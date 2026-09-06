@@ -21,3 +21,5 @@ dev-err.log
 # system
 .DS_Store
 Thumbs.db
+# downloaded APK artifacts
+dist-apk/
