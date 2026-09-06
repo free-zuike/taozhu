@@ -39,11 +39,20 @@ jobs:
         working-directory: frontend
         run: npx cap sync android
 
-      - name: Build debug APK
+      - name: Setup signing keystore (固定签名)
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > frontend/android/app/taozhu-release.keystore
+
+      - name: Build signed release APK
         working-directory: frontend/android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/frontend/android/app/taozhu-release.keystore
+          ANDROID_KEYSTORE_STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_STORE_PASS }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          ANDROID_KEYSTORE_KEY_PASS: ${{ secrets.ANDROID_KEYSTORE_KEY_PASS }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
 
       - name: Publish APK to Release
         env:
@@ -52,14 +61,14 @@ jobs:
           VERSION=$(grep -oP 'versionName "\K[^"]+' frontend/android/app/build.gradle)
           TAG="taozhu-v${VERSION}-$(date +%Y%m%d-%H%M%S)"
           gh release create "$TAG" \
-            frontend/android/app/build/outputs/apk/debug/app-debug.apk \
+            frontend/android/app/build/outputs/apk/release/app-release.apk \
             --repo "$GITHUB_REPOSITORY" \
             --title "陶朱 v${VERSION} Android" \
-            --notes "下载 app-debug.apk 传到手机安装（允许未知来源）；服务器地址在 App 登录页手动填写"
+            --notes "下载 app-release.apk 传到手机安装（允许未知来源）；服务器地址在 App 登录页手动填写"
 
       - name: Upload APK (artifact backup)
         uses: actions/upload-artifact@v4
         with:
-          name: taozhu-debug-apk
-          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
+          name: taozhu-release-apk
+          path: frontend/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error

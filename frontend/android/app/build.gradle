@@ -16,10 +16,24 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        // 固定签名：由 CI 从 secrets 注入 keystore；本地无 env 时不配置（release 构建不签名，仅 CI 产出正式签名包）
+        release {
+            if (System.getenv('ANDROID_KEYSTORE_PATH')) {
+                storeFile file(System.getenv('ANDROID_KEYSTORE_PATH'))
+                storePassword System.getenv('ANDROID_KEYSTORE_STORE_PASS')
+                keyAlias System.getenv('ANDROID_KEYSTORE_ALIAS')
+                keyPassword System.getenv('ANDROID_KEYSTORE_KEY_PASS')
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (System.getenv('ANDROID_KEYSTORE_PATH')) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }
