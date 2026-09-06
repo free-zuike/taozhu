@@ -44,10 +44,15 @@
       </el-table>
 
       <div class="footer">
-        <el-button @click="addRow">+ 添加商品</el-button>
+        <div>
+          <el-button @click="addRow">+ 添加商品</el-button>
+          <el-button type="success" plain @click="photoDlg?.open()">📷 拍照识别</el-button>
+        </div>
         <div class="total">合计：<span class="total-num">¥{{ total.toFixed(2) }}</span></div>
       </div>
       <el-button type="primary" size="large" class="submit" :loading="saving" @click="submit">提交进货单</el-button>
+
+      <PhotoParseDialog ref="photoDlg" :items="items" purpose="purchase" @imported="importDrafts" />
     </el-card>
   </div>
 </template>
@@ -56,6 +61,8 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api, errMsg } from '../api';
+import PhotoParseDialog from '../components/PhotoParseDialog.vue';
+import type { ImportedRow } from '../types/ui';
 
 interface PriceOption { id: string; unit: string; sale_price: number; purchase_price: number }
 interface ItemOption { id: string; name: string; prices: PriceOption[] }
@@ -67,6 +74,7 @@ const items = ref<ItemOption[]>([]);
 const happenedAt = ref(new Date().toISOString().slice(0, 10));
 const note = ref('');
 const rows = reactive<Row[]>([]);
+const photoDlg = ref<{ open: () => void } | null>(null);
 
 const total = computed(() => rows.reduce((s, r) => s + r.quantity * r.purchasePrice, 0));
 const rowAmount = (r: Row) => (r.quantity * r.purchasePrice).toFixed(2);
@@ -83,6 +91,20 @@ function onItemChange(row: Row) {
 function onPriceChange(row: Row) {
   const price = row.prices.find((p) => p.id === row.priceId);
   if (price) row.purchasePrice = price.purchase_price;
+}
+
+/** 拍照识别导入：相同商品+单位合并数量，否则新增行 */
+function importDrafts(list: ImportedRow[]) {
+  for (const r of list) {
+    const existing = rows.find((x) => x.itemId === r.itemId && x.priceId === r.priceId);
+    if (existing) {
+      existing.quantity += r.quantity;
+      existing.purchasePrice = r.price;
+    } else {
+      const item = items.value.find((i) => i.id === r.itemId);
+      rows.push({ itemId: r.itemId, priceId: r.priceId, prices: item?.prices ?? [], quantity: r.quantity, purchasePrice: r.price });
+    }
+  }
 }
 
 async function load() {

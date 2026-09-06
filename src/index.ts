@@ -9,6 +9,7 @@ import { purchasesRouter } from './routes/purchases';
 import { salesRouter } from './routes/sales';
 import { statsRouter } from './routes/stats';
 import { usersRouter } from './routes/users';
+import { aiRouter } from './routes/ai';
 import { ensureSchema } from './schema';
 
 type AppEnv = { Bindings: Env; Variables: { user: import('./types').AuthUser } };
@@ -31,6 +32,7 @@ app.route('/api/v1/purchases', purchasesRouter);
 app.route('/api/v1/payments', paymentsRouter);
 app.route('/api/v1/stats', statsRouter);
 app.route('/api/v1/users', usersRouter);
+app.route('/api/v1/ai', aiRouter);
 
 // 静态资源回退：非 API 路径交给 ASSETS（前端 SPA）
 app.all('*', async (c) => {
