@@ -1,7 +1,7 @@
 /** 出货单（送饭店记账）：sales + sale_items，进价快照计毛利 */
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
-import { authMiddleware } from '../middleware/auth';
+import { adminOnly, authMiddleware } from '../middleware/auth';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -140,8 +140,8 @@ salesRouter.get('/:id', async (c) => {
   });
 });
 
-// DELETE /sales/:id — 删除出货单（级联删明细）
-salesRouter.delete('/:id', async (c) => {
+// DELETE /sales/:id — 删除出货单（级联删明细，仅老板）
+salesRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM sales WHERE id = ?').bind(id).run();
   return c.body(null, 204);

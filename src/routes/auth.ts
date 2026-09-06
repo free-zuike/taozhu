@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { signToken } from '../lib/jwt';
 import { hashPassword, randomId, verifyPassword } from '../lib/password';
 import { authMiddleware } from '../middleware/auth';
+import { APP_NAME, APP_VERSION } from '../version';
 import type { Env, UserRow } from '../types';
 
 export const authRouter = new Hono<{ Bindings: Env; Variables: { user: UserRow } }>();
@@ -51,7 +52,7 @@ authRouter.get('/me', authMiddleware(), async (c) => {
 });
 
 // GET /auth/ping — 部署探活（无需认证）
-authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso() }));
+authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, version: APP_VERSION }));
 
 // 统计系统是否已初始化（前端引导页判断）
 authRouter.get('/bootstrap/status', async (c) => {

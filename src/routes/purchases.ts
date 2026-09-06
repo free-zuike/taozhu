@@ -1,7 +1,7 @@
 /** 进货单：purchases + purchase_items（记成本） */
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
-import { authMiddleware } from '../middleware/auth';
+import { adminOnly, authMiddleware } from '../middleware/auth';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -112,8 +112,8 @@ purchasesRouter.get('/:id', async (c) => {
   return c.json({ ...(row as object), items: detail.results });
 });
 
-// DELETE /purchases/:id
-purchasesRouter.delete('/:id', async (c) => {
+// DELETE /purchases/:id — 删除进货单（级联删明细，仅老板）
+purchasesRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM purchases WHERE id = ?').bind(id).run();
   return c.body(null, 204);

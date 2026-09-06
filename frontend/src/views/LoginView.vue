@@ -1,9 +1,12 @@
 <template>
   <div class="login-page">
     <el-card class="login-card">
-      <h2 class="title">陶朱</h2>
+      <h2 class="title">{{ APP_NAME }} <span class="ver">v{{ APP_VERSION }}</span></h2>
       <el-alert v-if="!initialized" type="warning" :closable="false" class="mb" title="首次使用：请先创建老板账号" show-icon />
       <el-form label-position="top" @submit.prevent="submit">
+        <el-form-item label="服务器地址（留空 = 当前网页地址，App 请填服务器域名）">
+          <el-input v-model="serverUrl" placeholder="如 https://xxx.workers.dev" />
+        </el-form-item>
         <el-form-item label="登录名">
           <el-input v-model="form.username" placeholder="登录名" autocomplete="username" />
         </el-form-item>
@@ -23,13 +26,15 @@ import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
-import { errMsg } from '../api';
+import { errMsg, getApiBase, setApiBase } from '../api';
+import { APP_NAME, APP_VERSION } from '../version';
 
 const auth = useAuthStore();
 const router = useRouter();
 const initialized = ref(true);
 const loading = ref(false);
 const form = reactive({ username: '', password: '' });
+const serverUrl = ref(getApiBase());
 
 onMounted(async () => {
   try {
@@ -44,6 +49,8 @@ async function submit() {
     ElMessage.warning('请输入登录名和密码');
     return;
   }
+  // 登录前应用服务器地址（App/自托管各端可手动指定）
+  setApiBase(serverUrl.value);
   loading.value = true;
   try {
     if (initialized.value) await auth.login(form.username.trim(), form.password);
@@ -71,6 +78,11 @@ async function submit() {
 .title {
   text-align: center;
   margin: 0 0 16px;
+}
+.ver {
+  font-size: 12px;
+  color: #909399;
+  font-weight: normal;
 }
 .w-full {
   width: 100%;

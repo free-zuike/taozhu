@@ -174,4 +174,12 @@ describe('多用户账号', () => {
     const newLogin = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'newpass456' });
     expect(newLogin.status).toBe(200);
   });
+
+  it('店员不能删除出货单/进货单（仅老板可删，防误删账目）', async () => {
+    await call(env, 'POST', '/api/v1/users', token, { username: 'staff1', password: 'staff123', role: 'staff' });
+    const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });
+    const staffToken = ((await login.json()) as { token: string }).token;
+    expect((await call(env, 'DELETE', '/api/v1/sales/xxx', staffToken)).status).toBe(403);
+    expect((await call(env, 'DELETE', '/api/v1/purchases/xxx', staffToken)).status).toBe(403);
+  });
 });

@@ -10,7 +10,7 @@
         <el-form-item label="日期"><el-date-picker v-model="form.happened_at" type="date" value-format="YYYY-MM-DD" /></el-form-item>
         <el-form-item label="金额"><el-input-number v-model="form.amount" :min="0" :precision="2" :controls="false" placeholder="收款金额" style="width: 140px" /></el-form-item>
         <el-form-item label="方式"><el-input v-model="form.method" placeholder="现金/微信…" style="width: 110px" /></el-form-item>
-        <el-button type="primary" :loading="saving" @click="submit">登记收款</el-button>
+        <el-button v-if="auth.isAdmin" type="primary" :loading="saving" @click="submit">登记收款</el-button>
       </el-form>
     </el-card>
 
@@ -24,7 +24,7 @@
         </el-table-column>
         <el-table-column prop="method" label="方式" width="90" />
         <el-table-column prop="note" label="备注" min-width="120" />
-        <el-table-column label="操作" width="70" align="right">
+        <el-table-column v-if="auth.isAdmin" label="操作" width="70" align="right">
           <template #default="{ row }">
             <el-popconfirm title="撤销这笔收款？" @confirm="remove(row.id)">
               <template #reference><el-button size="small" type="danger" link>撤销</el-button></template>
@@ -40,12 +40,15 @@
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api, errMsg } from '../api';
+import { todayLocal } from '../utils';
+import { useAuthStore } from '../stores/auth';
 
+const auth = useAuthStore();
 const loading = ref(false);
 const saving = ref(false);
 const clients = ref<Array<{ id: string; name: string; debt: number }>>([]);
 const payments = ref<Array<{ id: string; client_name: string; happened_at: string; amount: number; method: string; note: string }>>([]);
-const form = reactive({ client_id: '', happened_at: new Date().toISOString().slice(0, 10), amount: 0, method: '微信', note: '' });
+const form = reactive({ client_id: '', happened_at: todayLocal(), amount: 0, method: '微信', note: '' });
 const fmt = (n: number) => Number(n || 0).toFixed(2);
 
 async function load() {

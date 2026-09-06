@@ -2,7 +2,7 @@
   <div v-loading="loading">
     <div class="toolbar">
       <el-input v-model="query" placeholder="搜索饭店" clearable class="q" @keyup.enter="load" />
-      <el-button type="primary" @click="openCreate">新增饭店</el-button>
+      <el-button v-if="auth.isAdmin" type="primary" @click="openCreate">新增饭店</el-button>
     </div>
     <el-table :data="clients" border stripe>
       <el-table-column prop="name" label="饭店" min-width="140" />
@@ -17,7 +17,7 @@
       <el-table-column prop="debt" label="欠款" align="right" width="100">
         <template #default="{ row }"><span class="red">¥{{ fmt(row.debt) }}</span></template>
       </el-table-column>
-      <el-table-column label="操作" width="140" align="right">
+      <el-table-column v-if="auth.isAdmin" label="操作" width="140" align="right">
         <template #default="{ row }">
           <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
           <el-popconfirm title="删除该饭店？(历史账目保留)" @confirm="remove(row.id)">
@@ -46,6 +46,9 @@
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api, errMsg } from '../api';
+import { useAuthStore } from '../stores/auth';
+
+const auth = useAuthStore();
 
 interface ClientRow {
   id: string; name: string; contact: string; phone: string; note: string;

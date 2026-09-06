@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">送菜记账</string>
-    <string name="title_activity_main">送菜记账</string>
+    <string name="app_name">陶朱</string>
+    <string name="title_activity_main">陶朱</string>
     <string name="package_name">com.taozhu.app</string>
     <string name="custom_url_scheme">com.taozhu.app</string>
 </resources>

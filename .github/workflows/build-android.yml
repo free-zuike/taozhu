@@ -42,7 +42,20 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Upload APK
+      - name: Publish APK to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP 'versionName "\K[^"]+' frontend/android/app/build.gradle)
+          TAG="taozhu-v${VERSION}-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" \
+            frontend/android/app/build/outputs/apk/debug/app-debug.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "陶朱 v${VERSION} Android" \
+            --notes "下载 app-debug.apk 传到手机安装（开启「未知来源」）。
+创建 Release / 更新代码后重打：仓库 Actions → Build Android APK → Run workflow，""
+
+      - name: Upload APK (artifact backup)
         uses: actions/upload-artifact@v4
         with:
           name: taozhu-debug-apk

@@ -17,6 +17,15 @@ type AppEnv = { Bindings: Env; Variables: { user: import('./types').AuthUser } }
 
 const app = new Hono<AppEnv>();
 
+// CORS：允许跨域（Android App / 自托管端访问后端）
+app.use('*', async (c, next) => {
+  c.header('Access-Control-Allow-Origin', '*');
+  c.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+  c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (c.req.method === 'OPTIONS') return c.body(null, 204);
+  await next();
+});
+
 app.get('/healthz', (c) => c.json({ ok: true }));
 
 // 首次 API 请求触发幂等建表（不鉴权）

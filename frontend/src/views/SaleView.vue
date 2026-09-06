@@ -66,6 +66,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api, errMsg } from '../api';
+import { todayLocal } from '../utils';
 import PhotoParseDialog from '../components/PhotoParseDialog.vue';
 import type { ImportedRow } from '../types/ui';
 
@@ -78,7 +79,7 @@ const saving = ref(false);
 const clients = ref<Array<{ id: string; name: string }>>([]);
 const items = ref<ItemOption[]>([]);
 const clientId = ref('');
-const happenedAt = ref(new Date().toISOString().slice(0, 10));
+const happenedAt = ref(todayLocal());
 const note = ref('');
 const rows = reactive<Row[]>([]);
 const photoDlg = ref<{ open: () => void } | null>(null);

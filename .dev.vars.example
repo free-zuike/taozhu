@@ -1,0 +1,2 @@
+# 本地开发配置（勿提交真实值；复制为 .dev.vars 并填写）
+JWT_SECRET=replace-with-a-random-secret

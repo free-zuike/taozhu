@@ -2,7 +2,7 @@
   <div v-loading="loading">
     <div class="toolbar">
       <el-input v-model="query" placeholder="搜索商品名" clearable class="q" @keyup.enter="load" />
-      <el-button type="primary" @click="openCreate">新增商品</el-button>
+      <el-button v-if="auth.isAdmin" type="primary" @click="openCreate">新增商品</el-button>
     </div>
     <el-table :data="items" border stripe>
       <el-table-column prop="name" label="名称" min-width="120" />
@@ -14,7 +14,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="140" align="right">
+      <el-table-column v-if="auth.isAdmin" label="操作" width="140" align="right">
         <template #default="{ row }">
           <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
           <el-popconfirm title="删除该商品？" @confirm="remove(row.id)">
@@ -52,6 +52,9 @@
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api, errMsg } from '../api';
+import { useAuthStore } from '../stores/auth';
+
+const auth = useAuthStore();
 
 interface PriceRow { id?: string; unit: string; purchase_price: number; sale_price: number }
 interface ItemRow { id: string; name: string; category: string; prices: PriceRow[] }
