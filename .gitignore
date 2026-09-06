@@ -23,3 +23,7 @@ dev-err.log
 Thumbs.db
 # downloaded APK artifacts
 dist-apk/
+
+# uni-app (frontend-uni)
+frontend-uni/node_modules/
+frontend-uni/dist/

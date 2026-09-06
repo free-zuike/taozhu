@@ -1,0 +1,28 @@
+{
+	"pages": [
+		{
+			"path": "pages/login/login",
+			"style": {
+				"navigationBarTitleText": "登录"
+			}
+		},
+		{
+			"path": "pages/sale/sale",
+			"style": {
+				"navigationBarTitleText": "出货记单"
+			}
+		},
+		{
+			"path": "pages/purchase/purchase",
+			"style": {
+				"navigationBarTitleText": "进货记单"
+			}
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "black",
+		"navigationBarTitleText": "陶朱",
+		"navigationBarBackgroundColor": "#F8F8F8",
+		"backgroundColor": "#F8F8F8"
+	}
+}
