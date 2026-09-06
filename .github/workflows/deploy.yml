@@ -78,9 +78,13 @@ jobs:
       - name: Set JWT_SECRET
         run: npx wrangler secret put JWT_SECRET --name taozhu <<< "${{ secrets.JWT_SECRET }}"
 
-      - name: Set ZHIPU_API_KEY (AI 拍照识别)
-        if: secrets.ZHIPU_API_KEY != ''
-        run: npx wrangler secret put ZHIPU_API_KEY --name taozhu <<< "${{ secrets.ZHIPU_API_KEY }}"
+      - name: Set ZHIPU_API_KEY
+        run: |
+          if [ -n "$ZHIPU_KEY" ]; then
+            npx wrangler secret put ZHIPU_API_KEY --name taozhu <<< "$ZHIPU_KEY"
+          fi
+        env:
+          ZHIPU_KEY: ${{ secrets.ZHIPU_API_KEY }}
 
       - name: Deploy
         run: npx wrangler deploy
