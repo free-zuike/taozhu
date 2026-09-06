@@ -4,7 +4,10 @@ import axios from 'axios';
 const TOKEN_KEY = 'taozhu_token';
 const USER_KEY = 'taozhu_user';
 
-export const api = axios.create({ baseURL: '/api/v1' });
+// Web（同源相对路径）走 ''；Android App（Capacitor）构建时注入 VITE_API_BASE 指向生产域名
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined ?? '').replace(/\/+$/, '');
+
+export const api = axios.create({ baseURL: `${API_BASE}/api/v1` });
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);

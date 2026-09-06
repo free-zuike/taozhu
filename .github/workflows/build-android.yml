@@ -20,6 +20,8 @@ jobs:
 
       - name: Install & build frontend
         working-directory: frontend
+        env:
+          VITE_API_BASE: https://taozhu.freezuike-3f7.workers.dev
         run: |
           npm ci
           npm run build:no-check
