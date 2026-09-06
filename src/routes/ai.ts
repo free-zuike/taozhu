@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { parsePhoto } from '../services/ai-parse';
+import { getZhipuKey } from './settings';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -12,6 +13,10 @@ aiRouter.use('*', authMiddleware());
 // POST /api/v1/ai/parse-photo?purpose=purchase|sale  — multipart 字段 photo
 aiRouter.post('/parse-photo', async (c) => {
   const purpose = c.req.query('purpose') === 'sale' ? 'sale' : 'purchase';
+  const key = await getZhipuKey(c.env.DB, c.env.ZHIPU_API_KEY);
+  if (!key) {
+    return c.json({ error: 'AI 拍照识别未启用：请老板在「系统设置」中填写 AI Key（智谱免费模型）' }, 400);
+  }
   let file: File | null = null;
   try {
     const form = await c.req.formData();
@@ -28,7 +33,7 @@ aiRouter.post('/parse-photo', async (c) => {
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   try {
-    const drafts = await parsePhoto(c.env.ZHIPU_API_KEY, file.type, bytes, purpose);
+    const drafts = await parsePhoto(key, file.type, bytes, purpose);
     return c.json({ ok: true, purpose, items: drafts });
   } catch (err) {
     const msg = err instanceof Error ? err.message : '识别失败';

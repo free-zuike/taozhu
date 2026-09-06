@@ -19,6 +19,7 @@ const router = createRouter({
         { path: 'payments', name: 'payments', component: () => import('./views/PaymentsView.vue'), meta: { title: '收款结账' } },
         { path: 'stats', name: 'stats', component: () => import('./views/StatsView.vue'), meta: { title: '统计' } },
         { path: 'users', name: 'users', component: () => import('./views/UsersView.vue'), meta: { title: '账号管理', adminOnly: true } },
+        { path: 'settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { title: '系统设置', adminOnly: true } },
       ],
     },
   ],

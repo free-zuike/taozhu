@@ -11,6 +11,7 @@
         <el-menu-item index="/payments"><el-icon><Wallet /></el-icon>收款结账</el-menu-item>
         <el-menu-item index="/stats"><el-icon><TrendCharts /></el-icon>统计</el-menu-item>
         <el-menu-item v-if="auth.isAdmin" index="/users"><el-icon><User /></el-icon>账号管理</el-menu-item>
+        <el-menu-item v-if="auth.isAdmin" index="/settings"><el-icon><Setting /></el-icon>系统设置</el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>

@@ -87,6 +87,10 @@ const DDL: string[] = [
     created_by TEXT REFERENCES users(id)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_payments_client ON payments (client_id)`,
+  `CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`,
 ];
 
 let schemaReady = false;
