@@ -113,22 +113,36 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** 调用智谱免费视觉模型做识别；未配置 key 抛错带提示 */
+/** AI 配置（后台可设置，OpenAI 兼容） */
+export interface AiConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+}
+
+export const DEFAULT_AI_CONFIG = {
+  baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+  model: 'glm-4v-flash',
+};
+
+/** 调用 OpenAI 兼容视觉模型做识别；未配置 key 抛错带提示 */
 export async function parsePhoto(
-  apiKey: string | undefined,
+  config: AiConfig,
   mime: string,
   imageBytes: Uint8Array,
   purpose: 'purchase' | 'sale',
 ): Promise<DraftItem[]> {
-  if (!apiKey?.trim()) {
-    throw new Error('AI 拍照识别未配置：请先设置 ZHIPU_API_KEY');
+  if (!config.apiKey.trim()) {
+    throw new Error('AI 拍照识别未启用：请老板在「系统设置」填写 API Key');
   }
   const base64 = bytesToBase64(imageBytes);
-  const resp = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+  const baseUrl = config.baseUrl.replace(/\/+$/, '');
+  const endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+  const resp = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim()}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey.trim()}` },
     body: JSON.stringify({
-      model: 'glm-4v-flash',
+      model: config.model,
       temperature: 0.1,
       messages: [
         {

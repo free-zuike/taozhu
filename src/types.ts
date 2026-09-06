@@ -3,8 +3,6 @@ export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
   JWT_SECRET: string;
-  /** 智谱 API key（AI 拍照识别，glm-4v-flash 免费模型） */
-  ZHIPU_API_KEY?: string;
 }
 
 /** JWT 载荷中的用户信息 */
