@@ -1,8 +1,8 @@
 /** API 封装：axios 实例 + token 注入 + 401 处理 */
 import axios from 'axios';
 
-const TOKEN_KEY = 'vegbook_token';
-const USER_KEY = 'vegbook_user';
+const TOKEN_KEY = 'taozhu_token';
+const USER_KEY = 'taozhu_user';
 
 export const api = axios.create({ baseURL: '/api/v1' });
 

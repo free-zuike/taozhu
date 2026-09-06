@@ -1,4 +1,4 @@
-/** vegbook 入口：静态托管 + /api/v1 路由 */
+/** taozhu 入口：静态托管 + /api/v1 路由 */
 import { Hono } from 'hono';
 import type { Env } from './types';
 import { authRouter } from './routes/auth';

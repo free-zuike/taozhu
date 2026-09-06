@@ -1,4 +1,4 @@
--- 送菜进销存（vegbook）D1 Schema
+-- 通用进销存（taozhu）D1 Schema
 -- 幂等建表：重复执行不报错（OR IGNORE 用于索引）
 
 -- 用户（老板 admin / 店员 staff）

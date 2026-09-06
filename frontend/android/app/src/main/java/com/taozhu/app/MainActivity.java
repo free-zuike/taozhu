@@ -1,4 +1,4 @@
-package com.vegbook.app;
+package com.taozhu.app;
 
 import com.getcapacitor.BridgeActivity;
 

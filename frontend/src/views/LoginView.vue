@@ -1,7 +1,7 @@
 <template>
   <div class="login-page">
     <el-card class="login-card">
-      <h2 class="title">送菜记账</h2>
+      <h2 class="title">陶朱</h2>
       <el-alert v-if="!initialized" type="warning" :closable="false" class="mb" title="首次使用：请先创建老板账号" show-icon />
       <el-form label-position="top" @submit.prevent="submit">
         <el-form-item label="登录名">

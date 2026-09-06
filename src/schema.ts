@@ -103,7 +103,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     schemaReady = true;
   } catch (err) {
-    console.error('[vegbook] ensureSchema failed:', err);
+    console.error('[taozhu] ensureSchema failed:', err);
     throw err;
   }
 }

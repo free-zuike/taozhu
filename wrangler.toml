@@ -1,4 +1,4 @@
-name = "vegbook"
+name = "taozhu"
 main = "src/index.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
@@ -12,5 +12,5 @@ not_found_handling = "single-page-application"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "vegbook"
+database_name = "taozhu"
 database_id = "PLACEHOLDER_DATABASE_ID"

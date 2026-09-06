@@ -1,7 +1,7 @@
 <template>
   <el-container class="layout">
     <el-aside width="200px" class="aside">
-      <div class="brand">送菜记账</div>
+      <div class="brand">陶朱</div>
       <el-menu :default-active="$route.path" router class="menu">
         <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon>工作台</el-menu-item>
         <el-menu-item index="/sale"><el-icon><ShoppingCart /></el-icon>出货记单</el-menu-item>
