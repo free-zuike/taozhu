@@ -5,6 +5,9 @@ on:
   push:
     tags: ['v*']              # 打 tag v* 自动构建
 
+permissions:
+  contents: write             # 发布 Release 需要
+
 jobs:
   build:
     runs-on: ubuntu-latest    # 自带 Android SDK / JDK / Gradle
