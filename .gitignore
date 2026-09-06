@@ -1,0 +1,23 @@
+# deps
+node_modules/
+frontend/node_modules/
+
+# build outputs (CI generated)
+frontend/dist/
+public/
+frontend/android/app/src/main/assets/public/
+frontend/android/.gradle/
+frontend/android/build/
+frontend/android/app/build/
+frontend/android/capacitor-cordova-android-plugins/build/
+frontend/android/capacitor-cordova-android-plugins/src/main/assets/
+
+# local dev (contains JWT_SECRET)
+.wrangler/
+.dev.vars
+dev.log
+dev-err.log
+
+# system
+.DS_Store
+Thumbs.db

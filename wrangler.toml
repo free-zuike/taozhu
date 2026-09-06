@@ -1,0 +1,16 @@
+name = "vegbook"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 静态资源：前端构建产物放 ./public，由 Workers 直接托管（同源，与 API 同域）
+[assets]
+directory = "./public"
+binding = "ASSETS"
+# SPA：未匹配路径（/login、/sale 等前端路由）回退 index.html
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vegbook"
+database_id = "PLACEHOLDER_DATABASE_ID"
