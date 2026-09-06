@@ -46,9 +46,11 @@ function onCommand(cmd: string) {
 <style scoped>
 .layout {
   height: 100vh;
+  width: 100%;
 }
 .aside {
   background: #1f2d3d;
+  flex-shrink: 0;
 }
 .brand {
   color: #fff;
@@ -88,5 +90,8 @@ function onCommand(cmd: string) {
 }
 .main {
   background: #f5f7fa;
+  /* flex 子项默认 min-width:auto，内容最小宽度会撑塌窄屏布局——置 0 让右侧正确占满剩余宽度 */
+  min-width: 0;
+  overflow-x: auto;
 }
 </style>
