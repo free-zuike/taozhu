@@ -41,7 +41,7 @@ const byClient = ref<Array<{ name: string; sales_total: number; paid_total: numb
 const monthly = ref<Array<{ month: string; sales_total: number; gross_profit: number; paid_total: number }>>([]);
 const currentYear = new Date().getUTCFullYear();
 const year = ref(currentYear);
-const years = [currentYear - 1, currentYear, currentYear + 1];
+const years = ref<number[]>([currentYear]);
 const fmt = (n: number) => Number(n || 0).toFixed(2);
 /** "2026-09" → "9月" */
 const monthLabel = (m: string) => (m?.length >= 7 ? `${Number(m.slice(5, 7))}月` : m);
@@ -49,9 +49,19 @@ const monthLabel = (m: string) => (m?.length >= 7 ? `${Number(m.slice(5, 7))}月
 async function loadAll() {
   loading.value = true;
   try {
-    const [c, m] = await Promise.all([api.get('/stats/clients'), api.get('/stats/monthly', { params: { year: year.value } })]);
+    const [c, m, y] = await Promise.all([
+      api.get('/stats/clients'),
+      api.get('/stats/monthly', { params: { year: year.value } }),
+      api.get('/stats/years'),
+    ]);
     byClient.value = c.data.clients;
     monthly.value = m.data.months;
+    // 有数据年份：从最早有账的年份到当前年；无数据用当前年
+    const list = (y.data.years as number[]).filter((n) => n <= currentYear);
+    if (list.length) {
+      years.value = list;
+      if (!list.includes(year.value)) year.value = list[list.length - 1];
+    }
   } finally {
     loading.value = false;
   }

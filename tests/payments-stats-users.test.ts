@@ -112,6 +112,22 @@ describe('统计', () => {
     expect(data.months[0].sales_total).toBe(52);
     expect(data.months[0].gross_profit).toBe(12);
   });
+
+  it('有数据年份列表（出货产生 2026）', async () => {
+    const data = (await (await call(env, 'GET', '/api/v1/stats/years', token)).json()) as { years: number[] };
+    expect(data.years).toContain(2026);
+  });
+});
+
+describe('统计（空库）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  beforeEach(async () => { env = (await setup()).env; token = await boot(env); });
+
+  it('无任何数据时年份列表为空数组', async () => {
+    const data = (await (await call(env, 'GET', '/api/v1/stats/years', token)).json()) as { years: number[] };
+    expect(data.years).toEqual([]);
+  });
 });
 
 describe('多用户账号', () => {

@@ -105,3 +105,14 @@ statsRouter.get('/monthly', async (c) => {
     })),
   });
 });
+
+// GET /stats/years — 有数据的年份列表（出货/进货/收款并集，升序）
+statsRouter.get('/years', async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT DISTINCT substr(happened_at, 1, 4) AS y FROM sales
+     UNION SELECT DISTINCT substr(happened_at, 1, 4) FROM purchases
+     UNION SELECT DISTINCT substr(happened_at, 1, 4) FROM payments
+     ORDER BY y`,
+  ).all<{ y: string }>();
+  return c.json({ years: rows.results.map((r) => Number(r.y)).filter((n) => Number.isInteger(n) && n >= 2000) });
+});
