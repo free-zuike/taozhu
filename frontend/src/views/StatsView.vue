@@ -15,13 +15,18 @@
       <template #header>
         <div class="monthly-header">
           <span>按月统计</span>
-          <el-select v-model="year" style="width: 100px" @change="loadMonthly">
-            <el-option v-for="y in years" :key="y" :label="String(y)" :value="y" />
-          </el-select>
+          <span class="year-picker">
+            年份：
+            <el-select v-model="year" style="width: 100px" @change="loadMonthly">
+              <el-option v-for="y in years" :key="y" :label="`${y} 年`" :value="y" />
+            </el-select>
+          </span>
         </div>
       </template>
       <el-table :data="monthly" border stripe size="small">
-        <el-table-column prop="month" label="月份" width="120" />
+        <el-table-column label="月份" width="120">
+          <template #default="{ row }">{{ monthLabel(row.month) }}</template>
+        </el-table-column>
         <el-table-column prop="sales_total" label="出货" align="right"><template #default="{ row }">¥{{ fmt(row.sales_total) }}</template></el-table-column>
         <el-table-column prop="gross_profit" label="毛利" align="right"><template #default="{ row }"><span class="green">¥{{ fmt(row.gross_profit) }}</span></template></el-table-column>
         <el-table-column prop="paid_total" label="收款" align="right"><template #default="{ row }">¥{{ fmt(row.paid_total) }}</template></el-table-column>
@@ -41,6 +46,8 @@ const currentYear = new Date().getUTCFullYear();
 const year = ref(currentYear);
 const years = [currentYear - 1, currentYear, currentYear + 1];
 const fmt = (n: number) => Number(n || 0).toFixed(2);
+/** "2026-09" → "9月" */
+const monthLabel = (m: string) => (m?.length >= 7 ? `${Number(m.slice(5, 7))}月` : m);
 
 async function loadAll() {
   loading.value = true;
@@ -66,4 +73,5 @@ function loadMonthly() {
 .red { color: #f56c6c; }
 .green { color: #67c23a; }
 .monthly-header { display: flex; justify-content: space-between; align-items: center; }
+.year-picker { display: inline-flex; align-items: center; font-size: 13px; color: #606266; }
 </style>
