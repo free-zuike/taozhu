@@ -54,17 +54,22 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease
 
-      - name: Publish APK to Release
+      - name: Publish APK to Release (单 Release 累积全部版本)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(grep -oP 'versionName "\K[^"]+' frontend/android/app/build.gradle)
-          TAG="taozhu-v${VERSION}-$(date +%Y%m%d-%H%M%S)"
-          gh release create "$TAG" \
-            frontend/android/app/build/outputs/apk/release/app-release.apk \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "陶朱 v${VERSION} Android" \
-            --notes "下载 app-release.apk 传到手机安装（允许未知来源）；服务器地址在 App 登录页手动填写"
+          TS=$(date +%Y%m%d-%H%M%S)
+          # 文件名带版本+时间，累积上传到同一个 release（不互相覆盖，历史版本都可下载）
+          cp frontend/android/app/build/outputs/apk/release/app-release.apk "/tmp/app-${VERSION}-${TS}.apk"
+          REL="taozhu-app"
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
+              --title "陶朱 Android（全版本下载）" \
+              --notes "所有历史版本 APK 都在此 release 下，按文件名（app-版本-时间.apk）选择下载；最新版在最上方。"
+          fi
+          gh release upload "$REL" "/tmp/app-${VERSION}-${TS}.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "uploaded: app-${VERSION}-${TS}.apk"
 
       - name: Upload APK (artifact backup)
         uses: actions/upload-artifact@v4
