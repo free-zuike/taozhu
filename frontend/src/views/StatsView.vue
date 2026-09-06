@@ -14,13 +14,10 @@
     <el-card shadow="never">
       <template #header>
         <div class="monthly-header">
-          <span>按月统计</span>
-          <span class="year-picker">
-            年份：
-            <el-select v-model="year" style="width: 100px" @change="loadMonthly">
-              <el-option v-for="y in years" :key="y" :label="`${y} 年`" :value="y" />
-            </el-select>
-          </span>
+          <span>{{ year }} 年月度统计</span>
+          <el-select v-model="year" style="width: 100px" @change="loadMonthly">
+            <el-option v-for="y in years" :key="y" :label="`${y} 年`" :value="y" />
+          </el-select>
         </div>
       </template>
       <el-table :data="monthly" border stripe size="small">
@@ -73,5 +70,4 @@ function loadMonthly() {
 .red { color: #f56c6c; }
 .green { color: #67c23a; }
 .monthly-header { display: flex; justify-content: space-between; align-items: center; }
-.year-picker { display: inline-flex; align-items: center; font-size: 13px; color: #606266; }
 </style>
