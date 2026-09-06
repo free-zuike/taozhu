@@ -124,7 +124,6 @@ async function load() {
     const [c, i] = await Promise.all([api.get('/clients'), api.get('/items/summary')]);
     clients.value = c.data.clients;
     items.value = i.data.items;
-    addRow();
   } finally {
     loading.value = false;
   }
@@ -146,7 +145,6 @@ async function submit() {
     });
     ElMessage.success(`出货单已提交，合计 ¥${total.value.toFixed(2)}`);
     rows.splice(0, rows.length);
-    addRow();
     note.value = '';
   } catch (e) {
     ElMessage.error(errMsg(e));

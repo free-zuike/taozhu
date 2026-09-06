@@ -112,7 +112,6 @@ async function load() {
   try {
     const { data } = await api.get('/items/summary');
     items.value = data.items;
-    addRow();
   } finally {
     loading.value = false;
   }
@@ -132,7 +131,6 @@ async function submit() {
     });
     ElMessage.success(`进货单已提交，合计 ¥${total.value.toFixed(2)}`);
     rows.splice(0, rows.length);
-    addRow();
     note.value = '';
   } catch (e) {
     ElMessage.error(errMsg(e));
