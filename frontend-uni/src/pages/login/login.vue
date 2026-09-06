@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <view class="page">
     <view class="brand">陶朱<text class="ver"> v{{ APP_VERSION }}</text></view>
 
@@ -49,7 +49,7 @@ async function submit() {
       const d = await request<{ token: string }>('/auth/bootstrap', 'POST', { username: username.value.trim(), password: password.value });
       setToken(d.token);
     }
-    uni.reLaunch({ url: '/pages/sale/sale' });
+    uni.switchTab({ url: '/pages/dashboard/dashboard' });
   } catch (e) {
     const msg = (e as Error).message || '登录失败';
     uni.showToast({ title: msg, icon: 'none' });

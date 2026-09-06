@@ -7,6 +7,12 @@
 			}
 		},
 		{
+			"path": "pages/dashboard/dashboard",
+			"style": {
+				"navigationBarTitleText": "工作台"
+			}
+		},
+		{
 			"path": "pages/sale/sale",
 			"style": {
 				"navigationBarTitleText": "出货记单"
@@ -17,8 +23,42 @@
 			"style": {
 				"navigationBarTitleText": "进货记单"
 			}
+		},
+		{
+			"path": "pages/items/items",
+			"style": {
+				"navigationBarTitleText": "商品管理"
+			}
+		},
+		{
+			"path": "pages/clients/clients",
+			"style": {
+				"navigationBarTitleText": "饭店管理"
+			}
+		},
+		{
+			"path": "pages/payments/payments",
+			"style": {
+				"navigationBarTitleText": "收款结账"
+			}
+		},
+		{
+			"path": "pages/stats/stats",
+			"style": {
+				"navigationBarTitleText": "统计"
+			}
 		}
 	],
+	"tabBar": {
+		"color": "#909399",
+		"selectedColor": "#409EFF",
+		"backgroundColor": "#ffffff",
+		"list": [
+			{ "pagePath": "pages/dashboard/dashboard", "text": "工作台" },
+			{ "pagePath": "pages/sale/sale", "text": "出货" },
+			{ "pagePath": "pages/purchase/purchase", "text": "进货" }
+		]
+	},
 	"globalStyle": {
 		"navigationBarTextStyle": "black",
 		"navigationBarTitleText": "陶朱",
