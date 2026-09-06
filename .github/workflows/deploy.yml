@@ -1,0 +1,84 @@
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend deps
+        run: npm install
+
+      - name: Install & build frontend (assets → ./public)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build:no-check
+
+      - name: Setup D1 database (auto-create if missing)
+        id: d1
+        run: |
+          DB_ID=$(npx wrangler d1 list --json 2>/dev/null | node -e "
+            const data = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+            const db = (data || []).find(d => d.name === 'taozhu');
+            if (db) process.stdout.write(db.uuid);
+          " || true)
+          if [ -z "$DB_ID" ]; then
+            echo "No existing D1 found, creating taozhu..."
+            npx wrangler d1 create taozhu 2>&1 | tee create_out.txt || true
+            DB_ID=$(grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' create_out.txt 2>/dev/null || true)
+          fi
+          if [ -z "$DB_ID" ]; then
+            echo "FATAL: Could not resolve database_id"
+            exit 1
+          fi
+          echo "database_id=$DB_ID" >> $GITHUB_OUTPUT
+          echo "Resolved D1 database_id: $DB_ID"
+
+      - name: Resolve account ID
+        id: account
+        run: |
+          ACCOUNT_ID=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts?per_page=100" \
+            | node -e "
+              const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+              if (!d.success || !d.result || d.result.length === 0) {
+                console.error('Failed to resolve account_id:', JSON.stringify(d.errors || {}));
+                process.exit(1);
+              }
+              process.stdout.write(d.result[0].id);
+            ")
+          if [ -z "$ACCOUNT_ID" ]; then
+            echo "FATAL: Could not resolve account_id"
+            exit 1
+          fi
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+          echo "Resolved account_id: $ACCOUNT_ID"
+
+      - name: Inject database_id into wrangler.toml
+        run: |
+          node -e "const fs=require('fs');let t=fs.readFileSync('wrangler.toml','utf8');t=t.replace('PLACEHOLDER_DATABASE_ID',process.argv[1]);fs.writeFileSync('wrangler.toml',t);" "${{ steps.d1.outputs.database_id }}"
+
+      - name: Set JWT_SECRET
+        run: npx wrangler secret put JWT_SECRET --name taozhu <<< "${{ secrets.JWT_SECRET }}"
+
+      - name: Deploy
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.account.outputs.account_id }}
