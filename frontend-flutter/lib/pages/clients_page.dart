@@ -10,13 +10,27 @@ class ClientsPage extends StatefulWidget {
 
 class _ClientsPageState extends State<ClientsPage> {
   List<Map<String, dynamic>> _clients = [];
+  List<Map<String, dynamic>> _cats = [];
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadCats();
   }
+
+  Future<void> _loadCats() async {
+    try {
+      final d = await Api.instance.get('/categories?type=client');
+      setState(() => _cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>());
+    } catch (_) {}
+  }
+
+  List<Map<String, dynamic>> get _topCats =>
+      _cats.where((c) => c['parent_id'] == null || '${c['parent_id']}' == '').toList();
+  List<Map<String, dynamic>> _subCatsOf(String topId) =>
+      _cats.where((c) => '${c['parent_id']}' == topId).toList();
 
   Future<void> _load() async {
     try {
@@ -37,17 +51,59 @@ class _ClientsPageState extends State<ClientsPage> {
   Future<void> _edit([Map<String, dynamic>? c]) async {
     final nameCtrl = TextEditingController(text: c?['name'] as String? ?? '');
     final phoneCtrl = TextEditingController(text: c?['phone'] as String? ?? '');
+    String? selTopId;
+    String? selSubId;
+    // 编辑时按当前分类反推一级/二级
+    final curId = c?['category_id'] as String? ?? '';
+    if (curId.isNotEmpty) {
+      final cur = _cats.where((x) => '${x['id']}' == curId).firstOrNull;
+      if (cur != null && cur['parent_id'] != null && '${cur['parent_id']}' != '') {
+        selTopId = '${cur['parent_id']}';
+        selSubId = curId;
+      } else if (cur != null) {
+        selTopId = curId;
+      }
+    }
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(c == null ? '新增饭店' : '编辑饭店'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: '饭店名称 *')),
-            const SizedBox(height: 8),
-            TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: '电话（可选）')),
-          ],
+        title: Text(c == null ? '新增店铺' : '编辑店铺'),
+        content: StatefulBuilder(
+          builder: (ctx, setDlg) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: '店铺名称 *')),
+              const SizedBox(height: 8),
+              TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: '电话（可选）')),
+              if (_topCats.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  initialValue: selTopId,
+                  decoration: const InputDecoration(labelText: '分类（可选）'),
+                  hint: const Text('选择分类'),
+                  items: _topCats
+                      .map((x) => DropdownMenuItem(value: '${x['id']}', child: Text('${x['name']}')))
+                      .toList(),
+                  onChanged: (v) => setDlg(() {
+                    selTopId = v;
+                    selSubId = null;
+                  }),
+                ),
+                if (selTopId != null && _subCatsOf(selTopId!).isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    initialValue: selSubId,
+                    decoration: const InputDecoration(labelText: '子分类（可选）'),
+                    hint: const Text('如 火锅店/中餐'),
+                    items: _subCatsOf(selTopId!)
+                        .map((x) => DropdownMenuItem(value: '${x['id']}', child: Text('${x['name']}')))
+                        .toList(),
+                    onChanged: (v) => setDlg(() => selSubId = v),
+                  ),
+                ],
+              ],
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
@@ -58,14 +114,23 @@ class _ClientsPageState extends State<ClientsPage> {
     if (ok != true) return;
     final name = nameCtrl.text.trim();
     if (name.isEmpty) {
-      toast(context, '请填写饭店名称');
+      toast(context, '请填写店铺名称');
       return;
     }
+    final categoryId = selSubId ?? selTopId;
     try {
       if (c == null) {
-        await Api.instance.post('/clients', {'name': name, 'phone': phoneCtrl.text.trim()});
+        await Api.instance.post('/clients', {
+          'name': name,
+          'phone': phoneCtrl.text.trim(),
+          if (categoryId != null) 'category_id': categoryId,
+        });
       } else {
-        await Api.instance.patch('/clients/${c['id']}', {'name': name, 'phone': phoneCtrl.text.trim()});
+        await Api.instance.patch('/clients/${c['id']}', {
+          'name': name,
+          'phone': phoneCtrl.text.trim(),
+          'category_id': categoryId,
+        });
       }
       toast(context, '已保存');
       _load();
@@ -120,9 +185,10 @@ class _ClientsPageState extends State<ClientsPage> {
                     Card(
                       child: ListTile(
                         title: Text('${c['name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: Text(c['phone'] != null && '${c['phone']}'.isNotEmpty
-                            ? '${c['phone']}'
-                            : ''),
+                        subtitle: Text([
+                          if ('${c['category_name'] ?? ''}'.isNotEmpty) '${c['category_name']}',
+                          if (c['phone'] != null && '${c['phone']}'.isNotEmpty) '${c['phone']}',
+                        ].join(' · ')),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
