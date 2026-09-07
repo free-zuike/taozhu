@@ -7,7 +7,6 @@ on:
       - main
     paths:                    # 仅小程序（uni-app）相关改动才构建
       - 'frontend-uni/**'
-      - 'frontend/src/version.ts'
       - '.github/workflows/build-miniprogram.yml'
 
 permissions:
@@ -32,9 +31,25 @@ jobs:
           npm ci
           npm run build:mp-weixin
 
-      - name: Upload miniprogram package
+      - name: Upload miniprogram package (artifact backup)
         uses: actions/upload-artifact@v4
         with:
           name: taozhu-miniprogram
           path: frontend-uni/dist/build/mp-weixin
           if-no-files-found: error
+
+      - name: Package & upload to version Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || echo "0.1.0.0")
+          cd frontend-uni/dist/build/mp-weixin && zip -qr "/tmp/taozhu-miniprogram-${VERSION}.zip" . && cd -
+          REL="taozhu-v${VERSION}"
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
+              --title "陶朱 v${VERSION}" \
+              --notes "陶朱 v${VERSION}：本版本全部产物（Android APK / Web / Windows / iOS / 微信小程序）。"
+          fi
+          gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}"
+          gh release upload "$REL" "/tmp/taozhu-miniprogram-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "uploaded taozhu-miniprogram-${VERSION}.zip"
