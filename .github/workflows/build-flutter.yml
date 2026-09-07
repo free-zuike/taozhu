@@ -29,10 +29,6 @@ jobs:
         working-directory: frontend-flutter
         run: flutter create --org com.taozhu --project-name taozhu_app .
 
-      - name: Build Web (Flutter)
-        working-directory: frontend-flutter
-        run: flutter build web
-
       - name: Build APK (release, 正式签名)
         working-directory: frontend-flutter
         env:
@@ -64,14 +60,12 @@ jobs:
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || echo "0.1.0.0")
           cp frontend-flutter/build/app/outputs/flutter-apk/app-release.apk "/tmp/flutter-app-${VERSION}.apk"
-          cd frontend-flutter/build/web && zip -qr "/tmp/flutter-web-${VERSION}.zip" . && cd -
           REL="taozhu-v${VERSION}"
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
               --title "陶朱 v${VERSION}" \
-              --notes "陶朱 v${VERSION}：本版本全部产物（Android APK / Flutter Web 包）。同版本重构建覆盖同名文件。"
+              --notes "陶朱 v${VERSION}：本版本全部产物（Android APK / Web 包 / Windows / iOS）。同版本重构建覆盖同名文件。"
           fi
           gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}"
           gh release upload "$REL" "/tmp/flutter-app-${VERSION}.apk" --repo "$GITHUB_REPOSITORY" --clobber
-          gh release upload "$REL" "/tmp/flutter-web-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber
-          echo "uploaded flutter-app/flutter-web ${VERSION}"
+          echo "uploaded flutter-app ${VERSION}"
