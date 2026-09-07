@@ -185,13 +185,14 @@ class _StatsPageState extends State<StatsPage> {
 
   Widget _shopItem(BuildContext ctx, String? id, String name) {
     final active = _clientId == id;
+    final dark = Theme.of(ctx).brightness == Brightness.dark;
     return ListTile(
       dense: true,
       leading: Icon(active ? Icons.check_circle : Icons.store_outlined,
           color: active ? _primary : const Color(0xFF909399)),
       title: Text(name,
           style: TextStyle(
-            color: active ? _primary : Colors.black,
+            color: active ? _primary : (dark ? Colors.white : Colors.black),
             fontWeight: active ? FontWeight.w600 : FontWeight.w400,
           )),
       onTap: () => Navigator.pop(ctx, id),
@@ -200,6 +201,7 @@ class _StatsPageState extends State<StatsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     final (start, end) = _viewRange;
     return Scaffold(
       appBar: AppBar(title: const Text('统计报表')),
@@ -220,10 +222,10 @@ class _StatsPageState extends State<StatsPage> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                             decoration: BoxDecoration(
-                              color: Colors.white,
+                              color: dark ? const Color(0xFF1E1E1E) : Colors.white,
                               borderRadius: BorderRadius.circular(20),
                               boxShadow: [
-                                BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2)),
+                                BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.06), blurRadius: 8, offset: const Offset(0, 2)),
                               ],
                             ),
                             child: Row(
@@ -346,6 +348,7 @@ class _StatsPageState extends State<StatsPage> {
 
   Widget _pill(String label, String value, {IconData? icon}) {
     final active = _quick == value;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 160),
       child: InkWell(
@@ -361,9 +364,9 @@ class _StatsPageState extends State<StatsPage> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: active ? _primary : Colors.white,
+            color: active ? _primary : (dark ? const Color(0xFF1E1E1E) : Colors.white),
             borderRadius: BorderRadius.circular(16),
-            border: active ? null : Border.all(color: const Color(0xFFDCDFE6)),
+            border: active ? null : Border.all(color: dark ? const Color(0xFF3A3A3A) : const Color(0xFFDCDFE6)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -374,7 +377,7 @@ class _StatsPageState extends State<StatsPage> {
               ],
               Text(label,
                   style: TextStyle(
-                    color: active ? Colors.white : const Color(0xFF606266),
+                    color: active ? Colors.white : (dark ? const Color(0xFFC0C4CC) : const Color(0xFF606266)),
                     fontWeight: active ? FontWeight.w600 : FontWeight.w400,
                     fontSize: 13,
                   )),
@@ -486,7 +489,9 @@ class _StatsPageState extends State<StatsPage> {
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w700,
-                          color: e.key == '欠款' && e.value > 0 ? const Color(0xFFF56C6C) : Colors.black,
+                          color: e.key == '欠款' && e.value > 0
+                              ? const Color(0xFFF56C6C)
+                              : (Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black),
                         )),
                     if (e.key == '出货')
                       Text('日均 ¥${fmtMoney(sales / _spanDays)}',
