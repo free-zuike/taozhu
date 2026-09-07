@@ -19,15 +19,26 @@ class _ItemsPageState extends State<ItemsPage> {
   }
 
   Future<void> _load() async {
+    // ① 本地缓存秒开
+    final cached = await Api.instance.getCached('/items');
+    if (cached != null) {
+      setState(() {
+        _items = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _loading = false;
+      });
+    }
+    // ② 网络刷新 + 更新缓存
     try {
       final d = await Api.instance.get('/items');
+      await Api.instance.setCache('/items', d);
+      if (!mounted) return;
       setState(() {
         _items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
         _loading = false;
       });
     } catch (e) {
       setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 

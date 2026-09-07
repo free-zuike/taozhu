@@ -10,6 +10,7 @@ class Api {
 
   static const _tokenKey = 'taozhu_token';
   static const _baseKey = 'taozhu_api_base';
+  static const _cachePrefix = 'taozhu_cache_';
   // 无内置默认地址：个人部署模式，登录页必须显式填写自己的服务器地址
   // （Web 生产构建通过 --dart-define=API_BASE 注入默认值，留空即连；App 不注入 → 必填）
   static const _envBase = String.fromEnvironment('API_BASE');
@@ -110,6 +111,28 @@ class Api {
   Future<Map<String, dynamic>> patch(String path, [Map<String, dynamic>? body]) =>
       request(path, method: 'PATCH', body: body);
   Future<Map<String, dynamic>> delete(String path) => request(path, method: 'DELETE');
+
+  /// 读本地缓存（TTL 内返回缓存，未命中/过期返回 null）——下拉等常用数据秒开
+  Future<Map<String, dynamic>?> getCached(String path, {Duration ttl = const Duration(minutes: 10)}) async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString('$_cachePrefix$path');
+    if (raw == null) return null;
+    try {
+      final d = jsonDecode(raw) as Map<String, dynamic>;
+      final savedAt = DateTime.tryParse('${d['_t'] ?? ''}');
+      if (savedAt != null && DateTime.now().difference(savedAt) < ttl) {
+        return d['data'] as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// 写本地缓存
+  Future<void> setCache(String path, Map<String, dynamic> data) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+        '$_cachePrefix$path', jsonEncode({'_t': DateTime.now().toIso8601String(), 'data': data}));
+  }
 
   /// multipart 图片上传（AI 拍照识别：POST /ai/parse-photo，字段 photo）
   Future<Map<String, dynamic>> uploadPhoto(String path, Uint8List bytes, String filename) async {

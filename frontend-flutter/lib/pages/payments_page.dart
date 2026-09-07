@@ -29,12 +29,22 @@ class _PaymentsPageState extends State<PaymentsPage> {
   }
 
   Future<void> _load() async {
+    // ① 店铺下拉走本地缓存秒开；历史列表始终网络刷新
+    final cached = await Api.instance.getCached('/clients');
+    if (cached != null) {
+      setState(() => _clients = ((cached['clients'] as List?) ?? []).cast<Map<String, dynamic>>());
+    }
+    // ② 网络刷新
     try {
-      final c = await Api.instance.get('/clients');
-      final p = await Api.instance.get('/payments');
+      final results = await Future.wait([
+        Api.instance.get('/clients'),
+        Api.instance.get('/payments'),
+      ]);
+      await Api.instance.setCache('/clients', results[0]);
+      if (!mounted) return;
       setState(() {
-        _clients = ((c['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _payments = ((p['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _clients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _payments = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
         _loading = false;
       });
     } catch (e) {
@@ -46,7 +56,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
   Future<void> _submit() async {
     final amount = double.tryParse(_amountCtrl.text) ?? 0;
     if (_clientId == null) {
-      toast(context, '请选择饭店');
+      toast(context, '请选择店铺');
       return;
     }
     if (amount <= 0) {
@@ -116,7 +126,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                         children: [
                           DropdownButtonFormField<String>(
                             initialValue: _clientId,
-                            decoration: const InputDecoration(labelText: '饭店'),
+                            decoration: const InputDecoration(labelText: '店铺'),
                             items: _clients
                                 .map((c) => DropdownMenuItem(
                                     value: c['id'] as String, child: Text('${c['name']}')))

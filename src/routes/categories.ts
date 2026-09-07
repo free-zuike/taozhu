@@ -1,4 +1,4 @@
-/** 分类管理：商品分类(type=item) / 店铺分类(type=client)，支持两级（如 饭店 → 火锅店） */
+/** 分类管理：商品分类(type=item) / 店铺分类(type=client)，支持两级（如 店铺 → 火锅店） */
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';

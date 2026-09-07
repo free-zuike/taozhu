@@ -73,7 +73,7 @@ class _HomePageState extends State<HomePage> {
                   _card('今日收款', '¥${_fmt(_today['paid_total'])}'),
                   _card('今日进货', '¥${_fmt(_today['purchase_total'])}', red: true),
                   _card('总欠款', '¥${_fmt(_totals['debt'])}', red: true),
-                  _card('饭店数', '${_totals['client_count'] ?? 0}'),
+                  _card('店铺数', '${_totals['client_count'] ?? 0}'),
                 ],
               ),
               const SizedBox(height: 16),

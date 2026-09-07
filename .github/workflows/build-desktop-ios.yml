@@ -7,7 +7,6 @@ on:
       - main
     paths:                    # 仅 Flutter 相关改动才构建（Windows/iOS）
       - 'frontend-flutter/**'
-      - 'frontend/src/version.ts'
       - '.github/workflows/build-desktop-ios.yml'
 
 permissions:
