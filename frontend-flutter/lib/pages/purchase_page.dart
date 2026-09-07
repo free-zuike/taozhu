@@ -28,11 +28,19 @@ class _PurchasePageState extends State<PurchasePage> {
   }
 
   Future<void> _load() async {
+    // ① 本地缓存秒开
+    final cached = await Api.instance.getCached('/items/summary');
+    if (cached != null) {
+      setState(() => _items = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>());
+    }
+    // ② 并行网络刷新 + 更新缓存
     try {
       final i = await Api.instance.get('/items/summary');
+      await Api.instance.setCache('/items/summary', i);
+      if (!mounted) return;
       setState(() => _items = ((i['items'] as List?) ?? []).cast<Map<String, dynamic>>());
     } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 

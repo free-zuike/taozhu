@@ -1,4 +1,4 @@
-/** 收款登记（结账）：payments —— 饭店欠款 = Σ出货 − Σ收款 */
+/** 收款登记（结账）：payments —— 店铺欠款 = Σ出货 − Σ收款 */
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
@@ -19,10 +19,10 @@ paymentsRouter.post('/', adminOnly(), async (c) => {
   } | null;
   const clientId = body?.client_id;
   const amount = Number(body?.amount);
-  if (!clientId) return c.json({ error: '请选择饭店' }, 400);
+  if (!clientId) return c.json({ error: '请选择店铺' }, 400);
   if (!Number.isFinite(amount) || amount <= 0) return c.json({ error: '收款金额必须大于 0' }, 400);
   const client = await c.env.DB.prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first();
-  if (!client) return c.json({ error: '饭店不存在' }, 404);
+  if (!client) return c.json({ error: '店铺不存在' }, 404);
   const id = randomId();
   const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
   await c.env.DB.prepare(

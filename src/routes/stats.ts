@@ -62,15 +62,22 @@ statsRouter.get('/overview', async (c) => {
   });
 });
 
-// GET /stats/clients — 按店：出货/收款/欠款/毛利
+// GET /stats/clients?start=&end= — 按店：出货/收款/欠款/毛利（可传起止日期过滤，缺省=全部历史）
 statsRouter.get('/clients', async (c) => {
+  const start = c.req.query('start')?.trim();
+  const end = c.req.query('end')?.trim();
+  const hasRange = !!(start && end);
+  const saleCond = hasRange ? 'AND substr(s.happened_at, 1, 10) BETWEEN ? AND ?' : '';
+  const payCond = hasRange ? 'AND substr(happened_at, 1, 10) BETWEEN ? AND ?' : '';
+  const params: unknown[] = [];
+  if (hasRange) params.push(start, end, start, end, start, end);
   const rows = await c.env.DB.prepare(
     `SELECT c.id, c.name,
-      COALESCE((SELECT SUM(si.amount) FROM sale_items si JOIN sales s ON s.id = si.sale_id AND s.client_id = c.id), 0) AS sales_total,
-      COALESCE((SELECT SUM(amount) FROM payments WHERE client_id = c.id), 0) AS paid_total,
-      COALESCE((SELECT SUM((si.sale_price - si.cost_price) * si.quantity) FROM sale_items si JOIN sales s ON s.id = si.sale_id AND s.client_id = c.id), 0) AS gross_profit
+      COALESCE((SELECT SUM(si.amount) FROM sale_items si JOIN sales s ON s.id = si.sale_id AND s.client_id = c.id ${saleCond}), 0) AS sales_total,
+      COALESCE((SELECT SUM(amount) FROM payments WHERE client_id = c.id ${payCond}), 0) AS paid_total,
+      COALESCE((SELECT SUM((si.sale_price - si.cost_price) * si.quantity) FROM sale_items si JOIN sales s ON s.id = si.sale_id AND s.client_id = c.id ${saleCond}), 0) AS gross_profit
      FROM clients c WHERE c.deleted_at IS NULL ORDER BY sales_total DESC`,
-  ).all<{ id: string; name: string; sales_total: number; paid_total: number; gross_profit: number }>();
+  ).bind(...params).all<{ id: string; name: string; sales_total: number; paid_total: number; gross_profit: number }>();
   const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
   return c.json({
     clients: rows.results.map((c2) => ({
@@ -115,4 +122,100 @@ statsRouter.get('/years', async (c) => {
      ORDER BY y`,
   ).all<{ y: string }>();
   return c.json({ years: rows.results.map((r) => Number(r.y)).filter((n) => Number.isInteger(n) && n >= 2000) });
+});
+
+// GET /stats/summary?start=&end=&client_id= — 任意区间汇总（起止日都含；欠款=截止 end 累计出货−累计收款）
+statsRouter.get('/summary', async (c) => {
+  const start = c.req.query('start')?.trim();
+  const end = c.req.query('end')?.trim();
+  if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
+  const clientId = c.req.query('client_id')?.trim();
+  const db = c.env.DB;
+  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+
+  const salesParams: unknown[] = [start, end];
+  const salesSql = `SELECT
+      COALESCE(SUM(si.amount), 0) AS sales_total,
+      COALESCE(SUM((si.sale_price - si.cost_price) * si.quantity), 0) AS gross_profit,
+      COUNT(DISTINCT s.id) AS sales_count
+     FROM sale_items si JOIN sales s ON s.id = si.sale_id
+     WHERE substr(s.happened_at, 1, 10) BETWEEN ? AND ?${clientId ? ' AND s.client_id = ?' : ''}`;
+  if (clientId) salesParams.push(clientId);
+  const sales = await db.prepare(salesSql).bind(...salesParams).first<{
+    sales_total: number; gross_profit: number; sales_count: number;
+  }>();
+
+  const paidParams: unknown[] = [start, end];
+  const paidSql = `SELECT COALESCE(SUM(amount), 0) AS paid_total
+     FROM payments WHERE substr(happened_at, 1, 10) BETWEEN ? AND ?${clientId ? ' AND client_id = ?' : ''}`;
+  if (clientId) paidParams.push(clientId);
+  const paid = await db.prepare(paidSql).bind(...paidParams).first<{ paid_total: number }>();
+
+  const buyParams: unknown[] = [start, end];
+  const buySql = `SELECT COALESCE(SUM(pi.amount), 0) AS purchase_total
+     FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
+     WHERE substr(p.happened_at, 1, 10) BETWEEN ? AND ?`;
+  const buy = await db.prepare(buySql).bind(...buyParams).first<{ purchase_total: number }>();
+
+  // 截止 end 的总欠款（区间前累计也计入：全部出货 − 全部收款，时间 ≤ end）
+  // SQL 占位符顺序：all_sales(<=?, client=?) → all_paid(<=?, client=?)
+  const debtParams: unknown[] = clientId ? [end, clientId, end, clientId] : [end, end];
+  const debtSql = `SELECT
+      COALESCE((SELECT SUM(si.amount) FROM sale_items si JOIN sales s ON s.id = si.sale_id
+                WHERE substr(s.happened_at, 1, 10) <= ?${clientId ? ' AND s.client_id = ?' : ''}), 0) AS all_sales,
+      COALESCE((SELECT SUM(amount) FROM payments
+                WHERE substr(happened_at, 1, 10) <= ?${clientId ? ' AND client_id = ?' : ''}), 0) AS all_paid`;
+  const debt = await db.prepare(debtSql).bind(...debtParams).first<{ all_sales: number; all_paid: number }>();
+
+  return c.json({
+    start, end,
+    sales_total: r(sales?.sales_total), gross_profit: r(sales?.gross_profit),
+    sales_count: sales?.sales_count ?? 0,
+    paid_total: r(paid?.paid_total), purchase_total: r(buy?.purchase_total),
+    debt: r((debt?.all_sales ?? 0) - (debt?.all_paid ?? 0)),
+  });
+});
+
+// GET /stats/daily?start=&end=&client_id= — 区间内按日：出货/毛利/收款/进货（只含有数据的日，前端补零）
+statsRouter.get('/daily', async (c) => {
+  const start = c.req.query('start')?.trim();
+  const end = c.req.query('end')?.trim();
+  if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
+  const clientId = c.req.query('client_id')?.trim();
+  const db = c.env.DB;
+  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+
+  const sParams: unknown[] = [start, end];
+  const sSql = `SELECT substr(s.happened_at, 1, 10) AS day,
+      SUM(si.amount) AS sales_total,
+      SUM((si.sale_price - si.cost_price) * si.quantity) AS gross_profit
+     FROM sale_items si JOIN sales s ON s.id = si.sale_id
+     WHERE substr(s.happened_at, 1, 10) BETWEEN ? AND ?${clientId ? ' AND s.client_id = ?' : ''}
+     GROUP BY day ORDER BY day`;
+  if (clientId) sParams.push(clientId);
+  const salesRows = await db.prepare(sSql).bind(...sParams).all<{ day: string; sales_total: number; gross_profit: number }>();
+
+  const pParams: unknown[] = [start, end];
+  const pSql = `SELECT substr(happened_at, 1, 10) AS day, SUM(amount) AS paid_total
+     FROM payments WHERE substr(happened_at, 1, 10) BETWEEN ? AND ?${clientId ? ' AND client_id = ?' : ''}
+     GROUP BY day ORDER BY day`;
+  if (clientId) pParams.push(clientId);
+  const paidRows = await db.prepare(pSql).bind(...pParams).all<{ day: string; paid_total: number }>();
+
+  const bParams: unknown[] = [start, end];
+  const bSql = `SELECT substr(p.happened_at, 1, 10) AS day, SUM(pi.amount) AS purchase_total
+     FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
+     WHERE substr(p.happened_at, 1, 10) BETWEEN ? AND ?
+     GROUP BY day ORDER BY day`;
+  const buyRows = await db.prepare(bSql).bind(...bParams).all<{ day: string; purchase_total: number }>();
+
+  const paidMap = new Map(paidRows.results.map((p) => [p.day, p.paid_total]));
+  const buyMap = new Map(buyRows.results.map((p) => [p.day, p.purchase_total]));
+  return c.json({
+    start, end,
+    days: salesRows.results.map((s) => ({
+      day: s.day, sales_total: r(s.sales_total), gross_profit: r(s.gross_profit),
+      paid_total: r(paidMap.get(s.day) ?? 0), purchase_total: r(buyMap.get(s.day) ?? 0),
+    })),
+  });
 });

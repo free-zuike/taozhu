@@ -1,4 +1,4 @@
-/** 出货单（送饭店记账）：sales + sale_items，进价快照计毛利 */
+/** 出货单（送店铺记账）：sales + sale_items，进价快照计毛利 */
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { adminOnly, authMiddleware } from '../middleware/auth';
@@ -28,11 +28,11 @@ salesRouter.post('/', async (c) => {
   } | null;
   const clientId = body?.client_id;
   const items = body?.items ?? [];
-  if (!clientId) return c.json({ error: '请选择饭店' }, 400);
+  if (!clientId) return c.json({ error: '请选择店铺' }, 400);
   if (!Array.isArray(items) || items.length === 0) return c.json({ error: '请至少添加一种商品' }, 400);
 
   const client = await c.env.DB.prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first();
-  if (!client) return c.json({ error: '饭店不存在' }, 404);
+  if (!client) return c.json({ error: '店铺不存在' }, 404);
 
   // 校验商品价格并取进价快照
   const priceIds = items.map((i) => i.price_id);

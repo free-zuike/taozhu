@@ -33,15 +33,23 @@ class _ClientsPageState extends State<ClientsPage> {
       _cats.where((c) => '${c['parent_id']}' == topId).toList();
 
   Future<void> _load() async {
+    // ① 本地缓存秒开
+    final cached = await Api.instance.getCached('/clients');
+    if (cached != null) {
+      setState(() => _clients = ((cached['clients'] as List?) ?? []).cast<Map<String, dynamic>>());
+    }
+    // ② 网络刷新 + 更新缓存
     try {
       final d = await Api.instance.get('/clients');
+      await Api.instance.setCache('/clients', d);
+      if (!mounted) return;
       setState(() {
         _clients = ((d['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
         _loading = false;
       });
     } catch (e) {
       setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -143,7 +151,7 @@ class _ClientsPageState extends State<ClientsPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除饭店'),
+        title: const Text('删除店铺'),
         content: Text('确定删除「${c['name']}」吗？历史记账不受影响。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),

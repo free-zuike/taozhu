@@ -1,4 +1,4 @@
-/** 饭店（客户）管理 */
+/** 店铺（客户）管理 */
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
@@ -37,11 +37,11 @@ clientsRouter.get('/', async (c) => {
   }) });
 });
 
-// POST /clients — 新建饭店
+// POST /clients — 新建店铺
 clientsRouter.post('/', adminOnly(), async (c) => {
   const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string } | null;
   const name = body?.name?.trim();
-  if (!name) return c.json({ error: '饭店名称必填' }, 400);
+  if (!name) return c.json({ error: '店铺名称必填' }, 400);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
   if (catErr) return c.json({ error: catErr }, 400);
   const id = randomId();
@@ -55,7 +55,7 @@ clientsRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string | null } | null;
   const client = await c.env.DB.prepare('SELECT * FROM clients WHERE id = ? AND deleted_at IS NULL').bind(id).first<ClientRow>();
-  if (!client) return c.json({ error: '饭店不存在' }, 404);
+  if (!client) return c.json({ error: '店铺不存在' }, 404);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
   if (catErr) return c.json({ error: catErr }, 400);
   await c.env.DB.prepare('UPDATE clients SET name = ?, contact = ?, phone = ?, note = ?, category_id = ? WHERE id = ?')

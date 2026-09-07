@@ -107,7 +107,7 @@ class _BottomShellState extends State<BottomShell> {
             ListTile(
               leading: const Icon(Icons.storefront, color: Color(0xFF409EFF)),
               title: const Text('出货记单'),
-              subtitle: const Text('给饭店送货'),
+              subtitle: const Text('给店铺送货'),
               onTap: () {
                 Navigator.pop(ctx);
                 Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalePage()));

@@ -123,13 +123,13 @@ describe('记单与欠款联动（核心业务）', () => {
     await call(env, 'POST', '/api/v1/items', token, { name: '白菜', category: '蔬菜', prices: [{ unit: '斤', purchase_price: 2.0, sale_price: 2.5 }] });
     const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string; prices: Array<{ id: string }> }> };
     priceId = items.items[0].prices[0].id;
-    // 饭店：品味轩
+    // 店铺：品味轩
     await call(env, 'POST', '/api/v1/clients', token, { name: '品味轩', contact: '王老板' });
     const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string; debt: number }> };
     clientId = clients.clients[0].id;
   });
 
-  it('出货单：总额=数量×单价，饭店欠款自动联动', async () => {
+  it('出货单：总额=数量×单价，店铺欠款自动联动', async () => {
     const sale = await call(env, 'POST', '/api/v1/sales', token, {
       client_id: clientId, happened_at: '2026-09-06', note: '早班送菜',
       items: [{ price_id: priceId, quantity: 20, sale_price: 2.6 }],
@@ -165,7 +165,7 @@ describe('记单与欠款联动（核心业务）', () => {
     expect(data.total).toBe(95);
   });
 
-  it('出货单必须选饭店且至少一件商品', async () => {
+  it('出货单必须选店铺且至少一件商品', async () => {
     const noClient = await call(env, 'POST', '/api/v1/sales', token, { items: [{ price_id: priceId, quantity: 1 }] });
     expect(noClient.status).toBe(400);
     const noItems = await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, items: [] });

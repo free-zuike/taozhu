@@ -10,10 +10,10 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
--- 饭店（客户）
+-- 店铺（客户）
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,                -- 饭店名
+  name TEXT NOT NULL,                -- 店铺名
   contact TEXT DEFAULT '',           -- 联系人
   phone TEXT DEFAULT '',
   note TEXT DEFAULT '',
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS purchase_items (
 );
 CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id);
 
--- 出货单（送饭店的账单）
+-- 出货单（送店铺的账单）
 CREATE TABLE IF NOT EXISTS sales (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id),
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS sale_items (
 );
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id);
 
--- 收款（结账登记：饭店欠款 = Σsales.amount - Σpayments.amount）
+-- 收款（结账登记：店铺欠款 = Σsales.amount - Σpayments.amount）
 CREATE TABLE IF NOT EXISTS payments (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id),

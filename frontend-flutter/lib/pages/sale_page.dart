@@ -37,12 +37,39 @@ class _SalePageState extends State<SalePage> {
   }
 
   Future<void> _load() async {
-    try {
-      final c = await Api.instance.get('/clients');
-      final i = await Api.instance.get('/items/summary');
+    // ① 本地缓存秒开（下拉立即有数据，不卡网络）
+    final cachedC = await Api.instance.getCached('/clients');
+    final cachedI = await Api.instance.getCached('/items/summary');
+    if (cachedC != null || cachedI != null) {
       setState(() {
-        _clients = (c['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        _items = ((i['items'] as List?) ?? [])
+        if (cachedC != null) {
+          _clients = (cachedC['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+        }
+        if (cachedI != null) {
+          _items = ((cachedI['items'] as List?) ?? [])
+              .map((e) => _ItemOption(
+                    e['id'] as String,
+                    e['name'] as String,
+                    ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
+                  ))
+              .toList();
+        }
+      });
+    }
+    // ② 并行网络刷新 + 更新缓存
+    try {
+      final results = await Future.wait([
+        Api.instance.get('/clients'),
+        Api.instance.get('/items/summary'),
+      ]);
+      await Future.wait([
+        Api.instance.setCache('/clients', results[0]),
+        Api.instance.setCache('/items/summary', results[1]),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _clients = (results[0]['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+        _items = ((results[1]['items'] as List?) ?? [])
             .map((e) => _ItemOption(
                   e['id'] as String,
                   e['name'] as String,
@@ -51,7 +78,9 @@ class _SalePageState extends State<SalePage> {
             .toList();
       });
     } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (cachedC == null && cachedI == null) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      }
     }
   }
 
@@ -106,7 +135,7 @@ class _SalePageState extends State<SalePage> {
 
   Future<void> _submit() async {
     if (_clientId == null) {
-      toast(context, '请选择饭店');
+      toast(context, '请选择店铺');
       return;
     }
     final valid = _rows.where((r) => r.itemId != null && r.priceId != null && r.quantity > 0).toList();
@@ -157,7 +186,7 @@ class _SalePageState extends State<SalePage> {
               padding: const EdgeInsets.all(16),
               child: DropdownButtonFormField<String>(
                 initialValue: _clientId,
-                decoration: const InputDecoration(labelText: '饭店'),
+                decoration: const InputDecoration(labelText: '店铺'),
                 items: _clients
                     .map((c) => DropdownMenuItem(value: c['id'] as String, child: Text(c['name'] as String)))
                     .toList(),

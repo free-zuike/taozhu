@@ -7,7 +7,6 @@ on:
       - main
     paths:                    # 仅 Flutter 相关改动才构建（其它端改动跳过）
       - 'frontend-flutter/**'
-      - 'frontend/src/version.ts'
       - '.github/workflows/build-flutter.yml'
 
 permissions:
