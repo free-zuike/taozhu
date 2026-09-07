@@ -68,6 +68,8 @@ class Api {
           res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
         case 'PUT':
           res = await http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
+        case 'PATCH':
+          res = await http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
         case 'DELETE':
           res = await http.delete(Uri.parse(url), headers: headers);
         default:
@@ -100,5 +102,7 @@ class Api {
       request(path, method: 'POST', body: body);
   Future<Map<String, dynamic>> put(String path, [Map<String, dynamic>? body]) =>
       request(path, method: 'PUT', body: body);
+  Future<Map<String, dynamic>> patch(String path, [Map<String, dynamic>? body]) =>
+      request(path, method: 'PATCH', body: body);
   Future<Map<String, dynamic>> delete(String path) => request(path, method: 'DELETE');
 }
