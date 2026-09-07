@@ -71,6 +71,7 @@ class _ClientsPageState extends State<ClientsPage> {
     final nameCtrl = TextEditingController(text: c?['name'] as String? ?? '');
     String? selTopId;
     String? selSubId;
+    var selDay = ((c?['month_start_day'] as num?) ?? 1).toInt();
     // 编辑时按当前分类反推一级/二级
     final curId = c?['category_id'] as String? ?? '';
     if (curId.isNotEmpty) {
@@ -91,6 +92,20 @@ class _ClientsPageState extends State<ClientsPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: '店铺名称 *')),
+              const SizedBox(height: 8),
+              // 每月起始日（结账周期起点，1=自然月；与 移动记账 账本一致 1-28）
+              DropdownButtonFormField<int>(
+                initialValue: selDay,
+                decoration: const InputDecoration(labelText: '每月起始日'),
+                items: [
+                  for (int d = 1; d <= 28; d++)
+                    DropdownMenuItem(
+                      value: d,
+                      child: Text(d == 1 ? '1日（自然月）' : '$d日（每月${d}日~次月${d - 1}日）'),
+                    ),
+                ],
+                onChanged: (v) => setDlg(() => selDay = v ?? 1),
+              ),
               const SizedBox(height: 8),
               if (_topCats.isNotEmpty) ...[
                 const SizedBox(height: 8),
@@ -146,11 +161,13 @@ class _ClientsPageState extends State<ClientsPage> {
       if (c == null) {
         await Api.instance.post('/clients', {
           'name': name,
+          'month_start_day': selDay,
           if (categoryId != null) 'category_id': categoryId,
         });
       } else {
         await Api.instance.patch('/clients/${c['id']}', {
           'name': name,
+          'month_start_day': selDay,
           'category_id': categoryId,
         });
       }
@@ -209,6 +226,7 @@ class _ClientsPageState extends State<ClientsPage> {
                         title: Text('${c['name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text([
                           if ('${c['category_name'] ?? ''}'.isNotEmpty) '${c['category_name']}',
+                          if (((c['month_start_day'] as num?) ?? 1) > 1) '每月 ${c['month_start_day']} 日起算',
                           if ('${c['first_book_date'] ?? ''}'.isNotEmpty)
                             '记账 ${_bookDays('${c['first_book_date']}')} 天（自 ${c['first_book_date']}）',
                         ].join(' · ')),

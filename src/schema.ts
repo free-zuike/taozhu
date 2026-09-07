@@ -16,6 +16,7 @@ const DDL: string[] = [
     note TEXT DEFAULT '',
     start_date TEXT,
     end_date TEXT,
+    month_start_day INTEGER NOT NULL DEFAULT 1,
     category_id TEXT,
     deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -133,13 +134,16 @@ export async function ensureSchema(db: D1Database): Promise<void> {
         await db.prepare(`ALTER TABLE ${t} ADD COLUMN category_id TEXT`).run();
       }
     }
-    // clients 另有：记账开始/结束日期（结账周期起止）
+    // clients 另有：记账开始/结束日期（结账周期起止）+ 每月起始日（1-28，1=自然月）
     const cCols = await db.prepare('PRAGMA table_info(clients)').all<{ name: string }>();
     if (!cCols.results.some((x) => x.name === 'start_date')) {
       await db.prepare('ALTER TABLE clients ADD COLUMN start_date TEXT').run();
     }
     if (!cCols.results.some((x) => x.name === 'end_date')) {
       await db.prepare('ALTER TABLE clients ADD COLUMN end_date TEXT').run();
+    }
+    if (!cCols.results.some((x) => x.name === 'month_start_day')) {
+      await db.prepare('ALTER TABLE clients ADD COLUMN month_start_day INTEGER NOT NULL DEFAULT 1').run();
     }
     schemaReady = true;
   } catch (err) {
