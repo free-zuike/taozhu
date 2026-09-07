@@ -61,11 +61,11 @@ jobs:
           VERSION=$(grep -oP 'versionName "\K[^"]+' frontend/android/app/build.gradle)
           # 固定名：同版本重构建覆盖同名，不同版本共存，不堆积时间戳变体
           cp frontend/android/app/build/outputs/apk/release/app-release.apk "/tmp/app-${VERSION}.apk"
-          REL="taozhu-app"
+          REL="taozhu-v${VERSION}"
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
               --title "陶朱 v${VERSION}" \
-              --notes "一个 Release 按版本累积全部产物；同版本重构建覆盖同名文件。"
+              --notes "陶朱 v${VERSION}：本版本全部产物（Android APK / Web / Windows / iOS）。同版本重构建覆盖同名文件。"
           fi
           gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}"
           gh release upload "$REL" "/tmp/app-${VERSION}.apk" --repo "$GITHUB_REPOSITORY" --clobber
