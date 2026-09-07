@@ -24,7 +24,7 @@ class _BottomShellState extends State<BottomShell> {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [HomePage(), SalePage(), PaymentsPage(), MyPage()],
+        children: const [HomePage(), ClientsPage(), PaymentsPage(), MyPage()],
       ),
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -40,7 +40,7 @@ class _BottomShellState extends State<BottomShell> {
           child: Row(
             children: [
               _navItem(0, Icons.dashboard_outlined, '工作台'),
-              _navItem(1, Icons.storefront_outlined, '出货'),
+              _navItem(1, Icons.store_outlined, '店铺'),
               _centerButton(),
               _navItem(2, Icons.payments_outlined, '收款'),
               _navItem(3, Icons.person_outline, '我的'),

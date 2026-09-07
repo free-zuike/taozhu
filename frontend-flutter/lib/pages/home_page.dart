@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import 'router.dart';
-import 'purchase_page.dart';
-import 'items_page.dart';
-import 'clients_page.dart';
 import 'stats_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -77,50 +74,6 @@ class _HomePageState extends State<HomePage> {
                   _card('今日进货', '¥${_fmt(_today['purchase_total'])}', red: true),
                   _card('总欠款', '¥${_fmt(_totals['debt'])}', red: true),
                   _card('饭店数', '${_totals['client_count'] ?? 0}'),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
-                      onPressed: () => goPage(context, const PurchasePage()),
-                      icon: const Icon(Icons.shopping_cart),
-                      label: const Text('进货记单'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
-                      onPressed: () => goPage(context, const ItemsPage()),
-                      icon: const Icon(Icons.inventory_2_outlined),
-                      label: const Text('商品管理'),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
-                      onPressed: () => goPage(context, const ClientsPage()),
-                      icon: const Icon(Icons.store_outlined),
-                      label: const Text('饭店管理'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
-                      onPressed: () => goPage(context, const StatsPage()),
-                      icon: const Icon(Icons.bar_chart),
-                      label: const Text('统计报表'),
-                    ),
-                  ),
                 ],
               ),
               const SizedBox(height: 16),

@@ -103,10 +103,11 @@ class _ClientsPageState extends State<ClientsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('饭店管理')),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _edit(),
-        child: const Icon(Icons.add),
+      appBar: AppBar(
+        title: const Text('店铺'),
+        actions: [
+          IconButton(onPressed: () => _edit(), icon: const Icon(Icons.add)),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
