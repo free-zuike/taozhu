@@ -165,4 +165,18 @@ describe('统计区间', () => {
     expect(d.items[0].quantity).toBe(20);
     expect(d.items[0].amount).toBe(40);
   });
+
+  it('clients 支持记账开始日期 start_date', async () => {
+    const post = await call(env, 'POST', '/api/v1/clients', token, { name: 'C店', start_date: '2026-09-07' });
+    expect(post.status).toBe(201);
+    const list = await (await call(env, 'GET', '/api/v1/clients', token)).json() as { clients: Array<{ id: string; name: string; start_date: string }> };
+    const c3 = list.clients.find((x) => x.name === 'C店')!;
+    expect(c3.start_date).toBe('2026-09-07');
+    // 编辑更新开始日期
+    const id = c3.id;
+    const patch = await call(env, 'PATCH', `/api/v1/clients/${id}`, token, { start_date: '2026-09-01' });
+    expect(patch.status).toBe(200);
+    const list2 = await (await call(env, 'GET', '/api/v1/clients', token)).json() as { clients: Array<{ name: string; start_date: string }> };
+    expect(list2.clients.find((x) => x.name === 'C店')!.start_date).toBe('2026-09-01');
+  });
 });

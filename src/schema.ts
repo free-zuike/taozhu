@@ -14,6 +14,8 @@ const DDL: string[] = [
     contact TEXT DEFAULT '',
     phone TEXT DEFAULT '',
     note TEXT DEFAULT '',
+    start_date TEXT,
+    category_id TEXT,
     deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
@@ -129,6 +131,11 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       if (!cols.results.some((x) => x.name === 'category_id')) {
         await db.prepare(`ALTER TABLE ${t} ADD COLUMN category_id TEXT`).run();
       }
+    }
+    // clients 另有：记账开始日期（结账周期起始）
+    const cCols = await db.prepare('PRAGMA table_info(clients)').all<{ name: string }>();
+    if (!cCols.results.some((x) => x.name === 'start_date')) {
+      await db.prepare('ALTER TABLE clients ADD COLUMN start_date TEXT').run();
     }
     schemaReady = true;
   } catch (err) {
