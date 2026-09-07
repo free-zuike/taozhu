@@ -91,6 +91,15 @@ const DDL: string[] = [
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS categories (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('item','client')),
+    name TEXT NOT NULL,
+    parent_id TEXT REFERENCES categories(id),
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_categories_type ON categories (type)`,
 ];
 
 let schemaReady = false;
@@ -104,6 +113,22 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     ).first<{ name: string }>();
     if (!exists) {
       await db.batch(DDL.map((sql) => db.prepare(sql)));
+    }
+    // 增量迁移（幂等，已有库也会补齐新表/新列；SQLite 无 ADD COLUMN IF NOT EXISTS，需查列）
+    const catTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'categories'",
+    ).first<{ name: string }>();
+    if (!catTable) {
+      await db.batch([
+        db.prepare(DDL[DDL.length - 2]),
+        db.prepare(DDL[DDL.length - 1]),
+      ]);
+    }
+    for (const t of ['clients', 'items'] as const) {
+      const cols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
+      if (!cols.results.some((x) => x.name === 'category_id')) {
+        await db.prepare(`ALTER TABLE ${t} ADD COLUMN category_id TEXT`).run();
+      }
     }
     schemaReady = true;
   } catch (err) {
