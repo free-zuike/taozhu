@@ -42,6 +42,12 @@ jobs:
         run: |
           # ① 包名统一 com.taozhu.app（与「陶朱」一致：避免两个应用并存、可覆盖升级）
           sed -i 's|namespace = ".*"|namespace = "com.taozhu.app"|; s|applicationId = ".*"|applicationId = "com.taozhu.app"|' android/app/build.gradle.kts
+          # ①b MainActivity 类包与 applicationId 对齐——只改 namespace 不改类路径会 ClassNotFoundException 启动即崩
+          if [ -f android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt ]; then
+            sed -i 's|package com.taozhu.taozhu_app|package com.taozhu.app|' android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt
+            mkdir -p android/app/src/main/kotlin/com/taozhu/app
+            mv android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt
+          fi
           # ② 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
           sed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml || true
