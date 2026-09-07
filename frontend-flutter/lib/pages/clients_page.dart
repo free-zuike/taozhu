@@ -56,11 +56,14 @@ class _ClientsPageState extends State<ClientsPage> {
   double _debt(Map<String, dynamic> c) =>
       ((c['sales_total'] as num?)?.toDouble() ?? 0) - ((c['paid_total'] as num?)?.toDouble() ?? 0);
 
+  String _fmtDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
   Future<void> _edit([Map<String, dynamic>? c]) async {
     final nameCtrl = TextEditingController(text: c?['name'] as String? ?? '');
-    final phoneCtrl = TextEditingController(text: c?['phone'] as String? ?? '');
     String? selTopId;
     String? selSubId;
+    String? selDate = c?['start_date'] as String? ?? _fmtDate(DateTime.now());
     // 编辑时按当前分类反推一级/二级
     final curId = c?['category_id'] as String? ?? '';
     if (curId.isNotEmpty) {
@@ -82,7 +85,28 @@ class _ClientsPageState extends State<ClientsPage> {
             children: [
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: '店铺名称 *')),
               const SizedBox(height: 8),
-              TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: '电话（可选）')),
+              // 记账开始日期（结账周期起始日，滚动月/对账用）
+              InkWell(
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: ctx,
+                    initialDate: DateTime.tryParse(selDate ?? '') ?? DateTime.now(),
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime(2100),
+                  );
+                  if (picked != null) setDlg(() => selDate = _fmtDate(picked));
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(labelText: '记账开始日期'),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.event, size: 18, color: Color(0xFF409EFF)),
+                      const SizedBox(width: 8),
+                      Text(selDate ?? '选择日期'),
+                    ],
+                  ),
+                ),
+              ),
               if (_topCats.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
@@ -109,6 +133,13 @@ class _ClientsPageState extends State<ClientsPage> {
                     onChanged: (v) => setDlg(() => selSubId = v),
                   ),
                 ],
+              ] else ...[
+                const SizedBox(height: 8),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('暂无店铺分类，可先在「我的 → 分类管理」创建',
+                      style: TextStyle(color: Color(0xFF909399), fontSize: 12)),
+                ),
               ],
             ],
           ),
@@ -130,13 +161,13 @@ class _ClientsPageState extends State<ClientsPage> {
       if (c == null) {
         await Api.instance.post('/clients', {
           'name': name,
-          'phone': phoneCtrl.text.trim(),
+          'start_date': selDate,
           if (categoryId != null) 'category_id': categoryId,
         });
       } else {
         await Api.instance.patch('/clients/${c['id']}', {
           'name': name,
-          'phone': phoneCtrl.text.trim(),
+          'start_date': selDate,
           'category_id': categoryId,
         });
       }
@@ -195,7 +226,7 @@ class _ClientsPageState extends State<ClientsPage> {
                         title: Text('${c['name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text([
                           if ('${c['category_name'] ?? ''}'.isNotEmpty) '${c['category_name']}',
-                          if (c['phone'] != null && '${c['phone']}'.isNotEmpty) '${c['phone']}',
+                          if ('${c['start_date'] ?? ''}'.isNotEmpty) '开始 ${c['start_date']}',
                         ].join(' · ')),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,

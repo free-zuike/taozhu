@@ -30,6 +30,7 @@ clientsRouter.get('/', async (c) => {
     const row = r as unknown as ClientRow & { sales_total: number; paid_total: number; category_name: string | null };
     return {
       id: row.id, name: row.name, contact: row.contact ?? '', phone: row.phone ?? '', note: row.note ?? '',
+      start_date: row.start_date ?? '',
       category_id: row.category_id ?? '', category_name: row.category_name ?? '',
       sales_total: row.sales_total, paid_total: row.paid_total,
       debt: Number((row.sales_total - row.paid_total).toFixed(2)),
@@ -39,32 +40,33 @@ clientsRouter.get('/', async (c) => {
 
 // POST /clients — 新建店铺
 clientsRouter.post('/', adminOnly(), async (c) => {
-  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string; start_date?: string } | null;
   const name = body?.name?.trim();
   if (!name) return c.json({ error: '店铺名称必填' }, 400);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
   if (catErr) return c.json({ error: catErr }, 400);
   const id = randomId();
-  await c.env.DB.prepare('INSERT INTO clients (id, name, contact, phone, note, category_id) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(id, name, body?.contact?.trim() ?? '', body?.phone?.trim() ?? '', body?.note?.trim() ?? '', body?.category_id ?? null).run();
-  return c.json({ id, name, contact: body?.contact?.trim() ?? '', phone: body?.phone?.trim() ?? '', note: body?.note?.trim() ?? '', category_id: body?.category_id ?? '', debt: 0 }, 201);
+  await c.env.DB.prepare('INSERT INTO clients (id, name, contact, phone, note, category_id, start_date) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, name, body?.contact?.trim() ?? '', body?.phone?.trim() ?? '', body?.note?.trim() ?? '', body?.category_id ?? null, body?.start_date?.trim() ?? null).run();
+  return c.json({ id, name, contact: body?.contact?.trim() ?? '', phone: body?.phone?.trim() ?? '', note: body?.note?.trim() ?? '', category_id: body?.category_id ?? '', start_date: body?.start_date?.trim() ?? '', debt: 0 }, 201);
 });
 
 // PATCH /clients/:id
 clientsRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string | null } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string | null; start_date?: string | null } | null;
   const client = await c.env.DB.prepare('SELECT * FROM clients WHERE id = ? AND deleted_at IS NULL').bind(id).first<ClientRow>();
   if (!client) return c.json({ error: '店铺不存在' }, 404);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
   if (catErr) return c.json({ error: catErr }, 400);
-  await c.env.DB.prepare('UPDATE clients SET name = ?, contact = ?, phone = ?, note = ?, category_id = ? WHERE id = ?')
+  await c.env.DB.prepare('UPDATE clients SET name = ?, contact = ?, phone = ?, note = ?, category_id = ?, start_date = ? WHERE id = ?')
     .bind(
       body?.name?.trim() || client.name,
       body?.contact?.trim() ?? client.contact ?? '',
       body?.phone?.trim() ?? client.phone ?? '',
       body?.note?.trim() ?? client.note ?? '',
       body?.category_id !== undefined ? body.category_id : client.category_id,
+      body?.start_date !== undefined ? (body.start_date?.trim() ?? null) : client.start_date,
       id,
     ).run();
   return c.json({ ok: true });
