@@ -38,9 +38,9 @@ jobs:
           $VERSION = (Select-String -Path "frontend-flutter/lib/version.dart" -Pattern "APP_VERSION = '([^']+)'").Matches[0].Groups[1].Value
           if (-not $VERSION) { $VERSION = "0.1.0.0" }
           Compress-Archive -Path "frontend-flutter/build/windows/x64/runner/Release/*" -DestinationPath "$env:TEMP/taozhu-windows-${VERSION}.zip"
-          $REL = "taozhu-app"
+          $REL = "taozhu-v$VERSION"
           gh release view $REL 2>$null; if (-not $?) {
-            gh release create $REL --title "陶朱 v$VERSION" --notes "一个 Release 按版本累积全部产物（APK / Web / Flutter / Windows / iOS）。"
+            gh release create $REL --title "陶朱 v$VERSION" --notes "陶朱 v$VERSION：本版本全部产物（Windows / iOS / APK / Web）。"
           }
           gh release edit $REL --title "陶朱 v$VERSION" | Out-Null
           gh release upload $REL "$env:TEMP/taozhu-windows-${VERSION}.zip" --clobber
@@ -67,11 +67,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend/src/version.ts || echo "0.1.0.0")
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || echo "0.1.0.0")
           cd frontend-flutter/build/ios/iphoneos && zip -qr "/tmp/taozhu-ios-${VERSION}-unsigned.zip" Runner.app && cd -
-          REL="taozhu-app"
+          REL="taozhu-v${VERSION}"
           if ! gh release view "$REL" >/dev/null 2>&1; then
-            gh release create "$REL" --title "陶朱 v${VERSION}" --notes "一个 Release 按版本累积全部产物。"
+            gh release create "$REL" --title "陶朱 v${VERSION}" --notes "陶朱 v${VERSION}：本版本全部产物（iOS / Windows / APK / Web）。"
           fi
           gh release edit "$REL" --title "陶朱 v${VERSION}"
           gh release upload "$REL" "/tmp/taozhu-ios-${VERSION}-unsigned.zip" --clobber
