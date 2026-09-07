@@ -148,4 +148,21 @@ describe('统计区间', () => {
     const res = await call(env, 'GET', '/api/v1/stats/summary', token);
     expect(res.status).toBe(400);
   });
+
+  it('items 商品排行（区间内出货额 Top）', async () => {
+    const res = await call(env, 'GET', '/api/v1/stats/items?start=2026-09-01&end=2026-09-30', token);
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { items: Array<{ name: string; unit: string; quantity: number; amount: number }> };
+    expect(d.items.length).toBe(1); // 只有白菜
+    expect(d.items[0].name).toBe('白菜');
+    expect(d.items[0].quantity).toBe(45); // 25 + 20 斤
+    expect(d.items[0].amount).toBe(90);
+  });
+
+  it('items 按店铺过滤', async () => {
+    const res = await call(env, 'GET', '/api/v1/stats/items?start=2026-09-01&end=2026-09-30&client_id=c-b', token);
+    const d = (await res.json()) as { items: Array<{ quantity: number; amount: number }> };
+    expect(d.items[0].quantity).toBe(20);
+    expect(d.items[0].amount).toBe(40);
+  });
 });
