@@ -1,0 +1,52 @@
+name: Build Flutter App
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate platforms (android/web/...)
+        working-directory: frontend-flutter
+        run: flutter create --org com.taozhu --project-name taozhu_app .
+
+      - name: Build Web (Flutter)
+        working-directory: frontend-flutter
+        run: flutter build web
+
+      - name: Build APK (debug, 可安装验证)
+        working-directory: frontend-flutter
+        run: flutter build apk --debug
+
+      - name: Package & upload to single Release (taozhu-app)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP '^version:\s*\K[^+]+' frontend-flutter/pubspec.yaml)
+          TS=$(date +%Y%m%d-%H%M%S)
+          cp frontend-flutter/build/app/outputs/flutter-apk/app-debug.apk "/tmp/flutter-app-${VERSION}-${TS}.apk"
+          cd frontend-flutter/build/web && zip -qr "/tmp/flutter-web-${VERSION}-${TS}.zip" . && cd -
+          REL="taozhu-app"
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
+              --title "陶朱（全平台产物）" \
+              --notes "一个 Release 累积全部版本产物：APK / Web 包 / Flutter 产物等，按文件名（产物-版本-时间）下载。"
+          fi
+          gh release upload "$REL" "/tmp/flutter-app-${VERSION}-${TS}.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$REL" "/tmp/flutter-web-${VERSION}-${TS}.zip" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "uploaded flutter-app/flutter-web ${VERSION}"

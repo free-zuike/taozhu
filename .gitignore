@@ -27,3 +27,5 @@ dist-apk/
 # uni-app (frontend-uni)
 frontend-uni/node_modules/
 frontend-uni/dist/
+frontend-flutter/build/
+frontend-flutter/.dart_tool/
