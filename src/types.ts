@@ -26,6 +26,7 @@ export interface ClientRow {
   contact: string | null;
   phone: string | null;
   note: string | null;
+  category_id: string | null;
   deleted_at: string | null;
 }
 
@@ -33,6 +34,7 @@ export interface ItemRow {
   id: string;
   name: string;
   category: string | null;
+  category_id: string | null;
   deleted_at: string | null;
 }
 

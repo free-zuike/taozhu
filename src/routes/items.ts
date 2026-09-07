@@ -11,8 +11,14 @@ itemsRouter.use('*', authMiddleware());
 
 const nowIso = () => new Date().toISOString();
 
-function serialize(item: ItemRow & { category?: string | null }, prices: unknown[]) {
-  return { id: item.id, name: item.name, category: item.category ?? '', prices };
+function serialize(item: ItemRow & { category?: string | null; category_name?: string | null }, prices: unknown[]) {
+  return {
+    id: item.id, name: item.name,
+    category: item.category ?? '',
+    category_id: item.category_id ?? '',
+    category_name: item.category_name ?? '',
+    prices,
+  };
 }
 
 // GET /items?q= — 商品列表（含价格组合，不含已删）
@@ -20,8 +26,9 @@ itemsRouter.get('/', async (c) => {
   const q = c.req.query('q')?.trim() ?? '';
   const rows = q
     ? await c.env.DB.prepare(
-        'SELECT * FROM items WHERE deleted_at IS NULL AND name LIKE ? ORDER BY name').bind(`%${q}%`).all<ItemRow>()
-    : await c.env.DB.prepare('SELECT * FROM items WHERE deleted_at IS NULL ORDER BY name').all<ItemRow>();
+        'SELECT i.*, cat.name AS category_name FROM items i LEFT JOIN categories cat ON cat.id = i.category_id WHERE i.deleted_at IS NULL AND i.name LIKE ? ORDER BY i.name').bind(`%${q}%`).all<ItemRow & { category_name: string | null }>()
+    : await c.env.DB.prepare(
+        'SELECT i.*, cat.name AS category_name FROM items i LEFT JOIN categories cat ON cat.id = i.category_id WHERE i.deleted_at IS NULL ORDER BY i.name').all<ItemRow & { category_name: string | null }>();
   const priceRows = await c.env.DB.prepare(
     'SELECT * FROM item_prices WHERE active = 1 AND item_id IN (SELECT id FROM items WHERE deleted_at IS NULL) ORDER BY unit').all();
   const byItem = new Map<string, unknown[]>();
@@ -47,17 +54,21 @@ itemsRouter.get('/summary', async (c) => {
   return c.json({ items });
 });
 
-// POST /items — 新建商品（body: {name, category, prices:[{unit,purchase_price,sale_price}]}）
+// POST /items — 新建商品（body: {name, category?, category_id?, prices:[{unit,purchase_price,sale_price}]}）
 itemsRouter.post('/', adminOnly(), async (c) => {
   const body = await c.req.json().catch(() => null) as {
-    name?: string; category?: string;
+    name?: string; category?: string; category_id?: string;
     prices?: Array<{ unit: string; purchase_price: number; sale_price: number }>;
   } | null;
   const name = body?.name?.trim();
   if (!name) return c.json({ error: '商品名称必填' }, 400);
+  if (body?.category_id) {
+    const cat = await c.env.DB.prepare('SELECT id FROM categories WHERE id = ? AND type = ?').bind(body.category_id, 'item').first();
+    if (!cat) return c.json({ error: '商品分类不存在' }, 400);
+  }
   const id = randomId();
-  await c.env.DB.prepare('INSERT INTO items (id, name, category) VALUES (?, ?, ?)')
-    .bind(id, name, body?.category?.trim() ?? '').run();
+  await c.env.DB.prepare('INSERT INTO items (id, name, category, category_id) VALUES (?, ?, ?, ?)')
+    .bind(id, name, body?.category?.trim() ?? '', body?.category_id ?? null).run();
   const priceIds: string[] = [];
   for (const p of body?.prices ?? []) {
     const unit = p.unit?.trim();
@@ -68,18 +79,27 @@ itemsRouter.post('/', adminOnly(), async (c) => {
       .bind(pid, id, unit, Number(p.purchase_price) || 0, Number(p.sale_price) || 0).run();
     priceIds.push(pid);
   }
-  return c.json({ id, name, category: body?.category?.trim() ?? '', prices: priceIds }, 201);
+  return c.json({ id, name, category: body?.category?.trim() ?? '', category_id: body?.category_id ?? '', prices: priceIds }, 201);
 });
 
 // PATCH /items/:id — 改名称/分类
 itemsRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json().catch(() => null) as { name?: string; category?: string } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; category?: string; category_id?: string | null } | null;
   const item = await c.env.DB.prepare('SELECT * FROM items WHERE id = ? AND deleted_at IS NULL').bind(id).first<ItemRow>();
   if (!item) return c.json({ error: '商品不存在' }, 404);
+  if (body?.category_id) {
+    const cat = await c.env.DB.prepare('SELECT id FROM categories WHERE id = ? AND type = ?').bind(body.category_id, 'item').first();
+    if (!cat) return c.json({ error: '商品分类不存在' }, 400);
+  }
   const name = body?.name?.trim();
-  await c.env.DB.prepare('UPDATE items SET name = ?, category = ? WHERE id = ?')
-    .bind(name || item.name, body?.category?.trim() ?? item.category ?? '', id).run();
+  await c.env.DB.prepare('UPDATE items SET name = ?, category = ?, category_id = ? WHERE id = ?')
+    .bind(
+      name || item.name,
+      body?.category?.trim() ?? item.category ?? '',
+      body?.category_id !== undefined ? body.category_id : item.category_id,
+      id,
+    ).run();
   return c.json({ id, name: name || item.name, category: body?.category?.trim() ?? item.category ?? '' });
 });
 

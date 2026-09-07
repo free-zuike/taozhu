@@ -9,6 +9,7 @@ import { purchasesRouter } from './routes/purchases';
 import { salesRouter } from './routes/sales';
 import { statsRouter } from './routes/stats';
 import { usersRouter } from './routes/users';
+import { categoriesRouter } from './routes/categories';
 import { aiRouter } from './routes/ai';
 import { settingsRouter } from './routes/settings';
 import { ensureSchema } from './schema';
@@ -42,6 +43,7 @@ app.route('/api/v1/purchases', purchasesRouter);
 app.route('/api/v1/payments', paymentsRouter);
 app.route('/api/v1/stats', statsRouter);
 app.route('/api/v1/users', usersRouter);
+app.route('/api/v1/categories', categoriesRouter);
 app.route('/api/v1/ai', aiRouter);
 app.route('/api/v1/settings', settingsRouter);
 
