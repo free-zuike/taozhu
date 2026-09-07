@@ -152,7 +152,7 @@ class _ClientsPageState extends State<ClientsPage> {
                   if (_clients.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(32),
-                      child: Center(child: Text('暂无饭店，点右下角 + 添加', style: TextStyle(color: Colors.grey))),
+                      child: Center(child: Text('暂无店铺，点右上角 ＋ 添加', style: TextStyle(color: Colors.grey))),
                     ),
                 ],
               ),
