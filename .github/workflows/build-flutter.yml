@@ -29,25 +29,24 @@ jobs:
         working-directory: frontend-flutter
         run: flutter build web
 
-      - name: Build APK (debug, 可安装验证)
+      - name: Build APK (release, 体积小)
         working-directory: frontend-flutter
-        run: flutter build apk --debug
+        run: flutter build apk --release
 
       - name: Package & upload to single Release (taozhu-app)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || echo "0.1.0.0")
-          TS=$(date +%Y%m%d-%H%M%S)
-          cp frontend-flutter/build/app/outputs/flutter-apk/app-debug.apk "/tmp/flutter-app-${VERSION}-${TS}.apk"
-          cd frontend-flutter/build/web && zip -qr "/tmp/flutter-web-${VERSION}-${TS}.zip" . && cd -
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend/src/version.ts || echo "0.1.0.0")
+          cp frontend-flutter/build/app/outputs/flutter-apk/app-release.apk "/tmp/flutter-app-${VERSION}.apk"
+          cd frontend-flutter/build/web && zip -qr "/tmp/flutter-web-${VERSION}.zip" . && cd -
           REL="taozhu-app"
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
               --title "陶朱 v${VERSION}" \
-              --notes "一个 Release 累积全部版本产物：APK / Web 包 / Flutter 产物等，按文件名（产物-版本-时间）下载。"
+              --notes "一个 Release 按版本累积全部产物。同版本重构建会覆盖同名文件，不重复堆积。"
           fi
           gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}"
-          gh release upload "$REL" "/tmp/flutter-app-${VERSION}-${TS}.apk" --repo "$GITHUB_REPOSITORY" --clobber
-          gh release upload "$REL" "/tmp/flutter-web-${VERSION}-${TS}.zip" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$REL" "/tmp/flutter-app-${VERSION}.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$REL" "/tmp/flutter-web-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber
           echo "uploaded flutter-app/flutter-web ${VERSION}"
