@@ -1,5 +1,6 @@
 /// API 封装：服务器地址可手动设置 + token + 401 处理（http 包，三端通用）
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -109,4 +110,38 @@ class Api {
   Future<Map<String, dynamic>> patch(String path, [Map<String, dynamic>? body]) =>
       request(path, method: 'PATCH', body: body);
   Future<Map<String, dynamic>> delete(String path) => request(path, method: 'DELETE');
+
+  /// multipart 图片上传（AI 拍照识别：POST /ai/parse-photo，字段 photo）
+  Future<Map<String, dynamic>> uploadPhoto(String path, Uint8List bytes, String filename) async {
+    final base = await _base();
+    if (base.isEmpty) {
+      throw Exception('未配置服务器地址：请在登录页填写您的服务器地址（如 https://您的域名）');
+    }
+    final url = '$base/api/v1$path';
+    final req = http.MultipartRequest('POST', Uri.parse(url));
+    req.files.add(http.MultipartFile.fromBytes('photo', bytes, filename: filename));
+    final t = await _token();
+    if (t != null && t.isNotEmpty) req.headers['Authorization'] = 'Bearer $t';
+    http.Response res;
+    try {
+      final streamed = await req.send();
+      res = await http.Response.fromStream(streamed);
+    } catch (e) {
+      throw Exception('$e （地址: $url）');
+    }
+    if (res.statusCode == 401) {
+      await clearToken();
+      throw Exception('登录已过期，请重新登录');
+    }
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      if (res.bodyBytes.isEmpty) return {};
+      return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    }
+    String msg = '请求失败(${res.statusCode})';
+    try {
+      final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      if (d['error'] is String) msg = d['error'] as String;
+    } catch (_) {}
+    throw Exception(msg);
+  }
 }

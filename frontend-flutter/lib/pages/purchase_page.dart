@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../api.dart';
 import 'router.dart';
 
@@ -37,6 +38,56 @@ class _PurchasePageState extends State<PurchasePage> {
 
   double get _total => _rows.fold(0, (s, r) => s + r.quantity * r.purchasePrice);
 
+  /// AI 拍照识别：拍照 → 后端解析 → 匹配已有商品填行
+  Future<void> _aiParse() async {
+    try {
+      final picked = await ImagePicker()
+          .pickImage(source: ImageSource.camera, maxWidth: 1600, imageQuality: 85);
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      toast(context, '识别中…');
+      final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.jpg');
+      final items = (d['items'] as List?) ?? [];
+      if (items.isEmpty) {
+        toast(context, '未识别到商品，请手动填写');
+        return;
+      }
+      var filled = 0;
+      for (final raw in items) {
+        final name = '${raw['name'] ?? ''}'.trim();
+        final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
+        final price = (raw['price'] as num?)?.toDouble() ?? 0;
+        final unit = '${raw['unit'] ?? ''}'.trim();
+        final match = _items
+            .where((it) => '${it['name']}' == name ||
+                '${it['name']}'.contains(name) ||
+                name.contains('${it['name']}'))
+            .firstOrNull;
+        if (match == null) continue;
+        final prices = ((match['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+        Map<String, dynamic>? pr;
+        if (unit.isNotEmpty) {
+          pr = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+        }
+        pr ??= prices.firstOrNull;
+        if (pr == null) continue;
+        setState(() {
+          final row = (_rows.length == 1 && _rows.first.itemId == null)
+              ? _rows.first
+              : (_rows..add(_PRow())).last;
+          row.itemId = '${match['id']}';
+          row.priceId = pr!['id'] as String?;
+          row.quantity = qty;
+          row.purchasePrice = price > 0 ? price : (pr!['purchase_price'] as num).toDouble();
+          filled++;
+        });
+      }
+      toast(context, filled > 0 ? '已导入 $filled 项商品' : '识别结果未匹配到已有商品，请手动填写');
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   Future<void> _submit() async {
     final valid = _rows.where((r) => r.itemId != null && r.priceId != null && r.quantity > 0).toList();
     if (valid.isEmpty) {
@@ -65,7 +116,16 @@ class _PurchasePageState extends State<PurchasePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('进货记单')),
+      appBar: AppBar(
+        title: const Text('进货记单'),
+        actions: [
+          IconButton(
+            tooltip: 'AI 拍照识别',
+            icon: const Icon(Icons.camera_alt_outlined),
+            onPressed: _busy ? null : _aiParse,
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
