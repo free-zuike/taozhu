@@ -126,7 +126,7 @@ class _ClientsPageState extends State<ClientsPage> {
                     children: [
                       const Icon(Icons.event_busy, size: 18, color: Color(0xFF409EFF)),
                       const SizedBox(width: 8),
-                      Expanded(child: Text(selEndDate == null || selEndDate.isEmpty ? '未定（长期）' : selEndDate!)),
+                      Expanded(child: Text((selEndDate?.isEmpty ?? true) ? '未定（长期）' : selEndDate!)),
                       if (selEndDate != null && selEndDate!.isNotEmpty)
                         InkWell(
                           onTap: () => setDlg(() => selEndDate = ''),
@@ -136,7 +136,8 @@ class _ClientsPageState extends State<ClientsPage> {
                   ),
                 ),
               ),
-              if (_topCats.isNotEmpty) ...[                const SizedBox(height: 8),
+              if (_topCats.isNotEmpty) ...[
+                const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   initialValue: selTopId,
                   decoration: const InputDecoration(labelText: '分类（可选）'),
@@ -190,14 +191,14 @@ class _ClientsPageState extends State<ClientsPage> {
         await Api.instance.post('/clients', {
           'name': name,
           'start_date': selDate,
-          if (selEndDate != null && selEndDate.isNotEmpty) 'end_date': selEndDate,
+          if (selEndDate?.isNotEmpty == true) 'end_date': selEndDate,
           if (categoryId != null) 'category_id': categoryId,
         });
       } else {
         await Api.instance.patch('/clients/${c['id']}', {
           'name': name,
           'start_date': selDate,
-          'end_date': (selEndDate == null || selEndDate.isEmpty) ? null : selEndDate,
+          'end_date': (selEndDate == null || selEndDate!.isEmpty) ? null : selEndDate,
           'category_id': categoryId,
         });
       }
