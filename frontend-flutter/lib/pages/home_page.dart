@@ -26,8 +26,8 @@ class _HomePageState extends State<HomePage> {
     try {
       final d = await Api.instance.get('/stats/overview');
       setState(() {
-        _today = (d['today'] as Map?) ?? {};
-        _totals = (d['totals'] as Map?) ?? {};
+        _today = (d['today'] as Map?)?.cast<String, dynamic>() ?? {};
+        _totals = (d['totals'] as Map?)?.cast<String, dynamic>() ?? {};
         _topDebt = (d['top_debt_clients'] as List?) ?? [];
         _loading = false;
       });
