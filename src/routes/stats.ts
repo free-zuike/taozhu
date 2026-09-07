@@ -219,3 +219,29 @@ statsRouter.get('/daily', async (c) => {
     })),
   });
 });
+
+// GET /stats/items?start=&end=&client_id= — 区间内商品出货排行（按出货额降序，Top 15）
+statsRouter.get('/items', async (c) => {
+  const start = c.req.query('start')?.trim();
+  const end = c.req.query('end')?.trim();
+  if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
+  const clientId = c.req.query('client_id')?.trim();
+  const params: unknown[] = [start, end];
+  if (clientId) params.push(clientId);
+  const rows = await c.env.DB.prepare(
+    `SELECT i.name, si.unit, SUM(si.quantity) AS quantity, SUM(si.amount) AS amount
+     FROM sale_items si
+     JOIN sales s ON s.id = si.sale_id
+     JOIN items i ON i.id = si.item_id
+     WHERE substr(s.happened_at, 1, 10) BETWEEN ? AND ?${clientId ? ' AND s.client_id = ?' : ''}
+     GROUP BY si.item_id, si.unit
+     ORDER BY amount DESC LIMIT 15`,
+  ).bind(...params).all<{ name: string; unit: string; quantity: number; amount: number }>();
+  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  return c.json({
+    items: rows.results.map((x) => ({
+      name: x.name, unit: x.unit,
+      quantity: r(x.quantity), amount: r(x.amount),
+    })),
+  });
+});
