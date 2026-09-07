@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
-import '../widgets/admin_scaffold.dart';
 import 'router.dart';
 
 class SalePage extends StatefulWidget {
@@ -89,9 +88,8 @@ class _SalePageState extends State<SalePage> {
 
   @override
   Widget build(BuildContext context) {
-    return AdminScaffold(
-      selectedIndex: 1,
-      title: '出货记单',
+    return Scaffold(
+      appBar: AppBar(title: const Text('出货记单')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -132,7 +130,6 @@ class _SalePageState extends State<SalePage> {
           ),
         ],
       ),
-      onSelect: (i) => goPage(context, i),
     );
   }
 

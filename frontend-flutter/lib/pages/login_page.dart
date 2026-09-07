@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
-import 'home_page.dart';
+import '../widgets/bottom_shell.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -55,7 +55,7 @@ class _LoginPageState extends State<LoginPage> {
       await Api.instance.setToken(d['token'] as String);
       if (!mounted) return;
       Navigator.of(context)
-          .pushReplacement(MaterialPageRoute(builder: (_) => const HomePage()));
+          .pushReplacement(MaterialPageRoute(builder: (_) => const BottomShell()));
     } catch (e) {
       _toast(e.toString().replaceFirst('Exception: ', ''));
     } finally {
