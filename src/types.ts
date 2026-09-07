@@ -27,6 +27,7 @@ export interface ClientRow {
   phone: string | null;
   note: string | null;
   start_date: string | null;
+  end_date: string | null;
   category_id: string | null;
   deleted_at: string | null;
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../theme.dart';
 import 'router.dart';
 import 'items_page.dart';
 import 'categories_page.dart';
@@ -41,6 +42,16 @@ class _MyPageState extends State<MyPage> {
               leading: const Icon(Icons.dns_outlined, color: Color(0xFF409EFF)),
               title: const Text('服务器地址', style: TextStyle(fontSize: 13, color: Color(0xFF909399))),
               subtitle: Text(_base.isEmpty ? '未设置' : _base),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: SwitchListTile(
+              secondary: const Icon(Icons.dark_mode_outlined),
+              title: const Text('深色模式'),
+              subtitle: const Text('夜间/白天主题切换', style: TextStyle(fontSize: 12)),
+              value: themeNotifier.value == ThemeMode.dark,
+              onChanged: (v) => setThemeMode(v ? ThemeMode.dark : ThemeMode.light),
             ),
           ),
           const SizedBox(height: 12),

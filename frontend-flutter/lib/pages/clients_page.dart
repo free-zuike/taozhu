@@ -64,6 +64,7 @@ class _ClientsPageState extends State<ClientsPage> {
     String? selTopId;
     String? selSubId;
     String? selDate = c?['start_date'] as String? ?? _fmtDate(DateTime.now());
+    String? selEndDate = c?['end_date'] as String? ?? '';
     // 编辑时按当前分类反推一级/二级
     final curId = c?['category_id'] as String? ?? '';
     if (curId.isNotEmpty) {
@@ -107,8 +108,35 @@ class _ClientsPageState extends State<ClientsPage> {
                   ),
                 ),
               ),
-              if (_topCats.isNotEmpty) ...[
-                const SizedBox(height: 8),
+              const SizedBox(height: 8),
+              // 记账结束日期（可选，空=长期/未定）
+              InkWell(
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: ctx,
+                    initialDate: DateTime.tryParse(selEndDate ?? '') ?? DateTime.now(),
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime(2100),
+                  );
+                  if (picked != null) setDlg(() => selEndDate = _fmtDate(picked));
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(labelText: '记账结束日期（可选）'),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.event_busy, size: 18, color: Color(0xFF409EFF)),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(selEndDate == null || selEndDate.isEmpty ? '未定（长期）' : selEndDate!)),
+                      if (selEndDate != null && selEndDate!.isNotEmpty)
+                        InkWell(
+                          onTap: () => setDlg(() => selEndDate = ''),
+                          child: const Icon(Icons.close, size: 16, color: Color(0xFF909399)),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              if (_topCats.isNotEmpty) ...[                const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   initialValue: selTopId,
                   decoration: const InputDecoration(labelText: '分类（可选）'),
@@ -162,12 +190,14 @@ class _ClientsPageState extends State<ClientsPage> {
         await Api.instance.post('/clients', {
           'name': name,
           'start_date': selDate,
+          if (selEndDate != null && selEndDate.isNotEmpty) 'end_date': selEndDate,
           if (categoryId != null) 'category_id': categoryId,
         });
       } else {
         await Api.instance.patch('/clients/${c['id']}', {
           'name': name,
           'start_date': selDate,
+          'end_date': (selEndDate == null || selEndDate.isEmpty) ? null : selEndDate,
           'category_id': categoryId,
         });
       }
@@ -226,7 +256,7 @@ class _ClientsPageState extends State<ClientsPage> {
                         title: Text('${c['name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text([
                           if ('${c['category_name'] ?? ''}'.isNotEmpty) '${c['category_name']}',
-                          if ('${c['start_date'] ?? ''}'.isNotEmpty) '开始 ${c['start_date']}',
+                          if ('${c['start_date'] ?? ''}'.isNotEmpty) '${c['start_date']}${'${c['end_date'] ?? ''}'.isNotEmpty ? ' ~ ${c['end_date']}' : ''}',
                         ].join(' · ')),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
