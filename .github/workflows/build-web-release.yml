@@ -40,11 +40,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || echo "0.1.0.0")
           REL="taozhu-app"
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
-              --title "陶朱（全平台产物）" \
+              --title "陶朱 v${VERSION}" \
               --notes "一个 Release 累积全部版本的产物（APK / Web 包 / 后续 exe 等），按文件名（产物-版本-时间）选择下载。"
           fi
+          gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}"
           gh release upload "$REL" "${{ env.web_zip }}" --repo "$GITHUB_REPOSITORY" --clobber
           echo "uploaded: ${{ env.web_zip }}"

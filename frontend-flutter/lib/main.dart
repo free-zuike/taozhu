@@ -10,9 +10,20 @@ class TaoZhuApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const primary = Color(0xFF409EFF);
     return MaterialApp(
       title: '陶朱',
-      theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: primary,
+          primary: primary,
+        ),
+        useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFFF5F7FA),
+        appBarTheme: const AppBarTheme(backgroundColor: Colors.white, elevation: 0.5),
+        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
+      ),
       home: FutureBuilder<bool>(
         future: Api.instance.hasToken(),
         builder: (context, snap) {

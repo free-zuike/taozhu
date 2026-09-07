@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
-import 'sale_page.dart';
-import 'purchase_page.dart';
-import 'items_page.dart';
+import '../widgets/admin_scaffold.dart';
+import 'router.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -33,10 +32,7 @@ class _HomePageState extends State<HomePage> {
       });
     } catch (e) {
       setState(() => _loading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))));
-      }
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -47,9 +43,9 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(title: const Text('工作台')),
+    return AdminScaffold(
+      selectedIndex: 0,
+      title: '工作台',
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -61,78 +57,96 @@ class _HomePageState extends State<HomePage> {
                     spacing: 12,
                     runSpacing: 12,
                     children: [
-                      _card('今日出货', '¥${_fmt(_today['sales_total'])}', Colors.black),
-                      _card('今日毛利', '¥${_fmt(_today['gross_profit'])}', Colors.green.shade600),
-                      _card('今日收款', '¥${_fmt(_today['paid_total'])}', Colors.black),
-                      _card('今日进货', '¥${_fmt(_today['purchase_total'])}', Colors.red.shade600),
-                      _card('总欠款', '¥${_fmt(_totals['debt'])}', Colors.red.shade600),
-                      _card('饭店数', '${_totals['client_count'] ?? 0}', Colors.black),
+                      _card('今日出货', '¥${_fmt(_today['sales_total'])}'),
+                      _card('今日毛利', '¥${_fmt(_today['gross_profit'])}', green: true),
+                      _card('今日收款', '¥${_fmt(_today['paid_total'])}'),
+                      _card('今日进货', '¥${_fmt(_today['purchase_total'])}', red: true),
+                      _card('总欠款', '¥${_fmt(_totals['debt'])}', red: true),
+                      _card('饭店数', '${_totals['client_count'] ?? 0}'),
                     ],
                   ),
                   const SizedBox(height: 16),
-                  Row(children: [
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SalePage())),
-                        child: const Text('出货记单'),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+                          onPressed: () => goPage(context, 1),
+                          child: const Text('出货记单'),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton.tonal(
-                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PurchasePage())),
-                        child: const Text('进货记单'),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+                          onPressed: () => goPage(context, 2),
+                          child: const Text('进货记单'),
+                        ),
                       ),
-                    ),
-                  ]),
-                  const SizedBox(height: 8),
-                  Row(children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ItemsPage())),
-                        child: const Text('商品管理'),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+                          onPressed: () => goPage(context, 3),
+                          child: const Text('商品管理'),
+                        ),
                       ),
-                    ),
-                  ]),
+                    ],
+                  ),
                   const SizedBox(height: 16),
-                  const Text('欠款排行（前 5）', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 8),
                   Card(
-                    child: Column(
-                      children: [
-                        for (final c in _topDebt)
-                          ListTile(
-                            dense: true,
-                            title: Text('${c['name']}'),
-                            trailing: Text('¥${_fmt(c['debt'])}',
-                                style: TextStyle(color: Colors.red.shade600, fontWeight: FontWeight.bold)),
-                          ),
-                        if (_topDebt.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.all(16),
-                            child: Text('暂无数据', style: TextStyle(color: Colors.grey)),
-                          ),
-                      ],
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('欠款排行（前 5）',
+                              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                          const SizedBox(height: 4),
+                          for (final c in _topDebt)
+                            ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: Text('${c['name']}'),
+                              trailing: Text('¥${_fmt(c['debt'])}',
+                                  style: const TextStyle(
+                                      color: Color(0xFFF56C6C), fontWeight: FontWeight.w600)),
+                            ),
+                          if (_topDebt.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.all(16),
+                              child: Text('暂无数据', style: TextStyle(color: Colors.grey)),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
+      onSelect: (i) => goPage(context, i),
     );
   }
 
-  Widget _card(String label, String value, Color color) {
+  Widget _card(String label, String value, {bool green = false, bool red = false}) {
+    final color = green ? const Color(0xFF67C23A) : (red ? const Color(0xFFF56C6C) : Colors.black);
+    final w = MediaQuery.of(context).size.width;
+    final itemW = (w.clamp(200.0, 900.0) - 16 * 2 - 12) / 2;
     return SizedBox(
-      width: (MediaQuery.of(context).size.width - 16 * 2 - 12) / 2,
+      width: itemW,
       child: Card(
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+              Text(label, style: const TextStyle(color: Color(0xFF909399), fontSize: 13)),
               const SizedBox(height: 6),
-              Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color)),
+              Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: color)),
             ],
           ),
         ),

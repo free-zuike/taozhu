@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../widgets/admin_scaffold.dart';
+import 'router.dart';
 
 class PurchasePage extends StatefulWidget {
   const PurchasePage({super.key});
@@ -30,23 +32,16 @@ class _PurchasePageState extends State<PurchasePage> {
       final i = await Api.instance.get('/items/summary');
       setState(() => _items = ((i['items'] as List?) ?? []).cast<Map<String, dynamic>>());
     } catch (e) {
-      _toast(e.toString().replaceFirst('Exception: ', ''));
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
-  double get _total =>
-      _rows.fold(0, (s, r) => s + r.quantity * r.purchasePrice);
-
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
-  }
+  double get _total => _rows.fold(0, (s, r) => s + r.quantity * r.purchasePrice);
 
   Future<void> _submit() async {
     final valid = _rows.where((r) => r.itemId != null && r.priceId != null && r.quantity > 0).toList();
     if (valid.isEmpty) {
-      _toast('请填写完整的商品明细');
+      toast(context, '请填写完整的商品明细');
       return;
     }
     setState(() => _busy = true);
@@ -56,13 +51,13 @@ class _PurchasePageState extends State<PurchasePage> {
             .map((r) => {'price_id': r.priceId, 'quantity': r.quantity, 'purchase_price': r.purchasePrice})
             .toList(),
       });
-      _toast('已提交，合计 ¥${_total.toStringAsFixed(2)}');
+      toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
       setState(() {
         _rows.clear();
         _rows.add(_PRow());
       });
     } catch (e) {
-      _toast(e.toString().replaceFirst('Exception: ', ''));
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -70,12 +65,14 @@ class _PurchasePageState extends State<PurchasePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('进货记单')),
+    return AdminScaffold(
+      selectedIndex: 2,
+      title: '进货记单',
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           for (int i = 0; i < _rows.length; i++) _buildRow(i),
+          const SizedBox(height: 8),
           Row(
             children: [
               OutlinedButton(
@@ -84,16 +81,18 @@ class _PurchasePageState extends State<PurchasePage> {
               ),
               const Spacer(),
               Text('合计 ¥${_total.toStringAsFixed(2)}',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red)),
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFFF56C6C))),
             ],
           ),
           const SizedBox(height: 12),
           FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             onPressed: _busy ? null : _submit,
             child: Text(_busy ? '提交中…' : '提交进货单'),
           ),
         ],
       ),
+      onSelect: (i) => goPage(context, i),
     );
   }
 
@@ -104,13 +103,15 @@ class _PurchasePageState extends State<PurchasePage> {
         : ((_items.firstWhere((x) => x['id'] == row.itemId)['prices'] as List?) ?? [])
             .cast<Map<String, dynamic>>();
     return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
           children: [
             DropdownButtonFormField<String>(
               initialValue: row.itemId,
-              decoration: const InputDecoration(labelText: '商品', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: '商品'),
               items: _items
                   .map((it) => DropdownMenuItem(value: it['id'] as String, child: Text(it['name'] as String)))
                   .toList(),
@@ -122,7 +123,7 @@ class _PurchasePageState extends State<PurchasePage> {
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: row.priceId,
-              decoration: const InputDecoration(labelText: '单位/进价', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: '单位/进价'),
               items: prices
                   .map((p) => DropdownMenuItem(
                         value: p['id'] as String,
@@ -140,7 +141,7 @@ class _PurchasePageState extends State<PurchasePage> {
                 Expanded(
                   child: TextField(
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: '数量', border: OutlineInputBorder()),
+                    decoration: const InputDecoration(labelText: '数量'),
                     onChanged: (v) => row.quantity = double.tryParse(v) ?? 0,
                   ),
                 ),
@@ -148,12 +149,12 @@ class _PurchasePageState extends State<PurchasePage> {
                 Expanded(
                   child: TextField(
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: '进价', border: OutlineInputBorder()),
+                    decoration: const InputDecoration(labelText: '进价'),
                     onChanged: (v) => row.purchasePrice = double.tryParse(v) ?? 0,
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.delete, color: Colors.red),
+                  icon: const Icon(Icons.delete, color: Color(0xFFF56C6C)),
                   onPressed: _rows.length > 1 ? () => setState(() => _rows.removeAt(i)) : null,
                 ),
               ],

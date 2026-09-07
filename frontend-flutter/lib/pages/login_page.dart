@@ -50,7 +50,8 @@ class _LoginPageState extends State<LoginPage> {
             });
       await Api.instance.setToken(d['token'] as String);
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const HomePage()));
+      Navigator.of(context)
+          .pushReplacement(MaterialPageRoute(builder: (_) => const HomePage()));
     } catch (e) {
       _toast(e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -70,48 +71,60 @@ class _LoginPageState extends State<LoginPage> {
       backgroundColor: const Color(0xFFF5F7FA),
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text('陶朱', style: TextStyle(fontSize: 40, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              const Text('v0.1.0.0', style: TextStyle(color: Colors.grey, fontSize: 14)),
-              const SizedBox(height: 32),
-              TextField(
-                controller: _baseCtrl,
-                decoration: const InputDecoration(
-                  labelText: '服务器地址',
-                  hintText: '留空=当前网页；App 填 https://xxx.workers.dev',
-                  border: OutlineInputBorder(),
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Card(
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text('陶朱',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
+                    const Text('v0.1.0.0',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Color(0xFF909399), fontSize: 13)),
+                    const SizedBox(height: 24),
+                    TextField(
+                      controller: _baseCtrl,
+                      decoration: const InputDecoration(
+                        labelText: '服务器地址',
+                        hintText: '留空=当前网页；App 填 https://xxx.workers.dev',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _userCtrl,
+                      decoration: const InputDecoration(labelText: '登录名'),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _passCtrl,
+                      obscureText: true,
+                      decoration: const InputDecoration(labelText: '密码'),
+                      onSubmitted: (_) => _submit(),
+                    ),
+                    const SizedBox(height: 24),
+                    FilledButton(
+                      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+                      onPressed: _busy ? null : _submit,
+                      child: Text(_busy ? '登录中…' : (_initialized ? '登录' : '创建账号并登录')),
+                    ),
+                    if (!_initialized) ...[
+                      const SizedBox(height: 12),
+                      const Text('首次使用：以上为老板账号，创建后即可登录',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Color(0xFFE6A23C), fontSize: 13)),
+                    ],
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _userCtrl,
-                decoration: const InputDecoration(labelText: '登录名', border: OutlineInputBorder()),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _passCtrl,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: '密码', border: OutlineInputBorder()),
-                onSubmitted: (_) => _submit(),
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: FilledButton(
-                  onPressed: _busy ? null : _submit,
-                  child: Text(_busy ? '登录中…' : (_initialized ? '登录' : '创建账号并登录')),
-                ),
-              ),
-              if (!_initialized) ...[
-                const SizedBox(height: 12),
-                const Text('首次使用：以上为老板账号，创建后即可登录', style: TextStyle(color: Colors.orange, fontSize: 13)),
-              ],
-            ],
+            ),
           ),
         ),
       ),
