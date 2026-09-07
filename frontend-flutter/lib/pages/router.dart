@@ -21,8 +21,14 @@ Widget pageFor(int index) {
 }
 
 void goPage(BuildContext context, int index) {
+  if (index == 0) {
+    // 「工作台」= 回到根页面（任何二级页点它都回首页，且不叠加栈）
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    return;
+  }
+  // 二级页用 push 压栈：系统返回键回到上一个页面（不能用 pushReplacement——会把当前页替换掉，返回=退出 App）
   Navigator.of(context)
-      .pushReplacement(MaterialPageRoute(builder: (_) => pageFor(index)));
+      .push(MaterialPageRoute(builder: (_) => pageFor(index)));
 }
 
 void toast(BuildContext context, String msg) {
