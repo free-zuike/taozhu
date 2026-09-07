@@ -28,6 +28,7 @@ export interface ClientRow {
   note: string | null;
   start_date: string | null;
   end_date: string | null;
+  month_start_day: number;
   category_id: string | null;
   deleted_at: string | null;
 }

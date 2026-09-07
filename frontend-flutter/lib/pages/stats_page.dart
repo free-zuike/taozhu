@@ -69,6 +69,30 @@ class _StatsPageState extends State<StatsPage> {
 
   DateTime _monthEnd(int y, int m) => DateTime(y, m + 1, 0);
 
+  /// 选中店铺的每月起始日（1=自然月，移动记账 式 1-28）
+  int get _msd {
+    if (_clientId != null) {
+      final c = _clients.where((x) => '${x['id']}' == _clientId).firstOrNull;
+      final v = c?['month_start_day'];
+      if (v is num && v.toInt() >= 1 && v.toInt() <= 28) return v.toInt();
+    }
+    return 1;
+  }
+
+  /// 某月周期（按起始日）：[起始日, 次月起始日)；起始日=1 时按自然月
+  (String, String) _periodOf(int startDay, DateTime anchor) {
+    if (startDay <= 1) {
+      final first = DateTime(anchor.year, anchor.month, 1);
+      final last = DateTime(anchor.year, anchor.month + 1, 0);
+      return (_fmtDate(first), _fmtDate(last));
+    }
+    final thisStart = DateTime(anchor.year, anchor.month, startDay);
+    final (s, e) = anchor.day >= startDay
+        ? (thisStart, DateTime(anchor.year, anchor.month + 1, startDay))
+        : (DateTime(anchor.year, anchor.month - 1, startDay), thisStart);
+    return (_fmtDate(s), _fmtDate(e.subtract(const Duration(days: 1))));
+  }
+
   (String, String) get _range {
     final now = DateTime.now();
     switch (_quick) {
@@ -76,7 +100,8 @@ class _StatsPageState extends State<StatsPage> {
         final d = _fmtDate(now);
         return (d, d);
       case 'last':
-        return (_fmtDate(DateTime(now.year, now.month - 1, 1)), _fmtDate(DateTime(now.year, now.month, 0)));
+        // 上一结账周期（按店铺起始日）
+        return _periodOf(_msd, DateTime(now.year, now.month - 1, now.day.clamp(1, 28)));
       case 'rolling':
         return (_fmtDate(now), _fmtDate(DateTime(now.year, now.month + 1, now.day)));
       case 'custom':
@@ -85,7 +110,8 @@ class _StatsPageState extends State<StatsPage> {
         }
         return (_fmtDate(DateTime(now.year, now.month, 1)), _fmtDate(now));
       default:
-        return (_fmtDate(DateTime(now.year, now.month, 1)), _fmtDate(now));
+        // 本月 = 当前结账周期（按店铺起始日）
+        return _periodOf(_msd, now);
     }
   }
 
@@ -264,7 +290,7 @@ class _StatsPageState extends State<StatsPage> {
                   if (_mode == 'month') _monthBar(),
                   if (_mode == 'year') _yearBar(),
                   const SizedBox(height: 6),
-                  Text('$start ~ $end（${_spanDays} 天）',
+                  Text('$start ~ $end（${_spanDays} 天${_mode == 'range' && _msd > 1 ? ' · 每月 $_msd 日起算' : ''}）',
                       style: const TextStyle(color: Color(0xFF909399), fontSize: 12)),
                   const SizedBox(height: 12),
                   _summaryCards(),

@@ -33,6 +33,7 @@ clientsRouter.get('/', async (c) => {
     return {
       id: row.id, name: row.name, contact: row.contact ?? '', phone: row.phone ?? '', note: row.note ?? '',
       start_date: row.start_date ?? '', end_date: row.end_date ?? '',
+      month_start_day: row.month_start_day ?? 1,
       first_book_date: row.first_book_date ?? '',
       category_id: row.category_id ?? '', category_name: row.category_name ?? '',
       sales_total: row.sales_total, paid_total: row.paid_total,
@@ -43,26 +44,30 @@ clientsRouter.get('/', async (c) => {
 
 // POST /clients — 新建店铺
 clientsRouter.post('/', adminOnly(), async (c) => {
-  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string; start_date?: string; end_date?: string } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string; start_date?: string; end_date?: string; month_start_day?: number } | null;
   const name = body?.name?.trim();
   if (!name) return c.json({ error: '店铺名称必填' }, 400);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
   if (catErr) return c.json({ error: catErr }, 400);
+  const msd = normalizeStartDay(body?.month_start_day);
+  if (msd === null) return c.json({ error: '每月起始日须为 1-28 的整数' }, 400);
   const id = randomId();
-  await c.env.DB.prepare('INSERT INTO clients (id, name, contact, phone, note, category_id, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, name, body?.contact?.trim() ?? '', body?.phone?.trim() ?? '', body?.note?.trim() ?? '', body?.category_id ?? null, body?.start_date?.trim() ?? null, body?.end_date?.trim() ?? null).run();
-  return c.json({ id, name, contact: body?.contact?.trim() ?? '', phone: body?.phone?.trim() ?? '', note: body?.note?.trim() ?? '', category_id: body?.category_id ?? '', start_date: body?.start_date?.trim() ?? '', end_date: body?.end_date?.trim() ?? '', debt: 0 }, 201);
+  await c.env.DB.prepare('INSERT INTO clients (id, name, contact, phone, note, category_id, start_date, end_date, month_start_day) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, name, body?.contact?.trim() ?? '', body?.phone?.trim() ?? '', body?.note?.trim() ?? '', body?.category_id ?? null, body?.start_date?.trim() ?? null, body?.end_date?.trim() ?? null, msd).run();
+  return c.json({ id, name, contact: body?.contact?.trim() ?? '', phone: body?.phone?.trim() ?? '', note: body?.note?.trim() ?? '', category_id: body?.category_id ?? '', start_date: body?.start_date?.trim() ?? '', end_date: body?.end_date?.trim() ?? '', month_start_day: msd, debt: 0 }, 201);
 });
 
 // PATCH /clients/:id
 clientsRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string | null; start_date?: string | null; end_date?: string | null } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string | null; start_date?: string | null; end_date?: string | null; month_start_day?: number } | null;
   const client = await c.env.DB.prepare('SELECT * FROM clients WHERE id = ? AND deleted_at IS NULL').bind(id).first<ClientRow>();
   if (!client) return c.json({ error: '店铺不存在' }, 404);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
   if (catErr) return c.json({ error: catErr }, 400);
-  await c.env.DB.prepare('UPDATE clients SET name = ?, contact = ?, phone = ?, note = ?, category_id = ?, start_date = ?, end_date = ? WHERE id = ?')
+  const msd = body?.month_start_day !== undefined ? normalizeStartDay(body.month_start_day) : client.month_start_day;
+  if (msd === null) return c.json({ error: '每月起始日须为 1-28 的整数' }, 400);
+  await c.env.DB.prepare('UPDATE clients SET name = ?, contact = ?, phone = ?, note = ?, category_id = ?, start_date = ?, end_date = ?, month_start_day = ? WHERE id = ?')
     .bind(
       body?.name?.trim() || client.name,
       body?.contact?.trim() ?? client.contact ?? '',
@@ -71,10 +76,19 @@ clientsRouter.patch('/:id', adminOnly(), async (c) => {
       body?.category_id !== undefined ? body.category_id : client.category_id,
       body?.start_date !== undefined ? (body.start_date?.trim() ?? null) : client.start_date,
       body?.end_date !== undefined ? (body.end_date?.trim() ?? null) : client.end_date,
+      msd,
       id,
     ).run();
   return c.json({ ok: true });
 });
+
+/** 校验并规范化每月起始日（1-28，缺省 1=自然月）；非法返回 null */
+function normalizeStartDay(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return 1;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 28) return null;
+  return n;
+}
 
 // DELETE /clients/:id — 软删
 clientsRouter.delete('/:id', adminOnly(), async (c) => {

@@ -180,4 +180,20 @@ describe('统计区间', () => {
     const list2 = await (await call(env, 'GET', '/api/v1/clients', token)).json() as { clients: Array<{ name: string; end_date: string }> };
     expect(list2.clients.find((x) => x.name === 'C店')!.end_date).toBe('2026-11-07');
   });
+
+  it('clients 每月起始日（默认1=自然月，可设1-28，非法拒绝）', async () => {
+    const post = await call(env, 'POST', '/api/v1/clients', token, { name: 'D店' });
+    expect(((await post.json()) as { month_start_day: number }).month_start_day).toBe(1);
+    const post2 = await call(env, 'POST', '/api/v1/clients', token, { name: 'E店', month_start_day: 5 });
+    expect(((await post2.json()) as { month_start_day: number }).month_start_day).toBe(5);
+    const bad = await call(env, 'POST', '/api/v1/clients', token, { name: 'F店', month_start_day: 29 });
+    expect(bad.status).toBe(400);
+    const list = await (await call(env, 'GET', '/api/v1/clients', token)).json() as { clients: Array<{ id: string; name: string; month_start_day: number }> };
+    const e5 = list.clients.find((x) => x.name === 'E店')!;
+    expect(e5.month_start_day).toBe(5);
+    const patch = await call(env, 'PATCH', `/api/v1/clients/${e5.id}`, token, { month_start_day: 15 });
+    expect(patch.status).toBe(200);
+    const list2 = await (await call(env, 'GET', '/api/v1/clients', token)).json() as { clients: Array<{ name: string; month_start_day: number }> };
+    expect(list2.clients.find((x) => x.name === 'E店')!.month_start_day).toBe(15);
+  });
 });
