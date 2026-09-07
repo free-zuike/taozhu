@@ -62,7 +62,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend/src/version.ts || echo "0.1.0.0")
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || echo "0.1.0.0")
           cp frontend-flutter/build/app/outputs/flutter-apk/app-release.apk "/tmp/flutter-app-${VERSION}.apk"
           cd frontend-flutter/build/web && zip -qr "/tmp/flutter-web-${VERSION}.zip" . && cd -
           REL="taozhu-app"

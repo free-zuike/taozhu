@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../version.dart';
 import '../widgets/bottom_shell.dart';
 
 class LoginPage extends StatefulWidget {
@@ -90,7 +91,7 @@ class _LoginPageState extends State<LoginPage> {
                     const Text('陶朱',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
-                    const Text('v0.1.0.0',
+                    const Text('v$APP_VERSION',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Color(0xFF909399), fontSize: 13)),
                     const SizedBox(height: 24),
