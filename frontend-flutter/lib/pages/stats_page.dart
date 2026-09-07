@@ -262,7 +262,7 @@ class _StatsPageState extends State<StatsPage> {
                   if (_mode == 'month') _monthBar(),
                   if (_mode == 'year') _yearBar(),
                   const SizedBox(height: 6),
-                  Text('$start ~ $end（$ _spanDays 天）',
+                  Text('$start ~ $end（${_spanDays} 天）',
                       style: const TextStyle(color: Color(0xFF909399), fontSize: 12)),
                   const SizedBox(height: 12),
                   _summaryCards(),
