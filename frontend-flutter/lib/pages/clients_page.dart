@@ -56,15 +56,21 @@ class _ClientsPageState extends State<ClientsPage> {
   double _debt(Map<String, dynamic> c) =>
       ((c['sales_total'] as num?)?.toDouble() ?? 0) - ((c['paid_total'] as num?)?.toDouble() ?? 0);
 
-  String _fmtDate(DateTime d) =>
-      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  /// 记账天数（移动记账 式：今天 − 第一笔记账日期 + 1）
+  int _bookDays(String firstDate) {
+    final f = DateTime.tryParse(firstDate);
+    if (f == null) return 0;
+    final now = DateTime.now();
+    final d = DateTime(now.year, now.month, now.day)
+        .difference(DateTime(f.year, f.month, f.day))
+        .inDays + 1;
+    return d < 1 ? 1 : d;
+  }
 
   Future<void> _edit([Map<String, dynamic>? c]) async {
     final nameCtrl = TextEditingController(text: c?['name'] as String? ?? '');
     String? selTopId;
     String? selSubId;
-    String? selDate = c?['start_date'] as String? ?? _fmtDate(DateTime.now());
-    String? selEndDate = c?['end_date'] as String? ?? '';
     // 编辑时按当前分类反推一级/二级
     final curId = c?['category_id'] as String? ?? '';
     if (curId.isNotEmpty) {
@@ -86,56 +92,6 @@ class _ClientsPageState extends State<ClientsPage> {
             children: [
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: '店铺名称 *')),
               const SizedBox(height: 8),
-              // 记账开始日期（结账周期起始日，滚动月/对账用）
-              InkWell(
-                onTap: () async {
-                  final picked = await showDatePicker(
-                    context: ctx,
-                    initialDate: DateTime.tryParse(selDate ?? '') ?? DateTime.now(),
-                    firstDate: DateTime(2000),
-                    lastDate: DateTime(2100),
-                  );
-                  if (picked != null) setDlg(() => selDate = _fmtDate(picked));
-                },
-                child: InputDecorator(
-                  decoration: const InputDecoration(labelText: '记账开始日期'),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.event, size: 18, color: Color(0xFF409EFF)),
-                      const SizedBox(width: 8),
-                      Text(selDate ?? '选择日期'),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              // 记账结束日期（可选，空=长期/未定）
-              InkWell(
-                onTap: () async {
-                  final picked = await showDatePicker(
-                    context: ctx,
-                    initialDate: DateTime.tryParse(selEndDate ?? '') ?? DateTime.now(),
-                    firstDate: DateTime(2000),
-                    lastDate: DateTime(2100),
-                  );
-                  if (picked != null) setDlg(() => selEndDate = _fmtDate(picked));
-                },
-                child: InputDecorator(
-                  decoration: const InputDecoration(labelText: '记账结束日期（可选）'),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.event_busy, size: 18, color: Color(0xFF409EFF)),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text((selEndDate?.isEmpty ?? true) ? '未定（长期）' : selEndDate!)),
-                      if (selEndDate != null && selEndDate!.isNotEmpty)
-                        InkWell(
-                          onTap: () => setDlg(() => selEndDate = ''),
-                          child: const Icon(Icons.close, size: 16, color: Color(0xFF909399)),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
               if (_topCats.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
@@ -190,15 +146,11 @@ class _ClientsPageState extends State<ClientsPage> {
       if (c == null) {
         await Api.instance.post('/clients', {
           'name': name,
-          'start_date': selDate,
-          if (selEndDate?.isNotEmpty == true) 'end_date': selEndDate,
           if (categoryId != null) 'category_id': categoryId,
         });
       } else {
         await Api.instance.patch('/clients/${c['id']}', {
           'name': name,
-          'start_date': selDate,
-          'end_date': (selEndDate == null || selEndDate!.isEmpty) ? null : selEndDate,
           'category_id': categoryId,
         });
       }
@@ -257,7 +209,8 @@ class _ClientsPageState extends State<ClientsPage> {
                         title: Text('${c['name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text([
                           if ('${c['category_name'] ?? ''}'.isNotEmpty) '${c['category_name']}',
-                          if ('${c['start_date'] ?? ''}'.isNotEmpty) '${c['start_date']}${'${c['end_date'] ?? ''}'.isNotEmpty ? ' ~ ${c['end_date']}' : ''}',
+                          if ('${c['first_book_date'] ?? ''}'.isNotEmpty)
+                            '记账 ${_bookDays('${c['first_book_date']}')} 天（自 ${c['first_book_date']}）',
                         ].join(' · ')),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,

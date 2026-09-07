@@ -21,6 +21,7 @@ class _BottomShellState extends State<BottomShell> {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       body: IndexedStack(
         index: _index,
@@ -31,10 +32,10 @@ class _BottomShellState extends State<BottomShell> {
         child: Container(
           height: 64,
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.96),
+            color: dark ? const Color(0xFF1E1E1E) : Colors.white.withOpacity(0.96),
             borderRadius: BorderRadius.circular(28),
             boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 16, offset: const Offset(0, 4)),
+              BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.08), blurRadius: 16, offset: const Offset(0, 4)),
             ],
           ),
           child: Row(

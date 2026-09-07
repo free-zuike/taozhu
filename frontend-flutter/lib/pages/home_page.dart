@@ -110,7 +110,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _card(String label, String value, {bool green = false, bool red = false}) {
-    final color = green ? const Color(0xFF67C23A) : (red ? const Color(0xFFF56C6C) : Colors.black);
+    final color = green
+        ? const Color(0xFF67C23A)
+        : (red
+            ? const Color(0xFFF56C6C)
+            : (Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black));
     final w = MediaQuery.of(context).size.width;
     final itemW = (w.clamp(200.0, 900.0) - 16 * 2 - 12) / 2;
     return SizedBox(
