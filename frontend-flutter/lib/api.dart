@@ -9,10 +9,21 @@ class Api {
 
   static const _tokenKey = 'taozhu_token';
   static const _baseKey = 'taozhu_api_base';
+  /// 默认服务器地址（未手动设置时使用；登录页可改）
+  static const defaultBase = 'https://taozhu.freezuike-3f7.workers.dev';
+
+  /// 规范化服务器地址：去空格/尾斜杠，缺协议头自动补 https://
+  static String _norm(String raw) {
+    var b = raw.trim().replaceAll(RegExp(r'/+$'), '');
+    if (b.isNotEmpty && !b.startsWith('http://') && !b.startsWith('https://')) {
+      b = 'https://$b';
+    }
+    return b;
+  }
 
   Future<String> _base() async {
     final p = await SharedPreferences.getInstance();
-    return (p.getString(_baseKey) ?? '').replaceAll(RegExp(r'/+$'), '');
+    return _norm(p.getString(_baseKey) ?? defaultBase);
   }
 
   Future<String?> _token() async {
@@ -31,8 +42,7 @@ class Api {
   Future<bool> hasToken() async => (await _token())?.isNotEmpty ?? false;
 
   Future<void> setBase(String u) async {
-    (await SharedPreferences.getInstance())
-        .setString(_baseKey, u.trim().replaceAll(RegExp(r'/+$'), ''));
+    (await SharedPreferences.getInstance()).setString(_baseKey, _norm(u));
   }
 
   Future<String> getBase() => _base();
@@ -50,15 +60,20 @@ class Api {
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
 
     http.Response res;
-    switch (method) {
-      case 'POST':
-        res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
-      case 'PUT':
-        res = await http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
-      case 'DELETE':
-        res = await http.delete(Uri.parse(url), headers: headers);
-      default:
-        res = await http.get(Uri.parse(url), headers: headers);
+    try {
+      switch (method) {
+        case 'POST':
+          res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
+        case 'PUT':
+          res = await http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
+        case 'DELETE':
+          res = await http.delete(Uri.parse(url), headers: headers);
+        default:
+          res = await http.get(Uri.parse(url), headers: headers);
+      }
+    } catch (e) {
+      // 网络/DNS/连接异常：把请求的完整地址附上，便于定位地址填错/网络问题
+      throw Exception('$e （地址: $url）');
     }
 
     if (res.statusCode == 401) {

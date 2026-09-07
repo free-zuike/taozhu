@@ -5,6 +5,10 @@ on:
   push:
     branches:
       - main
+    paths:                    # 仅 Web（Element Plus 前端）相关改动才构建
+      - 'frontend/**'
+      - 'frontend/src/version.ts'
+      - '.github/workflows/build-web-release.yml'
 
 permissions:
   contents: write

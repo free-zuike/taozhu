@@ -5,6 +5,10 @@ on:
   push:
     branches:
       - main
+    paths:                    # 仅小程序（uni-app）相关改动才构建
+      - 'frontend-uni/**'
+      - 'frontend/src/version.ts'
+      - '.github/workflows/build-miniprogram.yml'
 
 permissions:
   contents: write

@@ -5,6 +5,10 @@ on:
   push:
     branches:
       - main
+    paths:                    # 仅 Flutter 相关改动才构建（其它端改动跳过）
+      - 'frontend-flutter/**'
+      - 'frontend/src/version.ts'
+      - '.github/workflows/build-flutter.yml'
 
 permissions:
   contents: write
@@ -31,7 +35,10 @@ jobs:
 
       - name: Build APK (release, 体积小)
         working-directory: frontend-flutter
-        run: flutter build apk --release
+        run: |
+          # 包名统一为 com.taozhu.app（与「陶朱」版一致，避免两个应用并存）
+          sed -i 's|namespace = ".*"|namespace = "com.taozhu.app"|; s|applicationId = ".*"|applicationId = "com.taozhu.app"|' android/app/build.gradle.kts || true
+          flutter build apk --release
 
       - name: Package & upload to single Release (taozhu-app)
         env:

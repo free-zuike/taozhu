@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+    paths:                    # 仅后端/Web 相关改动才部署
+      - 'src/**'
+      - 'frontend/**'
+      - 'wrangler.toml'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.dev.vars.example'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 jobs:
