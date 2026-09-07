@@ -33,11 +33,20 @@ jobs:
         working-directory: frontend-flutter
         run: flutter build web
 
-      - name: Build APK (release, 体积小)
+      - name: Build APK (release, 正式签名)
         working-directory: frontend-flutter
+        env:
+          ANDROID_KEYSTORE_STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_STORE_PASS }}
+          ANDROID_KEYSTORE_KEY_PASS: ${{ secrets.ANDROID_KEYSTORE_KEY_PASS }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
         run: |
-          # 包名统一为 com.taozhu.app（与「陶朱」版一致，避免两个应用并存）
-          sed -i 's|namespace = ".*"|namespace = "com.taozhu.app"|; s|applicationId = ".*"|applicationId = "com.taozhu.app"|' android/app/build.gradle.kts || true
+          # ① 包名统一 com.taozhu.app（与「陶朱」一致：避免两个应用并存、可覆盖升级）
+          sed -i 's|namespace = ".*"|namespace = "com.taozhu.app"|; s|applicationId = ".*"|applicationId = "com.taozhu.app"|' android/app/build.gradle.kts
+          # ② 应用显示名「陶朱」
+          sed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml
+          # ③ 正式签名（复用与「陶朱」相同的 keystore）+ 关 R8（规避 release 闪退）
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/taozhu-release.keystore
+          cat android-sign.gradle.kts >> android/app/build.gradle.kts
           flutter build apk --release
 
       - name: Package & upload to single Release (taozhu-app)

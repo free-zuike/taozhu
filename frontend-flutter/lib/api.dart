@@ -9,8 +9,7 @@ class Api {
 
   static const _tokenKey = 'taozhu_token';
   static const _baseKey = 'taozhu_api_base';
-  /// 默认服务器地址（未手动设置时使用；登录页可改）
-  static const defaultBase = 'https://taozhu.freezuike-3f7.workers.dev';
+  // 无内置默认地址：个人部署模式，登录页必须显式填写自己的服务器地址
 
   /// 规范化服务器地址：去空格/尾斜杠，缺协议头自动补 https://
   static String _norm(String raw) {
@@ -23,7 +22,7 @@ class Api {
 
   Future<String> _base() async {
     final p = await SharedPreferences.getInstance();
-    return _norm(p.getString(_baseKey) ?? defaultBase);
+    return _norm(p.getString(_baseKey) ?? '');
   }
 
   Future<String?> _token() async {
@@ -54,6 +53,9 @@ class Api {
     Map<String, dynamic>? body,
   }) async {
     final base = await _base();
+    if (base.isEmpty) {
+      throw Exception('未配置服务器地址：请在登录页填写您的服务器地址（如 https://您的域名）');
+    }
     final url = '$base/api/v1$path';
     final headers = {'Content-Type': 'application/json'};
     final t = await _token();

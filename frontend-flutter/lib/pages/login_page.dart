@@ -32,6 +32,10 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _submit() async {
+    if (_baseCtrl.text.trim().isEmpty) {
+      _toast('请先填写服务器地址（必填）：您自己的服务器，如 https://您的域名');
+      return;
+    }
     if (_userCtrl.text.trim().isEmpty || _passCtrl.text.isEmpty) {
       _toast('请输入登录名和密码');
       return;
@@ -94,7 +98,7 @@ class _LoginPageState extends State<LoginPage> {
                       controller: _baseCtrl,
                       decoration: const InputDecoration(
                         labelText: '服务器地址',
-                        hintText: '留空=当前网页；App 填 https://xxx.workers.dev',
+                        hintText: '必填：您的服务器地址，如 https://xxx.com',
                       ),
                     ),
                     const SizedBox(height: 16),
