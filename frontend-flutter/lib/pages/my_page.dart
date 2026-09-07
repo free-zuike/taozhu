@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import 'router.dart';
 import 'items_page.dart';
-import 'clients_page.dart';
-import 'stats_page.dart';
 import 'login_page.dart';
 
 class MyPage extends StatefulWidget {
@@ -55,20 +53,6 @@ class _MyPageState extends State<MyPage> {
                   title: const Text('商品管理'),
                   trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
                   onTap: () => goPage(context, const ItemsPage()),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.store_outlined),
-                  title: const Text('饭店管理'),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const ClientsPage()),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.bar_chart),
-                  title: const Text('统计报表'),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const StatsPage()),
                 ),
               ],
             ),
