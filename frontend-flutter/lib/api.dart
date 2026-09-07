@@ -10,6 +10,8 @@ class Api {
   static const _tokenKey = 'taozhu_token';
   static const _baseKey = 'taozhu_api_base';
   // 无内置默认地址：个人部署模式，登录页必须显式填写自己的服务器地址
+  // （Web 生产构建通过 --dart-define=API_BASE 注入默认值，留空即连；App 不注入 → 必填）
+  static const _envBase = String.fromEnvironment('API_BASE');
 
   /// 规范化服务器地址：去空格/尾斜杠，缺协议头自动补 https://
   static String _norm(String raw) {
@@ -22,7 +24,9 @@ class Api {
 
   Future<String> _base() async {
     final p = await SharedPreferences.getInstance();
-    return _norm(p.getString(_baseKey) ?? '');
+    final stored = p.getString(_baseKey);
+    if (stored != null && stored.isNotEmpty) return _norm(stored);
+    return _norm(_envBase);
   }
 
   Future<String?> _token() async {

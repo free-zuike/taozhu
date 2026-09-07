@@ -35,7 +35,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $VERSION = (Select-String -Path "frontend/src/version.ts" -Pattern "APP_VERSION = '([^']+)'").Matches[0].Groups[1].Value
+          $VERSION = (Select-String -Path "frontend-flutter/lib/version.dart" -Pattern "APP_VERSION = '([^']+)'").Matches[0].Groups[1].Value
           if (-not $VERSION) { $VERSION = "0.1.0.0" }
           Compress-Archive -Path "frontend-flutter/build/windows/x64/runner/Release/*" -DestinationPath "$env:TEMP/taozhu-windows-${VERSION}.zip"
           $REL = "taozhu-app"

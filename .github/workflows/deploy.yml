@@ -4,9 +4,9 @@ on:
   push:
     branches:
       - main
-    paths:                    # 仅后端/Web 相关改动才部署
+    paths:                    # 后端 / Web(Flutter) 相关改动才部署
       - 'src/**'
-      - 'frontend/**'
+      - 'frontend-flutter/**'
       - 'wrangler.toml'
       - 'package.json'
       - 'package-lock.json'
@@ -33,12 +33,24 @@ jobs:
       - name: Install backend deps
         run: npm install
 
-      # Web = 第一版 Element Plus 管理后台（frontend/），桌面端样式；小程序走 uni-app，App 走 Flutter
-      - name: Install & build frontend (Element Plus → ./public)
-        working-directory: frontend
+      # Web = Flutter Web（组合 B：一套 Dart 管 Web+App+桌面，功能与 App 同步）
+      # 注入生产 API_BASE → Web 端登录地址留空即连生产；App/个人部署不注入 → 地址必填
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build Web (Flutter) with production API_BASE
+        working-directory: frontend-flutter
         run: |
-          npm ci
-          npm run build:no-check
+          flutter create --org com.taozhu --project-name taozhu_app .
+          flutter build web --dart-define=API_BASE=https://taozhu.freezuike-3f7.workers.dev
+
+      - name: Swap public dir with Flutter web build
+        run: |
+          rm -rf public
+          cp -r frontend-flutter/build/web public
 
       - name: Setup D1 database (auto-create if missing)
         id: d1
