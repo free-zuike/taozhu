@@ -48,6 +48,8 @@ jobs:
             mkdir -p android/app/src/main/kotlin/com/taozhu/app
             mv android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt
           fi
+          # ①c 主 manifest 加 INTERNET 权限：Flutter 模板只在 debug/profile 清单有，release 无此权限=全部网络请求(DNS/连接)被拒→登录必失败
+          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/><application|' android/app/src/main/AndroidManifest.xml
           # ② 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
           sed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml || true
