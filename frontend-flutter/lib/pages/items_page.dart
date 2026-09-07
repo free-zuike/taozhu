@@ -89,7 +89,7 @@ class _ItemsPageState extends State<ItemsPage> {
                                     Text('${it['name']}',
                                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
                                     const SizedBox(width: 8),
-                                    Text('${it['category'] ?? ''}',
+                                    Text('${it['category_name'] ?? ''}${((it['category_name'] as String?) ?? '').isEmpty ? (it['category'] ?? '') : ''}',
                                         style: const TextStyle(color: Color(0xFF909399))),
                                   ]),
                                   const SizedBox(height: 6),
@@ -131,8 +131,9 @@ class _ItemEditPage extends StatefulWidget {
 
 class _ItemEditPageState extends State<_ItemEditPage> {
   final _nameCtrl = TextEditingController();
-  final _catCtrl = TextEditingController();
   final List<Map<String, TextEditingController>> _priceRows = [_newRow()];
+  List<Map<String, dynamic>> _cats = [];
+  String? _categoryId;
   bool _busy = false;
 
   static Map<String, TextEditingController> _newRow() => {
@@ -142,9 +143,26 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       };
 
   @override
+  void initState() {
+    super.initState();
+    _loadCats();
+  }
+
+  Future<void> _loadCats() async {
+    try {
+      final d = await Api.instance.get('/categories?type=item');
+      setState(() {
+        _cats = ((d['categories'] as List?) ?? [])
+            .cast<Map<String, dynamic>>()
+            .where((c) => c['parent_id'] == null || '${c['parent_id']}' == '')
+            .toList();
+      });
+    } catch (_) {}
+  }
+
+  @override
   void dispose() {
     _nameCtrl.dispose();
-    _catCtrl.dispose();
     for (final r in _priceRows) {
       r['unit']?.dispose();
       r['buy']?.dispose();
@@ -174,9 +192,11 @@ class _ItemEditPageState extends State<_ItemEditPage> {
     }
     setState(() => _busy = true);
     try {
+      final catName = _cats.where((c) => c['id'] == _categoryId).map((c) => '${c['name']}').firstOrNull;
       await Api.instance.post('/items', {
         'name': name,
-        'category': _catCtrl.text.trim(),
+        'category': catName ?? '',
+        'category_id': _categoryId,
         'prices': prices,
       });
       toast(context, '已添加');
@@ -197,7 +217,15 @@ class _ItemEditPageState extends State<_ItemEditPage> {
         children: [
           TextField(controller: _nameCtrl, decoration: const InputDecoration(labelText: '商品名称 *')),
           const SizedBox(height: 12),
-          TextField(controller: _catCtrl, decoration: const InputDecoration(labelText: '分类（可选）')),
+          DropdownButtonFormField<String>(
+            initialValue: _categoryId,
+            decoration: const InputDecoration(labelText: '分类（可选）'),
+            hint: const Text('选择分类'),
+            items: _cats
+                .map((c) => DropdownMenuItem(value: '${c['id']}', child: Text('${c['name']}')))
+                .toList(),
+            onChanged: (v) => setState(() => _categoryId = v),
+          ),
           const SizedBox(height: 16),
           const Text('单位价格（可多组，如 斤/包/箱）', style: TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),

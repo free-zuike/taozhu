@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import 'router.dart';
 import 'items_page.dart';
+import 'categories_page.dart';
 import 'login_page.dart';
 
 class MyPage extends StatefulWidget {
@@ -53,6 +54,14 @@ class _MyPageState extends State<MyPage> {
                   title: const Text('商品管理'),
                   trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
                   onTap: () => goPage(context, const ItemsPage()),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.label_outline),
+                  title: const Text('分类管理'),
+                  subtitle: const Text('商品分类 / 店铺分类（两级）', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: () => goPage(context, const CategoriesPage()),
                 ),
               ],
             ),
