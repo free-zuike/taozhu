@@ -4,7 +4,7 @@ import '../api.dart';
 import '../utils/money.dart';
 import 'router.dart';
 
-/// 统计（仿 移动记账 洞察）：店铺胶囊选择 + 周期胶囊（今日/本月/上月/滚动月/自定义） + 日/月/年视图
+/// 统计：店铺胶囊选择 + 周期胶囊（今日/本月/上月/滚动月/自定义） + 日/月/年视图
 /// 总览卡（含日均） + 折线图 + 商品排行 + 按店结账
 class StatsPage extends StatefulWidget {
   const StatsPage({super.key});
@@ -69,7 +69,7 @@ class _StatsPageState extends State<StatsPage> {
 
   DateTime _monthEnd(int y, int m) => DateTime(y, m + 1, 0);
 
-  /// 选中店铺的每月起始日（1=自然月，移动记账 式 1-28）
+  /// 选中店铺的每月起始日（1=自然月，可设 1-28）
   int get _msd {
     if (_clientId != null) {
       final c = _clients.where((x) => '${x['id']}' == _clientId).firstOrNull;
@@ -238,7 +238,7 @@ class _StatsPageState extends State<StatsPage> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  // 店铺胶囊（仿 移动记账 账本选择）
+                  // 店铺胶囊选择
                   Row(
                     children: [
                       Expanded(
@@ -357,7 +357,7 @@ class _StatsPageState extends State<StatsPage> {
     );
   }
 
-  // ── 周期胶囊（仿 移动记账 CapsuleSwitcher） ──
+  // ── 周期胶囊 ──
   Widget _quickBar() {
     return Wrap(
       spacing: 8,
@@ -531,7 +531,7 @@ class _StatsPageState extends State<StatsPage> {
     );
   }
 
-  // ── 折线图（仿 移动记账 自绘 LineChart） ──
+  // ── 折线图（自绘） ──
   Widget _lineChart() {
     final items = _mode == 'year' ? _months : _days;
     if (items.isEmpty) {

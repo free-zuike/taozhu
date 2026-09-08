@@ -8,7 +8,7 @@ import '../pages/items_page.dart';
 import '../pages/clients_page.dart';
 import '../pages/stats_page.dart';
 
-/// 底部悬浮胶囊导航壳（增量式）：4 个 tab + 中央大按钮快捷记单
+/// 底部悬浮胶囊导航壳：4 个 tab + 中央大按钮快捷记单
 class BottomShell extends StatefulWidget {
   const BottomShell({super.key});
   @override

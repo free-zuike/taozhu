@@ -56,7 +56,7 @@ class _ClientsPageState extends State<ClientsPage> {
   double _debt(Map<String, dynamic> c) =>
       ((c['sales_total'] as num?)?.toDouble() ?? 0) - ((c['paid_total'] as num?)?.toDouble() ?? 0);
 
-  /// 记账天数（移动记账 式：今天 − 第一笔记账日期 + 1）
+  /// 记账天数（今天 − 第一笔记账日期 + 1）
   int _bookDays(String firstDate) {
     final f = DateTime.tryParse(firstDate);
     if (f == null) return 0;
@@ -69,9 +69,10 @@ class _ClientsPageState extends State<ClientsPage> {
 
   Future<void> _edit([Map<String, dynamic>? c]) async {
     final nameCtrl = TextEditingController(text: c?['name'] as String? ?? '');
+    final dayCtrl = TextEditingController(
+        text: '${(((c?['month_start_day'] as num?) ?? 1)).toInt()}');
     String? selTopId;
     String? selSubId;
-    var selDay = ((c?['month_start_day'] as num?) ?? 1).toInt();
     // 编辑时按当前分类反推一级/二级
     final curId = c?['category_id'] as String? ?? '';
     if (curId.isNotEmpty) {
@@ -93,18 +94,11 @@ class _ClientsPageState extends State<ClientsPage> {
             children: [
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: '店铺名称 *')),
               const SizedBox(height: 8),
-              // 每月起始日（结账周期起点，1=自然月；与 移动记账 账本一致 1-28）
-              DropdownButtonFormField<int>(
-                initialValue: selDay,
-                decoration: const InputDecoration(labelText: '每月起始日'),
-                items: [
-                  for (int d = 1; d <= 28; d++)
-                    DropdownMenuItem(
-                      value: d,
-                      child: Text(d == 1 ? '1日（自然月）' : '$d日（每月${d}日~次月${d - 1}日）'),
-                    ),
-                ],
-                onChanged: (v) => setDlg(() => selDay = v ?? 1),
+              // 每月起始日：直接填数字（1-28，1=自然月），结账周期从该日起算
+              TextField(
+                controller: dayCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: '每月起始日', helperText: '填 1-28，1=自然月'),
               ),
               const SizedBox(height: 8),
               if (_topCats.isNotEmpty) ...[
@@ -156,18 +150,23 @@ class _ClientsPageState extends State<ClientsPage> {
       toast(context, '请填写店铺名称');
       return;
     }
+    final msd = int.tryParse(dayCtrl.text.trim());
+    if (msd == null || msd < 1 || msd > 28) {
+      toast(context, '每月起始日须为 1-28 的整数');
+      return;
+    }
     final categoryId = selSubId ?? selTopId;
     try {
       if (c == null) {
         await Api.instance.post('/clients', {
           'name': name,
-          'month_start_day': selDay,
+          'month_start_day': msd,
           if (categoryId != null) 'category_id': categoryId,
         });
       } else {
         await Api.instance.patch('/clients/${c['id']}', {
           'name': name,
-          'month_start_day': selDay,
+          'month_start_day': msd,
           'category_id': categoryId,
         });
       }
