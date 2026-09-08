@@ -59,12 +59,17 @@ jobs:
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || echo "0.1.0.0")
           cp frontend-flutter/build/app/outputs/flutter-apk/app-release.apk "/tmp/flutter-app-${VERSION}.apk"
+          # 更新说明：上个版本 tag 以来的提交摘要
+          git fetch --tags --quiet || true
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
-              --title "陶朱 v${VERSION}" \
-              --notes "陶朱 v${VERSION}：本版本全部产物（Android APK / Web 包 / Windows / iOS）。同版本重构建覆盖同名文件。"
+              --title "陶朱 v${VERSION}" --notes "$NOTES"
           fi
-          gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}"
+          gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
           gh release upload "$REL" "/tmp/flutter-app-${VERSION}.apk" --repo "$GITHUB_REPOSITORY" --clobber
           echo "uploaded flutter-app ${VERSION}"
