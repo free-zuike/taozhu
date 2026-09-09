@@ -55,24 +55,16 @@ authRouter.get('/me', authMiddleware(), async (c) => {
 authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, version: APP_VERSION }));
 
 // GET /auth/latest-version — 检查更新（无鉴权）：Workers 代查 GitHub Release 最新版本。
-// App/Web/小程序直连 api.github.com 在国内网络常被干扰（404/超时），走自己服务器更稳。
-// 实现：fetch github.com/releases/latest（跟随 302 重定向），从返回 HTML 中解析 taozhu-vX.Y.Z.W——
-//   GitHub API 对共享出口 IP 限流严格（403），HTML 页面对限流宽松得多；
-//   redirect:'manual' 在 Workers 返回 opaque 响应（status=0、location 不可读），必须跟随重定向再解析。
-// GitHub 不可达时 latest 为空串，前端给出手动跳转兜底。
+// 仓库公开后匿名 API 即可访问（私有仓库匿名一律 404）。GitHub 不可达时 latest 为空串，前端手动兜底。
 authRouter.get('/latest-version', async (c) => {
   let latest = '';
   try {
-    const res = await Promise.race([
-      fetch('https://github.com/free-zuike/taozhu/releases/latest', {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0) taozhu-worker', Accept: 'text/html' },
-      }),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('github timeout')), 5000)),
-    ]);
+    const res = await fetch('https://api.github.com/repos/free-zuike/taozhu/releases/latest', {
+      headers: { 'User-Agent': 'taozhu-worker', Accept: 'application/vnd.github+json' },
+    });
     if (res.ok) {
-      const html = await res.text();
-      const m = html.match(/taozhu-v(\d+\.\d+\.\d+\.\d+)/);
-      latest = m ? m[1] : '';
+      const d = (await res.json()) as { tag_name?: string };
+      latest = String(d.tag_name ?? '').replace(/^taozhu-v/, '');
     }
   } catch {
     latest = '';

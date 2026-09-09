@@ -29,3 +29,6 @@ frontend-uni/node_modules/
 frontend-uni/dist/
 frontend-flutter/build/
 frontend-flutter/.dart_tool/
+
+# 签名密钥（公开仓库不得提交）
+android-keystore/
