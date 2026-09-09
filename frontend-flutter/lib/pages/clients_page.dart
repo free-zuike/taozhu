@@ -42,10 +42,11 @@ class _ClientsPageState extends State<ClientsPage> {
 
   Future<void> _load({String q = ''}) async {
     final searching = q.isNotEmpty;
+    Map<String, dynamic>? cached;
     // 搜索时不读缓存、不写缓存，走最新网络结果
     if (!searching) {
       // ① 本地缓存秒开
-      final cached = await Api.instance.getCached('/clients');
+      cached = await Api.instance.getCached('/clients');
       if (cached != null) {
         setState(() => _clients = ((cached['clients'] as List?) ?? []).cast<Map<String, dynamic>>());
       }

@@ -28,10 +28,11 @@ class _ItemsPageState extends State<ItemsPage> {
 
   Future<void> _load({String q = ''}) async {
     final searching = q.isNotEmpty;
+    Map<String, dynamic>? cached;
     // 搜索时不读缓存、不写缓存，走最新网络结果
     if (!searching) {
       // ① 本地缓存秒开
-      final cached = await Api.instance.getCached('/items');
+      cached = await Api.instance.getCached('/items');
       if (cached != null) {
         setState(() {
           _items = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>();

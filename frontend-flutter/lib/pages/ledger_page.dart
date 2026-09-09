@@ -251,7 +251,6 @@ class _LedgerPageState extends State<LedgerPage> {
                           Expanded(
                             child: TextField(
                               controller: _fromCtrl,
-                              isDense: true,
                               decoration: const InputDecoration(labelText: '开始日期', isDense: true),
                             ),
                           ),
@@ -262,7 +261,6 @@ class _LedgerPageState extends State<LedgerPage> {
                           Expanded(
                             child: TextField(
                               controller: _toCtrl,
-                              isDense: true,
                               decoration: const InputDecoration(labelText: '结束日期', isDense: true),
                             ),
                           ),
