@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
+import { createStorage } from '../src/services/storage';
 import { createFakeD1, fakeAssets } from './helpers/fake-d1';
 
 const JWT_SECRET = 'test-secret';
@@ -145,5 +146,15 @@ describe('交易附件（R2）', () => {
 
   it('未登录 → 401', async () => {
     expect((await call(env, 'GET', '/api/v1/attachments?entity=sale&id=a')).status).toBe(401);
+  });
+});
+
+describe('附件存储工厂（createStorage）', () => {
+  it('r2 驱动返回 R2Storage；不支持的驱动抛错', () => {
+    const base = { DB: {}, ASSETS: fakeAssets, JWT_SECRET: 'x', BUCKET: new FakeBucket() } as never;
+    expect(createStorage({ ...base, STORAGE_DRIVER: 'r2' } as never)).toBeTruthy();
+    expect(() => createStorage({ ...base, STORAGE_DRIVER: 'webdav' } as never)).toThrow(/不支持|webdav/);
+    // 缺省默认 r2
+    expect(createStorage(base)).toBeTruthy();
   });
 });

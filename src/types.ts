@@ -5,6 +5,8 @@ export interface Env {
   JWT_SECRET: string;
   /** R2 附件存储（交易凭证图片），与 D1 配额独立 */
   BUCKET: R2Bucket;
+  /** 附件存储驱动（默认 r2；未来可 webdav 等），由 createStorage 工厂读取 */
+  STORAGE_DRIVER?: string;
 }
 
 /** JWT 载荷中的用户信息 */

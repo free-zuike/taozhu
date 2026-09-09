@@ -1,7 +1,8 @@
-/** 交易附件（凭证图片）：R2 存储，key = {entity}/{id}/{时间戳}.jpg
- *  实体 entity ∈ sale|purchase|payment，按前缀关联交易；零 D1 写（R2 配额独立）。 */
+/** 交易附件（凭证图片）：存储走后端工厂（默认 R2），key = {entity}/{id}/{时间戳}.jpg
+ *  实体 entity ∈ sale|purchase|payment，按前缀关联交易；零 D1 写。 */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
+import { createStorage } from '../services/storage';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -16,9 +17,10 @@ attachmentsRouter.get('/', async (c) => {
   const id = c.req.query('id');
   if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment' }, 400);
   if (!id) return c.json({ error: '缺少 id' }, 400);
-  const list = await c.env.BUCKET.list({ prefix: `${entity}/${id}/` });
+  const store = createStorage(c.env);
+  const objects = await store.list(`${entity}/${id}/`);
   return c.json({
-    attachments: list.objects.map((o) => ({ key: o.key, size: o.size, uploaded: o.uploaded?.toISOString() ?? '' })),
+    attachments: objects.map((o) => ({ key: o.key, size: o.size, uploaded: o.uploaded?.toISOString() ?? '' })),
   });
 });
 
@@ -40,20 +42,17 @@ attachmentsRouter.post('/', async (c) => {
   if (file.size === 0 || file.size > 10 * 1024 * 1024) return c.json({ error: '图片过大（上限 10MB）' }, 400);
 
   const key = `${entity}/${id}/${Date.now()}.jpg`;
-  await c.env.BUCKET.put(key, file.stream(), {
-    httpMetadata: { contentType: file.type || 'image/jpeg' },
-  });
+  await createStorage(c.env).put(key, file.stream(), file.type || 'image/jpeg');
   return c.json({ key }, 201);
 });
 
 // GET /attachments/:key{.+} — 代理读取图片内容（key 含斜杠如 sale/s1/123.jpg，{.+} 捕获多段）
 attachmentsRouter.get('/:key{.+}', async (c) => {
   const key = c.req.param('key');
-  const obj = await c.env.BUCKET.get(key);
+  const obj = await createStorage(c.env).get(key);
   if (!obj) return c.json({ error: '附件不存在' }, 404);
   const headers = new Headers();
-  obj.writeHttpMetadata(headers);
-  headers.set('etag', obj.httpEtag);
+  if (obj.contentType) headers.set('content-type', obj.contentType);
   return new Response(obj.body, { headers });
 });
 
@@ -61,6 +60,6 @@ attachmentsRouter.get('/:key{.+}', async (c) => {
 attachmentsRouter.delete('/', async (c) => {
   const key = c.req.query('key');
   if (!key) return c.json({ error: 'key 必填' }, 400);
-  await c.env.BUCKET.delete(key);
+  await createStorage(c.env).delete(key);
   return c.body(null, 204);
 });
