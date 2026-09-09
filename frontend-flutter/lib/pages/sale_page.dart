@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../api.dart';
+import '../local_freq.dart';
 import 'router.dart';
 
 class SalePage extends StatefulWidget {
@@ -58,6 +59,7 @@ class _SalePageState extends State<SalePage> {
     final cachedC = await Api.instance.getCached('/clients');
     final cachedI = await Api.instance.getCached('/items/summary');
     if (cachedC != null || cachedI != null) {
+      final freq = await Freq.load();
       setState(() {
         if (cachedC != null) {
           _clients = (cachedC['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
@@ -69,7 +71,8 @@ class _SalePageState extends State<SalePage> {
                     e['name'] as String,
                     ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
                   ))
-              .toList();
+              .toList()
+            ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
         }
       });
     }
@@ -84,15 +87,19 @@ class _SalePageState extends State<SalePage> {
         Api.instance.setCache('/items/summary', results[1]),
       ]);
       if (mounted) {
+        final freq = await Freq.load();
+        final items = ((results[1]['items'] as List?) ?? [])
+            .map((e) => _ItemOption(
+                  e['id'] as String,
+                  e['name'] as String,
+                  ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
+                ))
+            .toList()
+          ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
+        if (!mounted) return;
         setState(() {
           _clients = (results[0]['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-          _items = ((results[1]['items'] as List?) ?? [])
-              .map((e) => _ItemOption(
-                    e['id'] as String,
-                    e['name'] as String,
-                    ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
-                  ))
-              .toList();
+          _items = items;
         });
         // 编辑模式：商品目录就绪后预填原单据明细
         if (_editing) await _loadEdit();
@@ -102,6 +109,16 @@ class _SalePageState extends State<SalePage> {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       }
     }
+  }
+
+  /// 商品在本地频率表中的最大使用次数（按价格组合取峰值，0=无记录）
+  int _freqOf(_ItemOption item, Map<String, int> freq) {
+    var max = 0;
+    for (final p in item.prices) {
+      final f = freq['${p['id']}'] ?? 0;
+      if (f > max) max = f;
+    }
+    return max;
   }
 
   /// 编辑模式预填：GET /sales/:id → 按 item_id+unit 匹配现有价格，回填行
@@ -217,6 +234,7 @@ class _SalePageState extends State<SalePage> {
         if (mounted) Navigator.pop(context, true);
       } else {
         await Api.instance.post('/sales', body);
+        await Freq.bump(valid.map((r) => r.priceId ?? ''));
         toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
         setState(() {
           _rows.clear();

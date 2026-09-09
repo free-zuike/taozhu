@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../api.dart';
+import '../local_freq.dart';
 import 'router.dart';
 
 class PurchasePage extends StatefulWidget {
@@ -48,19 +49,36 @@ class _PurchasePageState extends State<PurchasePage> {
     // ① 本地缓存秒开
     final cached = await Api.instance.getCached('/items/summary');
     if (cached != null) {
-      setState(() => _items = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>());
+      final freq = await Freq.load();
+      final list = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>()
+        ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
+      setState(() => _items = list);
     }
     // ② 并行网络刷新 + 更新缓存
     try {
       final i = await Api.instance.get('/items/summary');
       await Api.instance.setCache('/items/summary', i);
       if (!mounted) return;
-      setState(() => _items = ((i['items'] as List?) ?? []).cast<Map<String, dynamic>>());
+      final freq = await Freq.load();
+      final list = ((i['items'] as List?) ?? []).cast<Map<String, dynamic>>()
+        ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
+      if (!mounted) return;
+      setState(() => _items = list);
       // 编辑模式：商品目录就绪后预填原单据明细
       if (_editing) await _loadEdit();
     } catch (e) {
       if (cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
+  }
+
+  /// 商品在本地频率表中的最大使用次数（按价格组合取峰值，0=无记录）
+  int _freqOf(Map<String, dynamic> item, Map<String, int> freq) {
+    var max = 0;
+    for (final p in ((item['prices'] as List?) ?? [])) {
+      final f = freq['${(p as Map)['id']}'] ?? 0;
+      if (f > max) max = f;
+    }
+    return max;
   }
 
   /// 编辑模式预填：GET /purchases/:id → 按 item_id+unit 匹配现有价格，回填行
@@ -174,6 +192,7 @@ class _PurchasePageState extends State<PurchasePage> {
         if (mounted) Navigator.pop(context, true);
       } else {
         await Api.instance.post('/purchases', body);
+        await Freq.bump(valid.map((r) => r.priceId ?? ''));
         toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
         setState(() {
           _rows.clear();
