@@ -38,7 +38,7 @@ jobs:
 
       - name: Package web zip (同版本固定名，覆盖不重复)
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || echo "0.1.0.0")
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
           cd frontend-flutter/build/web && zip -qr "/tmp/web-${VERSION}.zip" . && cd -
           echo "web_zip=/tmp/web-${VERSION}.zip" >> "$GITHUB_ENV"
           echo "包: web-${VERSION}.zip"
@@ -47,7 +47,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || echo "0.1.0.0")
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
           # 更新说明：上个版本 tag 以来的提交摘要
           git fetch --tags --quiet || true
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)

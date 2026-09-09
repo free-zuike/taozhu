@@ -42,7 +42,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || echo "0.1.0.0")
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || exit 1)
           cd frontend-uni/dist/build/mp-weixin && zip -qr "/tmp/taozhu-miniprogram-${VERSION}.zip" . && cd -
           # 更新说明：上个版本 tag 以来的提交摘要
           git fetch --tags --quiet || true

@@ -35,7 +35,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $VERSION = (Select-String -Path "frontend-flutter/lib/version.dart" -Pattern "APP_VERSION = '([^']+)'").Matches[0].Groups[1].Value
-          if (-not $VERSION) { $VERSION = "0.1.0.0" }
+          if (-not $VERSION) { Write-Error "版本提取失败"; exit 1 }
           Compress-Archive -Path "frontend-flutter/build/windows/x64/runner/Release/*" -DestinationPath "$env:TEMP/taozhu-windows-${VERSION}.zip"
           # 更新说明：上个版本 tag 以来的提交摘要
           git fetch --tags --quiet 2>$null
@@ -72,8 +72,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || echo "0.1.0.0")
-          cd frontend-flutter/build/macos/Build/Products/Release && zip -qr "/tmp/taozhu-macos-${VERSION}.zip" taozhu.app && cd -
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1 || exit 1)
+          cd frontend-flutter/build/macos/Build/Products/Release && zip -qr "/tmp/taozhu-macos-${VERSION}.zip" taozhu_app.app && cd -
           # 更新说明：上个版本 tag 以来的提交摘要
           git fetch --tags --quiet || true
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
@@ -109,7 +109,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1 || echo "0.1.0.0")
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1 || exit 1)
           cd frontend-flutter/build/ios/iphoneos && zip -qr "/tmp/taozhu-ios-${VERSION}-unsigned.zip" Runner.app && cd -
           # 更新说明：上个版本 tag 以来的提交摘要
           git fetch --tags --quiet || true

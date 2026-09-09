@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../utils/money.dart';
 import 'router.dart';
 import 'clients_page.dart';
 import 'sale_page.dart';
@@ -465,8 +466,10 @@ class _LedgerPageState extends State<LedgerPage> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : TabBarView(children: [
-                      _buildList('暂无偿付记录', _sales, _saleCard),
-                      _buildList('暂无收款记录', _payments, _paymentCard),
+                      _buildList('暂无偿付记录', _sales, _saleCard,
+                          (s) => ((s['total'] as num?)?.toDouble() ?? 0)),
+                      _buildList('暂无收款记录', _payments, _paymentCard,
+                          (p) => ((p['amount'] as num?)?.toDouble() ?? 0)),
                     ]),
             ),
           ],
@@ -479,6 +482,7 @@ class _LedgerPageState extends State<LedgerPage> {
     String emptyText,
     List<Map<String, dynamic>> rows,
     Widget Function(Map<String, dynamic>) card,
+    double Function(Map<String, dynamic>) amountOf,
   ) {
     if (rows.isEmpty) {
       return RefreshIndicator(
@@ -513,8 +517,10 @@ class _LedgerPageState extends State<LedgerPage> {
                   Text(_weekday(e.key),
                       style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
                   const Spacer(),
-                  Text('${e.value.length} 笔',
-                      style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                  Text(
+                    '${e.value.length} 笔 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, r) => s + amountOf(r)))}',
+                    style: const TextStyle(fontSize: 12, color: Color(0x8A000000)),
+                  ),
                 ],
               ),
             ),
@@ -533,46 +539,87 @@ class _LedgerPageState extends State<LedgerPage> {
     return '$date 周${wd[d.weekday - 1]}';
   }
 
+    /// 卡片右上 ⋯ 菜单：附件 / 编辑 / 删除
+  Widget _menu({required VoidCallback attach, required VoidCallback edit, required VoidCallback del}) {
+    return PopupMenuButton<String>(
+      padding: EdgeInsets.zero,
+      icon: const Icon(Icons.more_vert, size: 18, color: Color(0x61000000)),
+      onSelected: (v) {
+        if (v == 'attach') attach();
+        if (v == 'edit') edit();
+        if (v == 'del') del();
+      },
+      itemBuilder: (_) => const [
+        PopupMenuItem(value: 'attach', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.attachment_outlined, size: 18), title: Text('附件'))),
+        PopupMenuItem(value: 'edit', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.edit_outlined, size: 18), title: Text('编辑'))),
+        PopupMenuItem(value: 'del', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.delete_outline, size: 18, color: Color(0xFFEF4444)), title: Text('删除', style: TextStyle(color: Color(0xFFEF4444))))),
+      ],
+    );
+  }
+
   Widget _saleCard(Map<String, dynamic> s) {
-    final count = (s['items'] as List? ?? []).length;
+    final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
     final note = (s['note'] as String? ?? '').trim();
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      leading: CircleAvatar(
-        radius: 20,
-        backgroundColor: const Color(0xFF409EFF).withOpacity(0.12),
-        child: const Icon(Icons.storefront, size: 20, color: Color(0xFF409EFF)),
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      elevation: 0,
+      color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: dark ? const Color(0xFF409EFF).withOpacity(0.3) : const Color(0x0F000000)),
       ),
-      title: Text('${s['client_name']}',
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-      subtitle: Text(
-        '$count 项${note.isNotEmpty ? ' · $note' : ''}',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 12, color: Color(0x8A000000)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _editSale(s),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: const Color(0xFF409EFF).withOpacity(0.12),
+                child: const Icon(Icons.storefront, size: 16, color: Color(0xFF409EFF)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('${s['client_name']}',
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              ),
+              Text('¥${fmtMoney(s['total'])}',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFFEF4444))),
+              _menu(
+                attach: () => showAttachmentPanel(context, 'sale', '${s['id']}', '出货单附件'),
+                edit: () => _editSale(s),
+                del: () => _deleteSale(s),
+              ),
+            ]),
+            // 商品明细直接展开（全部显示，点卡片才进编辑）
+            for (final it in items)
+              Padding(
+                padding: const EdgeInsets.only(left: 40, top: 2),
+                child: Row(children: [
+                  Expanded(
+                    child: Text('${it['item_name']} ×${it['quantity']}${it['unit']}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13, color: Color(0x8A000000))),
+                  ),
+                  Text('¥${fmtMoney(it['amount'])}',
+                      style: const TextStyle(fontSize: 13, color: Color(0x61000000))),
+                ]),
+              ),
+            if (note.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(left: 40, top: 2),
+                child: Text('备注：$note',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+              ),
+          ]),
+        ),
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('¥${s['total']}',
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFFEF4444))),
-          const SizedBox(width: 4),
-          IconButton(
-            icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0x61000000)),
-            tooltip: '附件',
-            onPressed: () => showAttachmentPanel(context, 'sale', '${s['id']}', '出货单附件'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF409EFF)),
-            onPressed: () => _editSale(s),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline, size: 18, color: Color(0x8A000000)),
-            onPressed: () => _deleteSale(s),
-          ),
-        ],
-      ),
-      onTap: () => _editSale(s),
     );
   }
 
@@ -582,46 +629,51 @@ class _LedgerPageState extends State<LedgerPage> {
     final waived = ((p['waived'] as num?) ?? 0) > 0;
     final meta = [
       if (method.isNotEmpty) method,
-      if (waived) '平账 ¥${p['waived']}',
+      if (waived) '平账 ¥${fmtMoney(p['waived'])}',
       if (note.isNotEmpty) note,
     ].join(' · ');
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      leading: CircleAvatar(
-        radius: 20,
-        backgroundColor: const Color(0xFF22C55E).withOpacity(0.12),
-        child: const Icon(Icons.check_circle_outline, size: 20, color: Color(0xFF22C55E)),
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      elevation: 0,
+      color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: dark ? const Color(0xFF22C55E).withOpacity(0.3) : const Color(0x0F000000)),
       ),
-      title: Text('${p['client_name']}',
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-      subtitle: Text(
-        meta.isEmpty ? '' : meta,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 12, color: Color(0x8A000000)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _editPayment(p),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+          child: Row(children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: const Color(0xFF22C55E).withOpacity(0.12),
+              child: const Icon(Icons.check_circle_outline, size: 16, color: Color(0xFF22C55E)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${p['client_name']}',
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                if (meta.isNotEmpty)
+                  Text(meta,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+              ]),
+            ),
+            Text('¥${fmtMoney(p['amount'])}',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF22C55E))),
+            _menu(
+              attach: () => showAttachmentPanel(context, 'payment', '${p['id']}', '收款凭证'),
+              edit: () => _editPayment(p),
+              del: () => _deletePayment(p),
+            ),
+          ]),
+        ),
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('¥${p['amount']}',
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF22C55E))),
-          const SizedBox(width: 4),
-          IconButton(
-            icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0x61000000)),
-            tooltip: '附件',
-            onPressed: () => showAttachmentPanel(context, 'payment', '${p['id']}', '收款凭证'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF409EFF)),
-            onPressed: () => _editPayment(p),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline, size: 18, color: Color(0x8A000000)),
-            onPressed: () => _deletePayment(p),
-          ),
-        ],
-      ),
-      onTap: () => _editPayment(p),
     );
   }
 }

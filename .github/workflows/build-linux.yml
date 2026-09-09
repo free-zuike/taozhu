@@ -39,7 +39,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || echo "0.1.0.0")
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
           cd frontend-flutter/build/linux/x64/release/bundle && zip -qr "/tmp/taozhu-linux-${VERSION}.zip" . && cd -
           # 更新说明：上个版本 tag 以来的提交摘要
           git fetch --tags --quiet || true

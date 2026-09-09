@@ -1,6 +1,10 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 import '../api.dart';
 import '../theme.dart';
 import '../version.dart';
@@ -81,23 +85,55 @@ class _MyPageState extends State<MyPage> {
         return;
       }
       if (!mounted) return;
-      final copy = await showDialog<bool>(
+      final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+      final action = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('发现新版本'),
-          content: Text('当前 v$APP_VERSION\n最新 v$ver\n\n点击「复制下载链接」后粘贴到浏览器下载 APK。'),
+          content: Text(isAndroid
+              ? '当前 v$APP_VERSION\n最新 v$ver\n\n点击「立即更新」将在应用内下载并安装新版 APK。'
+              : '当前 v$APP_VERSION\n最新 v$ver\n\n点击「复制下载链接」后粘贴到浏览器下载。'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('复制下载链接')),
+            TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('取消')),
+            if (isAndroid)
+              FilledButton(onPressed: () => Navigator.pop(ctx, 'update'), child: const Text('立即更新'))
+            else
+              FilledButton(onPressed: () => Navigator.pop(ctx, 'copy'), child: const Text('复制下载链接')),
           ],
         ),
       );
-      if (copy == true) {
+      if (action == 'update') {
+        await _downloadAndInstall(ver);
+      } else if (action == 'copy') {
         await Clipboard.setData(ClipboardData(text: releaseUrl));
         toast(context, '已复制下载链接');
       }
     } catch (e) {
       toast(context, '检查更新失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
+  /// 应用内下载 APK 并调起系统安装器（仅 Android）
+  Future<void> _downloadAndInstall(String ver) async {
+    final url =
+        'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk';
+    toast(context, '开始下载 v$ver（约 60MB）…');
+    try {
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        toast(context, '下载失败（HTTP ${res.statusCode}）');
+        return;
+      }
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/taozhu-update-$ver.apk');
+      await file.writeAsBytes(res.bodyBytes);
+      toast(context, '下载完成，正在调起安装…');
+      final result = await OpenFilex.open(file.path);
+      if (result.type != ResultType.done) {
+        toast(context, '调起安装失败：${result.message}');
+      }
+    } catch (e) {
+      toast(context, '下载失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
 

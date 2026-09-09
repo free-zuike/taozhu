@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -43,11 +44,17 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
 
   String get _subPath => 'attachments/${widget.entity}/${widget.id}';
 
-  Future<Directory> _dir() async {
-    final root = await getApplicationDocumentsDirectory();
-    final d = Directory('${root.path}/${_subPath}');
-    if (!d.existsSync()) d.createSync(recursive: true);
-    return d;
+  /// 本地副本目录；Web 端无文件系统返回 null（附件仅云端）
+  Future<Directory?> _dir() async {
+    if (kIsWeb) return null;
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final d = Directory('${root.path}/${_subPath}');
+      if (!d.existsSync()) d.createSync(recursive: true);
+      return d;
+    } catch (_) {
+      return null; // path_provider 不可用（如 Web）时不阻塞
+    }
   }
 
   Future<void> _load() async {
@@ -58,8 +65,10 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
           .map((x) => '${x['key']}');
       final dir = await _dir();
       final locals = <String, String>{};
-      for (final f in dir.listSync()) {
-        if (f is File) locals[f.uri.pathSegments.last] = f.path;
+      if (dir != null) {
+        for (final f in dir.listSync()) {
+          if (f is File) locals[f.uri.pathSegments.last] = f.path;
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -104,10 +113,12 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
     // 本地 MD5 去重：本地已存过同内容图片则跳过（云端同样以 MD5 命名幂等）
     final h = md5.convert(bytes).toString();
     final dir = await _dir();
-    final localFile = File('${dir.path}/$h.jpg');
-    if (localFile.existsSync()) {
-      toast(context, '该图片已存在，跳过重复上传');
-      return;
+    if (dir != null) {
+      final localFile = File('${dir.path}/$h.jpg');
+      if (localFile.existsSync()) {
+        toast(context, '该图片已存在，跳过重复上传');
+        return;
+      }
     }
     toast(context, '上传中…');
     try {
@@ -116,8 +127,10 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
         bytes,
         'photo.jpg',
       );
-      // 本地副本（双存储）：断网也能看；文件名 = 内容 MD5（与云端 key 末段一致）
-      await localFile.writeAsBytes(bytes);
+      // 本地副本（双存储，移动/桌面端）：断网也能看；文件名 = 内容 MD5（与云端 key 末段一致）
+      if (dir != null) {
+        await File('${dir.path}/$h.jpg').writeAsBytes(bytes);
+      }
       toast(context, '已添加附件');
       _load();
     } catch (e) {
@@ -158,33 +171,47 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
 
   Widget _thumb(_Item it) {
     final local = it.localPath;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (local != null && File(local).existsSync())
-          Image.file(File(local), fit: BoxFit.cover)
-        else
-          Image.network(
-            '$_base/api/v1/attachments/${it.key}',
-            fit: BoxFit.cover,
-            headers: _token.isEmpty ? null : {'Authorization': 'Bearer $_token'},
-            errorBuilder: (_, __, ___) => const Center(
-              child: Icon(Icons.broken_image_outlined, color: Color(0xFFC0C4CC)),
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    // 固定浅灰/深灰底：加载中与加载失败不再是黑块（夜间模式可见）
+    return Container(
+      color: dark ? const Color(0xFF2C2C2E) : const Color(0xFFF5F5F5),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (local != null && File(local).existsSync())
+            Image.file(File(local), fit: BoxFit.cover)
+          else
+            Image.network(
+              '$_base/api/v1/attachments/${it.key}',
+              fit: BoxFit.cover,
+              headers: _token.isEmpty ? null : {'Authorization': 'Bearer $_token'},
+              loadingBuilder: (_, child, progress) => progress == null
+                  ? child
+                  : const Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+              errorBuilder: (_, __, ___) => const Center(
+                child: Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF)),
+              ),
+            ),
+          Positioned(
+            right: 0,
+            top: 0,
+            child: GestureDetector(
+              onTap: () => _delete(it),
+              child: Container(
+                color: Colors.black.withOpacity(0.45),
+                padding: const EdgeInsets.all(4),
+                child: const Icon(Icons.close, size: 14, color: Colors.white),
+              ),
             ),
           ),
-        Positioned(
-          right: 0,
-          top: 0,
-          child: GestureDetector(
-            onTap: () => _delete(it),
-            child: Container(
-              color: Colors.black.withOpacity(0.45),
-              padding: const EdgeInsets.all(4),
-              child: const Icon(Icons.close, size: 14, color: Colors.white),
-            ),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
