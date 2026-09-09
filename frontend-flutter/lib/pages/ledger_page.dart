@@ -5,10 +5,9 @@ import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import 'router.dart';
 import 'sale_page.dart';
-import 'purchase_page.dart';
 import 'attachment_panel.dart';
 
-/// 账本：出货 / 进货 / 收款历史，支持编辑与删除（纠错入口）
+/// 交易（账本=店铺）：出货 / 收款流水，按店铺+时间范围，支持编辑删除与附件（按日期分组列表）
 class LedgerPage extends StatefulWidget {
   const LedgerPage({super.key});
   @override
@@ -17,7 +16,6 @@ class LedgerPage extends StatefulWidget {
 
 class _LedgerPageState extends State<LedgerPage> {
   List<Map<String, dynamic>> _sales = [];
-  List<Map<String, dynamic>> _purchases = [];
   List<Map<String, dynamic>> _payments = [];
   List<Map<String, dynamic>> _clients = [];
   String? _clientId; // 账本（店铺）维度：必选，默认第一个；无店铺时自动建「默认店铺」
@@ -49,10 +47,7 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
-  String _dateQuery() {
-    final r = _rangeDates();
-    return r == null ? '' : '?date_from=${r.$1}&date_to=${r.$2}';
-  }
+  String _dateQuery() => ''; // （进货独立 tab，本页不再使用）
 
   /// 出货/收款查询：账本（店铺）必选 + 时间范围；进货不按店铺（仅时间范围）
   String _clientQuery() {
@@ -88,18 +83,16 @@ class _LedgerPageState extends State<LedgerPage> {
       if (clients.isNotEmpty && (_clientId == null || !clients.any((c) => '${c['id']}' == _clientId))) {
         _clientId = '${clients.first['id']}';
       }
-      // ② 按账本+范围拉交易
+      // ② 按账本+范围拉交易（出货/收款按店铺；进货在底部独立 tab，不在此页）
       final results = await Future.wait([
         Api.instance.getWithFallback('/sales${_clientQuery()}'),
-        Api.instance.getWithFallback('/purchases${_dateQuery()}'),
         Api.instance.getWithFallback('/payments${_clientQuery()}'),
       ]);
       if (!mounted) return;
       setState(() {
         _offline = results.any((r) => r.offline);
         _sales = ((results[0].data['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _purchases = ((results[1].data['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _payments = ((results[2].data['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _payments = ((results[1].data['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
         _clients = clients;
         _loading = false;
       });
@@ -145,25 +138,6 @@ class _LedgerPageState extends State<LedgerPage> {
     }
     try {
       await Api.instance.delete('/sales/${s['id']}');
-      toast(context, '已删除');
-      _load();
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
-    }
-  }
-
-  void _editPurchase(Map<String, dynamic> p) {
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => PurchasePage(editId: '${p['id']}')))
-        .then((_) => _load());
-  }
-
-  Future<void> _deletePurchase(Map<String, dynamic> p) async {
-    if (!await _confirm('删除进货单', '确定删除 ${_date(p['happened_at'])} 的进货单（¥${p['total']}）吗？')) {
-      return;
-    }
-    try {
-      await Api.instance.delete('/purchases/${p['id']}');
       toast(context, '已删除');
       _load();
     } catch (e) {
@@ -260,7 +234,7 @@ class _LedgerPageState extends State<LedgerPage> {
     return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
   }
 
-  /// 导出当前筛选 CSV 文件（系统分享面板）：按商品明细逐行展开——类型/日期/店铺/商品/数量/单位/单价/金额/备注
+  /// 导出当前筛选 CSV（出货/收款，按账本+范围）
   Future<void> _exportCsv() async {
     final buf = StringBuffer('\uFEFF');
     buf.writeln('类型,日期,店铺,商品,数量,单位,单价,金额,备注');
@@ -277,22 +251,6 @@ class _LedgerPageState extends State<LedgerPage> {
           _csv(it['sale_price']),
           _csv(it['amount']),
           _csv(s['note']),
-        ].join(','));
-      }
-    }
-    for (final p in _purchases) {
-      final items = (p['items'] as List? ?? []);
-      for (final it in items) {
-        buf.writeln([
-          '进货',
-          _csv(_date(p['happened_at'])),
-          '',
-          _csv(it['item_name']),
-          _csv(it['quantity']),
-          _csv(it['unit']),
-          _csv(it['purchase_price']),
-          _csv(it['amount']),
-          _csv(p['note']),
         ].join(','));
       }
     }
@@ -319,10 +277,10 @@ class _LedgerPageState extends State<LedgerPage> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('账本'),
+          title: const Text('交易'),
           actions: [
             IconButton(
               tooltip: '导出 CSV',
@@ -330,7 +288,7 @@ class _LedgerPageState extends State<LedgerPage> {
               onPressed: _exportCsv,
             ),
           ],
-          bottom: const TabBar(tabs: [Tab(text: '出货'), Tab(text: '进货'), Tab(text: '收款')]),
+          bottom: const TabBar(tabs: [Tab(text: '出货'), Tab(text: '收款')]),
         ),
         body: Column(
           children: [
@@ -412,7 +370,6 @@ class _LedgerPageState extends State<LedgerPage> {
                   ? const Center(child: CircularProgressIndicator())
                   : TabBarView(children: [
                       _buildList('暂无偿付记录', _sales, _saleCard),
-                      _buildList('暂无进货记录', _purchases, _purchaseCard),
                       _buildList('暂无收款记录', _payments, _paymentCard),
                     ]),
             ),
@@ -427,127 +384,148 @@ class _LedgerPageState extends State<LedgerPage> {
     List<Map<String, dynamic>> rows,
     Widget Function(Map<String, dynamic>) card,
   ) {
+    if (rows.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(48),
+              child: Center(child: Text(emptyText, style: const TextStyle(color: Colors.grey))),
+            ),
+          ],
+        ),
+      );
+    }
+    // 按日期分组（流水：日期组头 + 行）
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final r in rows) {
+      final d = _date(r['happened_at']);
+      (grouped[d] ??= []).add(r);
+    }
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
         children: [
-          if (rows.isEmpty)
+          for (final e in grouped.entries) ...[
             Padding(
-              padding: const EdgeInsets.all(40),
-              child: Center(child: Text(emptyText, style: const TextStyle(color: Colors.grey))),
+              padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
+              child: Row(
+                children: [
+                  Text(_weekday(e.key),
+                      style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                  const Spacer(),
+                  Text('${e.value.length} 笔',
+                      style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                ],
+              ),
             ),
-          for (final r in rows) card(r),
+            for (final r in e.value) card(r),
+          ],
         ],
       ),
     );
   }
 
-  Widget _saleCard(Map<String, dynamic> s) {
-    final count = (s['items'] as List? ?? []).length;
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.storefront, color: Color(0xFF409EFF)),
-        title: Text('${s['client_name']}'),
-        subtitle: Text(
-          '${_date(s['happened_at'])} · $count 项${(s['note'] as String? ?? '').isNotEmpty ? ' · ${s['note']}' : ''}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0xFF909399)),
-              tooltip: '附件',
-              onPressed: () => showAttachmentPanel(context, 'sale', '${s['id']}', '出货单附件'),
-            ),
-            Text('¥${s['total']}',
-                style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFF56C6C))),
-            IconButton(
-              icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF409EFF)),
-              onPressed: () => _editSale(s),
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFF56C6C)),
-              onPressed: () => _deleteSale(s),
-            ),
-          ],
-        ),
-        onTap: () => _editSale(s),
-      ),
-    );
+  /// 日期 → "2026-09-09 周三"
+  String _weekday(String date) {
+    final d = DateTime.tryParse(date);
+    if (d == null) return date;
+    const wd = ['一', '二', '三', '四', '五', '六', '日'];
+    return '$date 周${wd[d.weekday - 1]}';
   }
 
-  Widget _purchaseCard(Map<String, dynamic> p) {
-    final count = (p['items'] as List? ?? []).length;
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.shopping_cart, color: Color(0xFF67C23A)),
-        title: Text('${_date(p['happened_at'])} 进货'),
-        subtitle: Text(
-          '$count 项${(p['note'] as String? ?? '').isNotEmpty ? ' · ${p['note']}' : ''}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0xFF909399)),
-              tooltip: '附件',
-              onPressed: () => showAttachmentPanel(context, 'purchase', '${p['id']}', '进货单附件'),
-            ),
-            Text('¥${p['total']}',
-                style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFF56C6C))),
-            IconButton(
-              icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF409EFF)),
-              onPressed: () => _editPurchase(p),
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFF56C6C)),
-              onPressed: () => _deletePurchase(p),
-            ),
-          ],
-        ),
-        onTap: () => _editPurchase(p),
+  Widget _saleCard(Map<String, dynamic> s) {
+    final count = (s['items'] as List? ?? []).length;
+    final note = (s['note'] as String? ?? '').trim();
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      leading: CircleAvatar(
+        radius: 20,
+        backgroundColor: const Color(0xFF409EFF).withOpacity(0.12),
+        child: const Icon(Icons.storefront, size: 20, color: Color(0xFF409EFF)),
       ),
+      title: Text('${s['client_name']}',
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+      subtitle: Text(
+        '$count 项${note.isNotEmpty ? ' · $note' : ''}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 12, color: Color(0x8A000000)),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('¥${s['total']}',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFFEF4444))),
+          const SizedBox(width: 4),
+          IconButton(
+            icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0x61000000)),
+            tooltip: '附件',
+            onPressed: () => showAttachmentPanel(context, 'sale', '${s['id']}', '出货单附件'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF409EFF)),
+            onPressed: () => _editSale(s),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, size: 18, color: Color(0x8A000000)),
+            onPressed: () => _deleteSale(s),
+          ),
+        ],
+      ),
+      onTap: () => _editSale(s),
     );
   }
 
   Widget _paymentCard(Map<String, dynamic> p) {
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.check_circle_outline, color: Color(0xFF67C23A)),
-        title: Text('${p['client_name']}'),
-        subtitle: Text(
-          '${_date(p['happened_at'])}${(p['method'] as String? ?? '').isNotEmpty ? ' · ${p['method']}' : ''}'
-          '${(p['note'] as String? ?? '').isNotEmpty ? ' · ${p['note']}' : ''}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0xFF909399)),
-              tooltip: '附件',
-              onPressed: () => showAttachmentPanel(context, 'payment', '${p['id']}', '收款凭证'),
-            ),
-            Text('¥${p['amount']}',
-                style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF67C23A))),
-            IconButton(
-              icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF409EFF)),
-              onPressed: () => _editPayment(p),
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFF56C6C)),
-              onPressed: () => _deletePayment(p),
-            ),
-          ],
-        ),
-        onTap: () => _editPayment(p),
+    final method = (p['method'] as String? ?? '').trim();
+    final note = (p['note'] as String? ?? '').trim();
+    final waived = ((p['waived'] as num?) ?? 0) > 0;
+    final meta = [
+      if (method.isNotEmpty) method,
+      if (waived) '平账 ¥${p['waived']}',
+      if (note.isNotEmpty) note,
+    ].join(' · ');
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      leading: CircleAvatar(
+        radius: 20,
+        backgroundColor: const Color(0xFF22C55E).withOpacity(0.12),
+        child: const Icon(Icons.check_circle_outline, size: 20, color: Color(0xFF22C55E)),
       ),
+      title: Text('${p['client_name']}',
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+      subtitle: Text(
+        meta.isEmpty ? '' : meta,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 12, color: Color(0x8A000000)),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('¥${p['amount']}',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF22C55E))),
+          const SizedBox(width: 4),
+          IconButton(
+            icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0x61000000)),
+            tooltip: '附件',
+            onPressed: () => showAttachmentPanel(context, 'payment', '${p['id']}', '收款凭证'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF409EFF)),
+            onPressed: () => _editPayment(p),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, size: 18, color: Color(0x8A000000)),
+            onPressed: () => _deletePayment(p),
+          ),
+        ],
+      ),
+      onTap: () => _editPayment(p),
     );
   }
 }

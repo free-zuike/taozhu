@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
-import '../pages/home_page.dart';
 import '../pages/sale_page.dart';
 import '../pages/my_page.dart';
 import '../pages/purchase_page.dart';
 import '../pages/ledger_page.dart';
 import '../pages/stats_page.dart';
 
-/// 底部悬浮胶囊导航壳（对齐移动记账信息架构）：
-/// 工作台 / 交易（流水，顶栏店铺胶囊=选账本，含出货·进货·收款）/ 中央「记一笔」/ 统计（洞察）/ 我的
-/// 出货/进货记单通过中央 + 添加；店铺（账本）管理在「我的」
+/// 底部悬浮胶囊导航（对齐移动记账信息架构）：
+/// 交易（流水，账本=店铺胶囊筛选，出货·收款）/ 统计 / 中央「记一笔」/ 进货（独立，不分店）/ 我的
 class BottomShell extends StatefulWidget {
   const BottomShell({super.key});
   @override
@@ -25,7 +23,7 @@ class _BottomShellState extends State<BottomShell> {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [HomePage(), LedgerPage(), StatsPage(), MyPage()],
+        children: const [LedgerPage(), StatsPage(), PurchasePage(), MyPage()],
       ),
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -43,7 +41,7 @@ class _BottomShellState extends State<BottomShell> {
               _navItem(0, Icons.receipt_long_outlined, '交易'),
               _navItem(1, Icons.bar_chart_outlined, '统计'),
               _centerButton(),
-              _navItem(2, Icons.dashboard_outlined, '工作台'),
+              _navItem(2, Icons.shopping_cart_outlined, '进货'),
               _navItem(3, Icons.person_outline, '我的'),
             ],
           ),
