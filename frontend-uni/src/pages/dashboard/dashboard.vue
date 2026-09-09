@@ -3,7 +3,7 @@
     <!-- 今日卡片 -->
     <view class="cards">
       <view class="card"><text class="cl">今日出货</text><text class="cv">¥{{ fmt(today.sales_total) }}</text></view>
-      <view class="card"><text class="cl green">今日毛利</text><text class="cv green">¥{{ fmt(today.gross_profit) }}</text></view>
+      <view v-if="canSeeProfit" class="card"><text class="cl green">今日毛利</text><text class="cv green">¥{{ fmt(today.gross_profit) }}</text></view>
       <view class="card"><text class="cl">今日收款</text><text class="cv">¥{{ fmt(today.paid_total) }}</text></view>
       <view class="card"><text class="cl red">今日进货</text><text class="cv red">¥{{ fmt(today.purchase_total) }}</text></view>
       <view class="card"><text class="cl red">总欠款</text><text class="cv red">¥{{ fmt(totals.debt) }}</text></view>
@@ -14,8 +14,12 @@
     <view class="entries">
       <button class="btn" @click="go('/pages/items/items')">商品管理</button>
       <button class="btn" @click="go('/pages/clients/clients')">饭店管理</button>
+      <button class="btn" @click="go('/pages/categories/categories')">分类管理</button>
+      <button class="btn" @click="go('/pages/ledger/ledger')">账本</button>
       <button class="btn" @click="go('/pages/payments/payments')">收款结账</button>
+      <button class="btn" @click="go('/pages/statement/statement')">对账单</button>
       <button class="btn" @click="go('/pages/stats/stats')">统计</button>
+      <button class="btn" @click="go('/pages/users/users')">账号管理</button>
     </view>
 
     <!-- 欠款排行 -->
@@ -38,6 +42,7 @@ import { request, getToken } from '../../api';
 const today = ref({ sales_total: 0, gross_profit: 0, paid_total: 0, purchase_total: 0, sales_count: 0 });
 const totals = ref({ debt: 0, client_count: 0, all_sales: 0, all_paid: 0, item_count: 0 });
 const topDebt = ref<Array<{ id: string; name: string; debt: number }>>([]);
+const canSeeProfit = ref(true); // 店员看不到毛利（后端 can_see_profit=false 时隐藏）
 const fmt = (n: number) => Number(n || 0).toFixed(2);
 
 onShow(async () => {
@@ -46,10 +51,11 @@ onShow(async () => {
     return;
   }
   try {
-    const d = await request<{ today: typeof today.value; totals: typeof totals.value; top_debt_clients: Array<{ id: string; name: string; sales_total: number; paid_total: number; debt: number }> }>('/stats/overview', 'GET');
+    const d = await request<{ today: typeof today.value; totals: typeof totals.value; can_see_profit: boolean; top_debt_clients: Array<{ id: string; name: string; sales_total: number; paid_total: number; debt: number }> }>('/stats/overview', 'GET');
     today.value = d.today;
     totals.value = d.totals;
     topDebt.value = d.top_debt_clients;
+    canSeeProfit.value = d.can_see_profit !== false;
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }

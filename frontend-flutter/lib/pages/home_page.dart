@@ -14,6 +14,7 @@ class _HomePageState extends State<HomePage> {
   Map<String, dynamic> _totals = {};
   List<dynamic> _topDebt = [];
   bool _loading = true;
+  bool _canSeeProfit = true; // 店员看不到毛利（后端 can_see_profit=false 时隐藏）
 
   @override
   void initState() {
@@ -28,6 +29,7 @@ class _HomePageState extends State<HomePage> {
         _today = (d['today'] as Map?)?.cast<String, dynamic>() ?? {};
         _totals = (d['totals'] as Map?)?.cast<String, dynamic>() ?? {};
         _topDebt = (d['top_debt_clients'] as List?) ?? [];
+        _canSeeProfit = d['can_see_profit'] != false;
         _loading = false;
       });
     } catch (e) {
@@ -69,7 +71,7 @@ class _HomePageState extends State<HomePage> {
                 runSpacing: 12,
                 children: [
                   _card('今日出货', '¥${_fmt(_today['sales_total'])}'),
-                  _card('今日毛利', '¥${_fmt(_today['gross_profit'])}', green: true),
+                  if (_canSeeProfit) _card('今日毛利', '¥${_fmt(_today['gross_profit'])}', green: true),
                   _card('今日收款', '¥${_fmt(_today['paid_total'])}'),
                   _card('今日进货', '¥${_fmt(_today['purchase_total'])}', red: true),
                   _card('总欠款', '¥${_fmt(_totals['debt'])}', red: true),

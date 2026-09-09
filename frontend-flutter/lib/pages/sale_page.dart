@@ -29,6 +29,8 @@ class _Row {
 class _SalePageState extends State<SalePage> {
   List<Map<String, dynamic>> _clients = [];
   List<_ItemOption> _items = [];
+  // 商品下拉菜单项缓存：行组件不再每次 build 重建 items（目录大时明显降卡顿）
+  List<DropdownMenuItem<String>> _itemMenus = [];
   String? _clientId;
   final List<_Row> _rows = [_Row()];
   final _dateCtrl = TextEditingController(text: _today());
@@ -73,6 +75,9 @@ class _SalePageState extends State<SalePage> {
                   ))
               .toList()
             ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
+          _itemMenus = _items
+              .map((it) => DropdownMenuItem(value: it.id, child: Text(it.name)))
+              .toList();
         }
       });
     }
@@ -100,6 +105,9 @@ class _SalePageState extends State<SalePage> {
         setState(() {
           _clients = (results[0]['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
           _items = items;
+          _itemMenus = items
+              .map((it) => DropdownMenuItem(value: it.id, child: Text(it.name)))
+              .toList();
         });
         // 编辑模式：商品目录就绪后预填原单据明细
         if (_editing) await _loadEdit();
@@ -326,7 +334,7 @@ class _SalePageState extends State<SalePage> {
             DropdownButtonFormField<String>(
               initialValue: row.itemId,
               decoration: const InputDecoration(labelText: '商品'),
-              items: _items.map((it) => DropdownMenuItem(value: it.id, child: Text(it.name))).toList(),
+              items: _itemMenus,
               onChanged: (v) => setState(() {
                 row.itemId = v;
                 row.priceId = null;

@@ -65,4 +65,5 @@ export function request<T = any>(path: string, method: Method = 'GET', data?: un
 export const get = <T = any>(path: string) => request<T>(path, 'GET');
 export const post = <T = any>(path: string, data?: unknown) => request<T>(path, 'POST', data);
 export const put = <T = any>(path: string, data?: unknown) => request<T>(path, 'PUT', data);
+export const patch = <T = any>(path: string, data?: unknown) => request<T>(path, 'PATCH', data);
 export const del = <T = any>(path: string) => request<T>(path, 'DELETE');

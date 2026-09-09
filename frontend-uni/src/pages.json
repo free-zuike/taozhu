@@ -31,6 +31,30 @@
 			}
 		},
 		{
+			"path": "pages/categories/categories",
+			"style": {
+				"navigationBarTitleText": "分类管理"
+			}
+		},
+		{
+			"path": "pages/ledger/ledger",
+			"style": {
+				"navigationBarTitleText": "账本"
+			}
+		},
+		{
+			"path": "pages/statement/statement",
+			"style": {
+				"navigationBarTitleText": "对账单"
+			}
+		},
+		{
+			"path": "pages/users/users",
+			"style": {
+				"navigationBarTitleText": "账号管理"
+			}
+		},
+		{
 			"path": "pages/clients/clients",
 			"style": {
 				"navigationBarTitleText": "饭店管理"

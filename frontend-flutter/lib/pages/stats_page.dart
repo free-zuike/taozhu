@@ -32,6 +32,7 @@ class _StatsPageState extends State<StatsPage> {
   List<dynamic> _clientsStats = [];
   List<dynamic> _itemsStats = [];
   bool _loading = true;
+  bool _canSeeProfit = true; // 店员看不到毛利（后端 can_see_profit=false 时隐藏）
 
   static const _primary = Color(0xFF409EFF);
 
@@ -143,6 +144,7 @@ class _StatsPageState extends State<StatsPage> {
           _months = (results[0]['months'] as List?) ?? [];
           _days = [];
           _itemsStats = [];
+          _canSeeProfit = (results[0]['can_see_profit'] as bool?) ?? true;
           _loading = false;
         });
         return;
@@ -159,6 +161,7 @@ class _StatsPageState extends State<StatsPage> {
         _days = (results[1]['days'] as List?) ?? [];
         _itemsStats = ((results[2]['items'] as List?) ?? []).cast<Map<String, dynamic>>();
         _clientsStats = results.length > 3 ? ((results[3]['clients'] as List?) ?? []) : [];
+        _canSeeProfit = (results[0]['can_see_profit'] as bool?) ?? true;
         _loading = false;
       });
     } catch (e) {
@@ -489,7 +492,7 @@ class _StatsPageState extends State<StatsPage> {
         : _num(_summary['paid_total']);
     final data = <String, double>{
       '出货': sales,
-      '毛利': gross,
+      if (_canSeeProfit) '毛利': gross,
       '收款': paid,
       if (_mode != 'year') '进货': _num(_summary['purchase_total']),
       if (_mode != 'year') '欠款': _num(_summary['debt']),

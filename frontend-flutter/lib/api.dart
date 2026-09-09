@@ -10,6 +10,7 @@ class Api {
 
   static const _tokenKey = 'taozhu_token';
   static const _baseKey = 'taozhu_api_base';
+  static const _roleKey = 'taozhu_role';
   static const _cachePrefix = 'taozhu_cache_';
   // 无内置默认地址：个人部署模式，登录页必须显式填写自己的服务器地址
   // （Web 生产构建通过 --dart-define=API_BASE 注入默认值，留空即连；App 不注入 → 必填）
@@ -45,6 +46,14 @@ class Api {
   }
 
   Future<bool> hasToken() async => (await _token())?.isNotEmpty ?? false;
+
+  /// 当前账号角色（登录时缓存；老板=admin / 店员=staff）
+  Future<void> setRole(String role) async {
+    (await SharedPreferences.getInstance()).setString(_roleKey, role);
+  }
+
+  Future<String> getRole() async =>
+      (await SharedPreferences.getInstance()).getString(_roleKey) ?? '';
 
   Future<void> setBase(String u) async {
     (await SharedPreferences.getInstance()).setString(_baseKey, _norm(u));

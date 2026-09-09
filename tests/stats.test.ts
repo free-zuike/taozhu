@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
+import { hashPassword, randomId } from '../src/lib/password';
 import { createFakeD1, fakeAssets, type FakeD1 } from './helpers/fake-d1';
 
 const JWT_SECRET = 'test-secret';
@@ -195,5 +196,67 @@ describe('统计区间', () => {
     expect(patch.status).toBe(200);
     const list2 = await (await call(env, 'GET', '/api/v1/clients', token)).json() as { clients: Array<{ name: string; month_start_day: number }> };
     expect(list2.clients.find((x) => x.name === 'E店')!.month_start_day).toBe(15);
+  });
+});
+
+describe('店员权限：统计接口隐藏毛利', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let adminToken: string;
+  let staffToken: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    adminToken = await loginAdmin(env);
+    await seed(env.DB);
+    await env.DB.prepare('INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)')
+      .bind(randomId(), 'staff1', await hashPassword('staff123'), 'staff').run();
+    const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });
+    staffToken = ((await login.json()) as { token: string }).token;
+  });
+
+  it('店员 overview：gross_profit=0 且 can_see_profit=false；老板正常', async () => {
+    const staff = (await (await call(env, 'GET', '/api/v1/stats/overview', staffToken)).json()) as {
+      can_see_profit: boolean; today: { gross_profit: number };
+    };
+    expect(staff.can_see_profit).toBe(false);
+    expect(staff.today.gross_profit).toBe(0);
+    const admin = (await (await call(env, 'GET', '/api/v1/stats/overview', adminToken)).json()) as {
+      can_see_profit: boolean; today: { gross_profit: number };
+    };
+    expect(admin.can_see_profit).toBe(true);
+  });
+
+  it('店员 summary/monthly/clients/daily 毛利全部归零', async () => {
+    const results = await Promise.all([
+      call(env, 'GET', '/api/v1/stats/summary?start=2026-09-01&end=2026-09-30', staffToken),
+      call(env, 'GET', '/api/v1/stats/monthly?year=2026', staffToken),
+      call(env, 'GET', '/api/v1/stats/clients', staffToken),
+      call(env, 'GET', '/api/v1/stats/daily?start=2026-09-01&end=2026-09-30', staffToken),
+    ]);
+    for (const res of results) expect(res.status).toBe(200);
+    const [summary, monthly, clients, daily] = (await Promise.all(results.map((r) => r.json()))) as Array<{
+      can_see_profit: boolean;
+      gross_profit?: number;
+      months?: Array<{ gross_profit: number }>;
+      clients?: Array<{ gross_profit: number }>;
+      days?: Array<{ gross_profit: number }>;
+    }>;
+    expect(summary.can_see_profit).toBe(false);
+    expect(summary.gross_profit).toBe(0);
+    expect(monthly.can_see_profit).toBe(false);
+    expect(monthly.months!.every((m) => m.gross_profit === 0)).toBe(true);
+    expect(clients.can_see_profit).toBe(false);
+    expect(clients.clients!.every((c) => c.gross_profit === 0)).toBe(true);
+    expect(daily.can_see_profit).toBe(false);
+    expect(daily.days!.every((d) => d.gross_profit === 0)).toBe(true);
+  });
+
+  it('店员依然可见出货/收款/欠款等经营数据', async () => {
+    const summary = (await (await call(env, 'GET', '/api/v1/stats/summary?start=2026-09-01&end=2026-09-30', staffToken)).json()) as {
+      sales_total: number; paid_total: number; debt: number;
+    };
+    expect(summary.sales_total).toBe(90);
+    expect(summary.paid_total).toBe(30);
+    expect(summary.debt).toBe(160); // 全部出货 190（7月100+9月90） − 收款 30
   });
 });

@@ -14,6 +14,7 @@ const nowIso = () => new Date().toISOString();
 statsRouter.get('/overview', async (c) => {
   const date = c.req.query('date')?.trim() || nowIso().slice(0, 10);
   const db = c.env.DB;
+  const canSeeProfit = c.get('user').role === 'admin';
 
   const today = await db.prepare(
     `SELECT
@@ -45,9 +46,10 @@ statsRouter.get('/overview', async (c) => {
   const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
   return c.json({
     date,
+    can_see_profit: canSeeProfit,
     today: {
       sales_total: r(today?.sales_total), sales_count: today?.sales_count ?? 0,
-      gross_profit: r(today?.gross_profit), paid_total: r(today?.paid_total),
+      gross_profit: canSeeProfit ? r(today?.gross_profit) : 0, paid_total: r(today?.paid_total),
       purchase_total: r(today?.purchase_total),
     },
     totals: {
@@ -64,6 +66,7 @@ statsRouter.get('/overview', async (c) => {
 
 // GET /stats/clients?start=&end= — 按店：出货/收款/欠款/毛利（可传起止日期过滤，缺省=全部历史）
 statsRouter.get('/clients', async (c) => {
+  const canSeeProfit = c.get('user').role === 'admin';
   const start = c.req.query('start')?.trim();
   const end = c.req.query('end')?.trim();
   const hasRange = !!(start && end);
@@ -80,15 +83,17 @@ statsRouter.get('/clients', async (c) => {
   ).bind(...params).all<{ id: string; name: string; sales_total: number; paid_total: number; gross_profit: number }>();
   const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
   return c.json({
+    can_see_profit: canSeeProfit,
     clients: rows.results.map((c2) => ({
       id: c2.id, name: c2.name, sales_total: r(c2.sales_total), paid_total: r(c2.paid_total),
-      gross_profit: r(c2.gross_profit), debt: r(c2.sales_total - c2.paid_total),
+      gross_profit: canSeeProfit ? r(c2.gross_profit) : 0, debt: r(c2.sales_total - c2.paid_total),
     })),
   });
 });
 
 // GET /stats/monthly?year=2026 — 按月：出货额/毛利/收款
 statsRouter.get('/monthly', async (c) => {
+  const canSeeProfit = c.get('user').role === 'admin';
   const year = c.req.query('year')?.trim() || String(new Date().getUTCFullYear());
   const salesRows = await c.env.DB.prepare(
     `SELECT substr(s.happened_at, 1, 7) AS month,
@@ -106,8 +111,9 @@ statsRouter.get('/monthly', async (c) => {
   const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
   return c.json({
     year,
+    can_see_profit: canSeeProfit,
     months: salesRows.results.map((s) => ({
-      month: s.month, sales_total: r(s.sales_total), gross_profit: r(s.gross_profit),
+      month: s.month, sales_total: r(s.sales_total), gross_profit: canSeeProfit ? r(s.gross_profit) : 0,
       paid_total: r(paidMap.get(s.month) ?? 0),
     })),
   });
@@ -126,6 +132,7 @@ statsRouter.get('/years', async (c) => {
 
 // GET /stats/summary?start=&end=&client_id= — 任意区间汇总（起止日都含；欠款=截止 end 累计出货−累计收款）
 statsRouter.get('/summary', async (c) => {
+  const canSeeProfit = c.get('user').role === 'admin';
   const start = c.req.query('start')?.trim();
   const end = c.req.query('end')?.trim();
   if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
@@ -169,7 +176,8 @@ statsRouter.get('/summary', async (c) => {
 
   return c.json({
     start, end,
-    sales_total: r(sales?.sales_total), gross_profit: r(sales?.gross_profit),
+    can_see_profit: canSeeProfit,
+    sales_total: r(sales?.sales_total), gross_profit: canSeeProfit ? r(sales?.gross_profit) : 0,
     sales_count: sales?.sales_count ?? 0,
     paid_total: r(paid?.paid_total), purchase_total: r(buy?.purchase_total),
     debt: r((debt?.all_sales ?? 0) - (debt?.all_paid ?? 0)),
@@ -178,6 +186,7 @@ statsRouter.get('/summary', async (c) => {
 
 // GET /stats/daily?start=&end=&client_id= — 区间内按日：出货/毛利/收款/进货（只含有数据的日，前端补零）
 statsRouter.get('/daily', async (c) => {
+  const canSeeProfit = c.get('user').role === 'admin';
   const start = c.req.query('start')?.trim();
   const end = c.req.query('end')?.trim();
   if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
@@ -213,8 +222,9 @@ statsRouter.get('/daily', async (c) => {
   const buyMap = new Map(buyRows.results.map((p) => [p.day, p.purchase_total]));
   return c.json({
     start, end,
+    can_see_profit: canSeeProfit,
     days: salesRows.results.map((s) => ({
-      day: s.day, sales_total: r(s.sales_total), gross_profit: r(s.gross_profit),
+      day: s.day, sales_total: r(s.sales_total), gross_profit: canSeeProfit ? r(s.gross_profit) : 0,
       paid_total: r(paidMap.get(s.day) ?? 0), purchase_total: r(buyMap.get(s.day) ?? 0),
     })),
   });

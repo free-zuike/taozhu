@@ -24,13 +24,13 @@
       <button class="btn-add" @click="addRow">+ 添加商品</button>
       <text class="total">合计 <text class="total-num">¥{{ total }}</text></text>
     </view>
-    <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : '提交进货单' }}</button>
+    <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (editId ? '保存修改' : '提交进货单') }}</button>
   </view>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { onLoad, onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
 
 interface Price { id: string; unit: string; sale_price: number; purchase_price: number }
@@ -46,6 +46,12 @@ const itemNames = ref<string[]>([]);
 const date = ref('');
 const rows = ref<Row[]>([]);
 const saving = ref(false);
+const editId = ref(''); // 非空 = 编辑已有进货单（账本进入，提交走 PATCH）
+
+onLoad((options) => {
+  editId.value = options?.id || '';
+  if (editId.value) uni.setNavigationBarTitle({ title: '编辑进货单' });
+});
 
 const total = computed(() =>
   rows.value.reduce((s, r) => s + (Number(r.quantity) || 0) * (Number(r.purchasePrice) || 0), 0),
@@ -63,10 +69,36 @@ onShow(async () => {
     items.value = i.items;
     itemNames.value = i.items.map((x) => x.name);
     if (rows.value.length === 0) addRow();
+    if (editId.value) await loadEdit();
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
 });
+
+/// 编辑模式预填：GET /purchases/:id → 按 item_id+unit 匹配现有价格回填行
+async function loadEdit() {
+  try {
+    const d = await request<{ happened_at: string; items: Array<Record<string, any>> }>(`/purchases/${editId.value}`, 'GET');
+    date.value = String(d.happened_at || '').slice(0, 10);
+    rows.value = [];
+    for (const it of d.items) {
+      const item = items.value.find((x) => x.id === it.item_id);
+      const price = item?.prices.find((p) => p.unit === it.unit);
+      if (!item || !price) continue;
+      rows.value.push({
+        itemId: item.id, itemName: item.name, prices: item.prices,
+        priceId: price.id, priceLabel: `${price.unit}（进 ¥${price.purchase_price}）`, unit: price.unit,
+        quantity: String(it.quantity), purchasePrice: String(it.purchase_price),
+      });
+    }
+    if (rows.value.length === 0) {
+      rows.value = [];
+      addRow();
+    }
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '加载单据失败', icon: 'none' });
+  }
+}
 
 function todayLocal(): string {
   const d = new Date();
@@ -109,13 +141,19 @@ async function submit() {
   if (valid.length === 0) return uni.showToast({ title: '请填写完整的商品明细', icon: 'none' });
   saving.value = true;
   try {
-    await request('/purchases', 'POST', {
+    const body = {
       happened_at: date.value,
       items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), purchase_price: Number(r.purchasePrice) || 0 })),
-    });
-    uni.showToast({ title: `已提交 ¥${total.value.toFixed(2)}`, icon: 'success' });
-    rows.value = [];
-    addRow();
+    };
+    if (editId.value) {
+      await request(`/purchases/${editId.value}`, 'PATCH', body);
+      uni.showToast({ title: '已保存修改', icon: 'success' });
+    } else {
+      await request('/purchases', 'POST', body);
+      uni.showToast({ title: `已提交 ¥${total.value.toFixed(2)}`, icon: 'success' });
+      rows.value = [];
+      addRow();
+    }
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '提交失败', icon: 'none' });
   } finally {

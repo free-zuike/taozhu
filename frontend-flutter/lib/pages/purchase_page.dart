@@ -21,6 +21,8 @@ class _PRow {
 
 class _PurchasePageState extends State<PurchasePage> {
   List<Map<String, dynamic>> _items = [];
+  // 商品下拉菜单项缓存：行组件不再每次 build 重建 items（目录大时明显降卡顿）
+  List<DropdownMenuItem<String>> _itemMenus = [];
   final List<_PRow> _rows = [_PRow()];
   final _dateCtrl = TextEditingController(text: _today());
   bool _busy = false;
@@ -52,7 +54,13 @@ class _PurchasePageState extends State<PurchasePage> {
       final freq = await Freq.load();
       final list = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>()
         ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
-      setState(() => _items = list);
+      setState(() {
+        _items = list;
+        _itemMenus = list
+            .map((it) => DropdownMenuItem(
+                value: it['id'] as String, child: Text(it['name'] as String)))
+            .toList();
+      });
     }
     // ② 并行网络刷新 + 更新缓存
     try {
@@ -63,7 +71,13 @@ class _PurchasePageState extends State<PurchasePage> {
       final list = ((i['items'] as List?) ?? []).cast<Map<String, dynamic>>()
         ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
       if (!mounted) return;
-      setState(() => _items = list);
+      setState(() {
+        _items = list;
+        _itemMenus = list
+            .map((it) => DropdownMenuItem(
+                value: it['id'] as String, child: Text(it['name'] as String)))
+            .toList();
+      });
       // 编辑模式：商品目录就绪后预填原单据明细
       if (_editing) await _loadEdit();
     } catch (e) {
@@ -275,9 +289,7 @@ class _PurchasePageState extends State<PurchasePage> {
             DropdownButtonFormField<String>(
               initialValue: row.itemId,
               decoration: const InputDecoration(labelText: '商品'),
-              items: _items
-                  .map((it) => DropdownMenuItem(value: it['id'] as String, child: Text(it['name'] as String)))
-                  .toList(),
+              items: _itemMenus,
               onChanged: (v) => setState(() {
                 row.itemId = v;
                 row.priceId = null;

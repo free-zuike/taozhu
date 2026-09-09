@@ -54,6 +54,7 @@ class _LoginPageState extends State<LoginPage> {
               'password': _passCtrl.text,
             });
       await Api.instance.setToken(d['token'] as String);
+      await Api.instance.setRole('${(d['user'] as Map?)?['role'] ?? ''}');
       if (!mounted) return;
       Navigator.of(context)
           .pushReplacement(MaterialPageRoute(builder: (_) => const BottomShell()));
