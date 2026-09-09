@@ -1,8 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sembast/sembast.dart';
-import 'package:sembast/sembast_io.dart'
-    if (dart.library.html) 'package:sembast/sembast_web.dart' as platform;
+import 'db_factory_io.dart' if (dart.library.html) 'db_factory_web.dart' as factory_impl;
 
 /// 本地数据库（sembast）：App=SQLite 文件，Web=IndexedDB。
 /// 镜像服务端核心数据（clients/items/sales/payments），读优先本地（秒开+离线），网络成功静默写库。
@@ -12,15 +11,13 @@ class LocalDb {
 
   static Future<Database> _open() async {
     if (_db != null) return _db!;
-    late Database db;
     if (kIsWeb) {
-      db = await platform.databaseFactoryWeb.openDatabase('taozhu.db');
+      _db = await factory_impl.dbFactory.openDatabase('taozhu.db');
     } else {
       final dir = await getApplicationDocumentsDirectory();
-      db = await platform.databaseFactoryIo.openDatabase('${dir.path}/taozhu.db');
+      _db = await factory_impl.dbFactory.openDatabase('${dir.path}/taozhu.db');
     }
-    _db = db;
-    return db;
+    return _db!;
   }
 
   /// 整体替换某集合镜像（key = 行 id），rows 为空则清空
