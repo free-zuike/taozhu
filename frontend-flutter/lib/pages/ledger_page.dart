@@ -313,25 +313,52 @@ class _LedgerPageState extends State<LedgerPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 账本（店铺）切换：横向胶囊
+                  // 账本（店铺）切换：下拉框，一次只显示一个店铺
                   if (_clients.isNotEmpty)
-                    SizedBox(
-                      height: 36,
-                      child: ListView(
-                        scrollDirection: Axis.horizontal,
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF2C2C2E)
+                            : const Color(0xFFF5F5F5),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: _clientId != null
+                              ? const Color(0xFF409EFF).withOpacity(0.4)
+                              : Colors.transparent,
+                        ),
+                      ),
+                      child: Row(
                         children: [
-                          for (final c in _clients)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: ChoiceChip(
-                                label: Text('${c['name']}'),
-                                selected: '${c['id']}' == _clientId,
-                                onSelected: (_) {
-                                  setState(() => _clientId = '${c['id']}');
+                          const Icon(Icons.store_outlined, size: 20, color: Color(0xFF409EFF)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: _clientId,
+                                isExpanded: true,
+                                borderRadius: BorderRadius.circular(12),
+                                icon: const Icon(Icons.keyboard_arrow_down),
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: Theme.of(context).brightness == Brightness.dark
+                                      ? Colors.white
+                                      : const Color(0xFF111827),
+                                ),
+                                items: _clients
+                                    .map((c) => DropdownMenuItem(
+                                        value: '${c['id']}', child: Text('${c['name']}')))
+                                    .toList(),
+                                onChanged: (v) {
+                                  if (v == null) return;
+                                  setState(() => _clientId = v);
                                   _load();
                                 },
                               ),
                             ),
+                          ),
                         ],
                       ),
                     ),
