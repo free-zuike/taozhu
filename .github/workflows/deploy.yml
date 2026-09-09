@@ -105,7 +105,7 @@ jobs:
       # 与 D1 同风格：创建/复用都输出 bucket 状态，供日志追踪
       - name: Setup R2 bucket (auto-create if missing)
         run: |
-          if npx wrangler r2 bucket list --json 2>/dev/null | grep -q '"name": "taozhu-attachments"'; then
+          if npx wrangler r2 bucket list --json 2>/dev/null | grep -q 'taozhu-attachments'; then
             echo "R2 bucket exists: taozhu-attachments (reuse)"
           else
             echo "Creating R2 bucket: taozhu-attachments"
