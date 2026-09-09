@@ -140,6 +140,33 @@ class Api {
     return null;
   }
 
+  /// 读本地缓存（忽略 TTL，任意旧数据都返回）——离线兜底用
+  Future<Map<String, dynamic>?> getCachedRaw(String path) async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString('$_cachePrefix$path');
+    if (raw == null) return null;
+    try {
+      final d = jsonDecode(raw) as Map<String, dynamic>;
+      return d['data'] as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 网络优先 + 离线兜底：成功则写本地快照（永不过期）；网络失败读任意旧缓存并标记 offline；
+  /// 既无网络又无缓存时抛出原始异常
+  Future<({Map<String, dynamic> data, bool offline})> getWithFallback(String path) async {
+    try {
+      final d = await get(path);
+      await setCache(path, d);
+      return (data: d, offline: false);
+    } catch (e) {
+      final cached = await getCachedRaw(path);
+      if (cached != null) return (data: cached, offline: true);
+      rethrow;
+    }
+  }
+
   /// 写本地缓存
   Future<void> setCache(String path, Map<String, dynamic> data) async {
     final p = await SharedPreferences.getInstance();

@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import 'router.dart';
 import 'sale_page.dart';
@@ -21,6 +23,7 @@ class _LedgerPageState extends State<LedgerPage> {
   final _fromCtrl = TextEditingController();
   final _toCtrl = TextEditingController();
   bool _loading = true;
+  bool _offline = false; // 本次加载走了本地缓存（无网络）
 
   @override
   void initState() {
@@ -49,17 +52,18 @@ class _LedgerPageState extends State<LedgerPage> {
   Future<void> _load() async {
     try {
       final results = await Future.wait([
-        Api.instance.get('/sales${_query()}'),
-        Api.instance.get('/purchases${_query(withClient: false)}'),
-        Api.instance.get('/payments${_query()}'),
-        Api.instance.get('/clients'),
+        Api.instance.getWithFallback('/sales${_query()}'),
+        Api.instance.getWithFallback('/purchases${_query(withClient: false)}'),
+        Api.instance.getWithFallback('/payments${_query()}'),
+        Api.instance.getWithFallback('/clients'),
       ]);
       if (!mounted) return;
       setState(() {
-        _sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _purchases = ((results[1]['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _payments = ((results[2]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _clients = ((results[3]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _offline = results.any((r) => r.offline);
+        _sales = ((results[0].data['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _purchases = ((results[1].data['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _payments = ((results[2].data['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _clients = ((results[3].data['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
         _loading = false;
       });
     } catch (e) {
@@ -219,8 +223,8 @@ class _LedgerPageState extends State<LedgerPage> {
     return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
   }
 
-  /// 复制当前筛选结果 CSV（出货/进货/收款三部分，UTF-8 BOM 带表头，Excel 直开）
-  Future<void> _copyCsv() async {
+  /// 导出当前筛选结果 CSV 文件（系统分享面板），出货/进货/收款三部分，UTF-8 BOM 带表头
+  Future<void> _exportCsv() async {
     final buf = StringBuffer('\uFEFF');
     buf.writeln('类型,日期,店铺,金额,明细');
     for (final s in _sales) {
@@ -232,8 +236,11 @@ class _LedgerPageState extends State<LedgerPage> {
     for (final p in _payments) {
       buf.writeln('收款,${_csv(_date(p['happened_at']))},${_csv(p['client_name'])},${_csv(p['amount'])},${_csv(p['method'])}');
     }
-    await Clipboard.setData(ClipboardData(text: buf.toString()));
-    toast(context, 'CSV 已复制（${_sales.length + _purchases.length + _payments.length} 条），粘贴到 Excel 即可');
+    final bytes = Uint8List.fromList(utf8.encode(buf.toString()));
+    await Share.shareXFiles(
+      [XFile.fromData(bytes, mimeType: 'text/csv', name: 'taozhu-账本.csv')],
+      text: '陶朱账本 CSV',
+    );
   }
 
   @override
@@ -245,15 +252,31 @@ class _LedgerPageState extends State<LedgerPage> {
           title: const Text('账本'),
           actions: [
             IconButton(
-              tooltip: '复制 CSV',
-              icon: const Icon(Icons.table_chart_outlined),
-              onPressed: _copyCsv,
+              tooltip: '导出 CSV',
+              icon: const Icon(Icons.file_download_outlined),
+              onPressed: _exportCsv,
             ),
           ],
           bottom: const TabBar(tabs: [Tab(text: '出货'), Tab(text: '进货'), Tab(text: '收款')]),
         ),
         body: Column(
           children: [
+            if (_offline)
+              Container(
+                width: double.infinity,
+                color: const Color(0xFFE6A23C).withOpacity(0.12),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: const Row(
+                  children: [
+                    Icon(Icons.wifi_off, size: 16, color: Color(0xFFE6A23C)),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text('离线数据：当前无法连接服务器，显示本地缓存，可能不是最新',
+                          style: TextStyle(fontSize: 12, color: Color(0xFFB88230))),
+                    ),
+                  ],
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Card(

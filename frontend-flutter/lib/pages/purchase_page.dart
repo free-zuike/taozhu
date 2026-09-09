@@ -17,6 +17,9 @@ class _PRow {
   String? priceId;
   double quantity = 0;
   double purchasePrice = 0;
+  // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
+  final qtyCtrl = TextEditingController();
+  final priceCtrl = TextEditingController();
 }
 
 class _PurchasePageState extends State<PurchasePage> {
@@ -38,6 +41,10 @@ class _PurchasePageState extends State<PurchasePage> {
   @override
   void dispose() {
     _dateCtrl.dispose();
+    for (final r in _rows) {
+      r.qtyCtrl.dispose();
+      r.priceCtrl.dispose();
+    }
     super.dispose();
   }
 
@@ -122,7 +129,9 @@ class _PurchasePageState extends State<PurchasePage> {
             ..itemId = itemId
             ..priceId = price['id'] as String?
             ..quantity = qty
-            ..purchasePrice = pp);
+            ..purchasePrice = pp
+            ..qtyCtrl.text = qty.toString()
+            ..priceCtrl.text = pp.toStringAsFixed(2));
         }
         if (_rows.isEmpty) _rows.add(_PRow());
         if (skipped > 0) {
@@ -177,6 +186,8 @@ class _PurchasePageState extends State<PurchasePage> {
           row.priceId = pr!['id'] as String?;
           row.quantity = qty;
           row.purchasePrice = price > 0 ? price : (pr!['purchase_price'] as num).toDouble();
+          row.qtyCtrl.text = qty.toString();
+          row.priceCtrl.text = (price > 0 ? price : (pr!['purchase_price'] as num).toDouble()).toStringAsFixed(2);
           filled++;
         });
       }
@@ -298,16 +309,18 @@ class _PurchasePageState extends State<PurchasePage> {
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: row.priceId,
-              decoration: const InputDecoration(labelText: '单位/进价'),
+              decoration: const InputDecoration(labelText: '单位', helperText: '选单位自动带出默认进价，可再改'),
               items: prices
                   .map((p) => DropdownMenuItem(
                         value: p['id'] as String,
-                        child: Text('${p['unit']}（进 ¥${p['purchase_price']}）'),
+                        child: Text('${p['unit']}（默认进 ¥${p['purchase_price']}）'),
                       ))
                   .toList(),
               onChanged: (v) => setState(() {
                 row.priceId = v;
-                row.purchasePrice = (prices.firstWhere((p) => p['id'] == v)['purchase_price'] as num).toDouble();
+                final pp = (prices.firstWhere((p) => p['id'] == v)['purchase_price'] as num).toDouble();
+                row.purchasePrice = pp;
+                row.priceCtrl.text = pp.toStringAsFixed(2);
               }),
             ),
             const SizedBox(height: 8),
@@ -315,6 +328,7 @@ class _PurchasePageState extends State<PurchasePage> {
               children: [
                 Expanded(
                   child: TextField(
+                    controller: row.qtyCtrl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(labelText: '数量'),
                     onChanged: (v) => row.quantity = double.tryParse(v) ?? 0,
@@ -323,8 +337,9 @@ class _PurchasePageState extends State<PurchasePage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
+                    controller: row.priceCtrl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: '进价'),
+                    decoration: const InputDecoration(labelText: '进价（可直接改）'),
                     onChanged: (v) => row.purchasePrice = double.tryParse(v) ?? 0,
                   ),
                 ),

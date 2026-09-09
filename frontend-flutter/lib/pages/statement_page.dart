@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import 'router.dart';
 
@@ -157,13 +159,18 @@ class _StatementPageState extends State<StatementPage> {
     return buf.toString();
   }
 
-  Future<void> _copyCsv() async {
+  /// 导出 CSV 文件（系统分享面板：保存/发送），UTF-8 BOM + 表头
+  Future<void> _exportCsv() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
-    await Clipboard.setData(ClipboardData(text: _buildCsv()));
-    toast(context, 'CSV 已复制（带表头），粘贴到 Excel 即可');
+    final bytes = Uint8List.fromList(utf8.encode(_buildCsv()));
+    final name = 'taozhu-对账单-${_fromCtrl.text.trim()}-${_toCtrl.text.trim()}.csv';
+    await Share.shareXFiles(
+      [XFile.fromData(bytes, mimeType: 'text/csv', name: name)],
+      text: '陶朱对账单 CSV',
+    );
   }
 
   @override
@@ -305,9 +312,9 @@ class _StatementPageState extends State<StatementPage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _copyCsv,
-                    icon: const Icon(Icons.table_chart_outlined, size: 18),
-                    label: const Text('复制 CSV'),
+                    onPressed: _exportCsv,
+                    icon: const Icon(Icons.file_download_outlined, size: 18),
+                    label: const Text('导出 CSV'),
                   ),
                 ),
               ],

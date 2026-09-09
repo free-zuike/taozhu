@@ -24,6 +24,9 @@ class _Row {
   String? priceId;
   double quantity = 0;
   double salePrice = 0;
+  // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
+  final qtyCtrl = TextEditingController();
+  final saleCtrl = TextEditingController();
 }
 
 class _SalePageState extends State<SalePage> {
@@ -47,6 +50,10 @@ class _SalePageState extends State<SalePage> {
   @override
   void dispose() {
     _dateCtrl.dispose();
+    for (final r in _rows) {
+      r.qtyCtrl.dispose();
+      r.saleCtrl.dispose();
+    }
     super.dispose();
   }
 
@@ -163,7 +170,9 @@ class _SalePageState extends State<SalePage> {
             ..itemId = itemId
             ..priceId = price['id'] as String?
             ..quantity = qty
-            ..salePrice = sp);
+            ..salePrice = sp
+            ..qtyCtrl.text = qty.toString()
+            ..saleCtrl.text = sp.toString());
         }
         if (_rows.isEmpty) _rows.add(_Row());
         if (skipped > 0) {
@@ -215,6 +224,8 @@ class _SalePageState extends State<SalePage> {
           row.priceId = pr!['id'] as String?;
           row.quantity = qty;
           row.salePrice = price > 0 ? price : (pr!['sale_price'] as num).toDouble();
+          row.qtyCtrl.text = qty.toString();
+          row.saleCtrl.text = (price > 0 ? price : (pr!['sale_price'] as num).toDouble()).toStringAsFixed(2);
           filled++;
         });
       }
@@ -352,13 +363,13 @@ class _SalePageState extends State<SalePage> {
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: row.priceId,
-              decoration: const InputDecoration(labelText: '单位/出价'),
+              decoration: const InputDecoration(labelText: '单位', helperText: '选单位自动带出默认价，可再改'),
               items: (_items.where((x) => x.id == row.itemId).isEmpty
                       ? <_ItemOption>[]
                       : [_items.firstWhere((x) => x.id == row.itemId)])
                   .expand((it) => it.prices.map((p) => DropdownMenuItem(
                         value: p['id'] as String,
-                        child: Text('${p['unit']}（¥${p['sale_price']}）'),
+                        child: Text('${p['unit']}（默认 ¥${p['sale_price']}）'),
                       )))
                   .toList(),
               onChanged: (v) => setState(() {
@@ -368,6 +379,7 @@ class _SalePageState extends State<SalePage> {
                     .expand((x) => x.prices)
                     .firstWhere((p) => p['id'] == v);
                 row.salePrice = (p['sale_price'] as num).toDouble();
+                row.saleCtrl.text = (p['sale_price'] as num).toDouble().toStringAsFixed(2);
               }),
             ),
             const SizedBox(height: 8),
@@ -375,6 +387,7 @@ class _SalePageState extends State<SalePage> {
               children: [
                 Expanded(
                   child: TextField(
+                    controller: row.qtyCtrl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(labelText: '数量'),
                     onChanged: (v) => row.quantity = double.tryParse(v) ?? 0,
@@ -383,8 +396,9 @@ class _SalePageState extends State<SalePage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
+                    controller: row.saleCtrl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: '单价'),
+                    decoration: const InputDecoration(labelText: '出价（可直接改）'),
                     onChanged: (v) => row.salePrice = double.tryParse(v) ?? 0,
                   ),
                 ),
