@@ -72,12 +72,16 @@ class Api {
       switch (method) {
         case 'POST':
           res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
+          break;
         case 'PUT':
           res = await http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
+          break;
         case 'PATCH':
           res = await http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
+          break;
         case 'DELETE':
           res = await http.delete(Uri.parse(url), headers: headers);
+          break;
         default:
           res = await http.get(Uri.parse(url), headers: headers);
       }

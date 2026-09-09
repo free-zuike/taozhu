@@ -35,23 +35,27 @@ jobs:
           ANDROID_KEYSTORE_KEY_PASS: ${{ secrets.ANDROID_KEYSTORE_KEY_PASS }}
           ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
         run: |
-          # ① 包名统一 com.taozhu.app（与「陶朱」一致：避免两个应用并存、可覆盖升级）
+          # ① Android 版本与应用版本号同步：versionName=四段版本号；versionCode=四段加权拼成正整数（单调递增，覆盖升级稳定）。
+          #    不用改写 pubspec version：pub 的 version 格式只支持 x.y.z[+build]，四段 0.8.1.0 会判非法导致构建失败。
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" lib/version.dart || echo "0.1.0.0")
+          BUILD_NUM=$(echo "$VERSION" | awk -F. '{print ($1*1000000)+($2*10000)+($3*100)+($4+0)}')
+          # ② 包名统一 com.taozhu.app（与「陶朱」一致：避免两个应用并存、可覆盖升级）
           sed -i 's|namespace = ".*"|namespace = "com.taozhu.app"|; s|applicationId = ".*"|applicationId = "com.taozhu.app"|' android/app/build.gradle.kts
-          # ①b MainActivity 类包与 applicationId 对齐——只改 namespace 不改类路径会 ClassNotFoundException 启动即崩
+          # ②b MainActivity 类包与 applicationId 对齐——只改 namespace 不改类路径会 ClassNotFoundException 启动即崩
           if [ -f android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt ]; then
             sed -i 's|package com.taozhu.taozhu_app|package com.taozhu.app|' android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt
             mkdir -p android/app/src/main/kotlin/com/taozhu/app
             mv android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt
           fi
-          # ①c 主 manifest 加 INTERNET 权限：Flutter 模板只在 debug/profile 清单有，release 无此权限=全部网络请求(DNS/连接)被拒→登录必失败
+          # ②c 主 manifest 加 INTERNET 权限：Flutter 模板只在 debug/profile 清单有，release 无此权限=全部网络请求(DNS/连接)被拒→登录必失败
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/><application|' android/app/src/main/AndroidManifest.xml
-          # ② 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
+          # ③ 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
           sed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml || true
-          # ③ 正式签名（复用与「陶朱」相同的 keystore）+ 关 R8（规避 release 闪退）
+          # ④ 正式签名（复用与「陶朱」相同的 keystore）+ 关 R8（规避 release 闪退）
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/taozhu-release.keystore
           cat android-sign.gradle.kts >> android/app/build.gradle.kts
-          flutter build apk --release
+          flutter build apk --release --build-name="$VERSION" --build-number="$BUILD_NUM"
 
       - name: Package & upload to single Release (taozhu-app)
         env:

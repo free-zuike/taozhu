@@ -121,15 +121,19 @@ describe('分类体系', () => {
     expect(r.status).toBe(409);
   });
 
-  it('删除分类后商品/店铺引用置空', async () => {
+  it('删除分类后商品/店铺引用置空，且商品冗余分类文本一并清理', async () => {
     const cat = await (await call(env, 'POST', '/api/v1/categories', token, { type: 'item', name: '蔬菜' })).json() as { id: string };
-    await call(env, 'POST', '/api/v1/items', token, { name: '白菜', category_id: cat.id, prices: [{ unit: '斤', purchase_price: 1, sale_price: 2 }] });
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', category_id: cat.id, category: '蔬菜',
+      prices: [{ unit: '斤', purchase_price: 1, sale_price: 2 }],
+    });
     const del = await call(env, 'DELETE', `/api/v1/categories/${cat.id}`, token);
     expect(del.status).toBe(204);
-    const list = await (await call(env, 'GET', '/api/v1/items', token)).json() as { items: Array<{ name: string; category_id: string; category_name: string }> };
+    const list = await (await call(env, 'GET', '/api/v1/items', token)).json() as { items: Array<{ name: string; category_id: string; category_name: string; category: string }> };
     const it = list.items.find((x) => x.name === '白菜');
     expect(it?.category_id).toBe('');
     expect(it?.category_name).toBe('');
+    expect(it?.category).toBe(''); // 冗余文本同步清空
   });
 
   it('重命名与移动父级；有子分类不能降为二级', async () => {

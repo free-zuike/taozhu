@@ -86,7 +86,8 @@ categoriesRouter.delete('/:id', adminOnly(), async (c) => {
   if (cat.type === 'client') {
     await c.env.DB.prepare('UPDATE clients SET category_id = NULL WHERE category_id = ?').bind(id).run();
   } else {
-    await c.env.DB.prepare('UPDATE items SET category_id = NULL WHERE category_id = ?').bind(id).run();
+    // 同时清掉 items.category 冗余文本，避免列表残留旧分类名
+    await c.env.DB.prepare("UPDATE items SET category_id = NULL, category = '' WHERE category_id = ?").bind(id).run();
   }
   await c.env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id).run();
   return c.body(null, 204);

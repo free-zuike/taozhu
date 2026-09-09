@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api.dart';
 import 'router.dart';
@@ -12,12 +13,19 @@ class _ClientsPageState extends State<ClientsPage> {
   List<Map<String, dynamic>> _clients = [];
   List<Map<String, dynamic>> _cats = [];
   bool _loading = true;
+  Timer? _searchTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
     _loadCats();
+  }
+
+  @override
+  void dispose() {
+    _searchTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadCats() async {
@@ -32,16 +40,21 @@ class _ClientsPageState extends State<ClientsPage> {
   List<Map<String, dynamic>> _subCatsOf(String topId) =>
       _cats.where((c) => '${c['parent_id']}' == topId).toList();
 
-  Future<void> _load() async {
-    // ① 本地缓存秒开
-    final cached = await Api.instance.getCached('/clients');
-    if (cached != null) {
-      setState(() => _clients = ((cached['clients'] as List?) ?? []).cast<Map<String, dynamic>>());
+  Future<void> _load({String q = ''}) async {
+    final searching = q.isNotEmpty;
+    // 搜索时不读缓存、不写缓存，走最新网络结果
+    if (!searching) {
+      // ① 本地缓存秒开
+      final cached = await Api.instance.getCached('/clients');
+      if (cached != null) {
+        setState(() => _clients = ((cached['clients'] as List?) ?? []).cast<Map<String, dynamic>>());
+      }
     }
     // ② 网络刷新 + 更新缓存
     try {
-      final d = await Api.instance.get('/clients');
-      await Api.instance.setCache('/clients', d);
+      final d = await Api.instance
+          .get(searching ? '/clients?q=${Uri.encodeQueryComponent(q)}' : '/clients');
+      if (!searching) await Api.instance.setCache('/clients', d);
       if (!mounted) return;
       setState(() {
         _clients = ((d['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -49,7 +62,7 @@ class _ClientsPageState extends State<ClientsPage> {
       });
     } catch (e) {
       setState(() => _loading = false);
-      if (cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (!searching && cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -212,13 +225,32 @@ class _ClientsPageState extends State<ClientsPage> {
           IconButton(onPressed: () => _edit(), icon: const Icon(Icons.add)),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: TextField(
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search, size: 20),
+                hintText: '搜索店铺（名称关键字）',
+                isDense: true,
+              ),
+              onChanged: (v) {
+                _searchTimer?.cancel();
+                final q = v.trim();
+                _searchTimer =
+                    Timer(const Duration(milliseconds: 350), () => _load(q: q));
+              },
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: [
                   for (final c in _clients)
                     Card(
                       child: ListTile(
@@ -263,6 +295,9 @@ class _ClientsPageState extends State<ClientsPage> {
                 ],
               ),
             ),
+          ),
+        ],
+      ),
     );
   }
 }

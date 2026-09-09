@@ -13,8 +13,17 @@ class _PaymentsPageState extends State<PaymentsPage> {
   List<Map<String, dynamic>> _payments = [];
   String? _clientId;
   final _amountCtrl = TextEditingController();
+  final _dateCtrl = TextEditingController(text: _today());
+  final _methodCtrl = TextEditingController();
+  final _noteCtrl = TextEditingController();
   bool _busy = false;
   bool _loading = true;
+
+  /// 今日日期（YYYY-MM-DD），登记默认值；可改=补录历史日期
+  static String _today() {
+    final n = DateTime.now();
+    return '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+  }
 
   @override
   void initState() {
@@ -25,6 +34,9 @@ class _PaymentsPageState extends State<PaymentsPage> {
   @override
   void dispose() {
     _amountCtrl.dispose();
+    _dateCtrl.dispose();
+    _methodCtrl.dispose();
+    _noteCtrl.dispose();
     super.dispose();
   }
 
@@ -38,7 +50,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
     try {
       final results = await Future.wait([
         Api.instance.get('/clients'),
-        Api.instance.get('/payments'),
+        Api.instance.get('/payments?limit=50'),
       ]);
       await Api.instance.setCache('/clients', results[0]);
       if (!mounted) return;
@@ -65,7 +77,13 @@ class _PaymentsPageState extends State<PaymentsPage> {
     }
     setState(() => _busy = true);
     try {
-      await Api.instance.post('/payments', {'client_id': _clientId, 'amount': amount});
+      await Api.instance.post('/payments', {
+        'client_id': _clientId,
+        'amount': amount,
+        'happened_at': _dateCtrl.text.trim(),
+        'method': _methodCtrl.text.trim(),
+        'note': _noteCtrl.text.trim(),
+      });
       toast(context, '已登记收款 ¥${amount.toStringAsFixed(2)}');
       _amountCtrl.clear();
       _load();
@@ -73,6 +91,60 @@ class _PaymentsPageState extends State<PaymentsPage> {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _edit(Map<String, dynamic> p) async {
+    final amountCtrl = TextEditingController(text: '${p['amount']}');
+    final dateCtrl = TextEditingController(text: _date('${p['happened_at']}'));
+    final methodCtrl = TextEditingController(text: '${p['method'] ?? ''}');
+    final noteCtrl = TextEditingController(text: '${p['note'] ?? ''}');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('编辑收款'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: amountCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: '金额（元）'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: dateCtrl,
+              decoration: const InputDecoration(labelText: '日期（YYYY-MM-DD）'),
+            ),
+            const SizedBox(height: 8),
+            TextField(controller: methodCtrl, decoration: const InputDecoration(labelText: '收款方式（现金/微信/转账…）')),
+            const SizedBox(height: 8),
+            TextField(controller: noteCtrl, decoration: const InputDecoration(labelText: '备注')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final amount = double.tryParse(amountCtrl.text.trim());
+    if (amount == null || amount <= 0) {
+      toast(context, '请输入有效金额');
+      return;
+    }
+    try {
+      await Api.instance.patch('/payments/${p['id']}', {
+        'amount': amount,
+        'happened_at': dateCtrl.text.trim(),
+        'method': methodCtrl.text.trim(),
+        'note': noteCtrl.text.trim(),
+      });
+      toast(context, '已保存');
+      _load();
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -139,6 +211,19 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
                             decoration: const InputDecoration(labelText: '收款金额（元）', prefixText: '¥ '),
                           ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _dateCtrl,
+                            decoration: const InputDecoration(
+                                labelText: '日期（YYYY-MM-DD）', helperText: '默认今天，可改为补录历史'),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _methodCtrl,
+                            decoration: const InputDecoration(labelText: '收款方式（现金/微信/转账…，可选）'),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(controller: _noteCtrl, decoration: const InputDecoration(labelText: '备注（可选）')),
                           const SizedBox(height: 12),
                           FilledButton(
                             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
@@ -165,7 +250,13 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             Text('¥${p['amount']}',
                                 style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF67C23A))),
                             IconButton(
+                              icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF409EFF)),
+                              tooltip: '编辑',
+                              onPressed: () => _edit(p),
+                            ),
+                            IconButton(
                               icon: const Icon(Icons.undo, size: 18, color: Color(0xFF909399)),
+                              tooltip: '撤销',
                               onPressed: () => _revoke(p),
                             ),
                           ],

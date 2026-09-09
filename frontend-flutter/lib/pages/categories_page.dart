@@ -185,7 +185,8 @@ class _CategoriesPageState extends State<CategoriesPage> {
             IconButton(
               icon: const Icon(Icons.add, size: 20),
               tooltip: '添加子分类',
-              onPressed: isParent || indent ? null : () => _add(parentId: '${c['id']}', parentName: '${c['name']}'),
+              // 一级分类可添加任意多个子分类；仅禁止二级分类继续加（防三级）
+              onPressed: indent ? null : () => _add(parentId: '${c['id']}', parentName: '${c['name']}'),
             ),
             IconButton(
               icon: const Icon(Icons.edit_outlined, size: 20),

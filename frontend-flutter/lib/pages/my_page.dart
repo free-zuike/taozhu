@@ -4,6 +4,9 @@ import '../theme.dart';
 import 'router.dart';
 import 'items_page.dart';
 import 'categories_page.dart';
+import 'ledger_page.dart';
+import 'statement_page.dart';
+import 'users_page.dart';
 import 'login_page.dart';
 
 class MyPage extends StatefulWidget {
@@ -60,6 +63,30 @@ class _MyPageState extends State<MyPage> {
           Card(
             child: Column(
               children: [
+                ListTile(
+                  leading: const Icon(Icons.receipt_long_outlined),
+                  title: const Text('账本'),
+                  subtitle: const Text('出货 / 进货 / 收款历史，可修改、删除', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: () => goPage(context, const LedgerPage()),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.description_outlined),
+                  title: const Text('对账单'),
+                  subtitle: const Text('按店铺+周期生成对账明细，一键复制发送', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: () => goPage(context, const StatementPage()),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.people_outline),
+                  title: const Text('账号管理'),
+                  subtitle: const Text('店员/老板账号（仅老板可操作）', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: () => goPage(context, const UsersPage()),
+                ),
+                const Divider(height: 1, indent: 56),
                 ListTile(
                   leading: const Icon(Icons.inventory_2_outlined),
                   title: const Text('商品管理'),

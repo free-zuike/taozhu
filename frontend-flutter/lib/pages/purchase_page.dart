@@ -4,7 +4,9 @@ import '../api.dart';
 import 'router.dart';
 
 class PurchasePage extends StatefulWidget {
-  const PurchasePage({super.key});
+  const PurchasePage({super.key, this.editId});
+  /// 非空 = 编辑已有进货单（从账本进入），提交走 PATCH
+  final String? editId;
   @override
   State<PurchasePage> createState() => _PurchasePageState();
 }
@@ -19,7 +21,22 @@ class _PRow {
 class _PurchasePageState extends State<PurchasePage> {
   List<Map<String, dynamic>> _items = [];
   final List<_PRow> _rows = [_PRow()];
+  final _dateCtrl = TextEditingController(text: _today());
   bool _busy = false;
+
+  bool get _editing => widget.editId != null;
+
+  /// 今日日期（YYYY-MM-DD），表单默认值；可改=补录历史日期
+  static String _today() {
+    final n = DateTime.now();
+    return '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  void dispose() {
+    _dateCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -39,8 +56,49 @@ class _PurchasePageState extends State<PurchasePage> {
       await Api.instance.setCache('/items/summary', i);
       if (!mounted) return;
       setState(() => _items = ((i['items'] as List?) ?? []).cast<Map<String, dynamic>>());
+      // 编辑模式：商品目录就绪后预填原单据明细
+      if (_editing) await _loadEdit();
     } catch (e) {
       if (cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// 编辑模式预填：GET /purchases/:id → 按 item_id+unit 匹配现有价格，回填行
+  Future<void> _loadEdit() async {
+    try {
+      final d = await Api.instance.get('/purchases/${widget.editId}');
+      if (!mounted) return;
+      setState(() {
+        final hd = '${d['happened_at'] ?? ''}';
+        _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
+        final items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _rows.clear();
+        var skipped = 0;
+        for (final it in items) {
+          final itemId = '${it['item_id']}';
+          final unit = '${it['unit'] ?? ''}';
+          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+          final pp = (it['purchase_price'] as num?)?.toDouble() ?? 0;
+          final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
+          final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+          final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+          if (match == null || price == null) {
+            skipped++;
+            continue;
+          }
+          _rows.add(_PRow()
+            ..itemId = itemId
+            ..priceId = price['id'] as String?
+            ..quantity = qty
+            ..purchasePrice = pp);
+        }
+        if (_rows.isEmpty) _rows.add(_PRow());
+        if (skipped > 0) {
+          toast(context, '原单 $skipped 条商品已删除或价格停用，保存后将移除');
+        }
+      });
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -104,16 +162,24 @@ class _PurchasePageState extends State<PurchasePage> {
     }
     setState(() => _busy = true);
     try {
-      await Api.instance.post('/purchases', {
+      final body = {
+        'happened_at': _dateCtrl.text.trim(),
         'items': valid
             .map((r) => {'price_id': r.priceId, 'quantity': r.quantity, 'purchase_price': r.purchasePrice})
             .toList(),
-      });
-      toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
-      setState(() {
-        _rows.clear();
-        _rows.add(_PRow());
-      });
+      };
+      if (_editing) {
+        await Api.instance.patch('/purchases/${widget.editId}', body);
+        toast(context, '已保存修改');
+        if (mounted) Navigator.pop(context, true);
+      } else {
+        await Api.instance.post('/purchases', body);
+        toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
+        setState(() {
+          _rows.clear();
+          _rows.add(_PRow());
+        });
+      }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -125,7 +191,7 @@ class _PurchasePageState extends State<PurchasePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('进货记单'),
+        title: Text(_editing ? '编辑进货单' : '进货记单'),
         actions: [
           IconButton(
             tooltip: 'AI 拍照识别',
@@ -137,6 +203,19 @@ class _PurchasePageState extends State<PurchasePage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: TextField(
+                controller: _dateCtrl,
+                decoration: const InputDecoration(
+                    labelText: '进货日期（YYYY-MM-DD）', helperText: '默认今天，可改为补录历史'),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           for (int i = 0; i < _rows.length; i++) _buildRow(i),
           const SizedBox(height: 8),
           Row(
@@ -154,7 +233,7 @@ class _PurchasePageState extends State<PurchasePage> {
           FilledButton(
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             onPressed: _busy ? null : _submit,
-            child: Text(_busy ? '提交中…' : '提交进货单'),
+            child: Text(_busy ? '提交中…' : (_editing ? '保存修改' : '提交进货单')),
           ),
         ],
       ),

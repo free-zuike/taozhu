@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api.dart';
 import 'router.dart';
@@ -11,6 +12,7 @@ class ItemsPage extends StatefulWidget {
 class _ItemsPageState extends State<ItemsPage> {
   List<Map<String, dynamic>> _items = [];
   bool _loading = true;
+  Timer? _searchTimer;
 
   @override
   void initState() {
@@ -18,19 +20,30 @@ class _ItemsPageState extends State<ItemsPage> {
     _load();
   }
 
-  Future<void> _load() async {
-    // ① 本地缓存秒开
-    final cached = await Api.instance.getCached('/items');
-    if (cached != null) {
-      setState(() {
-        _items = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _loading = false;
-      });
+  @override
+  void dispose() {
+    _searchTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({String q = ''}) async {
+    final searching = q.isNotEmpty;
+    // 搜索时不读缓存、不写缓存，走最新网络结果
+    if (!searching) {
+      // ① 本地缓存秒开
+      final cached = await Api.instance.getCached('/items');
+      if (cached != null) {
+        setState(() {
+          _items = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+          _loading = false;
+        });
+      }
     }
     // ② 网络刷新 + 更新缓存
     try {
-      final d = await Api.instance.get('/items');
-      await Api.instance.setCache('/items', d);
+      final d = await Api.instance
+          .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
+      if (!searching) await Api.instance.setCache('/items', d);
       if (!mounted) return;
       setState(() {
         _items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -38,7 +51,7 @@ class _ItemsPageState extends State<ItemsPage> {
       });
     } catch (e) {
       setState(() => _loading = false);
-      if (cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (!searching && cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -79,13 +92,32 @@ class _ItemsPageState extends State<ItemsPage> {
         },
         child: const Icon(Icons.add),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: TextField(
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search, size: 20),
+                hintText: '搜索商品（名称关键字）',
+                isDense: true,
+              ),
+              onChanged: (v) {
+                _searchTimer?.cancel();
+                final q = v.trim();
+                _searchTimer =
+                    Timer(const Duration(milliseconds: 350), () => _load(q: q));
+              },
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: [
                   for (final it in _items)
                     Card(
                       child: Padding(
@@ -114,9 +146,23 @@ class _ItemsPageState extends State<ItemsPage> {
                                 ],
                               ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.delete_outline, color: Color(0xFFF56C6C)),
-                              onPressed: () => _delete(it['id'] as String, '${it['name']}'),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit_outlined, size: 20, color: Color(0xFF409EFF)),
+                                  tooltip: '编辑',
+                                  onPressed: () async {
+                                    await Navigator.of(context)
+                                        .push(MaterialPageRoute(builder: (_) => _ItemEditPage(item: it)));
+                                    _load();
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline, color: Color(0xFFF56C6C)),
+                                  onPressed: () => _delete(it['id'] as String, '${it['name']}'),
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -130,32 +176,62 @@ class _ItemsPageState extends State<ItemsPage> {
                 ],
               ),
             ),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class _ItemEditPage extends StatefulWidget {
-  const _ItemEditPage();
+  const _ItemEditPage({this.item});
+  /// 非空 = 编辑已有商品（含价格组增删改），保存走 PATCH /items 相关接口
+  final Map<String, dynamic>? item;
   @override
   State<_ItemEditPage> createState() => _ItemEditPageState();
 }
 
 class _ItemEditPageState extends State<_ItemEditPage> {
   final _nameCtrl = TextEditingController();
-  final List<Map<String, TextEditingController>> _priceRows = [_newRow()];
+  late final List<Map<String, TextEditingController>> _priceRows;
+  late final List<String?> _priceIds; // 与 _priceRows 平行：null=新增行（编辑模式下用于区分增/改/删）
   List<Map<String, dynamic>> _cats = [];
   String? _categoryId;
   bool _busy = false;
 
-  static Map<String, TextEditingController> _newRow() => {
-        'unit': TextEditingController(),
-        'buy': TextEditingController(),
-        'sell': TextEditingController(),
+  bool get _editing => widget.item != null;
+
+  static Map<String, TextEditingController> _newRow(
+      [String unit = '', String buy = '', String sell = '']) => {
+        'unit': TextEditingController(text: unit),
+        'buy': TextEditingController(text: buy),
+        'sell': TextEditingController(text: sell),
       };
 
   @override
   void initState() {
     super.initState();
+    final item = widget.item;
+    if (item != null) {
+      _nameCtrl.text = '${item['name'] ?? ''}';
+      final cid = '${item['category_id'] ?? ''}';
+      _categoryId = cid.isEmpty ? null : cid;
+      final prices = ((item['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (prices.isEmpty) {
+        _priceRows = [_newRow()];
+        _priceIds = [null];
+      } else {
+        _priceRows = prices
+            .map((p) => _newRow('${p['unit'] ?? ''}', '${p['purchase_price'] ?? ''}', '${p['sale_price'] ?? ''}'))
+            .toList();
+        _priceIds = prices
+            .map((p) => '${p['id'] ?? ''}'.isEmpty ? null : '${p['id']}')
+            .toList();
+      }
+    } else {
+      _priceRows = [_newRow()];
+      _priceIds = [null];
+    }
     _loadCats();
   }
 
@@ -188,29 +264,58 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       toast(context, '请填写商品名称');
       return;
     }
-    final prices = _priceRows
-        .map((r) => {
-              'unit': r['unit']!.text.trim(),
-              'purchase_price': double.tryParse(r['buy']!.text) ?? 0,
-              'sale_price': double.tryParse(r['sell']!.text) ?? 0,
-            })
-        .where((p) =>
-            p['unit'] != '' && ((p['purchase_price'] as double) > 0 || (p['sale_price'] as double) > 0))
-        .toList();
-    if (prices.isEmpty) {
+    // 收集有效价格行（带 priceId 标记：null=新增）
+    final rows = <Map<String, dynamic>>[];
+    for (int i = 0; i < _priceRows.length; i++) {
+      final unit = _priceRows[i]['unit']!.text.trim();
+      final buy = double.tryParse(_priceRows[i]['buy']!.text) ?? 0;
+      final sell = double.tryParse(_priceRows[i]['sell']!.text) ?? 0;
+      if (unit == '' || (buy <= 0 && sell <= 0)) continue;
+      rows.add({'unit': unit, 'buy': buy, 'sell': sell, 'priceId': _priceIds[i]});
+    }
+    if (rows.isEmpty) {
       toast(context, '请至少填写一个单位价格');
       return;
     }
     setState(() => _busy = true);
     try {
-      final catName = _cats.where((c) => c['id'] == _categoryId).map((c) => '${c['name']}').firstOrNull;
-      await Api.instance.post('/items', {
-        'name': name,
-        'category': catName ?? '',
-        'category_id': _categoryId,
-        'prices': prices,
-      });
-      toast(context, '已添加');
+      final catName = _cats.where((c) => '${c['id']}' == _categoryId).map((c) => '${c['name']}').firstOrNull;
+      if (_editing) {
+        final id = '${widget.item!['id']}';
+        await Api.instance.patch('/items/$id', {
+          'name': name,
+          'category': catName ?? '',
+          'category_id': _categoryId,
+        });
+        // 既有价格更新 / 新增价格
+        await Future.wait(rows.map((r) async {
+          final pid = r['priceId'] as String?;
+          final body = {'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell']};
+          if (pid != null) {
+            await Api.instance.patch('/item-prices/$pid', body);
+          } else {
+            await Api.instance.post('/items/$id/prices', body);
+          }
+        }));
+        // 被移除的既有价格 → 停用（DELETE /item-prices/:id）
+        final origIds = ((widget.item!['prices'] as List?) ?? [])
+            .map((p) => '${(p as Map)['id'] ?? ''}')
+            .where((s) => s.isNotEmpty)
+            .toSet();
+        final nowIds = rows.map((r) => r['priceId'] as String?).whereType<String>().toSet();
+        for (final gone in origIds.difference(nowIds)) {
+          await Api.instance.delete('/item-prices/$gone');
+        }
+        toast(context, '已保存');
+      } else {
+        await Api.instance.post('/items', {
+          'name': name,
+          'category': catName ?? '',
+          'category_id': _categoryId,
+          'prices': rows.map((r) => {'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell']}).toList(),
+        });
+        toast(context, '已添加');
+      }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -222,7 +327,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('新增商品')),
+      appBar: AppBar(title: Text(_editing ? '编辑商品' : '新增商品')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -270,7 +375,12 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.close, color: Color(0xFF909399)),
-                      onPressed: _priceRows.length > 1 ? () => setState(() => _priceRows.removeAt(i)) : null,
+                      onPressed: _priceRows.length > 1
+                          ? () => setState(() {
+                                _priceRows.removeAt(i);
+                                _priceIds.removeAt(i);
+                              })
+                          : null,
                     ),
                   ],
                 ),
@@ -279,7 +389,10 @@ class _ItemEditPageState extends State<_ItemEditPage> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: () => setState(() => _priceRows.add(_newRow())),
+              onPressed: () => setState(() {
+                _priceRows.add(_newRow());
+                _priceIds.add(null);
+              }),
               icon: const Icon(Icons.add),
               label: const Text('添加价格组'),
             ),

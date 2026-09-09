@@ -4,7 +4,9 @@ import '../api.dart';
 import 'router.dart';
 
 class SalePage extends StatefulWidget {
-  const SalePage({super.key});
+  const SalePage({super.key, this.editId});
+  /// 非空 = 编辑已有出货单（从账本进入），提交走 PATCH
+  final String? editId;
   @override
   State<SalePage> createState() => _SalePageState();
 }
@@ -28,7 +30,22 @@ class _SalePageState extends State<SalePage> {
   List<_ItemOption> _items = [];
   String? _clientId;
   final List<_Row> _rows = [_Row()];
+  final _dateCtrl = TextEditingController(text: _today());
   bool _busy = false;
+
+  bool get _editing => widget.editId != null;
+
+  /// 今日日期（YYYY-MM-DD），表单默认值；可改=补录历史日期
+  static String _today() {
+    final n = DateTime.now();
+    return '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  void dispose() {
+    _dateCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -66,21 +83,63 @@ class _SalePageState extends State<SalePage> {
         Api.instance.setCache('/clients', results[0]),
         Api.instance.setCache('/items/summary', results[1]),
       ]);
-      if (!mounted) return;
-      setState(() {
-        _clients = (results[0]['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        _items = ((results[1]['items'] as List?) ?? [])
-            .map((e) => _ItemOption(
-                  e['id'] as String,
-                  e['name'] as String,
-                  ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
-                ))
-            .toList();
-      });
+      if (mounted) {
+        setState(() {
+          _clients = (results[0]['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+          _items = ((results[1]['items'] as List?) ?? [])
+              .map((e) => _ItemOption(
+                    e['id'] as String,
+                    e['name'] as String,
+                    ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
+                  ))
+              .toList();
+        });
+        // 编辑模式：商品目录就绪后预填原单据明细
+        if (_editing) await _loadEdit();
+      }
     } catch (e) {
       if (cachedC == null && cachedI == null) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       }
+    }
+  }
+
+  /// 编辑模式预填：GET /sales/:id → 按 item_id+unit 匹配现有价格，回填行
+  Future<void> _loadEdit() async {
+    try {
+      final d = await Api.instance.get('/sales/${widget.editId}');
+      if (!mounted) return;
+      setState(() {
+        _clientId = d['client_id'] as String?;
+        final hd = '${d['happened_at'] ?? ''}';
+        _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
+        final items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _rows.clear();
+        var skipped = 0;
+        for (final it in items) {
+          final itemId = '${it['item_id']}';
+          final unit = '${it['unit'] ?? ''}';
+          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+          final sp = (it['sale_price'] as num?)?.toDouble() ?? 0;
+          final opt = _items.where((x) => x.id == itemId).firstOrNull;
+          final price = opt?.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+          if (opt == null || price == null) {
+            skipped++;
+            continue;
+          }
+          _rows.add(_Row()
+            ..itemId = itemId
+            ..priceId = price['id'] as String?
+            ..quantity = qty
+            ..salePrice = sp);
+        }
+        if (_rows.isEmpty) _rows.add(_Row());
+        if (skipped > 0) {
+          toast(context, '原单 $skipped 条商品已删除或价格停用，保存后将移除');
+        }
+      });
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -145,17 +204,25 @@ class _SalePageState extends State<SalePage> {
     }
     setState(() => _busy = true);
     try {
-      await Api.instance.post('/sales', {
+      final body = {
         'client_id': _clientId,
+        'happened_at': _dateCtrl.text.trim(),
         'items': valid
             .map((r) => {'price_id': r.priceId, 'quantity': r.quantity, 'sale_price': r.salePrice})
             .toList(),
-      });
-      toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
-      setState(() {
-        _rows.clear();
-        _rows.add(_Row());
-      });
+      };
+      if (_editing) {
+        await Api.instance.patch('/sales/${widget.editId}', body);
+        toast(context, '已保存修改');
+        if (mounted) Navigator.pop(context, true);
+      } else {
+        await Api.instance.post('/sales', body);
+        toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
+        setState(() {
+          _rows.clear();
+          _rows.add(_Row());
+        });
+      }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -167,7 +234,7 @@ class _SalePageState extends State<SalePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('出货记单'),
+        title: Text(_editing ? '编辑出货单' : '出货记单'),
         actions: [
           IconButton(
             tooltip: 'AI 拍照识别',
@@ -184,13 +251,23 @@ class _SalePageState extends State<SalePage> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: DropdownButtonFormField<String>(
-                initialValue: _clientId,
-                decoration: const InputDecoration(labelText: '店铺'),
-                items: _clients
-                    .map((c) => DropdownMenuItem(value: c['id'] as String, child: Text(c['name'] as String)))
-                    .toList(),
-                onChanged: (v) => setState(() => _clientId = v),
+              child: Column(
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: _clientId,
+                    decoration: const InputDecoration(labelText: '店铺'),
+                    items: _clients
+                        .map((c) => DropdownMenuItem(value: c['id'] as String, child: Text(c['name'] as String)))
+                        .toList(),
+                    onChanged: (v) => setState(() => _clientId = v),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _dateCtrl,
+                    decoration: const InputDecoration(
+                        labelText: '日期（YYYY-MM-DD）', helperText: '默认今天，可改为补录历史'),
+                  ),
+                ],
               ),
             ),
           ),
@@ -212,7 +289,7 @@ class _SalePageState extends State<SalePage> {
           FilledButton(
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             onPressed: _busy ? null : _submit,
-            child: Text(_busy ? '提交中…' : '提交出货单'),
+            child: Text(_busy ? '提交中…' : (_editing ? '保存修改' : '提交出货单')),
           ),
         ],
       ),

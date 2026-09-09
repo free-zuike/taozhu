@@ -172,3 +172,57 @@ describe('记单与欠款联动（核心业务）', () => {
     expect(noItems.status).toBe(400);
   });
 });
+
+describe('列表分页（limit/offset + total）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  let clientId: string;
+  let priceId: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+    await call(env, 'POST', '/api/v1/items', token, { name: '白菜', prices: [{ unit: '斤', purchase_price: 2.0, sale_price: 2.5 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string; prices: Array<{ id: string }> }> };
+    priceId = items.items[0].prices[0].id;
+    await call(env, 'POST', '/api/v1/clients', token, { name: '品味轩' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    clientId = clients.clients[0].id;
+    // 两笔出货 + 两笔收款 + 一笔进货（日期不同保证排序稳定）
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, happened_at: '2026-09-05', items: [{ price_id: priceId, quantity: 1 }] });
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, happened_at: '2026-09-06', items: [{ price_id: priceId, quantity: 2 }] });
+    await call(env, 'POST', '/api/v1/purchases', token, { happened_at: '2026-09-05', items: [{ price_id: priceId, quantity: 3 }] });
+    await call(env, 'POST', '/api/v1/payments', token, { client_id: clientId, happened_at: '2026-09-05', amount: 10 });
+    await call(env, 'POST', '/api/v1/payments', token, { client_id: clientId, happened_at: '2026-09-06', amount: 20 });
+  });
+
+  it('出货单 limit=1 只回 1 条但 total 为 2', async () => {
+    const res = await call(env, 'GET', '/api/v1/sales?limit=1', token);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { total: number; sales: unknown[] };
+    expect(data.total).toBe(2);
+    expect(data.sales).toHaveLength(1);
+  });
+
+  it('收款 offset=1 跳过第一条，total 不变', async () => {
+    const res = await call(env, 'GET', '/api/v1/payments?limit=1&offset=1', token);
+    const data = (await res.json()) as { total: number; payments: Array<{ amount: number }> };
+    expect(data.total).toBe(2);
+    expect(data.payments).toHaveLength(1);
+    expect(data.payments[0].amount).toBe(10); // offset 跳过了更新的 20
+  });
+
+  it('进货单 total 与 limit', async () => {
+    const res = await call(env, 'GET', '/api/v1/purchases?limit=5', token);
+    const data = (await res.json()) as { total: number; purchases: unknown[] };
+    expect(data.total).toBe(1);
+    expect(data.purchases).toHaveLength(1);
+  });
+
+  it('超上限 limit 被钳制在 1000，不报错', async () => {
+    const res = await call(env, 'GET', '/api/v1/sales?limit=99999', token);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { total: number };
+    expect(data.total).toBe(2);
+  });
+});

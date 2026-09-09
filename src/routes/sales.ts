@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { adminOnly, authMiddleware } from '../middleware/auth';
+import { parsePage } from '../lib/paging';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -78,22 +79,28 @@ salesRouter.post('/', async (c) => {
   return c.json({ id: saleId, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100, items: saleItemIds.length }, 201);
 });
 
-// GET /sales?client_id=&date_from=&date_to= — 出货单列表（含明细与总额）
+// GET /sales?client_id=&date_from=&date_to=&limit=&offset= — 出货单列表（含明细与总额，分页）
 salesRouter.get('/', async (c) => {
   const clientId = c.req.query('client_id')?.trim();
   const dateFrom = c.req.query('date_from')?.trim();
   const dateTo = c.req.query('date_to')?.trim();
+  const { limit, offset } = parsePage(c.req.query('limit'), c.req.query('offset'));
 
-  let sql = `SELECT s.*, c.name AS client_name,
-    (SELECT COALESCE(SUM(si.amount),0) FROM sale_items si WHERE si.sale_id = s.id) AS total
-    FROM sales s JOIN clients c ON c.id = s.client_id WHERE 1=1`;
+  let where = ' WHERE 1=1';
   const params: string[] = [];
-  if (clientId) { sql += ' AND s.client_id = ?'; params.push(clientId); }
-  if (dateFrom) { sql += ' AND s.happened_at >= ?'; params.push(dateFrom); }
-  if (dateTo) { sql += ' AND s.happened_at <= ?'; params.push(dateTo); }
-  sql += ' ORDER BY s.happened_at DESC, s.created_at DESC';
+  if (clientId) { where += ' AND s.client_id = ?'; params.push(clientId); }
+  if (dateFrom) { where += ' AND s.happened_at >= ?'; params.push(dateFrom); }
+  if (dateTo) { where += ' AND s.happened_at <= ?'; params.push(dateTo); }
 
-  const rows = await c.env.DB.prepare(sql).bind(...params).all();
+  const countRow = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS cnt FROM sales s ${where}`).bind(...params).first<{ cnt: number }>();
+
+  const rows = await c.env.DB.prepare(
+    `SELECT s.*, c.name AS client_name,
+      (SELECT COALESCE(SUM(si.amount),0) FROM sale_items si WHERE si.sale_id = s.id) AS total
+     FROM sales s JOIN clients c ON c.id = s.client_id ${where}
+     ORDER BY s.happened_at DESC, s.created_at DESC LIMIT ? OFFSET ?`,
+  ).bind(...params, limit, offset).all();
   if (rows.results.length === 0) return c.json({ sales: [] });
 
   const saleIds = rows.results.map((r) => (r as { id: string }).id);
@@ -111,6 +118,7 @@ salesRouter.get('/', async (c) => {
     bySale.set(saleId2, list);
   }
   return c.json({
+    total: countRow?.cnt ?? 0,
     sales: rows.results.map((r) => {
       const row = r as unknown as { id: string; client_id: string; client_name: string; happened_at: string; note: string; total: number };
       return {
@@ -138,6 +146,69 @@ salesRouter.get('/:id', async (c) => {
     total: (row as { total: number }).total,
     items: detail.results,
   });
+});
+
+// PATCH /sales/:id — 编辑出货单（改店铺/日期/备注；传 items 则整体替换明细，原子事务）
+salesRouter.patch('/:id', adminOnly(), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => null) as {
+    client_id?: string; happened_at?: string; note?: string; items?: SaleItemInput[];
+  } | null;
+  const sale = await c.env.DB.prepare('SELECT * FROM sales WHERE id = ?').bind(id)
+    .first<{ client_id: string; happened_at: string; note: string }>();
+  if (!sale) return c.json({ error: '出货单不存在' }, 404);
+
+  const clientId = body?.client_id ?? sale.client_id;
+  const client = await c.env.DB.prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first();
+  if (!client) return c.json({ error: '店铺不存在' }, 404);
+  const happenedAt = body?.happened_at?.trim() || sale.happened_at;
+  const note = body?.note?.trim() ?? sale.note ?? '';
+
+  const batch: D1PreparedStatement[] = [
+    c.env.DB.prepare('UPDATE sales SET client_id = ?, happened_at = ?, note = ? WHERE id = ?')
+      .bind(clientId, happenedAt, note, id),
+  ];
+  let total: number;
+  if (body?.items !== undefined) {
+    const items = body.items;
+    if (!Array.isArray(items) || items.length === 0) return c.json({ error: '请至少添加一种商品' }, 400);
+    const priceIds = items.map((i) => i.price_id);
+    if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
+    const placeholders = priceIds.map(() => '?').join(',');
+    const priceRows = await c.env.DB.prepare(
+      `SELECT id, item_id, unit, purchase_price, sale_price, active FROM item_prices WHERE id IN (${placeholders})`,
+    ).bind(...priceIds).all<{ id: string; item_id: string; unit: string; purchase_price: number; sale_price: number; active: number }>();
+    const priceMap = new Map(priceRows.results.map((p) => [p.id, p]));
+    total = 0;
+    for (const item of items) {
+      const price = priceMap.get(item.price_id);
+      if (!price || !price.active) return c.json({ error: `价格不存在或已停用: ${item.price_id}` }, 400);
+      const qty = Number(item.quantity);
+      if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
+      const salePrice = Number(item.sale_price);
+      const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
+      total += Math.round(qty * effectiveSale * 100) / 100;
+    }
+    batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
+    for (const item of items) {
+      const price = priceMap.get(item.price_id);
+      if (!price || !price.active) continue;
+      const qty = Number(item.quantity);
+      const salePrice = Number(item.sale_price);
+      const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
+      const amount = Math.round(qty * effectiveSale * 100) / 100;
+      batch.push(
+        c.env.DB.prepare(
+          'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ).bind(randomId(), id, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount),
+      );
+    }
+  } else {
+    const tot = await c.env.DB.prepare('SELECT COALESCE(SUM(amount),0) AS total FROM sale_items WHERE sale_id = ?').bind(id).first<{ total: number }>();
+    total = tot?.total ?? 0;
+  }
+  await c.env.DB.batch(batch);
+  return c.json({ id, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100 });
 });
 
 // DELETE /sales/:id — 删除出货单（级联删明细，仅老板）
