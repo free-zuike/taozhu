@@ -140,21 +140,52 @@ class _StatementPageState extends State<StatementPage> {
     return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
   }
 
-  /// 生成 CSV（UTF-8 BOM 前缀，Excel 直接打开不乱码）：出货明细 + 收款明细
+  /// 生成 CSV（UTF-8 BOM，Excel 直开）：按商品明细逐行展开——类型/日期/店铺/商品/数量/单位/单价/金额/备注
   String _buildCsv() {
     final buf = StringBuffer('\uFEFF');
-    buf.writeln('类型,日期,店铺,金额,明细');
+    buf.writeln('类型,日期,店铺,商品,数量,单位,单价,金额,备注');
     for (final s in _sales) {
       final items = (s['items'] as List? ?? []);
-      final detail = items
-          .map((it) => '${it['item_name']}${it['quantity']}${it['unit']}')
-          .join(';');
-      buf.writeln(
-          '出货,${_csv(_date(s['happened_at']))},${_csv(s['client_name'])},${_csv(s['total'])},${_csv(detail)}');
+      if (items.isEmpty) {
+        buf.writeln([
+          '出货',
+          _csv(_date(s['happened_at'])),
+          _csv(s['client_name']),
+          '',
+          '',
+          '',
+          '',
+          _csv(s['total']),
+          _csv(s['note']),
+        ].join(','));
+        continue;
+      }
+      for (final it in items) {
+        buf.writeln([
+          '出货',
+          _csv(_date(s['happened_at'])),
+          _csv(s['client_name']),
+          _csv(it['item_name']),
+          _csv(it['quantity']),
+          _csv(it['unit']),
+          _csv(it['sale_price']),
+          _csv(it['amount']),
+          _csv(s['note']),
+        ].join(','));
+      }
     }
     for (final p in _payments) {
-      buf.writeln(
-          '收款,${_csv(_date(p['happened_at']))},${_csv(p['client_name'])},${_csv(p['amount'])},${_csv(p['method'])}');
+      buf.writeln([
+        '收款',
+        _csv(_date(p['happened_at'])),
+        _csv(p['client_name']),
+        '',
+        '',
+        '',
+        '',
+        _csv(p['amount']),
+        _csv(p['method']),
+      ].join(','));
     }
     return buf.toString();
   }

@@ -223,18 +223,54 @@ class _LedgerPageState extends State<LedgerPage> {
     return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
   }
 
-  /// 导出当前筛选结果 CSV 文件（系统分享面板），出货/进货/收款三部分，UTF-8 BOM 带表头
+  /// 导出当前筛选 CSV 文件（系统分享面板）：按商品明细逐行展开——类型/日期/店铺/商品/数量/单位/单价/金额/备注
   Future<void> _exportCsv() async {
     final buf = StringBuffer('\uFEFF');
-    buf.writeln('类型,日期,店铺,金额,明细');
+    buf.writeln('类型,日期,店铺,商品,数量,单位,单价,金额,备注');
     for (final s in _sales) {
-      buf.writeln('出货,${_csv(_date(s['happened_at']))},${_csv(s['client_name'])},${_csv(s['total'])},${_csv((s['items'] as List? ?? []).length)} 项');
+      final items = (s['items'] as List? ?? []);
+      for (final it in items) {
+        buf.writeln([
+          '出货',
+          _csv(_date(s['happened_at'])),
+          _csv(s['client_name']),
+          _csv(it['item_name']),
+          _csv(it['quantity']),
+          _csv(it['unit']),
+          _csv(it['sale_price']),
+          _csv(it['amount']),
+          _csv(s['note']),
+        ].join(','));
+      }
     }
     for (final p in _purchases) {
-      buf.writeln('进货,${_csv(_date(p['happened_at']))},,${_csv(p['total'])},${_csv((p['items'] as List? ?? []).length)} 项');
+      final items = (p['items'] as List? ?? []);
+      for (final it in items) {
+        buf.writeln([
+          '进货',
+          _csv(_date(p['happened_at'])),
+          '',
+          _csv(it['item_name']),
+          _csv(it['quantity']),
+          _csv(it['unit']),
+          _csv(it['purchase_price']),
+          _csv(it['amount']),
+          _csv(p['note']),
+        ].join(','));
+      }
     }
     for (final p in _payments) {
-      buf.writeln('收款,${_csv(_date(p['happened_at']))},${_csv(p['client_name'])},${_csv(p['amount'])},${_csv(p['method'])}');
+      buf.writeln([
+        '收款',
+        _csv(_date(p['happened_at'])),
+        _csv(p['client_name']),
+        '',
+        '',
+        '',
+        '',
+        _csv(p['amount']),
+        _csv(p['method']),
+      ].join(','));
     }
     final bytes = Uint8List.fromList(utf8.encode(buf.toString()));
     await Share.shareXFiles(

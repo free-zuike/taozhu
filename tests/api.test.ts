@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string };
-    expect(d.current).toBe('0.12.3.0');
+    expect(d.current).toBe('0.12.3.1');
     expect(typeof d.latest).toBe('string');
   });
 });
