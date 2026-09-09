@@ -24,16 +24,11 @@ class LocalDb {
   static Future<void> putAll(String storeName, List<Map<String, dynamic>> rows) async {
     final db = await _open();
     final store = stringMapStoreFactory.store(storeName);
-    final tx = await db.transaction();
-    try {
-      await store.delete(tx);
-      for (final r in rows) {
-        final id = '${r['id'] ?? ''}';
-        if (id.isEmpty) continue;
-        await store.record(id).put(tx, r);
-      }
-    } finally {
-      await tx.close();
+    await store.delete(db);
+    for (final r in rows) {
+      final id = '${r['id'] ?? ''}';
+      if (id.isEmpty) continue;
+      await store.record(id).put(db, r);
     }
   }
 
