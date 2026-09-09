@@ -34,8 +34,9 @@ class _ItemsPageState extends State<ItemsPage> {
       // ① 本地缓存秒开
       cached = await Api.instance.getCached('/items');
       if (cached != null) {
+        final data = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>();
         setState(() {
-          _items = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+          _items = data;
           _loading = false;
         });
       }

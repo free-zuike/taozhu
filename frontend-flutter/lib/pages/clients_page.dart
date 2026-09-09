@@ -48,7 +48,8 @@ class _ClientsPageState extends State<ClientsPage> {
       // ① 本地缓存秒开
       cached = await Api.instance.getCached('/clients');
       if (cached != null) {
-        setState(() => _clients = ((cached['clients'] as List?) ?? []).cast<Map<String, dynamic>>());
+        final data = ((cached['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+        setState(() => _clients = data);
       }
     }
     // ② 网络刷新 + 更新缓存
