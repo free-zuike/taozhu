@@ -226,3 +226,16 @@ describe('列表分页（limit/offset + total）', () => {
     expect(data.total).toBe(2);
   });
 });
+
+describe('检查更新代理（/auth/latest-version）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  beforeEach(async () => { env = (await setup()).env; });
+
+  it('无需登录返回 200，含 current 版本；GitHub 不可达时 latest 为空串不报错', async () => {
+    const res = await call(env, 'GET', '/api/v1/auth/latest-version');
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { current: string; latest: string };
+    expect(d.current).toBe('0.12.1.0');
+    expect(typeof d.latest).toBe('string');
+  });
+});

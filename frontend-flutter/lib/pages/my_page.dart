@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import '../api.dart';
 import '../theme.dart';
 import '../version.dart';
@@ -50,18 +48,30 @@ class _MyPageState extends State<MyPage> {
     return false;
   }
 
-  /// 检查更新：GitHub Release 最新 tag 对比本地版本（公开仓库接口，无需鉴权）
+  /// 检查更新：走后端代理（Worker 代查 GitHub Release），避免 App/Web 直连 GitHub 被网络干扰
   Future<void> _checkUpdate() async {
     final releaseUrl = 'https://github.com/free-zuike/taozhu/releases/latest';
     try {
-      final res = await http.get(
-        Uri.parse('https://api.github.com/repos/free-zuike/taozhu/releases/latest'),
-        headers: const {'User-Agent': 'taozhu-app'},
-      );
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      final ver = '${body['tag_name'] ?? ''}'.replaceFirst(RegExp(r'^taozhu-v'), '');
-      if (res.statusCode != 200 || ver.isEmpty) {
-        toast(context, '无法获取最新版本（网络或接口限制）');
+      final d = await Api.instance.get('/auth/latest-version');
+      final ver = '${d['latest'] ?? ''}';
+      if (ver.isEmpty) {
+        // 后端也未能获取（GitHub 不可达）——手动兜底
+        if (!mounted) return;
+        final copy = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('检查更新失败'),
+            content: Text('暂时无法获取最新版本（GitHub 网络受限）。\n当前版本 v$APP_VERSION\n\n可手动打开 GitHub Release 页查看并下载 APK。'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('复制链接')),
+            ],
+          ),
+        );
+        if (copy == true) {
+          await Clipboard.setData(ClipboardData(text: releaseUrl));
+          toast(context, '已复制 GitHub Release 链接');
+        }
         return;
       }
       if (!_older(APP_VERSION, ver)) {

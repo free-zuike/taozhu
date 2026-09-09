@@ -54,6 +54,26 @@ authRouter.get('/me', authMiddleware(), async (c) => {
 // GET /auth/ping — 部署探活（无需认证）
 authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, version: APP_VERSION }));
 
+// GET /auth/latest-version — 检查更新（无鉴权）：Workers 代查 GitHub Release 最新版本。
+// App/小程序直连 api.github.com 在国内网络常被干扰（404/超时），走自己服务器更稳。
+// GitHub 不可达时 latest 为空串，前端给出手动跳转兜底。
+authRouter.get('/latest-version', async (c) => {
+  let latest = '';
+  try {
+    const res = await fetch('https://api.github.com/repos/free-zuike/taozhu/releases/latest', {
+      headers: { 'User-Agent': 'taozhu-worker' },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      const d = (await res.json()) as { tag_name?: string };
+      latest = String(d.tag_name ?? '').replace(/^taozhu-v/, '');
+    }
+  } catch {
+    latest = '';
+  }
+  return c.json({ current: APP_VERSION, latest });
+});
+
 // 统计系统是否已初始化（前端引导页判断）
 authRouter.get('/bootstrap/status', async (c) => {
   const row = await c.env.DB.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>();
