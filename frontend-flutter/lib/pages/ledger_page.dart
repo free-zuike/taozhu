@@ -20,9 +20,8 @@ class _LedgerPageState extends State<LedgerPage> {
   List<Map<String, dynamic>> _purchases = [];
   List<Map<String, dynamic>> _payments = [];
   List<Map<String, dynamic>> _clients = [];
-  String? _clientId; // null = 全部店铺
-  final _fromCtrl = TextEditingController();
-  final _toCtrl = TextEditingController();
+  String? _clientId; // 账本（店铺）维度：必选，默认第一个；无店铺时自动建「默认店铺」
+  String _range = 'month'; // month | 2m | 3m | all
   bool _loading = true;
   bool _offline = false; // 本次加载走了本地缓存（无网络）
 
@@ -32,31 +31,68 @@ class _LedgerPageState extends State<LedgerPage> {
     _load();
   }
 
-  @override
-  void dispose() {
-    _fromCtrl.dispose();
-    _toCtrl.dispose();
-    super.dispose();
+  static String _fmtDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// 时间范围 → (起始, 结束)；all 返回 null（不限日期）
+  (String, String)? _rangeDates() {
+    final now = DateTime.now();
+    switch (_range) {
+      case '2m':
+        return (_fmtDate(DateTime(now.year, now.month - 2, now.day)), _fmtDate(now));
+      case '3m':
+        return (_fmtDate(DateTime(now.year, now.month - 3, now.day)), _fmtDate(now));
+      case 'all':
+        return null;
+      default:
+        return (_fmtDate(DateTime(now.year, now.month, 1)), _fmtDate(now));
+    }
   }
 
-  /// 当前筛选条件下的查询串（空=不限）
-  String _query({bool withClient = true}) {
+  String _dateQuery() {
+    final r = _rangeDates();
+    return r == null ? '' : '?date_from=${r.$1}&date_to=${r.$2}';
+  }
+
+  /// 出货/收款查询：账本（店铺）必选 + 时间范围；进货不按店铺（仅时间范围）
+  String _clientQuery() {
+    final r = _rangeDates();
     final params = <String>[];
-    if (withClient && _clientId != null) params.add('client_id=$_clientId');
-    final from = _fromCtrl.text.trim();
-    final to = _toCtrl.text.trim();
-    if (from.isNotEmpty) params.add('date_from=$from');
-    if (to.isNotEmpty) params.add('date_to=$to');
+    if (_clientId != null) params.add('client_id=$_clientId');
+    if (r != null) {
+      params.add('date_from=${r.$1}');
+      params.add('date_to=${r.$2}');
+    }
     return params.isEmpty ? '' : '?${params.join('&')}';
   }
 
   Future<void> _load() async {
     try {
+      // ① 店铺（账本）列表；无店铺 → 自动创建「默认店铺」
+      var clients = <Map<String, dynamic>>[];
+      try {
+        final cr = await Api.instance.getWithFallback('/clients');
+        clients = ((cr.data['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } catch (_) {
+        clients = [];
+      }
+      if (clients.isEmpty) {
+        try {
+          final created = await Api.instance.post('/clients', {'name': '默认店铺'});
+          clients = [created];
+        } catch (e) {
+          toast(context, '创建默认店铺失败：${e.toString().replaceFirst('Exception: ', '')}');
+        }
+      }
+      if (!mounted) return;
+      if (clients.isNotEmpty && (_clientId == null || !clients.any((c) => '${c['id']}' == _clientId))) {
+        _clientId = '${clients.first['id']}';
+      }
+      // ② 按账本+范围拉交易
       final results = await Future.wait([
-        Api.instance.getWithFallback('/sales${_query()}'),
-        Api.instance.getWithFallback('/purchases${_query(withClient: false)}'),
-        Api.instance.getWithFallback('/payments${_query()}'),
-        Api.instance.getWithFallback('/clients'),
+        Api.instance.getWithFallback('/sales${_clientQuery()}'),
+        Api.instance.getWithFallback('/purchases${_dateQuery()}'),
+        Api.instance.getWithFallback('/payments${_clientQuery()}'),
       ]);
       if (!mounted) return;
       setState(() {
@@ -64,7 +100,7 @@ class _LedgerPageState extends State<LedgerPage> {
         _sales = ((results[0].data['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
         _purchases = ((results[1].data['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
         _payments = ((results[2].data['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _clients = ((results[3].data['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _clients = clients;
         _loading = false;
       });
     } catch (e) {
@@ -316,72 +352,59 @@ class _LedgerPageState extends State<LedgerPage> {
               ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    children: [
-                      DropdownButtonFormField<String?>(
-                        initialValue: _clientId,
-                        isDense: true,
-                        decoration: const InputDecoration(labelText: '店铺筛选'),
-                        items: [
-                          const DropdownMenuItem<String?>(value: null, child: Text('全部店铺')),
-                          ..._clients
-                              .map((c) => DropdownMenuItem<String?>(
-                                  value: '${c['id']}', child: Text('${c['name']}')))
-                              .toList(),
-                        ],
-                        onChanged: (v) => setState(() => _clientId = v),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 账本（店铺）切换：横向胶囊
+                  if (_clients.isNotEmpty)
+                    SizedBox(
+                      height: 36,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
                         children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _fromCtrl,
-                              decoration: const InputDecoration(labelText: '开始日期', isDense: true),
+                          for (final c in _clients)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: ChoiceChip(
+                                label: Text('${c['name']}'),
+                                selected: '${c['id']}' == _clientId,
+                                onSelected: (_) {
+                                  setState(() => _clientId = '${c['id']}');
+                                  _load();
+                                },
+                              ),
                             ),
-                          ),
-                          const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 8),
-                            child: Text('至'),
-                          ),
-                          Expanded(
-                            child: TextField(
-                              controller: _toCtrl,
-                              decoration: const InputDecoration(labelText: '结束日期', isDense: true),
-                            ),
-                          ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: _load,
-                              child: const Text('筛选'),
+                    ),
+                  const SizedBox(height: 8),
+                  // 时间范围：当月 / 最近2个月 / 最近3个月 / 全部
+                  SizedBox(
+                    height: 36,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      children: [
+                        for (final r in const [
+                          ('month', '当月'),
+                          ('2m', '最近2个月'),
+                          ('3m', '最近3个月'),
+                          ('all', '全部流水'),
+                        ])
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: ChoiceChip(
+                              label: Text(r.$2),
+                              selected: _range == r.$1,
+                              onSelected: (_) {
+                                setState(() => _range = r.$1);
+                                _load();
+                              },
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextButton(
-                              onPressed: () => setState(() {
-                                _clientId = null;
-                                _fromCtrl.clear();
-                                _toCtrl.clear();
-                              }),
-                              child: const Text('重置'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
             Expanded(
