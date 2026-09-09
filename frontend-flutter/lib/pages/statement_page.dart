@@ -132,6 +132,40 @@ class _StatementPageState extends State<StatementPage> {
     toast(context, '对账文本已复制，可直接粘贴发送');
   }
 
+  /// CSV 字段转义：含逗号/引号/换行的加引号包裹（引号翻倍）
+  String _csv(Object? v) {
+    final s = '$v';
+    return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
+  }
+
+  /// 生成 CSV（UTF-8 BOM 前缀，Excel 直接打开不乱码）：出货明细 + 收款明细
+  String _buildCsv() {
+    final buf = StringBuffer('\uFEFF');
+    buf.writeln('类型,日期,店铺,金额,明细');
+    for (final s in _sales) {
+      final items = (s['items'] as List? ?? []);
+      final detail = items
+          .map((it) => '${it['item_name']}${it['quantity']}${it['unit']}')
+          .join(';');
+      buf.writeln(
+          '出货,${_csv(_date(s['happened_at']))},${_csv(s['client_name'])},${_csv(s['total'])},${_csv(detail)}');
+    }
+    for (final p in _payments) {
+      buf.writeln(
+          '收款,${_csv(_date(p['happened_at']))},${_csv(p['client_name'])},${_csv(p['amount'])},${_csv(p['method'])}');
+    }
+    return buf.toString();
+  }
+
+  Future<void> _copyCsv() async {
+    if (!_loaded) {
+      toast(context, '请先生成对账单');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: _buildCsv()));
+    toast(context, 'CSV 已复制（带表头），粘贴到 Excel 即可');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -259,10 +293,24 @@ class _StatementPageState extends State<StatementPage> {
                 ),
               ),
             const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _copy,
-              icon: const Icon(Icons.copy_outlined),
-              label: const Text('复制对账文本'),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _copy,
+                    icon: const Icon(Icons.copy_outlined, size: 18),
+                    label: const Text('复制文本'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _copyCsv,
+                    icon: const Icon(Icons.table_chart_outlined, size: 18),
+                    label: const Text('复制 CSV'),
+                  ),
+                ),
+              ],
             ),
           ],
         ],

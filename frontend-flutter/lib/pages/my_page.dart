@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
+import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
 import 'categories_page.dart';
@@ -114,6 +115,12 @@ class _MyPageState extends State<MyPage> {
             onPressed: _logout,
             child: const Text('退出登录'),
           ),
+          const SizedBox(height: 16),
+          Center(
+            child: Text('陶朱 v$APP_VERSION',
+                style: const TextStyle(color: Color(0xFF909399), fontSize: 12)),
+          ),
+          const SizedBox(height: 16),
         ],
       ),
     );

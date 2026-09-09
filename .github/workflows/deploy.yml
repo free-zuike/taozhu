@@ -96,6 +96,11 @@ jobs:
         run: |
           node -e "const fs=require('fs');let t=fs.readFileSync('wrangler.toml','utf8');t=t.replace('PLACEHOLDER_DATABASE_ID',process.argv[1]);fs.writeFileSync('wrangler.toml',t);" "${{ steps.d1.outputs.database_id }}"
 
+      # 部署前建表（幂等）：生产库的表结构在发布时初始化，
+      # 请求路径的 ensureSchema 降级为只读兜底，不再消耗每日 D1 写配额
+      - name: Apply D1 schema (idempotent)
+        run: npx wrangler d1 execute taozhu --remote --file src/schema.sql
+
       - name: Set JWT_SECRET
         run: npx wrangler secret put JWT_SECRET --name taozhu <<< "${{ secrets.JWT_SECRET }}"
 
