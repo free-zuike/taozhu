@@ -47,7 +47,11 @@ jobs:
           flutter create --org com.taozhu --project-name taozhu_app .
           # 统一浏览器标签标题（模板默认 taozhu_app，刷新瞬间会闪烁）
           sed -i 's|<title>.*</title>|<title>陶朱</title>|' web/index.html
-          flutter build web --dart-define=API_BASE=https://taozhu.freezuike-3f7.workers.dev
+          # CanvasKit 自托管：避免白屏期从 gstatic.com 下载渲染引擎（国内慢/不稳）
+          mkdir -p web/canvaskit
+          curl -fsSL -o web/canvaskit/canvaskit.js "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.js"
+          curl -fsSL -o web/canvaskit/canvaskit.wasm "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.wasm"
+          flutter build web --dart-define=API_BASE=https://taozhu.freezuike-3f7.workers.dev --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/
 
       - name: Swap public dir with Flutter web build
         run: |

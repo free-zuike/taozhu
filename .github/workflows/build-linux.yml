@@ -1,0 +1,56 @@
+name: Build Linux Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:                    # 仅 Flutter 相关改动才构建
+      - 'frontend-flutter/**'
+      - '.github/workflows/build-linux.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - name: Generate platforms & build Linux
+        working-directory: frontend-flutter
+        run: |
+          flutter create --org com.taozhu --project-name taozhu_app .
+          flutter build linux --release
+
+      - name: Package & upload Linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || echo "0.1.0.0")
+          cd frontend-flutter/build/linux/x64/release/bundle && zip -qr "/tmp/taozhu-linux-${VERSION}.zip" . && cd -
+          # 更新说明：上个版本 tag 以来的提交摘要
+          git fetch --tags --quiet || true
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          REL="taozhu-v${VERSION}"
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
+          fi
+          gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
+          gh release upload "$REL" "/tmp/taozhu-linux-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "uploaded taozhu-linux-${VERSION}.zip"
