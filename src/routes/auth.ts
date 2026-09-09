@@ -55,18 +55,24 @@ authRouter.get('/me', authMiddleware(), async (c) => {
 authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, version: APP_VERSION }));
 
 // GET /auth/latest-version — 检查更新（无鉴权）：Workers 代查 GitHub Release 最新版本。
-// App/小程序直连 api.github.com 在国内网络常被干扰（404/超时），走自己服务器更稳。
+// App/Web/小程序直连 api.github.com 在国内网络常被干扰（404/超时），走自己服务器更稳。
+// 实现：请求 github.com/releases/latest 的 302 重定向，从 Location 解析版本号——
+//   GitHub API 对共享出口 IP 限流严格（403），HTML 重定向宽松得多。
 // GitHub 不可达时 latest 为空串，前端给出手动跳转兜底。
 authRouter.get('/latest-version', async (c) => {
   let latest = '';
   try {
-    const res = await fetch('https://api.github.com/repos/free-zuike/taozhu/releases/latest', {
-      headers: { 'User-Agent': 'taozhu-worker' },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (res.ok) {
-      const d = (await res.json()) as { tag_name?: string };
-      latest = String(d.tag_name ?? '').replace(/^taozhu-v/, '');
+    const res = await Promise.race([
+      fetch('https://github.com/free-zuike/taozhu/releases/latest', {
+        headers: { 'User-Agent': 'Mozilla/5.0 taozhu-worker', Accept: 'text/html' },
+        redirect: 'manual',
+      }),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('github timeout')), 5000)),
+    ]);
+    if (res.status === 302) {
+      const loc = res.headers.get('location') ?? '';
+      const tag = loc.split('/').pop() ?? '';
+      latest = tag.replace(/^taozhu-v/, '');
     }
   } catch {
     latest = '';
