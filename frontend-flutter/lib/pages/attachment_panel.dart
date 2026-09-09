@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -100,18 +101,23 @@ class _AttachmentPanelState extends State<AttachmentPanel> {
     final picked = await ImagePicker().pickImage(source: src, maxWidth: 1600, imageQuality: 85);
     if (picked == null) return;
     final bytes = await picked.readAsBytes();
+    // 本地 MD5 去重：本地已存过同内容图片则跳过（云端同样以 MD5 命名幂等）
+    final h = md5.convert(bytes).toString();
+    final dir = await _dir();
+    final localFile = File('${dir.path}/$h.jpg');
+    if (localFile.existsSync()) {
+      toast(context, '该图片已存在，跳过重复上传');
+      return;
+    }
     toast(context, '上传中…');
     try {
-      final d = await Api.instance.uploadPhoto(
+      await Api.instance.uploadPhoto(
         '/attachments?entity=${widget.entity}&id=${widget.id}',
         bytes,
         'photo.jpg',
       );
-      final key = '${d['key']}';
-      // 本地副本（双存储）：断网也能看
-      final dir = await _dir();
-      final name = key.split('/').last;
-      await File('${dir.path}/$name').writeAsBytes(bytes);
+      // 本地副本（双存储）：断网也能看；文件名 = 内容 MD5（与云端 key 末段一致）
+      await localFile.writeAsBytes(bytes);
       toast(context, '已添加附件');
       _load();
     } catch (e) {

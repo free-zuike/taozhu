@@ -1,8 +1,9 @@
-/** 交易附件（凭证图片）：存储走后端工厂（默认 R2），key = {entity}/{id}/{时间戳}.jpg
- *  实体 entity ∈ sale|purchase|payment，按前缀关联交易；零 D1 写。 */
+/** 交易附件（凭证图片）：公共图片存储（taozhu/images/attachments/...，MD5 内容去重）。
+ *  entity ∈ sale|purchase|payment（出货/进货/收款）；零 D1 写。 */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { createStorage } from '../services/storage';
+import { imageKey, LEGACY_IMAGE_PREFIXES } from '../lib/image-key';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -11,20 +12,30 @@ attachmentsRouter.use('*', authMiddleware());
 
 const VALID_ENTITY = ['sale', 'purchase', 'payment'];
 
-// GET /attachments?entity=&id= — 列出某交易的全部附件
+/** 当前规范前缀：taozhu/images/attachments/{entity}/{id}/ */
+const prefixOf = (entity: string, id: string) => `taozhu/images/attachments/${entity}/${id}/`;
+/** 兼容前缀列表（历史规范）：{前缀}{entity}/{id}/ */
+const legacyPrefixesOf = (entity: string, id: string) =>
+  LEGACY_IMAGE_PREFIXES.map((p) => `${p}${entity}/${id}/`);
+
+// GET /attachments?entity=&id= — 列出某交易的全部附件（兼容历史前缀，按 key 去重排序）
 attachmentsRouter.get('/', async (c) => {
   const entity = c.req.query('entity');
   const id = c.req.query('id');
   if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment' }, 400);
   if (!id) return c.json({ error: '缺少 id' }, 400);
   const store = createStorage(c.env);
-  const objects = await store.list(`${entity}/${id}/`);
+  const prefixes = [prefixOf(entity, id), ...legacyPrefixesOf(entity, id)];
+  const groups = await Promise.all(prefixes.map((p) => store.list(p)));
+  const byKey = new Map<string, { key: string; size: number; uploaded?: Date }>();
+  for (const group of groups) for (const o of group) byKey.set(o.key, o);
+  const attachments = [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
   return c.json({
-    attachments: objects.map((o) => ({ key: o.key, size: o.size, uploaded: o.uploaded?.toISOString() ?? '' })),
+    attachments: attachments.map((o) => ({ key: o.key, size: o.size, uploaded: o.uploaded?.toISOString() ?? '' })),
   });
 });
 
-// POST /attachments?entity=&id= — multipart 上传 photo（上限 10MB）
+// POST /attachments?entity=&id= — multipart 上传 photo（上限 10MB；同内容 MD5 去重=同一 key）
 attachmentsRouter.post('/', async (c) => {
   const entity = c.req.query('entity');
   const id = c.req.query('id');
@@ -41,8 +52,9 @@ attachmentsRouter.post('/', async (c) => {
   if (!file) return c.json({ error: '请选择图片上传' }, 400);
   if (file.size === 0 || file.size > 10 * 1024 * 1024) return c.json({ error: '图片过大（上限 10MB）' }, 400);
 
-  const key = `${entity}/${id}/${Date.now()}.jpg`;
-  await createStorage(c.env).put(key, file.stream(), file.type || 'image/jpeg');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const key = imageKey('attachments', [entity, id], bytes);
+  await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
   return c.json({ key }, 201);
 });
 

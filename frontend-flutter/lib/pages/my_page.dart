@@ -7,6 +7,8 @@ import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
 import 'categories_page.dart';
+import 'clients_page.dart';
+import 'payments_page.dart';
 import 'ledger_page.dart';
 import 'statement_page.dart';
 import 'users_page.dart';
@@ -135,6 +137,22 @@ class _MyPageState extends State<MyPage> {
                   subtitle: const Text('出货 / 进货 / 收款历史，可修改、删除', style: TextStyle(fontSize: 12)),
                   trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
                   onTap: () => goPage(context, const LedgerPage()),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.store_outlined),
+                  title: const Text('店铺管理'),
+                  subtitle: const Text('店铺（账本）列表、新增、编辑', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: () => goPage(context, const ClientsPage()),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.payments_outlined),
+                  title: const Text('收款结账'),
+                  subtitle: const Text('登记收款、查看收款历史', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: () => goPage(context, const PaymentsPage()),
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(

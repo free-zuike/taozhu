@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import '../pages/home_page.dart';
 import '../pages/sale_page.dart';
-import '../pages/payments_page.dart';
 import '../pages/my_page.dart';
 import '../pages/purchase_page.dart';
-import '../pages/items_page.dart';
-import '../pages/clients_page.dart';
-import '../pages/stats_page.dart';
+import '../pages/ledger_page.dart';
 
-/// 底部悬浮胶囊导航壳：4 个 tab + 中央大按钮快捷记单
+/// 底部悬浮胶囊导航壳：工作台 / 交易（账本=按店铺选账本）/ 中央快捷记单 / 我的
+/// 店铺、收款结账等移入「我的」功能列表，不再占底部 tab
 class BottomShell extends StatefulWidget {
   const BottomShell({super.key});
   @override
@@ -25,7 +23,7 @@ class _BottomShellState extends State<BottomShell> {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [HomePage(), ClientsPage(), PaymentsPage(), MyPage()],
+        children: const [HomePage(), LedgerPage(), MyPage()],
       ),
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -41,10 +39,9 @@ class _BottomShellState extends State<BottomShell> {
           child: Row(
             children: [
               _navItem(0, Icons.dashboard_outlined, '工作台'),
-              _navItem(1, Icons.store_outlined, '店铺'),
+              _navItem(1, Icons.receipt_long_outlined, '交易'),
               _centerButton(),
-              _navItem(2, Icons.payments_outlined, '收款'),
-              _navItem(3, Icons.person_outline, '我的'),
+              _navItem(2, Icons.person_outline, '我的'),
             ],
           ),
         ),

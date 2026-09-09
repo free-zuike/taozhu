@@ -103,7 +103,7 @@ describe('交易附件（R2）', () => {
     if (up.status !== 201) console.log('DEBUG upload:', up.status, await up.text());
     expect(up.status).toBe(201);
     const { key } = (await up.json()) as { key: string };
-    expect(key.startsWith('sale/s1/')).toBe(true);
+    expect(key.startsWith('taozhu/images/attachments/sale/s1/')).toBe(true);
 
     const list = await (await call(env, 'GET', '/api/v1/attachments?entity=sale&id=s1', token)).json() as {
       attachments: Array<{ key: string; size: number }>;
@@ -142,6 +142,28 @@ describe('交易附件（R2）', () => {
     const empty = new FormData();
     const up = await call(env, 'POST', '/api/v1/attachments?entity=sale&id=a', token, empty);
     expect(up.status).toBe(400);
+  });
+
+  it('MD5 去重：同一张图重复上传 → 同一 key，列表只有一份', async () => {
+    const up1 = await call(env, 'POST', '/api/v1/attachments?entity=sale&id=s1', token, photoForm(), true);
+    const up2 = await call(env, 'POST', '/api/v1/attachments?entity=sale&id=s1', token, photoForm(), true);
+    const k1 = ((await up1.json()) as { key: string }).key;
+    const k2 = ((await up2.json()) as { key: string }).key;
+    expect(k1).toBe(k2); // 同内容 → 同 MD5 → 同 key（幂等覆盖）
+    const list = await (await call(env, 'GET', '/api/v1/attachments?entity=sale&id=s1', token)).json() as {
+      attachments: unknown[];
+    };
+    expect(list.attachments).toHaveLength(1);
+  });
+
+  it('旧前缀兼容：taozhu 前缀上线前的遗留附件仍可列出', async () => {
+    // 模拟旧规范（v0.13.1 前 key=sale/id/xx.jpg）遗留数据
+    await env.BUCKET.put('sale/a/legacy.jpg', new Uint8Array([1, 2, 3]));
+    const list = await (await call(env, 'GET', '/api/v1/attachments?entity=sale&id=a', token)).json() as {
+      attachments: Array<{ key: string }>;
+    };
+    expect(list.attachments).toHaveLength(1);
+    expect(list.attachments[0].key).toBe('sale/a/legacy.jpg');
   });
 
   it('未登录 → 401', async () => {
