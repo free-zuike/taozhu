@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import '../api.dart';
+import '../local_db.dart';
 import 'router.dart';
 import 'clients_page.dart';
 import 'sale_page.dart';
@@ -63,43 +64,60 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   Future<void> _load() async {
+    // ① 本地数据库镜像秒开（离线可见、免等待）
+    var clients = await LocalDb.getAllByName('clients');
+    var sales = await LocalDb.getAll('sales');
+    var payments = await LocalDb.getAll('payments');
+    if (clients.isNotEmpty && sales.isNotEmpty && mounted) {
+      setState(() {
+        _clients = clients;
+        _sales = sales;
+        _payments = payments;
+        _loading = false;
+      });
+    }
+    // ② 网络刷新 + 写本地库
     try {
-      // ① 店铺（账本）列表；无店铺 → 自动创建「默认店铺」
-      var clients = <Map<String, dynamic>>[];
-      try {
-        final cr = await Api.instance.getWithFallback('/clients');
-        clients = ((cr.data['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-      } catch (_) {
-        clients = [];
-      }
+      final cr = await Api.instance.get('/clients');
+      clients = ((cr['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
       if (clients.isEmpty) {
-        try {
-          final created = await Api.instance.post('/clients', {'name': '默认店铺'});
-          clients = [created];
-        } catch (e) {
-          toast(context, '创建默认店铺失败：${e.toString().replaceFirst('Exception: ', '')}');
-        }
+        clients = [await Api.instance.post('/clients', {'name': '默认店铺'})];
       }
       if (!mounted) return;
-      if (clients.isNotEmpty && (_clientId == null || !clients.any((c) => '${c['id']}' == _clientId))) {
+      if (_clientId == null || !clients.any((c) => '${c['id']}' == _clientId)) {
         _clientId = '${clients.first['id']}';
       }
-      // ② 按账本+范围拉交易（出货/收款按店铺；进货在底部独立 tab，不在此页）
       final results = await Future.wait([
-        Api.instance.getWithFallback('/sales${_clientQuery()}'),
-        Api.instance.getWithFallback('/payments${_clientQuery()}'),
+        Api.instance.get('/sales${_clientQuery()}'),
+        Api.instance.get('/payments${_clientQuery()}'),
+      ]);
+      if (!mounted) return;
+      sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
+      payments = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+      // ③ 镜像写库（不阻塞渲染）
+      await Future.wait([
+        LocalDb.putAll('clients', clients),
+        LocalDb.putAll('sales', sales),
+        LocalDb.putAll('payments', payments),
       ]);
       if (!mounted) return;
       setState(() {
-        _offline = results.any((r) => r.offline);
-        _sales = ((results[0].data['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _payments = ((results[1].data['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _offline = false;
+        _sales = sales;
+        _payments = payments;
         _clients = clients;
         _loading = false;
       });
     } catch (e) {
-      setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      // 网络失败：有本地数据则标记离线；无数据才报错
+      if (!mounted) return;
+      setState(() {
+        _offline = clients.isNotEmpty || sales.isNotEmpty;
+        _loading = false;
+      });
+      if (clients.isEmpty && sales.isEmpty) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      }
     }
   }
 
@@ -418,31 +436,27 @@ class _LedgerPageState extends State<LedgerPage> {
                       ),
                     ),
                   const SizedBox(height: 8),
-                  // 时间范围：当月 / 最近2个月 / 最近3个月 / 全部
-                  SizedBox(
-                    height: 36,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      children: [
-                        for (final r in const [
-                          ('month', '当月'),
-                          ('2m', '最近2个月'),
-                          ('3m', '最近3个月'),
-                          ('all', '全部流水'),
-                        ])
-                          Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: ChoiceChip(
-                              label: Text(r.$2),
-                              selected: _range == r.$1,
-                              onSelected: (_) {
-                                setState(() => _range = r.$1);
-                                _load();
-                              },
-                            ),
-                          ),
-                      ],
-                    ),
+                  // 时间范围：当月 / 最近2个月 / 最近3个月 / 全部（Wrap 自动换行，文字完整显示）
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final r in const [
+                        ('month', '当月'),
+                        ('2m', '最近2个月'),
+                        ('3m', '最近3个月'),
+                        ('all', '全部流水'),
+                      ])
+                        ChoiceChip(
+                          label: Text(r.$2, style: const TextStyle(fontSize: 13)),
+                          visualDensity: VisualDensity.compact,
+                          selected: _range == r.$1,
+                          onSelected: (_) {
+                            setState(() => _range = r.$1);
+                            _load();
+                          },
+                        ),
+                    ],
                   ),
                 ],
               ),
