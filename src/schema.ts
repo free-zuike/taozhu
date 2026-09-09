@@ -85,6 +85,7 @@ const DDL: string[] = [
     client_id TEXT NOT NULL REFERENCES clients(id),
     happened_at TEXT NOT NULL,
     amount REAL NOT NULL CHECK (amount > 0),
+    waived REAL NOT NULL DEFAULT 0 CHECK (waived >= 0),
     method TEXT DEFAULT '',
     note TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -144,6 +145,11 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     if (!cCols.results.some((x) => x.name === 'month_start_day')) {
       await db.prepare('ALTER TABLE clients ADD COLUMN month_start_day INTEGER NOT NULL DEFAULT 1').run();
+    }
+    // payments 平账减免列（v0.13.0.0）
+    const payCols = await db.prepare('PRAGMA table_info(payments)').all<{ name: string }>();
+    if (!payCols.results.some((x) => x.name === 'waived')) {
+      await db.prepare('ALTER TABLE payments ADD COLUMN waived REAL NOT NULL DEFAULT 0').run();
     }
     schemaReady = true;
   } catch (err) {

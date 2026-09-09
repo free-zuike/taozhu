@@ -12,7 +12,9 @@ class _PaymentsPageState extends State<PaymentsPage> {
   List<Map<String, dynamic>> _clients = [];
   List<Map<String, dynamic>> _payments = [];
   String? _clientId;
+  double _selDebt = 0; // 当前选中店铺的应收（欠款）
   final _amountCtrl = TextEditingController();
+  final _waivedCtrl = TextEditingController(); // 平账减免
   final _dateCtrl = TextEditingController(text: _today());
   final _methodCtrl = TextEditingController();
   final _noteCtrl = TextEditingController();
@@ -34,6 +36,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
   @override
   void dispose() {
     _amountCtrl.dispose();
+    _waivedCtrl.dispose();
     _dateCtrl.dispose();
     _methodCtrl.dispose();
     _noteCtrl.dispose();
@@ -67,6 +70,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
 
   Future<void> _submit() async {
     final amount = double.tryParse(_amountCtrl.text) ?? 0;
+    final waived = double.tryParse(_waivedCtrl.text) ?? 0;
     if (_clientId == null) {
       toast(context, '请选择店铺');
       return;
@@ -75,17 +79,25 @@ class _PaymentsPageState extends State<PaymentsPage> {
       toast(context, '请输入有效金额');
       return;
     }
+    if (waived < 0) {
+      toast(context, '减免金额不能为负数');
+      return;
+    }
     setState(() => _busy = true);
     try {
       await Api.instance.post('/payments', {
         'client_id': _clientId,
         'amount': amount,
+        'waived': waived,
         'happened_at': _dateCtrl.text.trim(),
         'method': _methodCtrl.text.trim(),
         'note': _noteCtrl.text.trim(),
       });
-      toast(context, '已登记收款 ¥${amount.toStringAsFixed(2)}');
+      toast(context, waived > 0
+          ? '已登记：实收 ¥${amount.toStringAsFixed(2)}，平账 ¥${waived.toStringAsFixed(2)}'
+          : '已登记收款 ¥${amount.toStringAsFixed(2)}');
       _amountCtrl.clear();
+      _waivedCtrl.clear();
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -96,6 +108,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
 
   Future<void> _edit(Map<String, dynamic> p) async {
     final amountCtrl = TextEditingController(text: '${p['amount']}');
+    final waivedCtrl = TextEditingController(text: '${p['waived'] ?? 0}');
     final dateCtrl = TextEditingController(text: _date('${p['happened_at']}'));
     final methodCtrl = TextEditingController(text: '${p['method'] ?? ''}');
     final noteCtrl = TextEditingController(text: '${p['note'] ?? ''}');
@@ -110,6 +123,12 @@ class _PaymentsPageState extends State<PaymentsPage> {
               controller: amountCtrl,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               decoration: const InputDecoration(labelText: '金额（元）'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: waivedCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: '平账减免（元，可改）'),
             ),
             const SizedBox(height: 8),
             TextField(
@@ -134,9 +153,15 @@ class _PaymentsPageState extends State<PaymentsPage> {
       toast(context, '请输入有效金额');
       return;
     }
+    final waived = double.tryParse(waivedCtrl.text.trim()) ?? 0;
+    if (waived < 0) {
+      toast(context, '减免金额不能为负数');
+      return;
+    }
     try {
       await Api.instance.patch('/payments/${p['id']}', {
         'amount': amount,
+        'waived': waived,
         'happened_at': dateCtrl.text.trim(),
         'method': methodCtrl.text.trim(),
         'note': noteCtrl.text.trim(),
@@ -201,15 +226,34 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             decoration: const InputDecoration(labelText: '店铺'),
                             items: _clients
                                 .map((c) => DropdownMenuItem(
-                                    value: c['id'] as String, child: Text('${c['name']}')))
+                                    value: c['id'] as String,
+                                    child: Text('${c['name']}（欠 ¥${((c['debt'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}）')))
                                 .toList(),
-                            onChanged: (v) => setState(() => _clientId = v),
+                            onChanged: (v) => setState(() {
+                              _clientId = v;
+                              final c = _clients.where((x) => x['id'] == v).firstOrNull;
+                              _selDebt = ((c?['debt'] as num?)?.toDouble() ?? 0);
+                            }),
                           ),
-                          const SizedBox(height: 12),
+                          if (_clientId != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text('应收 ¥${_selDebt.toStringAsFixed(2)}',
+                                  style: const TextStyle(color: Color(0xFFF56C6C), fontSize: 13)),
+                            ),
+                          const SizedBox(height: 8),
                           TextField(
                             controller: _amountCtrl,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: '收款金额（元）', prefixText: '¥ '),
+                            decoration: const InputDecoration(labelText: '实收金额（元）', prefixText: '¥ '),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _waivedCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            decoration: const InputDecoration(
+                                labelText: '平账减免（元，可选）',
+                                helperText: '实收 + 减免 = 账面已收；减免后欠款自动结清'),
                           ),
                           const SizedBox(height: 8),
                           TextField(
@@ -243,7 +287,11 @@ class _PaymentsPageState extends State<PaymentsPage> {
                         dense: true,
                         leading: const Icon(Icons.check_circle_outline, color: Color(0xFF67C23A)),
                         title: Text('${p['client_name']}'),
-                        subtitle: Text('${_date(p['happened_at'])}${p['note'] != null && '${p['note']}'.isNotEmpty ? ' · ${p['note']}' : ''}'),
+                        subtitle: Text([
+                          _date(p['happened_at']),
+                          if (((p['waived'] as num?) ?? 0) > 0) '平账 ¥${p['waived']}',
+                          if (p['note'] != null && '${p['note']}'.isNotEmpty) '${p['note']}',
+                        ].join(' · ')),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
