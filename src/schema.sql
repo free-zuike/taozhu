@@ -97,14 +97,12 @@ CREATE TABLE IF NOT EXISTS sale_items (
 );
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id);
 
--- 收款（结账登记：店铺欠款 = Σsales.amount − Σ(payments.amount + payments.waived)）
--- waived = 平账减免金额（实收 amount，减免部分账面视为已结清）
+-- 收款（结账登记：店铺欠款 = Σsales.amount - Σpayments.amount）
 CREATE TABLE IF NOT EXISTS payments (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id),
   happened_at TEXT NOT NULL,
   amount REAL NOT NULL CHECK (amount > 0),
-  waived REAL NOT NULL DEFAULT 0 CHECK (waived >= 0),
   method TEXT DEFAULT '',
   note TEXT DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

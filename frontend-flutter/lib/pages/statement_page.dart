@@ -96,7 +96,6 @@ class _StatementPageState extends State<StatementPage> {
 
   double get _saleTotal => _sales.fold(0, (s, x) => s + ((x['total'] as num?)?.toDouble() ?? 0));
   double get _payTotal => _payments.fold(0, (s, x) => s + ((x['amount'] as num?)?.toDouble() ?? 0));
-  double get _waivedTotal => _payments.fold(0, (s, x) => s + (((x['waived'] as num?)?.toDouble()) ?? 0));
 
   String _date(Object? v) {
     final s = '$v';
@@ -121,8 +120,7 @@ class _StatementPageState extends State<StatementPage> {
     buf.writeln('—— 收款明细 ——');
     for (final p in _payments) {
       final m = '${p['method'] ?? ''}';
-      final w = ((p['waived'] as num?) ?? 0) > 0 ? ' 平账¥${p['waived']}' : '';
-      buf.writeln('${_date(p['happened_at'])}${m.isNotEmpty ? ' $m' : ''}$w ¥${(p['amount'] as num?)?.toStringAsFixed(2) ?? '-'}');
+      buf.writeln('${_date(p['happened_at'])}${m.isNotEmpty ? ' $m' : ''} ¥${(p['amount'] as num?)?.toStringAsFixed(2) ?? '-'}');
     }
     return buf.toString();
   }
@@ -177,10 +175,6 @@ class _StatementPageState extends State<StatementPage> {
       }
     }
     for (final p in _payments) {
-      final remark = [
-        _csv(p['method']),
-        if (((p['waived'] as num?) ?? 0) > 0) '平账¥${_csv(p['waived'])}',
-      ].where((s) => s.isNotEmpty).join(' ');
       buf.writeln([
         '收款',
         _csv(_date(p['happened_at'])),
@@ -190,7 +184,7 @@ class _StatementPageState extends State<StatementPage> {
         '',
         '',
         _csv(p['amount']),
-        remark,
+        _csv(p['method']),
       ].join(','));
     }
     return buf.toString();
@@ -291,13 +285,9 @@ class _StatementPageState extends State<StatementPage> {
               children: [
                 Expanded(child: _statCard('出货合计', '¥${_saleTotal.toStringAsFixed(2)}', const Color(0xFFF56C6C))),
                 const SizedBox(width: 12),
-                Expanded(child: _statCard('收款合计（实收）', '¥${_payTotal.toStringAsFixed(2)}', const Color(0xFF67C23A))),
+                Expanded(child: _statCard('收款合计', '¥${_payTotal.toStringAsFixed(2)}', const Color(0xFF67C23A))),
               ],
             ),
-            if (_waivedTotal > 0) ...[
-              const SizedBox(height: 12),
-              _statCard('减免合计（平账）', '¥${_waivedTotal.toStringAsFixed(2)}', const Color(0xFFE6A23C)),
-            ],
             const SizedBox(height: 12),
             _statCard('期末欠款（累计）', '¥${_debtEnd.toStringAsFixed(2)}',
                 _debtEnd > 0 ? const Color(0xFFF56C6C) : const Color(0xFF67C23A)),

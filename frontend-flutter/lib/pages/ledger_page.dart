@@ -260,10 +260,6 @@ class _LedgerPageState extends State<LedgerPage> {
       }
     }
     for (final p in _payments) {
-      final remark = [
-        _csv(p['method']),
-        if (((p['waived'] as num?) ?? 0) > 0) '平账¥${_csv(p['waived'])}',
-      ].where((s) => s.isNotEmpty).join(' ');
       buf.writeln([
         '收款',
         _csv(_date(p['happened_at'])),
@@ -273,7 +269,7 @@ class _LedgerPageState extends State<LedgerPage> {
         '',
         '',
         _csv(p['amount']),
-        remark,
+        _csv(p['method']),
       ].join(','));
     }
     final bytes = Uint8List.fromList(utf8.encode(buf.toString()));
@@ -492,7 +488,6 @@ class _LedgerPageState extends State<LedgerPage> {
         title: Text('${p['client_name']}'),
         subtitle: Text(
           '${_date(p['happened_at'])}${(p['method'] as String? ?? '').isNotEmpty ? ' · ${p['method']}' : ''}'
-          '${((p['waived'] as num?) ?? 0) > 0 ? ' · 平账 ¥${p['waived']}' : ''}'
           '${(p['note'] as String? ?? '').isNotEmpty ? ' · ${p['note']}' : ''}',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,

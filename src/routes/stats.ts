@@ -21,7 +21,7 @@ statsRouter.get('/overview', async (c) => {
       COALESCE((SELECT SUM(si.amount) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.happened_at = ?), 0) AS sales_total,
       COALESCE((SELECT COUNT(*) FROM sales WHERE happened_at = ?), 0) AS sales_count,
       COALESCE((SELECT SUM((si.sale_price - si.cost_price) * si.quantity) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.happened_at = ?), 0) AS gross_profit,
-      COALESCE((SELECT SUM(amount + waived) FROM payments WHERE happened_at = ?), 0) AS paid_total,
+      COALESCE((SELECT SUM(amount) FROM payments WHERE happened_at = ?), 0) AS paid_total,
       COALESCE((SELECT SUM(pi.amount) FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id WHERE p.happened_at = ?), 0) AS purchase_total`,
   ).bind(date, date, date, date, date).first<{
     sales_total: number; sales_count: number; gross_profit: number; paid_total: number; purchase_total: number;
@@ -30,7 +30,7 @@ statsRouter.get('/overview', async (c) => {
   const totals = await db.prepare(
     `SELECT
       COALESCE((SELECT SUM(amount) FROM sale_items), 0) AS all_sales,
-      COALESCE((SELECT SUM(amount + waived) FROM payments), 0) AS all_paid,
+      COALESCE((SELECT SUM(amount) FROM payments), 0) AS all_paid,
       COALESCE((SELECT COUNT(*) FROM clients WHERE deleted_at IS NULL), 0) AS client_count,
       COALESCE((SELECT COUNT(*) FROM items WHERE deleted_at IS NULL), 0) AS item_count`,
   ).first<{ all_sales: number; all_paid: number; client_count: number; item_count: number }>();
@@ -38,7 +38,7 @@ statsRouter.get('/overview', async (c) => {
   const topDebt = await db.prepare(
     `SELECT c.id, c.name,
       COALESCE((SELECT SUM(si.amount) FROM sale_items si JOIN sales s ON s.id = si.sale_id AND s.client_id = c.id), 0) AS sales_total,
-      COALESCE((SELECT SUM(amount + waived) FROM payments WHERE client_id = c.id), 0) AS paid_total
+      COALESCE((SELECT SUM(amount) FROM payments WHERE client_id = c.id), 0) AS paid_total
      FROM clients c WHERE c.deleted_at IS NULL
      ORDER BY (sales_total - paid_total) DESC LIMIT 5`,
   ).all<{ id: string; name: string; sales_total: number; paid_total: number }>();
@@ -77,7 +77,7 @@ statsRouter.get('/clients', async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT c.id, c.name,
       COALESCE((SELECT SUM(si.amount) FROM sale_items si JOIN sales s ON s.id = si.sale_id AND s.client_id = c.id ${saleCond}), 0) AS sales_total,
-      COALESCE((SELECT SUM(amount + waived) FROM payments WHERE client_id = c.id ${payCond}), 0) AS paid_total,
+      COALESCE((SELECT SUM(amount) FROM payments WHERE client_id = c.id ${payCond}), 0) AS paid_total,
       COALESCE((SELECT SUM((si.sale_price - si.cost_price) * si.quantity) FROM sale_items si JOIN sales s ON s.id = si.sale_id AND s.client_id = c.id ${saleCond}), 0) AS gross_profit
      FROM clients c WHERE c.deleted_at IS NULL ORDER BY sales_total DESC`,
   ).bind(...params).all<{ id: string; name: string; sales_total: number; paid_total: number; gross_profit: number }>();
@@ -104,7 +104,7 @@ statsRouter.get('/monthly', async (c) => {
      GROUP BY month ORDER BY month`,
   ).bind(year).all<{ month: string; sales_total: number; gross_profit: number }>();
   const paidRows = await c.env.DB.prepare(
-    `SELECT substr(happened_at, 1, 7) AS month, SUM(amount + waived) AS paid_total
+    `SELECT substr(happened_at, 1, 7) AS month, SUM(amount) AS paid_total
      FROM payments WHERE substr(happened_at, 1, 4) = ? GROUP BY month ORDER BY month`,
   ).bind(year).all<{ month: string; paid_total: number }>();
   const paidMap = new Map(paidRows.results.map((p) => [p.month, p.paid_total]));
@@ -153,7 +153,7 @@ statsRouter.get('/summary', async (c) => {
   }>();
 
   const paidParams: unknown[] = [start, end];
-  const paidSql = `SELECT COALESCE(SUM(amount + waived), 0) AS paid_total
+  const paidSql = `SELECT COALESCE(SUM(amount), 0) AS paid_total
      FROM payments WHERE substr(happened_at, 1, 10) BETWEEN ? AND ?${clientId ? ' AND client_id = ?' : ''}`;
   if (clientId) paidParams.push(clientId);
   const paid = await db.prepare(paidSql).bind(...paidParams).first<{ paid_total: number }>();
@@ -170,7 +170,7 @@ statsRouter.get('/summary', async (c) => {
   const debtSql = `SELECT
       COALESCE((SELECT SUM(si.amount) FROM sale_items si JOIN sales s ON s.id = si.sale_id
                 WHERE substr(s.happened_at, 1, 10) <= ?${clientId ? ' AND s.client_id = ?' : ''}), 0) AS all_sales,
-      COALESCE((SELECT SUM(amount + waived) FROM payments
+      COALESCE((SELECT SUM(amount) FROM payments
                 WHERE substr(happened_at, 1, 10) <= ?${clientId ? ' AND client_id = ?' : ''}), 0) AS all_paid`;
   const debt = await db.prepare(debtSql).bind(...debtParams).first<{ all_sales: number; all_paid: number }>();
 
@@ -205,7 +205,7 @@ statsRouter.get('/daily', async (c) => {
   const salesRows = await db.prepare(sSql).bind(...sParams).all<{ day: string; sales_total: number; gross_profit: number }>();
 
   const pParams: unknown[] = [start, end];
-  const pSql = `SELECT substr(happened_at, 1, 10) AS day, SUM(amount + waived) AS paid_total
+  const pSql = `SELECT substr(happened_at, 1, 10) AS day, SUM(amount) AS paid_total
      FROM payments WHERE substr(happened_at, 1, 10) BETWEEN ? AND ?${clientId ? ' AND client_id = ?' : ''}
      GROUP BY day ORDER BY day`;
   if (clientId) pParams.push(clientId);
