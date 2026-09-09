@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string };
-    expect(d.current).toBe('0.13.4.1');
+    expect(d.current).toBe('0.13.5.0');
     expect(typeof d.latest).toBe('string');
   });
 });
@@ -289,5 +289,37 @@ describe('商品价格组（增/改/停用）', () => {
       items: Array<{ prices: unknown[] }>;
     };
     expect(summary.items[0].prices).toHaveLength(0);
+  });
+});
+
+describe('clients 交易笔数（账本选择弹层用）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  let clientId: string;
+  let priceId: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+    await call(env, 'POST', '/api/v1/items', token, { name: '白菜', prices: [{ unit: '斤', purchase_price: 1, sale_price: 2 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ id: string; prices: Array<{ id: string }> }>;
+    };
+    priceId = items.items[0].prices[0].id;
+    await call(env, 'POST', '/api/v1/clients', token, { name: '品味轩' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as {
+      clients: Array<{ id: string }>;
+    };
+    clientId = clients.clients[0].id;
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, items: [{ price_id: priceId, quantity: 10 }] });
+    await call(env, 'POST', '/api/v1/payments', token, { client_id: clientId, amount: 5 });
+  });
+
+  it('返回 sale_count/payment_count', async () => {
+    const d = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as {
+      clients: Array<{ sale_count: number; payment_count: number }>;
+    };
+    expect(d.clients[0].sale_count).toBe(1);
+    expect(d.clients[0].payment_count).toBe(1);
   });
 });

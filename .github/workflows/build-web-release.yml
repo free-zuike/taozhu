@@ -28,6 +28,8 @@ jobs:
         working-directory: frontend-flutter
         run: |
           flutter create --org com.taozhu --project-name taozhu_app .
+          # 统一浏览器标签标题（模板默认 taozhu_app，刷新瞬间会闪烁）
+          sed -i 's|<title>.*</title>|<title>陶朱</title>|' web/index.html
           flutter build web
 
       - name: Package web zip (同版本固定名，覆盖不重复)

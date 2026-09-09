@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import 'router.dart';
+import 'clients_page.dart';
 import 'sale_page.dart';
 import 'attachment_panel.dart';
 
@@ -105,6 +106,66 @@ class _LedgerPageState extends State<LedgerPage> {
   String _date(Object? v) {
     final s = '$v';
     return s.length >= 10 ? s.substring(0, 10) : s;
+  }
+
+  /// 账本选择弹层：全部店铺（名称 + 交易笔数 + 欠款），底部管理店铺
+  Future<void> _showLedgerPicker() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: Text('选择店铺（账本）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final c in _clients)
+                    ListTile(
+                      leading: CircleAvatar(
+                        radius: 18,
+                        backgroundColor: const Color(0xFF409EFF).withOpacity(0.12),
+                        child: const Icon(Icons.storefront, size: 18, color: Color(0xFF409EFF)),
+                      ),
+                      title: Text('${c['name']}',
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                      subtitle: Text(
+                        '交易 ${(((c['sale_count'] as num?) ?? 0) + ((c['payment_count'] as num?) ?? 0))} 笔 · 欠 ¥${((c['debt'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
+                        style: const TextStyle(fontSize: 12, color: Color(0x8A000000)),
+                      ),
+                      trailing: '${c['id']}' == _clientId
+                          ? const Icon(Icons.check_circle, color: Color(0xFF409EFF), size: 20)
+                          : null,
+                      onTap: () => Navigator.pop(ctx, '${c['id']}'),
+                    ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.manage_search_outlined, color: Color(0xFF409EFF)),
+              title: const Text('管理店铺（账本）'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const ClientsPage()))
+                    .then((_) => _load());
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (selected != null && selected != _clientId) {
+      setState(() => _clientId = selected);
+      _load();
+    }
   }
 
   Future<bool> _confirm(String title, String message) async {
@@ -313,53 +374,47 @@ class _LedgerPageState extends State<LedgerPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 账本（店铺）切换：下拉框，一次只显示一个店铺
+                  // 账本（店铺）选择：点击弹出全部账本弹层（增量式：名称+交易笔数+欠款+管理）
                   if (_clients.isNotEmpty)
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xFF2C2C2E)
-                            : const Color(0xFFF5F5F5),
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: _clientId != null
-                              ? const Color(0xFF409EFF).withOpacity(0.4)
-                              : Colors.transparent,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.store_outlined, size: 20, color: Color(0xFF409EFF)),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<String>(
-                                value: _clientId,
-                                isExpanded: true,
-                                borderRadius: BorderRadius.circular(12),
-                                icon: const Icon(Icons.keyboard_arrow_down),
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: Theme.of(context).brightness == Brightness.dark
-                                      ? Colors.white
-                                      : const Color(0xFF111827),
-                                ),
-                                items: _clients
-                                    .map((c) => DropdownMenuItem(
-                                        value: '${c['id']}', child: Text('${c['name']}')))
-                                    .toList(),
-                                onChanged: (v) {
-                                  if (v == null) return;
-                                  setState(() => _clientId = v);
-                                  _load();
-                                },
-                              ),
-                            ),
+                        onTap: _showLedgerPicker,
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).brightness == Brightness.dark
+                                ? const Color(0xFF2C2C2E)
+                                : const Color(0xFFF5F5F5),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFF409EFF).withOpacity(0.4)),
                           ),
-                        ],
+                          child: Row(
+                            children: [
+                              const Icon(Icons.store_outlined, size: 20, color: Color(0xFF409EFF)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _clients
+                                          .where((c) => '${c['id']}' == _clientId)
+                                          .map((c) => '${c['name']}')
+                                          .firstOrNull ??
+                                      '选择店铺',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    color: Theme.of(context).brightness == Brightness.dark
+                                        ? Colors.white
+                                        : const Color(0xFF111827),
+                                  ),
+                                ),
+                              ),
+                              const Icon(Icons.keyboard_arrow_down, color: Color(0x61000000)),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   const SizedBox(height: 8),

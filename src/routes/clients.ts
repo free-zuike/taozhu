@@ -23,13 +23,15 @@ const SALES_TOTAL_SUB = '(SELECT sa.client_id, SUM(si.amount) AS total FROM sale
 clientsRouter.get('/', async (c) => {
   const q = c.req.query('q')?.trim() ?? '';
   const sql = `SELECT c.*, cat.name AS category_name, COALESCE(s.total, 0) AS sales_total, COALESCE(p.total, 0) AS paid_total,
+      (SELECT COUNT(*) FROM sales s2 WHERE s2.client_id = c.id) AS sale_count,
+      (SELECT COUNT(*) FROM payments p2 WHERE p2.client_id = c.id) AS payment_count,
       (SELECT MIN(substr(s2.happened_at, 1, 10)) FROM sales s2 WHERE s2.client_id = c.id) AS first_book_date
       FROM clients c LEFT JOIN categories cat ON cat.id = c.category_id LEFT JOIN ${SALES_TOTAL_SUB} s ON s.client_id = c.id LEFT JOIN (SELECT client_id, SUM(amount) AS total FROM payments GROUP BY client_id) p ON p.client_id = c.id WHERE c.deleted_at IS NULL`;
   const rows = q
     ? await c.env.DB.prepare(`${sql} AND c.name LIKE ? ORDER BY c.name`).bind(`%${q}%`).all()
     : await c.env.DB.prepare(`${sql} ORDER BY c.name`).all();
   return c.json({ clients: rows.results.map((r) => {
-    const row = r as unknown as ClientRow & { sales_total: number; paid_total: number; category_name: string | null; first_book_date: string | null };
+    const row = r as unknown as ClientRow & { sales_total: number; paid_total: number; sale_count: number; payment_count: number; category_name: string | null; first_book_date: string | null };
     return {
       id: row.id, name: row.name, contact: row.contact ?? '', phone: row.phone ?? '', note: row.note ?? '',
       start_date: row.start_date ?? '', end_date: row.end_date ?? '',
@@ -37,6 +39,7 @@ clientsRouter.get('/', async (c) => {
       first_book_date: row.first_book_date ?? '',
       category_id: row.category_id ?? '', category_name: row.category_name ?? '',
       sales_total: row.sales_total, paid_total: row.paid_total,
+      sale_count: row.sale_count ?? 0, payment_count: row.payment_count ?? 0,
       debt: Number((row.sales_total - row.paid_total).toFixed(2)),
     };
   }) });
