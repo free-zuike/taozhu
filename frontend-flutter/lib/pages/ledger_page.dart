@@ -6,6 +6,7 @@ import '../api.dart';
 import 'router.dart';
 import 'sale_page.dart';
 import 'purchase_page.dart';
+import 'attachment_panel.dart';
 
 /// 账本：出货 / 进货 / 收款历史，支持编辑与删除（纠错入口）
 class LedgerPage extends StatefulWidget {
@@ -433,6 +434,11 @@ class _LedgerPageState extends State<LedgerPage> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            IconButton(
+              icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0xFF909399)),
+              tooltip: '附件',
+              onPressed: () => showAttachmentPanel(context, 'sale', '${s['id']}', '出货单附件'),
+            ),
             Text('¥${s['total']}',
                 style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFF56C6C))),
             IconButton(
@@ -464,6 +470,11 @@ class _LedgerPageState extends State<LedgerPage> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            IconButton(
+              icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0xFF909399)),
+              tooltip: '附件',
+              onPressed: () => showAttachmentPanel(context, 'purchase', '${p['id']}', '进货单附件'),
+            ),
             Text('¥${p['total']}',
                 style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFF56C6C))),
             IconButton(
@@ -495,6 +506,11 @@ class _LedgerPageState extends State<LedgerPage> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            IconButton(
+              icon: const Icon(Icons.attachment_outlined, size: 18, color: Color(0xFF909399)),
+              tooltip: '附件',
+              onPressed: () => showAttachmentPanel(context, 'payment', '${p['id']}', '收款凭证'),
+            ),
             Text('¥${p['amount']}',
                 style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF67C23A))),
             IconButton(

@@ -3,6 +3,8 @@ export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
   JWT_SECRET: string;
+  /** R2 附件存储（交易凭证图片），与 D1 配额独立 */
+  BUCKET: R2Bucket;
 }
 
 /** JWT 载荷中的用户信息 */

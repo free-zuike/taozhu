@@ -14,3 +14,8 @@ not_found_handling = "single-page-application"
 binding = "DB"
 database_name = "taozhu"
 database_id = "PLACEHOLDER_DATABASE_ID"
+
+# 附件存储（交易凭证图片）：R2 与 D1 配额独立，不消耗 D1 写配额
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "taozhu-attachments"

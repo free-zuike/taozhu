@@ -37,6 +37,9 @@ class Api {
     return p.getString(_tokenKey);
   }
 
+  /// 供图片加载等场景读 token（如 Image.network 的 Authorization 头）
+  Future<String?> getTokenValue() => _token();
+
   Future<void> setToken(String t) async {
     (await SharedPreferences.getInstance()).setString(_tokenKey, t);
   }
