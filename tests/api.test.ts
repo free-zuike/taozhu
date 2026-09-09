@@ -235,7 +235,59 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string };
-    expect(d.current).toBe('0.12.1.0');
+    expect(d.current).toBe('0.12.2.0');
     expect(typeof d.latest).toBe('string');
+  });
+});
+
+describe('商品价格组（增/改/停用）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  let itemId: string;
+  let priceId: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2.0, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ id: string; prices: Array<{ id: string; unit: string; sale_price: number }> }>;
+    };
+    itemId = items.items[0].id;
+    priceId = items.items[0].prices[0].id;
+  });
+
+  it('新增价格组：POST /items/:id/prices 后列表出现两组', async () => {
+    const res = await call(env, 'POST', `/api/v1/items/${itemId}/prices`, token, {
+      unit: '袋', purchase_price: 18, sale_price: 20,
+    });
+    expect(res.status).toBe(201);
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ unit: string }> }>;
+    };
+    expect(items.items[0].prices.map((p) => p.unit)).toEqual(['斤', '袋']);
+  });
+
+  it('改价：PATCH /item-prices/:id 更新进价/出价', async () => {
+    const res = await call(env, 'PATCH', `/api/v1/items/item-prices/${priceId}`, token, {
+      purchase_price: 2.2, sale_price: 2.8,
+    });
+    expect(res.status).toBe(200);
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ purchase_price: number; sale_price: number }> }>;
+    };
+    expect(items.items[0].prices[0].purchase_price).toBe(2.2);
+    expect(items.items[0].prices[0].sale_price).toBe(2.8);
+  });
+
+  it('停用：DELETE /item-prices/:id 后 summary 目录不再返回该价格', async () => {
+    const res = await call(env, 'DELETE', `/api/v1/items/item-prices/${priceId}`, token);
+    expect(res.status).toBe(204);
+    const summary = (await (await call(env, 'GET', '/api/v1/items/summary', token)).json()) as {
+      items: Array<{ prices: unknown[] }>;
+    };
+    expect(summary.items[0].prices).toHaveLength(0);
   });
 });

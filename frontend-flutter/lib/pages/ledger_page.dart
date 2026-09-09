@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../api.dart';
 import 'router.dart';
 import 'sale_page.dart';
@@ -212,6 +213,29 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
+  /// CSV 字段转义：含逗号/引号/换行的加引号包裹
+  String _csv(Object? v) {
+    final s = '$v';
+    return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
+  }
+
+  /// 复制当前筛选结果 CSV（出货/进货/收款三部分，UTF-8 BOM 带表头，Excel 直开）
+  Future<void> _copyCsv() async {
+    final buf = StringBuffer('\uFEFF');
+    buf.writeln('类型,日期,店铺,金额,明细');
+    for (final s in _sales) {
+      buf.writeln('出货,${_csv(_date(s['happened_at']))},${_csv(s['client_name'])},${_csv(s['total'])},${_csv((s['items'] as List? ?? []).length)} 项');
+    }
+    for (final p in _purchases) {
+      buf.writeln('进货,${_csv(_date(p['happened_at']))},,${_csv(p['total'])},${_csv((p['items'] as List? ?? []).length)} 项');
+    }
+    for (final p in _payments) {
+      buf.writeln('收款,${_csv(_date(p['happened_at']))},${_csv(p['client_name'])},${_csv(p['amount'])},${_csv(p['method'])}');
+    }
+    await Clipboard.setData(ClipboardData(text: buf.toString()));
+    toast(context, 'CSV 已复制（${_sales.length + _purchases.length + _payments.length} 条），粘贴到 Excel 即可');
+  }
+
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
@@ -219,6 +243,13 @@ class _LedgerPageState extends State<LedgerPage> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('账本'),
+          actions: [
+            IconButton(
+              tooltip: '复制 CSV',
+              icon: const Icon(Icons.table_chart_outlined),
+              onPressed: _copyCsv,
+            ),
+          ],
           bottom: const TabBar(tabs: [Tab(text: '出货'), Tab(text: '进货'), Tab(text: '收款')]),
         ),
         body: Column(

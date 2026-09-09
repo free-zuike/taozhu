@@ -126,14 +126,14 @@ async function save() {
       // 既有价格更新 / 新增价格
       for (const p of rows) {
         const body = { unit: p.unit.trim(), purchase_price: num(p.purchase_price), sale_price: num(p.sale_price) };
-        if (p.id) await request(`/item-prices/${p.id}`, 'PATCH', body);
+        if (p.id) await request(`/items/item-prices/${p.id}`, 'PATCH', body);
         else await request(`/items/${id}/prices`, 'POST', body);
       }
       // 被移除的既有价格 → 停用
       const nowIds = new Set(rows.map((p) => p.id).filter(Boolean));
       const orig = items.value.find((x) => x.id === id);
       for (const p of orig?.prices || []) {
-        if (p.id && !nowIds.has(p.id)) await request(`/item-prices/${p.id}`, 'DELETE');
+        if (p.id && !nowIds.has(p.id)) await request(`/items/item-prices/${p.id}`, 'DELETE');
       }
     } else {
       await request('/items', 'POST', {

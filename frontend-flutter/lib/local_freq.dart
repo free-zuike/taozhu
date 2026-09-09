@@ -29,4 +29,29 @@ class Freq {
     final p = await SharedPreferences.getInstance();
     await p.setString(_key, jsonEncode(freq));
   }
+
+  // ---- 店铺使用频率（出货页选店排序用） ----
+
+  static const _clientKey = 'taozhu_client_freq';
+
+  static Future<Map<String, int>> loadClients() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString(_clientKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      return m.map((k, v) => MapEntry(k, (v as num?)?.toInt() ?? 0));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// 出货单提交成功后对店铺计一次使用
+  static Future<void> bumpClient(String clientId) async {
+    if (clientId.isEmpty) return;
+    final freq = await loadClients();
+    freq[clientId] = (freq[clientId] ?? 0) + 1;
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_clientKey, jsonEncode(freq));
+  }
 }

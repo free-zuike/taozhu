@@ -62,9 +62,12 @@ class _SalePageState extends State<SalePage> {
     final cachedI = await Api.instance.getCached('/items/summary');
     if (cachedC != null || cachedI != null) {
       final freq = await Freq.load();
+      final clientFreq = await Freq.loadClients();
       setState(() {
         if (cachedC != null) {
-          _clients = (cachedC['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+          _clients = (cachedC['clients'] as List?)?.cast<Map<String, dynamic>>() ?? []
+            ..sort((a, b) =>
+                (clientFreq['${b['id']}'] ?? 0) - (clientFreq['${a['id']}'] ?? 0));
         }
         if (cachedI != null) {
           _items = ((cachedI['items'] as List?) ?? [])
@@ -93,6 +96,7 @@ class _SalePageState extends State<SalePage> {
       ]);
       if (mounted) {
         final freq = await Freq.load();
+        final clientFreq = await Freq.loadClients();
         final items = ((results[1]['items'] as List?) ?? [])
             .map((e) => _ItemOption(
                   e['id'] as String,
@@ -101,9 +105,12 @@ class _SalePageState extends State<SalePage> {
                 ))
             .toList()
           ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
+        final clients = (results[0]['clients'] as List?)?.cast<Map<String, dynamic>>() ?? []
+          ..sort((a, b) =>
+              (clientFreq['${b['id']}'] ?? 0) - (clientFreq['${a['id']}'] ?? 0));
         if (!mounted) return;
         setState(() {
-          _clients = (results[0]['clients'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+          _clients = clients;
           _items = items;
           _itemMenus = items
               .map((it) => DropdownMenuItem(value: it.id, child: Text(it.name)))
@@ -243,6 +250,7 @@ class _SalePageState extends State<SalePage> {
       } else {
         await Api.instance.post('/sales', body);
         await Freq.bump(valid.map((r) => r.priceId ?? ''));
+        await Freq.bumpClient(_clientId ?? '');
         toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
         setState(() {
           _rows.clear();

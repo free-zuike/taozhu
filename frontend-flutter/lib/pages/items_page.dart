@@ -294,7 +294,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
           final pid = r['priceId'] as String?;
           final body = {'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell']};
           if (pid != null) {
-            await Api.instance.patch('/item-prices/$pid', body);
+            await Api.instance.patch('/items/item-prices/$pid', body);
           } else {
             await Api.instance.post('/items/$id/prices', body);
           }
@@ -306,7 +306,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
             .toSet();
         final nowIds = rows.map((r) => r['priceId'] as String?).whereType<String>().toSet();
         for (final gone in origIds.difference(nowIds)) {
-          await Api.instance.delete('/item-prices/$gone');
+          await Api.instance.delete('/items/item-prices/$gone');
         }
         toast(context, '已保存');
       } else {
