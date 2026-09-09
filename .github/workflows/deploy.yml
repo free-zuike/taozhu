@@ -101,16 +101,11 @@ jobs:
       - name: Apply D1 schema (idempotent)
         run: npx wrangler d1 execute taozhu --remote --file src/schema.sql
 
-      # 附件 R2 bucket（不存在则创建，存在则复用；需 token 有 R2 Edit 权限）
-      # 与 D1 同风格：创建/复用都输出 bucket 状态，供日志追踪
-      - name: Setup R2 bucket (auto-create if missing)
+      # 附件 R2 bucket（不存在则创建；已存在会报 10004，忽略即可——幂等）
+      # 不依赖 r2 bucket list 输出格式做存在性判断，避免误判
+      - name: Setup R2 bucket (idempotent)
         run: |
-          if npx wrangler r2 bucket list --json 2>/dev/null | grep -q 'taozhu-attachments'; then
-            echo "R2 bucket exists: taozhu-attachments (reuse)"
-          else
-            echo "Creating R2 bucket: taozhu-attachments"
-            npx wrangler r2 bucket create taozhu-attachments
-          fi
+          npx wrangler r2 bucket create taozhu-attachments 2>&1 || true
 
       - name: Set JWT_SECRET
         run: npx wrangler secret put JWT_SECRET --name taozhu <<< "${{ secrets.JWT_SECRET }}"
