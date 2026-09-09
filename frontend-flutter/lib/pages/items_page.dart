@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../local_db.dart';
 import 'router.dart';
 
 class ItemsPage extends StatefulWidget {
@@ -28,32 +29,31 @@ class _ItemsPageState extends State<ItemsPage> {
 
   Future<void> _load({String q = ''}) async {
     final searching = q.isNotEmpty;
-    Map<String, dynamic>? cached;
-    // 搜索时不读缓存、不写缓存，走最新网络结果
+    // 搜索时不读本地、不写本地，走最新网络结果
     if (!searching) {
-      // ① 本地缓存秒开
-      cached = await Api.instance.getCached('/items');
-      if (cached != null) {
-        final data = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      // ① 本地数据库秒开（离线可见）
+      final local = await LocalDb.getAllByName('items');
+      if (local.isNotEmpty && mounted) {
         setState(() {
-          _items = data;
+          _items = local;
           _loading = false;
         });
       }
     }
-    // ② 网络刷新 + 更新缓存
+    // ② 网络刷新 + 写本地库
     try {
       final d = await Api.instance
           .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
-      if (!searching) await Api.instance.setCache('/items', d);
+      final rows = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (!searching) await LocalDb.putAll('items', rows);
       if (!mounted) return;
       setState(() {
-        _items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _items = rows;
         _loading = false;
       });
     } catch (e) {
       setState(() => _loading = false);
-      if (!searching && cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 

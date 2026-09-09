@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../local_db.dart';
 import 'router.dart';
 
 class PaymentsPage extends StatefulWidget {
@@ -41,22 +42,31 @@ class _PaymentsPageState extends State<PaymentsPage> {
   }
 
   Future<void> _load() async {
-    // ① 店铺下拉走本地缓存秒开；历史列表始终网络刷新
-    final cached = await Api.instance.getCached('/clients');
-    if (cached != null) {
-      setState(() => _clients = ((cached['clients'] as List?) ?? []).cast<Map<String, dynamic>>());
+    // ① 本地数据库秒开（店铺目录 + 收款历史，离线可见）
+    var localClients = await LocalDb.getAllByName('clients');
+    var localPays = await LocalDb.getAll('payments');
+    if (localClients.isNotEmpty && mounted) {
+      setState(() => _clients = localClients);
     }
-    // ② 网络刷新
+    if (localPays.isNotEmpty && mounted) {
+      setState(() => _payments = localPays);
+    }
+    // ② 网络刷新 + 写本地库
     try {
       final results = await Future.wait([
         Api.instance.get('/clients'),
         Api.instance.get('/payments?limit=50'),
       ]);
-      await Api.instance.setCache('/clients', results[0]);
+      localClients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+      localPays = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+      await Future.wait([
+        LocalDb.putAll('clients', localClients),
+        LocalDb.putAll('payments', localPays),
+      ]);
       if (!mounted) return;
       setState(() {
-        _clients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _payments = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _clients = localClients;
+        _payments = localPays;
         _loading = false;
       });
     } catch (e) {
