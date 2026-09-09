@@ -26,6 +26,7 @@
         <view class="stat"><text>收款合计</text><text class="green">¥{{ payTotal.toFixed(2) }}（{{ payments.length }} 笔）</text></view>
         <view class="stat"><text>期末欠款</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ debt.toFixed(2) }}</text></view>
         <button class="btn-copy" @click="copy">复制对账文本</button>
+        <button class="btn-copy" @click="copyCsv">复制 CSV（粘到 Excel）</button>
       </view>
     </view>
 
@@ -159,6 +160,29 @@ function copy() {
   }
   uni.setClipboardData({ data: lines.join('\n') });
   uni.showToast({ title: '对账文本已复制', icon: 'success' });
+}
+
+/// CSV 字段转义：含逗号/引号/换行的加引号包裹
+function csv(v: unknown): string {
+  const s = String(v ?? '');
+  return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replaceAll('"', '""')}"` : s;
+}
+
+function copyCsv() {
+  if (!loaded.value) {
+    uni.showToast({ title: '请先生成对账单', icon: 'none' });
+    return;
+  }
+  const lines: string[] = ['\uFEFF类型,日期,店铺,金额,明细'];
+  for (const s of sales.value) {
+    const detail = (s.items || []).map((it: Record<string, any>) => `${it.item_name}${it.quantity}${it.unit}`).join(';');
+    lines.push(`出货,${csv(s.happened_at)},${csv(s.client_name)},${csv(s.total)},${csv(detail)}`);
+  }
+  for (const p of payments.value) {
+    lines.push(`收款,${csv(p.happened_at)},${csv(p.client_name)},${csv(p.amount)},${csv(p.method)}`);
+  }
+  uni.setClipboardData({ data: lines.join('\n') });
+  uni.showToast({ title: 'CSV 已复制（带表头）', icon: 'success' });
 }
 </script>
 

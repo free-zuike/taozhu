@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import '../api.dart';
 import '../theme.dart';
 import '../version.dart';
@@ -32,6 +36,57 @@ class _MyPageState extends State<MyPage> {
     if (!mounted) return;
     Navigator.of(context)
         .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginPage()), (r) => false);
+  }
+
+  /// 版本号比较：a < b ?（四段 x.y.z.w）
+  static bool _older(String a, String b) {
+    final pa = a.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+    final pb = b.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+    for (var i = 0; i < 4; i++) {
+      final x = i < pa.length ? pa[i] : 0;
+      final y = i < pb.length ? pb[i] : 0;
+      if (x != y) return x < y;
+    }
+    return false;
+  }
+
+  /// 检查更新：GitHub Release 最新 tag 对比本地版本（公开仓库接口，无需鉴权）
+  Future<void> _checkUpdate() async {
+    final releaseUrl = 'https://github.com/free-zuike/taozhu/releases/latest';
+    try {
+      final res = await http.get(
+        Uri.parse('https://api.github.com/repos/free-zuike/taozhu/releases/latest'),
+        headers: const {'User-Agent': 'taozhu-app'},
+      );
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final ver = '${body['tag_name'] ?? ''}'.replaceFirst(RegExp(r'^taozhu-v'), '');
+      if (res.statusCode != 200 || ver.isEmpty) {
+        toast(context, '无法获取最新版本（网络或接口限制）');
+        return;
+      }
+      if (!_older(APP_VERSION, ver)) {
+        toast(context, '当前已是最新版本 v$APP_VERSION');
+        return;
+      }
+      if (!mounted) return;
+      final copy = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('发现新版本'),
+          content: Text('当前 v$APP_VERSION\n最新 v$ver\n\n点击「复制下载链接」后粘贴到浏览器下载 APK。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('复制下载链接')),
+          ],
+        ),
+      );
+      if (copy == true) {
+        await Clipboard.setData(ClipboardData(text: releaseUrl));
+        toast(context, '已复制下载链接');
+      }
+    } catch (e) {
+      toast(context, '检查更新失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
   }
 
   @override
@@ -86,6 +141,14 @@ class _MyPageState extends State<MyPage> {
                   subtitle: const Text('店员/老板账号（仅老板可操作）', style: TextStyle(fontSize: 12)),
                   trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
                   onTap: () => goPage(context, const UsersPage()),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.system_update_alt_outlined),
+                  title: const Text('检查更新'),
+                  subtitle: const Text('对比 GitHub Release 最新版本', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: _checkUpdate,
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(
