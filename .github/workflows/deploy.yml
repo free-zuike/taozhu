@@ -58,6 +58,13 @@ jobs:
           rm -rf public
           cp -r frontend-flutter/build/web public
 
+      # 检查更新兜底源：随部署生成 latest.json（与后端版本一致，Worker 在读 GitHub 失败时返回它）
+      - name: Generate latest.json (version metadata)
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
+          printf '{"version":"%s","time":"%s"}' "$VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > public/latest.json
+          cat public/latest.json
+
       - name: Setup D1 database (auto-create if missing)
         id: d1
         run: |

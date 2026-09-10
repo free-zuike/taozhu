@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../version.dart';
 import '../widgets/bottom_shell.dart';
+import 'router.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -67,12 +68,14 @@ class _LoginPageState extends State<LoginPage> {
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+    toast(context, msg);
   }
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    const primary = Color(0xFF409EFF);
+    const fieldBg = Color(0xFFF5F7FA);
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Center(
@@ -80,60 +83,111 @@ class _LoginPageState extends State<LoginPage> {
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
-            child: Card(
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text('陶朱',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
-                    const Text('v$APP_VERSION',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Color(0xFF909399), fontSize: 13)),
-                    const SizedBox(height: 24),
-                    TextField(
-                      controller: _baseCtrl,
-                      decoration: const InputDecoration(
-                        labelText: '服务器地址',
-                        hintText: '必填：您的服务器地址，如 https://xxx.com',
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 36),
+              decoration: BoxDecoration(
+                color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: dark
+                    ? null
+                    : [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 24, offset: const Offset(0, 8))],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 品牌区
+                  Center(
+                    child: Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: primary.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(18),
                       ),
+                      child: const Icon(Icons.storefront, size: 34, color: primary),
                     ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _userCtrl,
-                      decoration: const InputDecoration(labelText: '登录名'),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('陶朱',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 6),
+                  const Text('出货 · 进货 · 收款 · 库存',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Color(0xFF909399), fontSize: 13)),
+                  const SizedBox(height: 28),
+                  _field(_baseCtrl, Icons.dns_outlined, '服务器地址', '您的服务器地址，如 https://xxx.com'),
+                  const SizedBox(height: 14),
+                  _field(_userCtrl, Icons.person_outline, '登录名', null),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _passCtrl,
+                    obscureText: true,
+                    style: TextStyle(color: dark ? Colors.white : const Color(0xFF111827)),
+                    decoration: _dec(Icons.lock_outline, '密码', null),
+                    onSubmitted: (_) => _submit(),
+                  ),
+                  const SizedBox(height: 26),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                      backgroundColor: primary,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _passCtrl,
-                      obscureText: true,
-                      decoration: const InputDecoration(labelText: '密码'),
-                      onSubmitted: (_) => _submit(),
-                    ),
-                    const SizedBox(height: 24),
-                    FilledButton(
-                      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
-                      onPressed: _busy ? null : _submit,
-                      child: Text(_busy ? '登录中…' : (_initialized ? '登录' : '创建账号并登录')),
-                    ),
-                    if (!_initialized) ...[
-                      const SizedBox(height: 12),
-                      const Text('首次使用：以上为老板账号，创建后即可登录',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Color(0xFFE6A23C), fontSize: 13)),
-                    ],
+                    onPressed: _busy ? null : _submit,
+                    child: Text(_busy ? '登录中…' : (_initialized ? '登录' : '创建账号并登录')),
+                  ),
+                  if (!_initialized) ...[
+                    const SizedBox(height: 12),
+                    const Text('首次使用：以上为老板账号，创建后即可登录',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Color(0xFFE6A23C), fontSize: 13)),
                   ],
-                ),
+                  const SizedBox(height: 16),
+                  Text('v$APP_VERSION',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFF909399), fontSize: 12)),
+                ],
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  InputDecoration _dec(IconData icon, String label, String? hint) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      prefixIcon: Icon(icon, size: 20, color: const Color(0xFF909399)),
+      filled: true,
+      fillColor: dark ? const Color(0xFF2C2C2E) : const Color(0xFFF5F7FA),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFF409EFF), width: 1.4),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+    );
+  }
+
+  Widget _field(TextEditingController ctrl, IconData icon, String label, String? hint) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return TextField(
+      controller: ctrl,
+      style: TextStyle(color: dark ? Colors.white : const Color(0xFF111827)),
+      decoration: _dec(icon, label, hint),
     );
   }
 }

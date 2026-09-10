@@ -104,6 +104,11 @@ class _MyPageState extends State<MyPage> {
 
   /// 检查更新：走后端代理（Worker 代查 GitHub Release），避免 App/Web 直连 GitHub 被网络干扰
   Future<void> _checkUpdate() async {
+    // Web 端特殊处理：页面随部署自动更新，刷新即为最新，无需下载安装
+    if (kIsWeb) {
+      toast(context, 'Web 版随部署自动更新，刷新页面即为最新版本');
+      return;
+    }
     final releaseUrl = 'https://github.com/free-zuike/taozhu/releases/latest';
     try {
       final d = await Api.instance.get('/auth/latest-version');
@@ -161,10 +166,14 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
-  /// 应用内下载 APK 并调起系统安装器（仅 Android），带实时进度对话框
+  /// 应用内下载 APK 并调起系统安装器（仅 Android），带实时进度对话框。
+  /// 直链（GitHub）失败时自动换镜像站（gh-proxy 等），避免直连受限。
   Future<void> _downloadAndInstall(String ver) async {
-    final url =
-        'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk';
+    final urls = [
+      'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
+      'https://gh-proxy.com/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
+      'https://ghfast.top/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
+    ];
     var downloaded = 0;
     var total = 0;
     final progress = ValueNotifier<double>(0);
@@ -196,19 +205,22 @@ class _MyPageState extends State<MyPage> {
         ),
       ),
     );
-    try {
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/taozhu-update-$ver.apk');
+    var ok = false;
+    for (final url in urls) {
+      downloaded = 0;
+      total = 0;
+      progress.value = 0;
       final client = http.Client();
-      http.StreamedResponse res;
       try {
-        res = await client.send(http.Request('GET', Uri.parse(url)));
-        if (res.statusCode != 200) {
-          if (mounted) Navigator.of(context, rootNavigator: true).pop();
-          toast(context, '下载失败（HTTP ${res.statusCode}）');
-          return;
+        final res = await client.send(http.Request('GET', Uri.parse(url)));
+        // 非 200 或响应明显不是 APK（镜像返回 HTML 错误页）→ 换下一个源
+        if (res.statusCode != 200 || (res.contentLength ?? 0) < 1000000) {
+          client.close();
+          continue;
         }
         total = res.contentLength ?? 0;
-        final dir = await getTemporaryDirectory();
-        final file = File('${dir.path}/taozhu-update-$ver.apk');
         final sink = file.openWrite();
         try {
           await for (final chunk in res.stream) {
@@ -220,19 +232,25 @@ class _MyPageState extends State<MyPage> {
         } finally {
           await sink.close();
         }
+        ok = true;
+      } catch (_) {
+        // 网络/超时：换下一个源
       } finally {
         client.close();
       }
-      progress.value = 1;
+      if (ok) break;
+    }
+    if (!ok) {
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
-      toast(context, '下载完成，正在调起安装…');
-      final result = await OpenFilex.open(File('${(await getTemporaryDirectory()).path}/taozhu-update-$ver.apk').path);
-      if (result.type != ResultType.done) {
-        toast(context, '调起安装失败：${result.message}');
-      }
-    } catch (e) {
-      if (mounted) Navigator.of(context, rootNavigator: true).pop();
-      toast(context, '下载失败：${e.toString().replaceFirst('Exception: ', '')}');
+      toast(context, '下载失败（直链与镜像均不可达）。可稍后重试，或用浏览器打开 GitHub Release 页下载 APK。');
+      return;
+    }
+    progress.value = 1;
+    if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    toast(context, '下载完成，正在调起安装…');
+    final result = await OpenFilex.open(file.path);
+    if (result.type != ResultType.done) {
+      toast(context, '调起安装失败：${result.message}');
     }
   }
 

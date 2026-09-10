@@ -18,6 +18,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+          if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
+          git fetch --tags --quiet || true
+          if git rev-parse -q --verify "refs/tags/taozhu-v${VERSION}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "taozhu-v${VERSION}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::版本号未 bump：taozhu-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号（src/version.ts + frontend-flutter/lib/version.dart + frontend-uni/src/manifest.json + tests/api.test.ts 断言），否则产物会覆盖旧 release。"
+              exit 1
+            fi
+          fi
+          echo "版本守卫通过：v${VERSION}"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -51,6 +65,11 @@ jobs:
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/><application|' android/app/src/main/AndroidManifest.xml
           # ②d 应用内更新：允许安装未知来源 APK（检查更新→下载→open_filex 触发安装器）
           sed -i 's|<application|<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/><application|' android/app/src/main/AndroidManifest.xml
+          # ②e 最小权限：依赖库（image_picker 等）合并进来的媒体读取权限全部移除
+          #     —— image_picker 1.1.x 用系统 Photo Picker / GET_CONTENT 选图，拍照走系统相机 Intent，均无需存储权限；
+          #     tools:node="remove" 对不存在的权限是 no-op，未来依赖升级也安全。
+          sed -i 's|<manifest xmlns:android="http://schemas.android.com/apk/res/android">|<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove"/><uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/><uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/><application|' android/app/src/main/AndroidManifest.xml
           # ③ 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
           sed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml || true

@@ -54,22 +54,55 @@ authRouter.get('/me', authMiddleware(), async (c) => {
 // GET /auth/ping — 部署探活（无需认证）
 authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, version: APP_VERSION }));
 
-// GET /auth/latest-version — 检查更新（无鉴权）：Workers 代查 GitHub Release 最新版本。
-// 仓库公开后匿名 API 即可访问（私有仓库匿名一律 404）。GitHub 不可达时 latest 为空串，前端手动兜底。
+// GET /auth/latest-version — 检查更新（无鉴权）：多源探测 + 短缓存。
+// 源1 GitHub Release API（权威）；源2 部署时生成的 /latest.json（本域静态，零网络依赖）；
+// 源3 jsDelivr CDN 镜像读取仓库版本文件（GitHub API 不可达时的兜底，国内可达性好）。
+// 全部失败返回 latest=''，前端手动兜底复制链接。10 分钟内复用成功结果，避免反复打外网。
+let latestCache: { at: number; latest: string } | null = null;
+const LATEST_CACHE_MS = 10 * 60 * 1000;
+
 authRouter.get('/latest-version', async (c) => {
-  let latest = '';
-  try {
-    const res = await fetch('https://api.github.com/repos/free-zuike/taozhu/releases/latest', {
-      headers: { 'User-Agent': 'taozhu-worker', Accept: 'application/vnd.github+json' },
-    });
-    if (res.ok) {
-      const d = (await res.json()) as { tag_name?: string };
-      latest = String(d.tag_name ?? '').replace(/^taozhu-v/, '');
-    }
-  } catch {
-    latest = '';
+  const now = Date.now();
+  if (latestCache && now - latestCache.at < LATEST_CACHE_MS) {
+    return c.json({ current: APP_VERSION, latest: latestCache.latest });
   }
-  return c.json({ current: APP_VERSION, latest });
+  const checkGitHub = async (): Promise<string> => {
+    try {
+      const res = await fetch('https://api.github.com/repos/free-zuike/taozhu/releases/latest', {
+        headers: { 'User-Agent': 'taozhu-worker', Accept: 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return '';
+      const d = (await res.json()) as { tag_name?: string };
+      return String(d.tag_name ?? '').replace(/^taozhu-v/, '');
+    } catch { return ''; }
+  };
+  const checkAsset = async (): Promise<string> => {
+    try {
+      const r = await c.env.ASSETS.fetch(new Request(new URL('/latest.json', c.req.url)));
+      if (!r.ok) return '';
+      const d = (await r.json()) as { version?: string };
+      return String(d.version ?? '').trim();
+    } catch { return ''; }
+  };
+  const checkJsDelivr = async (): Promise<string> => {
+    try {
+      const res = await fetch('https://fastly.jsdelivr.net/gh/free-zuike/taozhu@main/frontend-flutter/lib/version.dart', {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return '';
+      const m = /APP_VERSION = '([^']+)'/.exec(await res.text());
+      return m?.[1] ?? '';
+    } catch { return ''; }
+  };
+  for (const check of [checkGitHub, checkAsset, checkJsDelivr]) {
+    const v = await check();
+    if (v) {
+      latestCache = { at: now, latest: v };
+      return c.json({ current: APP_VERSION, latest: v });
+    }
+  }
+  return c.json({ current: APP_VERSION, latest: '' });
 });
 
 // 统计系统是否已初始化（前端引导页判断）

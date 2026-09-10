@@ -18,6 +18,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
+        shell: bash
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+          if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
+          git fetch --tags --quiet || true
+          if git rev-parse -q --verify "refs/tags/taozhu-v${VERSION}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "taozhu-v${VERSION}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::版本号未 bump：taozhu-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号，否则产物会覆盖旧 release。"
+              exit 1
+            fi
+          fi
+          echo "版本守卫通过：v${VERSION}"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -56,6 +71,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+          if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
+          git fetch --tags --quiet || true
+          if git rev-parse -q --verify "refs/tags/taozhu-v${VERSION}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "taozhu-v${VERSION}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::版本号未 bump：taozhu-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号，否则产物会覆盖旧 release。"
+              exit 1
+            fi
+          fi
+          echo "版本守卫通过：v${VERSION}"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -92,6 +121,20 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+          if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
+          git fetch --tags --quiet || true
+          if git rev-parse -q --verify "refs/tags/taozhu-v${VERSION}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "taozhu-v${VERSION}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::版本号未 bump：taozhu-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号，否则产物会覆盖旧 release。"
+              exit 1
+            fi
+          fi
+          echo "版本守卫通过：v${VERSION}"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2

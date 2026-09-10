@@ -98,8 +98,8 @@ class Api {
           res = await http.get(Uri.parse(url), headers: headers);
       }
     } catch (e) {
-      // 网络/DNS/连接异常：把请求的完整地址附上，便于定位地址填错/网络问题
-      throw Exception('$e （地址: $url）');
+      // 网络/DNS/连接异常：统一友好文案，不把底层异常与完整地址甩给用户
+      throw Exception('无法连接服务器，请检查网络或服务器地址');
     }
 
     if (res.statusCode == 401) {
