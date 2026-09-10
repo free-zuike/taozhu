@@ -38,6 +38,7 @@ class _SalePageState extends State<SalePage> {
   final List<_Row> _rows = [_Row()];
   final _dateCtrl = TextEditingController(text: _today());
   bool _busy = false;
+  Map<String, double> _lastQty = {}; // price_id → 上次数量（选单位自动带出）
 
   bool get _editing => widget.editId != null;
 
@@ -104,6 +105,7 @@ class _SalePageState extends State<SalePage> {
       if (mounted) {
         final freq = await Freq.load();
         final clientFreq = await Freq.loadClients();
+        final lastQty = await Freq.loadLastQty();
         final items = ((results[1]['items'] as List?) ?? [])
             .map((e) => _ItemOption(
                   e['id'] as String,
@@ -119,6 +121,7 @@ class _SalePageState extends State<SalePage> {
         setState(() {
           _clients = clients;
           _items = items;
+          _lastQty = lastQty;
           _itemMenus = items
               .map((it) => DropdownMenuItem(value: it.id, child: Text(it.name)))
               .toList();
@@ -275,6 +278,9 @@ class _SalePageState extends State<SalePage> {
         await Api.instance.post('/sales', body);
         await Freq.bump(valid.map((r) => r.priceId ?? ''));
         await Freq.bumpClient(_clientId ?? '');
+        for (final r in valid) {
+          await Freq.saveLastQty(r.priceId ?? '', r.quantity);
+        }
         toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
         setState(() {
           _rows.clear();
@@ -400,6 +406,12 @@ class _SalePageState extends State<SalePage> {
                     .firstWhere((p) => p['id'] == v);
                 row.salePrice = (p['sale_price'] as num).toDouble();
                 row.saleCtrl.text = (p['sale_price'] as num).toDouble().toStringAsFixed(2);
+                // 上次数量记忆：自动带出该单位上回记的数量
+                final last = _lastQty[v] ?? 0;
+                if (last > 0) {
+                  row.quantity = last;
+                  row.qtyCtrl.text = last.toString();
+                }
               }),
             ),
             const SizedBox(height: 8),

@@ -27,6 +27,7 @@ class _PurchasePageState extends State<PurchasePage> {
   // 商品下拉菜单项缓存：行组件不再每次 build 重建 items（目录大时明显降卡顿）
   List<DropdownMenuItem<String>> _itemMenus = [];
   final List<_PRow> _rows = [_PRow()];
+  Map<String, double> _lastQty = {}; // price_id → 上次数量（选单位自动带出）
   final _dateCtrl = TextEditingController(text: _today());
   bool _busy = false;
 
@@ -75,11 +76,13 @@ class _PurchasePageState extends State<PurchasePage> {
       await Api.instance.setCache('/items/summary', i);
       if (!mounted) return;
       final freq = await Freq.load();
+      final lastQty = await Freq.loadLastQty();
       final list = ((i['items'] as List?) ?? []).cast<Map<String, dynamic>>()
         ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
       if (!mounted) return;
       setState(() {
         _items = list;
+        _lastQty = lastQty;
         _itemMenus = list
             .map((it) => DropdownMenuItem(
                 value: it['id'] as String, child: Text(it['name'] as String)))
@@ -218,6 +221,9 @@ class _PurchasePageState extends State<PurchasePage> {
       } else {
         await Api.instance.post('/purchases', body);
         await Freq.bump(valid.map((r) => r.priceId ?? ''));
+        for (final r in valid) {
+          await Freq.saveLastQty(r.priceId ?? '', r.quantity);
+        }
         toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
         setState(() {
           _rows.clear();
@@ -328,6 +334,12 @@ class _PurchasePageState extends State<PurchasePage> {
                 final pp = (prices.firstWhere((p) => p['id'] == v)['purchase_price'] as num).toDouble();
                 row.purchasePrice = pp;
                 row.priceCtrl.text = pp.toStringAsFixed(2);
+                // 上次数量记忆：自动带出该单位上回进的数量
+                final last = _lastQty[v] ?? 0;
+                if (last > 0) {
+                  row.quantity = last;
+                  row.qtyCtrl.text = last.toString();
+                }
               }),
             ),
             const SizedBox(height: 8),

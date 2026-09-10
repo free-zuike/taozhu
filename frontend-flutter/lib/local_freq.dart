@@ -54,4 +54,29 @@ class Freq {
     final p = await SharedPreferences.getInstance();
     await p.setString(_clientKey, jsonEncode(freq));
   }
+
+  // ---- 上次数量记忆（记单选单位自动带出上回数量，重复记单提速） ----
+
+  static const _qtyKey = 'taozhu_last_qty';
+
+  static Future<Map<String, double>> loadLastQty() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString(_qtyKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      return m.map((k, v) => MapEntry(k, (v as num?)?.toDouble() ?? 0));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// 记单成功后保存该价格单位的上次数量
+  static Future<void> saveLastQty(String priceId, double qty) async {
+    if (priceId.isEmpty || qty <= 0) return;
+    final map = await loadLastQty();
+    map[priceId] = qty;
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_qtyKey, jsonEncode(map));
+  }
 }

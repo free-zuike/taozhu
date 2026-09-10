@@ -107,7 +107,7 @@ async function loadEdit() {
       if (!item || !price) continue;
       rows.value.push({
         itemId: item.id, itemName: item.name, prices: item.prices,
-        priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}）`, unit: price.unit,
+        priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`, unit: price.unit,
         quantity: String(it.quantity), salePrice: String(it.sale_price),
       });
     }
@@ -156,7 +156,7 @@ function onPrice(i: number, idx: number) {
   const row = rows.value[i];
   row.priceId = p.id;
   row.unit = p.unit;
-  row.priceLabel = `${p.unit}（¥${p.sale_price}）`;
+  row.priceLabel = `${p.unit}（¥${p.sale_price}·库存${p.stock ?? 0}）`;
   row.salePrice = String(p.sale_price);
 }
 

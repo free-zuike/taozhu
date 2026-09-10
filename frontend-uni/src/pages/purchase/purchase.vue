@@ -87,7 +87,7 @@ async function loadEdit() {
       if (!item || !price) continue;
       rows.value.push({
         itemId: item.id, itemName: item.name, prices: item.prices,
-        priceId: price.id, priceLabel: `${price.unit}（进 ¥${price.purchase_price}）`, unit: price.unit,
+        priceId: price.id, priceLabel: `${price.unit}（进 ¥${price.purchase_price}·库存${price.stock ?? 0}）`, unit: price.unit,
         quantity: String(it.quantity), purchasePrice: String(it.purchase_price),
       });
     }
@@ -132,7 +132,7 @@ function onPrice(i: number, idx: number) {
   const row = rows.value[i];
   row.priceId = p.id;
   row.unit = p.unit;
-  row.priceLabel = `${p.unit}（进 ¥${p.purchase_price}）`;
+  row.priceLabel = `${p.unit}（进 ¥${p.purchase_price}·库存${p.stock ?? 0}）`;
   row.purchasePrice = String(p.purchase_price);
 }
 
