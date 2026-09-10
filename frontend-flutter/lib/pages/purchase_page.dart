@@ -313,7 +313,7 @@ class _PurchasePageState extends State<PurchasePage> {
               items: prices
                   .map((p) => DropdownMenuItem(
                         value: p['id'] as String,
-                        child: Text('${p['unit']}（默认进 ¥${p['purchase_price']}）'),
+                        child: Text('${p['unit']}（进 ¥${p['purchase_price']} · 库存 ${p['stock'] ?? 0}）'),
                       ))
                   .toList(),
               onChanged: (v) => setState(() {

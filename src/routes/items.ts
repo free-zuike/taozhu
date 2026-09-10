@@ -40,11 +40,12 @@ itemsRouter.get('/', async (c) => {
   return c.json({ items: rows.results.map((r) => serialize(r, byItem.get(r.id) ?? [])) });
 });
 
-// GET /items/summary — 记单用的简化目录（id/名称/价格组合），全员可读、不含管理字段
+// GET /items/summary — 记单用的简化目录（id/名称/价格组合/当前库存），全员可读、不含管理字段
 itemsRouter.get('/summary', async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT i.id, i.name, i.category,
-            (SELECT json_group_array(json_object('id', p.id, 'unit', p.unit, 'sale_price', p.sale_price, 'purchase_price', p.purchase_price))
+            (SELECT json_group_array(json_object('id', p.id, 'unit', p.unit, 'sale_price', p.sale_price, 'purchase_price', p.purchase_price,
+              'stock', COALESCE((SELECT st.quantity FROM stocks st WHERE st.item_id = i.id AND st.unit = p.unit), 0)))
              FROM item_prices p WHERE p.item_id = i.id AND p.active = 1) AS prices
      FROM items i WHERE i.deleted_at IS NULL ORDER BY i.name`).all();
   const items = rows.results.map((r) => {

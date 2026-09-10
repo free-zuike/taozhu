@@ -132,4 +132,12 @@ describe('库存（stocks）', () => {
   it('未登录访问库存 → 401', async () => {
     expect((await call(env, 'GET', '/api/v1/stocks')).status).toBe(401);
   });
+
+  it('items/summary 记单目录返回当前库存', async () => {
+    await call(env, 'POST', '/api/v1/purchases', token, { items: [{ price_id: priceId, quantity: 25 }] });
+    const d = (await (await call(env, 'GET', '/api/v1/items/summary', token)).json()) as {
+      items: Array<{ prices: Array<{ stock: number }> }>;
+    };
+    expect(d.items[0].prices[0].stock).toBe(25);
+  });
 });

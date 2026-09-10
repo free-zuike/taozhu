@@ -245,6 +245,19 @@ class _SalePageState extends State<SalePage> {
       toast(context, '请填写完整的商品明细');
       return;
     }
+    // 库存不足软提醒（不拦截，可强交）
+    final lowStocks = <String>[];
+    for (final r in valid) {
+      final opt = _items.where((x) => x.id == r.itemId).firstOrNull;
+      final price = opt?.prices.where((p) => p['id'] == r.priceId).firstOrNull;
+      final stock = ((price?['stock'] as num?)?.toDouble() ?? 0);
+      if (stock > 0 && r.quantity > stock) {
+        lowStocks.add('${opt?.name}（${r.quantity} > 库存 $stock${price?['unit']}）');
+      }
+    }
+    if (lowStocks.isNotEmpty) {
+      toast(context, '库存不足提醒：${lowStocks.take(2).join('；')}');
+    }
     setState(() => _busy = true);
     try {
       final body = {
@@ -369,7 +382,7 @@ class _SalePageState extends State<SalePage> {
                       : [_items.firstWhere((x) => x.id == row.itemId)])
                   .expand((it) => it.prices.map((p) => DropdownMenuItem(
                         value: p['id'] as String,
-                        child: Text('${p['unit']}（默认 ¥${p['sale_price']}）'),
+                        child: Text('${p['unit']}（¥${p['sale_price']} · 库存 ${p['stock'] ?? 0}）'),
                       )))
                   .toList(),
               onChanged: (v) => setState(() {
