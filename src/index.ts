@@ -15,6 +15,7 @@ import { settingsRouter } from './routes/settings';
 import { attachmentsRouter } from './routes/attachments';
 import { stocksRouter } from './routes/stocks';
 import { backupRouter } from './routes/backup';
+import { shareRouter, renderShareHtml } from './routes/share';
 import { ensureSchema } from './schema';
 
 type AppEnv = { Bindings: Env; Variables: { user: import('./types').AuthUser } };
@@ -52,6 +53,22 @@ app.route('/api/v1/settings', settingsRouter);
 app.route('/api/v1/attachments', attachmentsRouter);
 app.route('/api/v1/stocks', stocksRouter);
 app.route('/api/v1/backup', backupRouter);
+app.route('/api/v1/share', shareRouter);
+
+// 对账单分享页（公开只读：token 随机且可选过期，数据为生成时快照）
+app.get('/share/:token', async (c) => {
+  const token = c.req.param('token');
+  const row = await c.env.DB.prepare(
+    'SELECT payload, expires_at FROM share_links WHERE token = ?',
+  ).bind(token).first<{ payload: string; expires_at: string | null }>();
+  if (!row) {
+    return c.html('<meta charset="utf-8"><div style="font-family:sans-serif;padding:40px;text-align:center;color:#909399">分享不存在或已被删除</div>', 404);
+  }
+  if (row.expires_at && row.expires_at < new Date().toISOString()) {
+    return c.html('<meta charset="utf-8"><div style="font-family:sans-serif;padding:40px;text-align:center;color:#909399">该分享已过期</div>', 410);
+  }
+  return c.html(renderShareHtml(row.payload));
+});
 
 // 静态资源回退：非 API 路径交给 ASSETS（前端 SPA）
 app.all('*', async (c) => {

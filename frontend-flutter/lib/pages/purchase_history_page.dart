@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
 import 'purchase_page.dart';
@@ -100,9 +101,10 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   }
 
   Widget _menu(Map<String, dynamic> p) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
-      icon: const Icon(Icons.more_vert, size: 18, color: Color(0x61000000)),
+      icon: Icon(Icons.more_vert, size: 18, color: c.textSub),
       onSelected: (v) {
         if (v == 'attach') showAttachmentPanel(context, 'purchase', '${p['id']}', '进货单附件');
         if (v == 'edit') _editPurchase(p);
@@ -119,14 +121,14 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   Widget _card(Map<String, dynamic> p) {
     final items = ((p['items'] as List?) ?? []).cast<Map<String, dynamic>>();
     final note = (p['note'] as String? ?? '').trim();
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 3),
       elevation: 0,
-      color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+      color: c.card,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: dark ? const Color(0xFF67C23A).withOpacity(0.3) : const Color(0x0F000000)),
+        side: BorderSide(color: c.success.withOpacity(0.3)),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -137,8 +139,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
             Row(children: [
               CircleAvatar(
                 radius: 16,
-                backgroundColor: const Color(0xFF67C23A).withOpacity(0.12),
-                child: const Icon(Icons.shopping_cart, size: 16, color: Color(0xFF67C23A)),
+                backgroundColor: c.success.withOpacity(0.12),
+                child: Icon(Icons.shopping_cart, size: 16, color: c.success),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -146,11 +148,11 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                   note.isNotEmpty ? note : (items.isNotEmpty ? '${items.first['item_name']} 等 ${items.length} 项' : '进货单'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: c.textMain),
                 ),
               ),
               Text('¥${fmtMoney(p['total'])}',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFFEF4444))),
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.danger)),
               _menu(p),
             ]),
             for (final it in items)
@@ -161,10 +163,10 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                     child: Text('${it['item_name']} ×${it['quantity']}${it['unit']}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13, color: Color(0x8A000000))),
+                        style: TextStyle(fontSize: 13, color: c.textSub)),
                   ),
                   Text('¥${fmtMoney(it['amount'])}',
-                      style: const TextStyle(fontSize: 13, color: Color(0x8A000000))),
+                      style: TextStyle(fontSize: 13, color: c.textSub)),
                   const SizedBox(width: 8),
                 ]),
               ),
@@ -235,6 +237,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   }
 
   Widget _buildList() {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     if (_purchases.isEmpty) {
       return RefreshIndicator(
         onRefresh: _load,
@@ -247,7 +250,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                 children: [
                   Icon(Icons.shopping_cart_outlined, size: 40, color: Color(0xFFD0D5DD)),
                   SizedBox(height: 12),
-                  Text('暂无进货记录', style: TextStyle(color: Colors.grey)),
+                  Text('暂无进货记录', style: TextStyle(color: c.textSub)),
                 ],
               ),
             ),
@@ -274,18 +277,14 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                       style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? Colors.white
-                              : const Color(0xFF111827))),
+                          color: c.textMain)),
                   const Spacer(),
                   Text(
                     '${e.value.length} 笔 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, r) => s + ((r['total'] as num?)?.toDouble() ?? 0)))}',
                     style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xFF9CA3AF)
-                            : const Color(0x8A000000)),
+                        color: c.textSub),
                   ),
                 ],
               ),

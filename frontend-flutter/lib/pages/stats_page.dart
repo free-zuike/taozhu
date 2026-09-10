@@ -254,54 +254,56 @@ class _StatsPageState extends State<StatsPage> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  // 店铺胶囊选择
-                  Row(
-                    children: [
-                      Expanded(
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(20),
-                          onTap: _pickShop,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: _surface,
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.06), blurRadius: 8, offset: const Offset(0, 2)),
-                              ],
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(Icons.store_outlined, size: 18, color: _primary),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(_clientName,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: _main)),
-                                ),
-                                Icon(Icons.expand_more, size: 18, color: _sub),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      SegmentedButton<String>(
-                        style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                        segments: const [
-                          ButtonSegment(value: 'range', label: Text('区间')),
-                          ButtonSegment(value: 'month', label: Text('月')),
-                          ButtonSegment(value: 'year', label: Text('年')),
+                  // 店铺胶囊（全宽，店名完整显示，不再被右侧按钮挤压）
+                  InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: _pickShop,
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                      decoration: BoxDecoration(
+                        color: _surface,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: _primary.withOpacity(0.35)),
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.05), blurRadius: 8, offset: const Offset(0, 2)),
                         ],
-                        selected: {_mode},
-                        onSelectionChanged: (s) {
-                          setState(() => _mode = s.first);
-                          _load();
-                        },
                       ),
-                    ],
+                      child: Row(
+                        children: [
+                          Icon(Icons.store_outlined, size: 18, color: _primary),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(_clientName,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15, color: _main)),
+                          ),
+                          Text('切换', style: TextStyle(fontSize: 12, color: _primary)),
+                          const SizedBox(width: 2),
+                          Icon(Icons.expand_more, size: 18, color: _sub),
+                        ],
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 12),
+                  // 视图模式（区间 / 月 / 年）
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: SegmentedButton<String>(
+                      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                      segments: const [
+                        ButtonSegment(value: 'range', label: Text('区间')),
+                        ButtonSegment(value: 'month', label: Text('月')),
+                        ButtonSegment(value: 'year', label: Text('年')),
+                      ],
+                      selected: {_mode},
+                      onSelectionChanged: (s) {
+                        setState(() => _mode = s.first);
+                        _load();
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   if (_mode == 'range') _quickBar(),
                   if (_mode == 'month') _monthBar(),
                   if (_mode == 'year') _yearBar(),

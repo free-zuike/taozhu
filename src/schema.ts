@@ -114,6 +114,13 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_stocks_item_unit ON stocks (item_id, unit)`,
+  `CREATE TABLE IF NOT EXISTS share_links (
+    token TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    expires_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_share_links_expires ON share_links (expires_at)`,
 ];
 
 let schemaReady = false;
@@ -142,6 +149,14 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     ).first<{ name: string }>();
     if (!stockTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS stocks'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
+    }
+    // 分享链接表（v0.16.17.0）：对账单分享页面用
+    const shareTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'share_links'",
+    ).first<{ name: string }>();
+    if (!shareTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS share_links'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
     }
     for (const t of ['clients', 'items'] as const) {

@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; notes: string };
-    expect(d.current).toBe('0.16.16.0');
+    expect(d.current).toBe('0.16.17.0');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.notes).toBe('string');
@@ -453,5 +453,57 @@ describe('全库备份导出 /backup', () => {
     const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });
     const staffToken = ((await login.json()) as { token: string }).token;
     expect((await call(env, 'GET', '/api/v1/backup', staffToken)).status).toBe(403);
+  });
+});
+
+describe('对账单分享（/api/v1/share + /share/:token）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+  });
+
+  const payload = JSON.stringify({
+    client: '测试饭店',
+    from: '2026-09-01',
+    to: '2026-09-30',
+    debt: 12.34,
+    sales: [{ date: '2026-09-01', name: '测试饭店', items: '白菜 ×2斤', amount: 5 }],
+    payments: [{ date: '2026-09-02', method: '微信', amount: 3, waived: 0 }],
+  });
+
+  it('未登录不能生成分享链接 → 401', async () => {
+    const res = await call(env, 'POST', '/api/v1/share', undefined, { payload });
+    expect(res.status).toBe(401);
+  });
+
+  it('老板生成分享链接（默认 3 天）并可渲染只读页面', async () => {
+    const res = await call(env, 'POST', '/api/v1/share', token, { payload, ttl_hours: 72 });
+    expect(res.status).toBe(201);
+    const d = (await res.json()) as { token: string; url: string; expires_at: string };
+    expect(d.url).toContain('/share/');
+    expect(d.expires_at).toBeTruthy();
+    const page = await app.request(`http://localhost/share/${d.token}`, {}, env as never);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('测试饭店');
+    expect(html).toContain('期末欠款 ¥12.34');
+    expect(html).toContain('白菜');
+  });
+
+  it('过期的分享返回 410', async () => {
+    const res = await call(env, 'POST', '/api/v1/share', token, { payload, ttl_hours: 1 });
+    const d = (await res.json()) as { token: string };
+    await env.DB.prepare('UPDATE share_links SET expires_at = ? WHERE token = ?')
+      .bind('2020-01-01T00:00:00.000Z', d.token).run();
+    const page = await app.request(`http://localhost/share/${d.token}`, {}, env as never);
+    expect(page.status).toBe(410);
+  });
+
+  it('不存在的 token 返回 404', async () => {
+    const page = await app.request('http://localhost/share/no-such-token', {}, env as never);
+    expect(page.status).toBe(404);
   });
 });

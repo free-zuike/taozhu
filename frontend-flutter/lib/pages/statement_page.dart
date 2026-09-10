@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:share_plus/share_plus.dart';
 import '../api.dart';
+import '../utils/download.dart';
 import 'router.dart';
 
 /// 对账单：按店铺 + 周期汇总出货/收款/期末欠款，一键复制文本发送给客户
@@ -167,78 +167,116 @@ class _StatementPageState extends State<StatementPage> {
     toast(context, '对账文本已复制，可直接粘贴发送');
   }
 
-  /// CSV 字段转义：含逗号/引号/换行的加引号包裹（引号翻倍）
-  String _csv(Object? v) {
-    final s = '$v';
-    return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
-  }
-
-  /// 生成 CSV（UTF-8 BOM，Excel 直开）：按商品明细逐行展开——类型/日期/店铺/商品/数量/单位/单价/金额/备注
-  String _buildCsv() {
-    final buf = StringBuffer('\uFEFF');
-    buf.writeln('类型,日期,店铺,商品,数量,单位,单价,金额,备注');
+  /// 生成 .xls（HTML 表格，Excel/微信可直接打开）内容，UTF-8 BOM 保证中文不乱码
+  String _buildXls() {
+    final esc = (String s) => s
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
+    final buf = StringBuffer()
+      ..writeln('<html><head><meta charset="utf-8"><title>陶朱对账单</title></head><body>')
+      ..writeln('<h3>陶朱对账单</h3>')
+      ..writeln('<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse">')
+      ..writeln('<tr><td><b>客户</b></td><td>${esc(clientName)}</td><td><b>账期</b></td><td>${esc(_fromCtrl.text.trim())} 至 ${esc(_toCtrl.text.trim())}</td></tr>')
+      ..writeln('<tr><td><b>出货合计</b></td><td>¥${_saleTotal.toStringAsFixed(2)}（${_sales.length} 笔）</td><td><b>收款合计</b></td><td>¥${_payTotal.toStringAsFixed(2)}（${_payments.length} 笔）</td></tr>')
+      ..writeln('<tr><td><b>期末欠款</b></td><td colspan="3">¥${_debtEnd.toStringAsFixed(2)}</td></tr>')
+      ..writeln('<tr><th>日期</th><th>出货明细</th><th>数量</th><th>金额</th></tr>');
     for (final s in _sales) {
-      final items = (s['items'] as List? ?? []);
+      final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
       if (items.isEmpty) {
-        buf.writeln([
-          '出货',
-          _csv(_date(s['happened_at'])),
-          _csv(s['client_name']),
-          '',
-          '',
-          '',
-          '',
-          _csv(s['total']),
-          _csv(s['note']),
-        ].join(','));
-        continue;
+        buf.writeln('<tr><td>${_date(s['happened_at'])}</td><td>${esc('${s['note'] ?? ''}')}</td><td></td><td>¥${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}</td></tr>');
       }
       for (final it in items) {
-        buf.writeln([
-          '出货',
-          _csv(_date(s['happened_at'])),
-          _csv(s['client_name']),
-          _csv(it['item_name']),
-          _csv(it['quantity']),
-          _csv(it['unit']),
-          _csv(it['sale_price']),
-          _csv(it['amount']),
-          _csv(s['note']),
-        ].join(','));
+        buf.writeln('<tr><td>${_date(s['happened_at'])}</td><td>${esc('${it['item_name']}')}</td><td>${it['quantity']}${esc('${it['unit']}')}</td><td>¥${((it['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}</td></tr>');
       }
     }
+    buf.writeln('<tr><th>日期</th><th>收款方式</th><th>实收</th><th>平账</th></tr>');
     for (final p in _payments) {
-      final remark = [
-        _csv(p['method']),
-        if (((p['waived'] as num?) ?? 0) > 0) '平账¥${_csv(p['waived'])}',
-      ].where((s) => s.isNotEmpty).join(' ');
-      buf.writeln([
-        '收款',
-        _csv(_date(p['happened_at'])),
-        _csv(p['client_name']),
-        '',
-        '',
-        '',
-        '',
-        _csv(p['amount']),
-        remark,
-      ].join(','));
+      final w = ((p['waived'] as num?)?.toDouble() ?? 0);
+      buf.writeln('<tr><td>${_date(p['happened_at'])}</td><td>${esc('${p['method'] ?? ''}')}</td><td>¥${((p['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}</td><td>${w > 0 ? '¥${w.toStringAsFixed(2)}' : ''}</td></tr>');
     }
+    buf.writeln('</table></body></html>');
     return buf.toString();
   }
 
-  /// 导出 CSV 文件（系统分享面板：保存/发送），UTF-8 BOM + 表头
-  Future<void> _exportCsv() async {
+  /// 导出 Excel（.xls，HTML 表格格式，微信/Excel 可直接打开）
+  Future<void> _exportXls() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
-    final bytes = Uint8List.fromList(utf8.encode(_buildCsv()));
-    final name = 'taozhu-对账单-${_fromCtrl.text.trim()}-${_toCtrl.text.trim()}.csv';
-    await Share.shareXFiles(
-      [XFile.fromData(bytes, mimeType: 'text/csv', name: name)],
-      text: '陶朱对账单 CSV',
+    final bytes = Uint8List.fromList(utf8.encode('\ufeff${_buildXls()}'));
+    final name = 'taozhu-对账单-${_fromCtrl.text.trim()}-${_toCtrl.text.trim()}.xls';
+    await saveBytes(bytes, name, 'application/vnd.ms-excel', '陶朱对账单');
+    if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
+  }
+
+  /// 生成可分享的对账单页面链接（可选失效时间：3 天 / 7 天 / 1 个月 / 永久）
+  Future<void> _share() async {
+    if (!_loaded) {
+      toast(context, '请先生成对账单');
+      return;
+    }
+    const ttlOptions = [('3 天', 72), ('7 天', 168), ('1 个月', 720), ('永久', 0)];
+    final sel = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('分享对账单（设置失效时间）'),
+        children: [
+          for (final o in ttlOptions)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, '${o.$2}'),
+              child: Text(o.$1, style: const TextStyle(fontSize: 15)),
+            ),
+        ],
+      ),
     );
+    if (sel == null) return;
+    final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
+    final payload = jsonEncode({
+      'client': clientName,
+      'from': _fromCtrl.text.trim(),
+      'to': _toCtrl.text.trim(),
+      'debt': _debtEnd,
+      'sales': _sales.map((s) {
+        final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
+        return {
+          'date': _date(s['happened_at']),
+          'name': s['client_name'] ?? clientName,
+          'items': items.map((it) => '${it['item_name']} ×${it['quantity']}${it['unit']}').join('、'),
+          'amount': s['total'],
+        };
+      }).toList(),
+      'payments': _payments.map((p) => {
+            'date': _date(p['happened_at']),
+            'method': p['method'] ?? '',
+            'amount': p['amount'],
+            'waived': p['waived'] ?? 0,
+          }).toList(),
+    });
+    try {
+      final d = await Api.instance.post('/share', {'payload': payload, 'ttl_hours': int.parse(sel)});
+      final url = '${d['url'] ?? ''}';
+      if (!mounted) return;
+      final action = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('分享链接已生成'),
+          content: Text('对方用浏览器打开即可查看对账单：\n\n$url\n\n链接在选定时间后自动失效。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, 'copy'), child: const Text('复制链接')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, 'ok'), child: const Text('好')),
+          ],
+        ),
+      );
+      if (action == 'copy') {
+        await Clipboard.setData(ClipboardData(text: url));
+        toast(context, '链接已复制');
+      }
+    } catch (e) {
+      toast(context, '生成分享失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
   }
 
   @override
@@ -247,6 +285,11 @@ class _StatementPageState extends State<StatementPage> {
       appBar: AppBar(
         title: const Text('对账单'),
         actions: [
+          IconButton(
+            tooltip: '分享对账单',
+            icon: const Icon(Icons.share_outlined),
+            onPressed: _share,
+          ),
           IconButton(
             tooltip: '复制对账文本',
             icon: const Icon(Icons.copy_outlined),
@@ -388,9 +431,9 @@ class _StatementPageState extends State<StatementPage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _exportCsv,
-                    icon: const Icon(Icons.file_download_outlined, size: 18),
-                    label: const Text('导出 CSV'),
+                    onPressed: _exportXls,
+                    icon: const Icon(Icons.table_chart_outlined, size: 18),
+                    label: const Text('导出 Excel'),
                   ),
                 ),
               ],

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
 
@@ -12,6 +13,7 @@ class StocksPage extends StatefulWidget {
 }
 
 class _StocksPageState extends State<StocksPage> {
+  TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _stocks = [];
   bool _loading = true;
   bool _belowOnly = false; // 只看预警（低于阈值）
@@ -275,7 +277,7 @@ class _StocksPageState extends State<StocksPage> {
                             child: Row(
                               children: [
                                 const Text('库存金额合计（按当前进价）',
-                                    style: TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                                    style: TextStyle(fontSize: 12, color: _c.textSub)),
                                 const Spacer(),
                                 Text(
                                   '¥${fmtMoney(_stocks.fold<double>(0, (s, x) => s + (((x['quantity'] as num?)?.toDouble() ?? 0) * ((x['cost_price'] as num?)?.toDouble() ?? 0))))}',
@@ -318,7 +320,7 @@ class _StocksPageState extends State<StocksPage> {
                               ),
                               title: Text('${s['item_name']}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                               subtitle: Text('单位 ${s['unit']} · 阈值 ${s['min_stock']}',
-                                  style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                                  style: TextStyle(fontSize: 12, color: _c.textSub)),
                               trailing: Text(
                                 '${s['quantity']}',
                                 style: TextStyle(
