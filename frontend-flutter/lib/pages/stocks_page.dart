@@ -276,7 +276,7 @@ class _StocksPageState extends State<StocksPage> {
                             padding: const EdgeInsets.only(bottom: 8),
                             child: Row(
                               children: [
-                                const Text('库存金额合计（按当前进价）',
+                                Text('库存金额合计（按当前进价）',
                                     style: TextStyle(fontSize: 12, color: _c.textSub)),
                                 const Spacer(),
                                 Text(

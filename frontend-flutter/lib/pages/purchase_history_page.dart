@@ -243,13 +243,13 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         onRefresh: _load,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
+          children: [
             Padding(
-              padding: EdgeInsets.all(48),
+              padding: const EdgeInsets.all(48),
               child: Column(
                 children: [
-                  Icon(Icons.shopping_cart_outlined, size: 40, color: Color(0xFFD0D5DD)),
-                  SizedBox(height: 12),
+                  const Icon(Icons.shopping_cart_outlined, size: 40, color: Color(0xFFD0D5DD)),
+                  const SizedBox(height: 12),
                   Text('暂无进货记录', style: TextStyle(color: c.textSub)),
                 ],
               ),

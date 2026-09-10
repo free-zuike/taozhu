@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; notes: string };
-    expect(d.current).toBe('0.16.17.0');
+    expect(d.current).toBe('0.16.18.0');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.notes).toBe('string');
