@@ -35,7 +35,15 @@ class _StatsPageState extends State<StatsPage> {
   bool _loading = true;
   bool _canSeeProfit = true; // 店员看不到毛利（后端 can_see_profit=false 时隐藏）
 
-  static const _primary = Color(0xFF409EFF);
+  // 主题语义色（Theme.of(context).extension<TaozhuColors>()）
+  TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
+  Color get _primary => _c.primary;
+  Color get _surface => _c.card;
+  Color get _sub => _c.textSub;
+  Color get _main => _c.textMain;
+  Color get _danger => _c.danger;
+  Color get _success => _c.success;
+  Color get _line => _c.divider;
 
   @override
   void initState() {
@@ -218,14 +226,13 @@ class _StatsPageState extends State<StatsPage> {
 
   Widget _shopItem(BuildContext ctx, String? id, String name) {
     final active = _clientId == id;
-    final dark = Theme.of(ctx).brightness == Brightness.dark;
     return ListTile(
       dense: true,
       leading: Icon(active ? Icons.check_circle : Icons.store_outlined,
-          color: active ? _primary : const Color(0xFF909399)),
+          color: active ? _primary : _sub),
       title: Text(name,
           style: TextStyle(
-            color: active ? _primary : (dark ? Colors.white : Colors.black),
+            color: active ? _primary : _main,
             fontWeight: active ? FontWeight.w600 : FontWeight.w400,
           )),
       onTap: () => Navigator.pop(ctx, id),
@@ -255,7 +262,7 @@ class _StatsPageState extends State<StatsPage> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                             decoration: BoxDecoration(
-                              color: dark ? const Color(0xFF1E1E1E) : Colors.white,
+                              color: _surface,
                               borderRadius: BorderRadius.circular(20),
                               boxShadow: [
                                 BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.06), blurRadius: 8, offset: const Offset(0, 2)),
@@ -263,14 +270,14 @@ class _StatsPageState extends State<StatsPage> {
                             ),
                             child: Row(
                               children: [
-                                const Icon(Icons.store_outlined, size: 18, color: Color(0xFF409EFF)),
+                                Icon(Icons.store_outlined, size: 18, color: _primary),
                                 const SizedBox(width: 6),
                                 Expanded(
                                   child: Text(_clientName,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: _main)),
                                 ),
-                                const Icon(Icons.expand_more, size: 18, color: Color(0xFF909399)),
+                                Icon(Icons.expand_more, size: 18, color: _sub),
                               ],
                             ),
                           ),
@@ -298,7 +305,7 @@ class _StatsPageState extends State<StatsPage> {
                   if (_mode == 'year') _yearBar(),
                   const SizedBox(height: 6),
                   Text('$start ~ $end（${_spanDays} 天${_mode == 'range' && _msd > 1 ? ' · 每月 $_msd 日起算' : ''}）',
-                      style: const TextStyle(color: Color(0xFF909399), fontSize: 12)),
+                      style: TextStyle(color: _sub, fontSize: 12)),
                   const SizedBox(height: 12),
                   const SizedBox(height: 20),
                   _sectionTitle(_mode == 'year' ? '月度出货趋势' : '每日出货趋势'),
@@ -308,14 +315,14 @@ class _StatsPageState extends State<StatsPage> {
                   _sectionTitle('分类排行（出货额）'),
                   const SizedBox(height: 8),
                   for (final (i, c) in _cats.indexed)
-                    _rankCard(i + 1, const Color(0xFFF59E0B), '${c['category']}', '${c['quantity']} 件',
+                    _rankCard(i + 1, _c.warning, '${c['category']}', '${c['quantity']} 件',
                         '¥${fmtMoney(_num(c['amount']))}'),
                   if (_cats.isEmpty) _empty('该区间暂无分类数据', Icons.category_outlined),
                   const SizedBox(height: 20),
                   _sectionTitle('商品排行（出货额）'),
                   const SizedBox(height: 8),
                   for (final (i, it) in _itemsStats.indexed)
-                    _rankCard(i + 1, const Color(0xFF409EFF), '${it['name']}', '${it['quantity']} ${it['unit']}',
+                    _rankCard(i + 1, _primary, '${it['name']}', '${it['quantity']} ${it['unit']}',
                         '¥${fmtMoney(_num(it['amount']))}'),
                   if (_itemsStats.isEmpty) _empty('该区间暂无出货', Icons.sell_outlined),
                   if (_clientId == null && _mode != 'year') ...[
@@ -325,13 +332,13 @@ class _StatsPageState extends State<StatsPage> {
                     for (final (i, c) in _clientsStats.indexed)
                       _rankCard(
                         i + 1,
-                        const Color(0xFF22C55E),
+                        _success,
                         '${c['name']}',
                         '出货 ¥${fmtMoney(_num(c['sales_total']))} · 已收 ¥${fmtMoney(_num(c['paid_total']))}',
                         '欠 ¥${fmtMoney(_num(c['sales_total']) - _num(c['paid_total']))}',
                         amountColor: _num(c['sales_total']) > _num(c['paid_total'])
-                            ? const Color(0xFFF56C6C)
-                            : const Color(0xFF67C23A),
+                            ? _danger
+                            : _success,
                       ),
                     if (_clientsStats.isEmpty) _empty('该区间暂无数据', Icons.store_outlined),
                   ],
@@ -358,7 +365,6 @@ class _StatsPageState extends State<StatsPage> {
 
   Widget _pill(String label, String value, {IconData? icon}) {
     final active = _quick == value;
-    final dark = Theme.of(context).brightness == Brightness.dark;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 160),
       child: InkWell(
@@ -374,20 +380,20 @@ class _StatsPageState extends State<StatsPage> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: active ? _primary : (dark ? const Color(0xFF1E1E1E) : Colors.white),
+            color: active ? _primary : _surface,
             borderRadius: BorderRadius.circular(16),
-            border: active ? null : Border.all(color: dark ? const Color(0xFF3A3A3A) : const Color(0xFFDCDFE6)),
+            border: active ? null : Border.all(color: _line),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               if (icon != null) ...[
-                Icon(icon, size: 14, color: active ? Colors.white : const Color(0xFF909399)),
+                Icon(icon, size: 14, color: active ? Colors.white : _sub),
                 const SizedBox(width: 4),
               ],
               Text(label,
                   style: TextStyle(
-                    color: active ? Colors.white : (dark ? const Color(0xFFC0C4CC) : const Color(0xFF606266)),
+                    color: active ? Colors.white : _main,
                     fontWeight: active ? FontWeight.w600 : FontWeight.w400,
                     fontSize: 13,
                   )),
@@ -494,19 +500,19 @@ class _StatsPageState extends State<StatsPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(e.key, style: const TextStyle(color: Color(0xFF909399), fontSize: 13)),
+                    Text(e.key, style: TextStyle(color: _sub, fontSize: 13)),
                     const SizedBox(height: 6),
                     Text('¥${fmtMoney(e.value)}',
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w700,
                           color: e.key == '欠款' && e.value > 0
-                              ? const Color(0xFFF56C6C)
-                              : (Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black),
+                              ? _danger
+                              : _main,
                         )),
                     if (e.key == '出货')
                       Text('日均 ¥${fmtMoney(sales / _spanDays)}',
-                          style: const TextStyle(color: Color(0xFF909399), fontSize: 12)),
+                          style: TextStyle(color: _sub, fontSize: 12)),
                   ],
                 ),
               ),
@@ -539,7 +545,7 @@ class _StatsPageState extends State<StatsPage> {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
-        color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+        color: _surface,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -561,12 +567,12 @@ class _StatsPageState extends State<StatsPage> {
                 Text(title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _main)),
                 const SizedBox(height: 2),
                 Text(subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF909399))),
+                    style: TextStyle(fontSize: 12, color: _sub)),
               ],
             ),
           ),
@@ -587,7 +593,7 @@ class _StatsPageState extends State<StatsPage> {
         children: [
           Icon(icon, size: 36, color: const Color(0xFFD0D5DD)),
           const SizedBox(height: 10),
-          Text(text, style: const TextStyle(color: Colors.grey)),
+          Text(text, style: TextStyle(color: _sub)),
         ],
       ),
     );
@@ -610,7 +616,7 @@ class _StatsPageState extends State<StatsPage> {
             Padding(
               padding: const EdgeInsets.only(left: 4),
               child: Text('出货 ¥${fmtMoney(values.fold<double>(0, (a, b) => a + b))}',
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: _main)),
             ),
             const SizedBox(height: 8),
             SizedBox(
@@ -622,11 +628,11 @@ class _StatsPageState extends State<StatsPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(_shortLabel(labels.first), style: const TextStyle(fontSize: 10, color: Color(0xFF909399))),
+                Text(_shortLabel(labels.first), style: TextStyle(fontSize: 10, color: _sub)),
                 if (labels.length > 2)
                   Text(_shortLabel(labels[labels.length ~/ 2]),
-                      style: const TextStyle(fontSize: 10, color: Color(0xFF909399))),
-                Text(_shortLabel(labels.last), style: const TextStyle(fontSize: 10, color: Color(0xFF909399))),
+                      style: TextStyle(fontSize: 10, color: _sub)),
+                Text(_shortLabel(labels.last), style: TextStyle(fontSize: 10, color: _sub)),
               ],
             ),
           ],

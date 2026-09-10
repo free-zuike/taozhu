@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../theme.dart';
 import '../version.dart';
 import '../widgets/bottom_shell.dart';
 import 'router.dart';
@@ -73,9 +74,8 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    const primary = Color(0xFF409EFF);
-    const fieldBg = Color(0xFFF5F7FA);
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Center(
@@ -86,7 +86,7 @@ class _LoginPageState extends State<LoginPage> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 36),
               decoration: BoxDecoration(
-                color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+                color: c.card,
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: dark
                     ? null
@@ -102,20 +102,20 @@ class _LoginPageState extends State<LoginPage> {
                       width: 64,
                       height: 64,
                       decoration: BoxDecoration(
-                        color: primary.withOpacity(0.12),
+                        color: c.primary.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(18),
                       ),
-                      child: const Icon(Icons.storefront, size: 34, color: primary),
+                      child: Icon(Icons.storefront, size: 34, color: c.primary),
                     ),
                   ),
                   const SizedBox(height: 16),
-                  const Text('陶朱',
+                  Text('陶朱',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800)),
+                      style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: c.textMain)),
                   const SizedBox(height: 6),
-                  const Text('出货 · 进货 · 收款 · 库存',
+                  Text('出货 · 进货 · 收款 · 库存',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: Color(0xFF909399), fontSize: 13)),
+                      style: TextStyle(color: c.textSub, fontSize: 13)),
                   const SizedBox(height: 28),
                   _field(_baseCtrl, Icons.dns_outlined, '服务器地址', '您的服务器地址，如 https://xxx.com'),
                   const SizedBox(height: 14),
@@ -124,7 +124,7 @@ class _LoginPageState extends State<LoginPage> {
                   TextField(
                     controller: _passCtrl,
                     obscureText: true,
-                    style: TextStyle(color: dark ? Colors.white : const Color(0xFF111827)),
+                    style: TextStyle(color: c.textMain),
                     decoration: _dec(Icons.lock_outline, '密码', null),
                     onSubmitted: (_) => _submit(),
                   ),
@@ -132,7 +132,7 @@ class _LoginPageState extends State<LoginPage> {
                   FilledButton(
                     style: FilledButton.styleFrom(
                       minimumSize: const Size.fromHeight(48),
-                      backgroundColor: primary,
+                      backgroundColor: c.primary,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
@@ -141,14 +141,14 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   if (!_initialized) ...[
                     const SizedBox(height: 12),
-                    const Text('首次使用：以上为老板账号，创建后即可登录',
+                    Text('首次使用：以上为老板账号，创建后即可登录',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Color(0xFFE6A23C), fontSize: 13)),
+                        style: TextStyle(color: c.warning, fontSize: 13)),
                   ],
                   const SizedBox(height: 16),
                   Text('v$APP_VERSION',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Color(0xFF909399), fontSize: 12)),
+                      style: TextStyle(color: c.textSub, fontSize: 12)),
                 ],
               ),
             ),
@@ -159,13 +159,13 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   InputDecoration _dec(IconData icon, String label, String? hint) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return InputDecoration(
       labelText: label,
       hintText: hint,
-      prefixIcon: Icon(icon, size: 20, color: const Color(0xFF909399)),
+      prefixIcon: Icon(icon, size: 20, color: c.textSub),
       filled: true,
-      fillColor: dark ? const Color(0xFF2C2C2E) : const Color(0xFFF5F7FA),
+      fillColor: c.field,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
         borderSide: BorderSide.none,
@@ -176,17 +176,17 @@ class _LoginPageState extends State<LoginPage> {
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFF409EFF), width: 1.4),
+        borderSide: BorderSide(color: c.primary, width: 1.4),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     );
   }
 
   Widget _field(TextEditingController ctrl, IconData icon, String label, String? hint) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return TextField(
       controller: ctrl,
-      style: TextStyle(color: dark ? Colors.white : const Color(0xFF111827)),
+      style: TextStyle(color: c.textMain),
       decoration: _dec(icon, label, hint),
     );
   }
