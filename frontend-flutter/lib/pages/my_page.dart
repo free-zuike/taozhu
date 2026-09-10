@@ -28,6 +28,8 @@ class MyPage extends StatefulWidget {
 }
 
 class _MyPageState extends State<MyPage> {
+  /// Android 系统下载器通道（MainActivity 注入，见 build-flutter.yml ②f）
+  static const _dlChannel = MethodChannel('taozhu/download');
   String _base = '';
   String _role = ''; // admin=老板 / staff=店员（登录/启动时读取）
   int _lowStocks = -1; // 低库存数量（-1=未加载）

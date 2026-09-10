@@ -18,5 +18,9 @@ Future<String?> pickTextFile() async {
   await input.onChange.first;
   final file = input.files?.first;
   if (file == null) return null;
-  return await file.text();
+  // 用 FileReader 读文本（dart2js 下 Blob.text() 不可靠）
+  final reader = html.FileReader();
+  reader.readAsText(file);
+  await reader.onLoad.first;
+  return reader.result as String?;
 }
