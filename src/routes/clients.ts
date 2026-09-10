@@ -26,7 +26,7 @@ clientsRouter.get('/', async (c) => {
       (SELECT COUNT(*) FROM sales s2 WHERE s2.client_id = c.id) AS sale_count,
       (SELECT COUNT(*) FROM payments p2 WHERE p2.client_id = c.id) AS payment_count,
       (SELECT MIN(substr(s2.happened_at, 1, 10)) FROM sales s2 WHERE s2.client_id = c.id) AS first_book_date
-      FROM clients c LEFT JOIN categories cat ON cat.id = c.category_id LEFT JOIN ${SALES_TOTAL_SUB} s ON s.client_id = c.id LEFT JOIN (SELECT client_id, SUM(amount) AS total FROM payments GROUP BY client_id) p ON p.client_id = c.id WHERE c.deleted_at IS NULL`;
+      FROM clients c LEFT JOIN categories cat ON cat.id = c.category_id LEFT JOIN ${SALES_TOTAL_SUB} s ON s.client_id = c.id LEFT JOIN (SELECT client_id, SUM(amount + waived) AS total FROM payments GROUP BY client_id) p ON p.client_id = c.id WHERE c.deleted_at IS NULL`;
   const rows = q
     ? await c.env.DB.prepare(`${sql} AND c.name LIKE ? ORDER BY c.name`).bind(`%${q}%`).all()
     : await c.env.DB.prepare(`${sql} ORDER BY c.name`).all();

@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string };
-    expect(d.current).toBe('0.13.6.3');
+    expect(d.current).toBe('0.13.7.0');
     expect(typeof d.latest).toBe('string');
   });
 });
@@ -321,5 +321,58 @@ describe('clients 交易笔数（账本选择弹层用）', () => {
     };
     expect(d.clients[0].sale_count).toBe(1);
     expect(d.clients[0].payment_count).toBe(1);
+  });
+});
+
+describe('收款平账（waived）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  let clientId: string;
+  let priceId: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+    await call(env, 'POST', '/api/v1/items', token, { name: '白菜', prices: [{ unit: '斤', purchase_price: 1, sale_price: 2 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ id: string; prices: Array<{ id: string }> }>;
+    };
+    priceId = items.items[0].prices[0].id;
+    await call(env, 'POST', '/api/v1/clients', token, { name: '品味轩' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as {
+      clients: Array<{ id: string; debt: number }>;
+    };
+    clientId = clients.clients[0].id;
+    // 出货 50 斤 × 2 = 欠款 100
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, items: [{ price_id: priceId, quantity: 50 }] });
+  });
+
+  it('实收 90 + 平账 10 → 欠款归零（paid_total 含减免）', async () => {
+    const pay = await call(env, 'POST', '/api/v1/payments', token, { client_id: clientId, amount: 90, waived: 10 });
+    expect(pay.status).toBe(201);
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as {
+      clients: Array<{ paid_total: number; debt: number }>;
+    };
+    expect(clients.clients[0].paid_total).toBe(100); // 90 实收 + 10 减免
+    expect(clients.clients[0].debt).toBe(0);
+  });
+
+  it('平账金额为负数 → 400，欠款不变', async () => {
+    const pay = await call(env, 'POST', '/api/v1/payments', token, { client_id: clientId, amount: 50, waived: -5 });
+    expect(pay.status).toBe(400);
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as {
+      clients: Array<{ debt: number }>;
+    };
+    expect(clients.clients[0].debt).toBe(100);
+  });
+
+  it('编辑收款可修改平账金额', async () => {
+    const pay = await (await call(env, 'POST', '/api/v1/payments', token, { client_id: clientId, amount: 80 })).json() as { id: string };
+    const patch = await call(env, 'PATCH', `/api/v1/payments/${pay.id}`, token, { waived: 20 });
+    expect(patch.status).toBe(200);
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as {
+      clients: Array<{ debt: number }>;
+    };
+    expect(clients.clients[0].debt).toBe(0);
   });
 });
