@@ -228,7 +228,7 @@ class _StatementPageState extends State<StatementPage> {
     }
     final name = '陶朱对账单_${clientName}_${_fromCtrl.text.trim()}_${_toCtrl.text.trim()}.xlsx';
     await saveBytes(
-        bytes, name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '陶朱对账单');
+        Uint8List.fromList(bytes), name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '陶朱对账单');
     if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
   }
 
