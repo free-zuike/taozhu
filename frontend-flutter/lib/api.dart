@@ -109,23 +109,27 @@ class Api {
       }
     }
 
+    // 网络异常自动重试（最多 3 次，代理切换/VPN 抖动等偶发失败）：成功返回，重试耗尽抛出
+    Future<http.Response> retry() async {
+      var attempts = 0;
+      while (true) {
+        try {
+          return await doReq();
+        } catch (_) {
+          attempts++;
+          if (attempts >= 3) rethrow;
+          await Future.delayed(Duration(milliseconds: 500 * attempts));
+        }
+      }
+    }
+
     http.Response res;
     try {
-      res = await doReq();
+      res = await retry();
     } catch (e) {
-      // 网络/DNS/连接异常：自动重试 2 次（代理切换/VPN 抖动等偶发失败），仍失败记日志并给友好提示
-      var ok = false;
-      for (var i = 0; i < 2 && !ok; i++) {
-        await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
-        try {
-          res = await doReq();
-          ok = true;
-        } catch (_) {}
-      }
-      if (!ok) {
-        appLog('net', '$method $path → ${e.toString().split('\n').first}');
-        throw Exception('无法连接服务器，请检查网络或服务器地址');
-      }
+      // 网络/DNS/连接异常：记日志，页面只给友好提示
+      appLog('net', '$method $path → ${e.toString().split('\n').first}');
+      throw Exception('无法连接服务器，请检查网络或服务器地址');
     }
 
     if (res.statusCode == 401) {
