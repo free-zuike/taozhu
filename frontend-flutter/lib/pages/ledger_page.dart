@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
 import 'clients_page.dart';
@@ -356,6 +357,7 @@ class _LedgerPageState extends State<LedgerPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return DefaultTabController(
       length: 2,
       child: Scaffold(
@@ -370,12 +372,12 @@ class _LedgerPageState extends State<LedgerPage> {
           ],
           bottom: TabBar(
             tabs: const [Tab(text: '出货'), Tab(text: '收款')],
-            labelColor: const Color(0xFF409EFF),
-            unselectedLabelColor: const Color(0xFF909399),
+            labelColor: c.primary,
+            unselectedLabelColor: c.textSub,
             labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
             unselectedLabelStyle: const TextStyle(fontSize: 14),
             indicator: BoxDecoration(
-              color: const Color(0xFF409EFF).withOpacity(0.12),
+              color: c.primary.withOpacity(0.12),
               borderRadius: BorderRadius.circular(20),
             ),
             indicatorSize: TabBarIndicatorSize.label,
@@ -415,15 +417,13 @@ class _LedgerPageState extends State<LedgerPage> {
                           width: double.infinity,
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                           decoration: BoxDecoration(
-                            color: Theme.of(context).brightness == Brightness.dark
-                                ? const Color(0xFF2C2C2E)
-                                : const Color(0xFFF5F5F5),
+                            color: c.field,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFF409EFF).withOpacity(0.4)),
+                            border: Border.all(color: c.primary.withOpacity(0.4)),
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.store_outlined, size: 20, color: Color(0xFF409EFF)),
+                              Icon(Icons.store_outlined, size: 20, color: c.primary),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -435,13 +435,11 @@ class _LedgerPageState extends State<LedgerPage> {
                                   style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w600,
-                                    color: Theme.of(context).brightness == Brightness.dark
-                                        ? Colors.white
-                                        : const Color(0xFF111827),
+                                    color: c.textMain,
                                   ),
                                 ),
                               ),
-                              const Icon(Icons.keyboard_arrow_down, color: Color(0x61000000)),
+                              Icon(Icons.keyboard_arrow_down, color: c.textSub),
                             ],
                           ),
                         ),
@@ -495,6 +493,7 @@ class _LedgerPageState extends State<LedgerPage> {
     Widget Function(Map<String, dynamic>) card,
     double Function(Map<String, dynamic>) amountOf,
   ) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     if (rows.isEmpty) {
       return RefreshIndicator(
         onRefresh: _load,
@@ -535,9 +534,7 @@ class _LedgerPageState extends State<LedgerPage> {
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white
-                            : const Color(0xFF111827),
+                        color: c.textMain,
                       )),
                   const Spacer(),
                   Text(
@@ -545,9 +542,7 @@ class _LedgerPageState extends State<LedgerPage> {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: Theme.of(context).brightness == Brightness.dark
-                          ? const Color(0xFF9CA3AF)
-                          : const Color(0x8A000000),
+                      color: c.textSub,
                     ),
                   ),
                 ],
@@ -568,20 +563,21 @@ class _LedgerPageState extends State<LedgerPage> {
     return '$date 周${wd[d.weekday - 1]}';
   }
 
-    /// 卡片右上 ⋯ 菜单：附件 / 编辑 / 删除
+  /// 卡片右上 ⋯ 菜单：附件 / 编辑 / 删除
   Widget _menu({required VoidCallback attach, required VoidCallback edit, required VoidCallback del}) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
-      icon: const Icon(Icons.more_vert, size: 18, color: Color(0x61000000)),
+      icon: Icon(Icons.more_vert, size: 18, color: c.textSub),
       onSelected: (v) {
         if (v == 'attach') attach();
         if (v == 'edit') edit();
         if (v == 'del') del();
       },
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'attach', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.attachment_outlined, size: 18), title: Text('附件'))),
-        PopupMenuItem(value: 'edit', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.edit_outlined, size: 18), title: Text('编辑'))),
-        PopupMenuItem(value: 'del', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.delete_outline, size: 18, color: Color(0xFFEF4444)), title: Text('删除', style: TextStyle(color: Color(0xFFEF4444))))),
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'attach', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.attachment_outlined, size: 18), title: Text('附件'))),
+        const PopupMenuItem(value: 'edit', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.edit_outlined, size: 18), title: Text('编辑'))),
+        PopupMenuItem(value: 'del', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.delete_outline, size: 18, color: c.danger), title: Text('删除', style: TextStyle(color: c.danger)))),
       ],
     );
   }
@@ -589,14 +585,14 @@ class _LedgerPageState extends State<LedgerPage> {
   Widget _saleCard(Map<String, dynamic> s) {
     final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
     final note = (s['note'] as String? ?? '').trim();
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 3),
       elevation: 0,
-      color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+      color: c.card,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: dark ? const Color(0xFF409EFF).withOpacity(0.3) : const Color(0x0F000000)),
+        side: BorderSide(color: c.primary.withOpacity(0.3)),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -607,16 +603,16 @@ class _LedgerPageState extends State<LedgerPage> {
             Row(children: [
               CircleAvatar(
                 radius: 16,
-                backgroundColor: const Color(0xFF409EFF).withOpacity(0.12),
-                child: const Icon(Icons.storefront, size: 16, color: Color(0xFF409EFF)),
+                backgroundColor: c.primary.withOpacity(0.12),
+                child: Icon(Icons.storefront, size: 16, color: c.primary),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text('${s['client_name']}',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: c.textMain)),
               ),
               Text('¥${fmtMoney(s['total'])}',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFFEF4444))),
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.danger)),
               _menu(
                 attach: () => showAttachmentPanel(context, 'sale', '${s['id']}', '出货单附件'),
                 edit: () => _editSale(s),
@@ -632,10 +628,10 @@ class _LedgerPageState extends State<LedgerPage> {
                     child: Text('${it['item_name']} ×${it['quantity']}${it['unit']}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13, color: Color(0x8A000000))),
+                        style: TextStyle(fontSize: 13, color: c.textSub)),
                   ),
                   Text('¥${fmtMoney(it['amount'])}',
-                      style: const TextStyle(fontSize: 13, color: Color(0x61000000))),
+                      style: TextStyle(fontSize: 13, color: c.textSub.withOpacity(0.7))),
                 ]),
               ),
             if (note.isNotEmpty)
@@ -644,7 +640,7 @@ class _LedgerPageState extends State<LedgerPage> {
                 child: Text('备注：$note',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                    style: TextStyle(fontSize: 12, color: c.textSub)),
               ),
           ]),
         ),
@@ -661,14 +657,14 @@ class _LedgerPageState extends State<LedgerPage> {
       if (waived) '平账 ¥${fmtMoney(p['waived'])}',
       if (note.isNotEmpty) note,
     ].join(' · ');
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 3),
       elevation: 0,
-      color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+      color: c.card,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: dark ? const Color(0xFF22C55E).withOpacity(0.3) : const Color(0x0F000000)),
+        side: BorderSide(color: c.success.withOpacity(0.3)),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -678,23 +674,23 @@ class _LedgerPageState extends State<LedgerPage> {
           child: Row(children: [
             CircleAvatar(
               radius: 16,
-              backgroundColor: const Color(0xFF22C55E).withOpacity(0.12),
-              child: const Icon(Icons.check_circle_outline, size: 16, color: Color(0xFF22C55E)),
+              backgroundColor: c.success.withOpacity(0.12),
+              child: Icon(Icons.check_circle_outline, size: 16, color: c.success),
             ),
             const SizedBox(width: 8),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('${p['client_name']}',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: c.textMain)),
                 if (meta.isNotEmpty)
                   Text(meta,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                      style: TextStyle(fontSize: 12, color: c.textSub)),
               ]),
             ),
             Text('¥${fmtMoney(p['amount'])}',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF22C55E))),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.success)),
             _menu(
               attach: () => showAttachmentPanel(context, 'payment', '${p['id']}', '收款凭证'),
               edit: () => _editPayment(p),

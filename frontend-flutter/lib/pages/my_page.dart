@@ -508,18 +508,15 @@ class _MyPageState extends State<MyPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text('主题', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: SegmentedButton<ThemeMode>(
-                      segments: const [
-                        ButtonSegment(value: ThemeMode.system, label: Text('跟随系统')),
-                        ButtonSegment(value: ThemeMode.light, label: Text('白天')),
-                        ButtonSegment(value: ThemeMode.dark, label: Text('黑夜')),
-                      ],
-                      selected: {themeNotifier.value},
-                      onSelectionChanged: (s) => setThemeMode(s.first),
-                    ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _themeChip(ThemeMode.system, '跟随系统'),
+                      _themeChip(ThemeMode.light, '白天'),
+                      _themeChip(ThemeMode.dark, '黑夜'),
+                    ],
                   ),
                 ],
               ),
@@ -613,6 +610,23 @@ class _MyPageState extends State<MyPage> {
           ],
         ],
       ),
+    );
+  }
+
+  /// 主题选择胶囊（紧凑，Web/App 通用）
+  Widget _themeChip(ThemeMode mode, String label) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    final active = themeNotifier.value == mode;
+    return ChoiceChip(
+      label: Text(label, style: const TextStyle(fontSize: 13)),
+      selected: active,
+      selectedColor: c.primary.withOpacity(0.12),
+      side: BorderSide(color: active ? c.primary : c.divider),
+      labelStyle: TextStyle(
+          color: active ? c.primary : c.textMain,
+          fontWeight: active ? FontWeight.w600 : FontWeight.w400),
+      visualDensity: VisualDensity.compact,
+      onSelected: (_) => setThemeMode(mode),
     );
   }
 
