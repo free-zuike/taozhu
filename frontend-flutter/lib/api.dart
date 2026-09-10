@@ -143,7 +143,7 @@ class Api {
       final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (d['error'] is String) msg = d['error'] as String;
     } catch (_) {}
-    appLog('http', '$method $path → ${res.statusCode}: $msg');
+    appLog('http', 'GET $path → ${res.statusCode}: $msg');
     throw Exception(msg);
   }
   Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) =>
@@ -234,7 +234,7 @@ class Api {
       final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (d['error'] is String) msg = d['error'] as String;
     } catch (_) {}
-    appLog('http', '$method $path → ${res.statusCode}: $msg');
+    appLog('http', 'POST $path → ${res.statusCode}: $msg');
     throw Exception(msg);
   }
 
