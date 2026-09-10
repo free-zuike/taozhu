@@ -16,7 +16,6 @@ import 'items_page.dart';
 import 'categories_page.dart';
 import 'clients_page.dart';
 import 'payments_page.dart';
-import 'ledger_page.dart';
 import 'statement_page.dart';
 import 'users_page.dart';
 import 'stocks_page.dart';
@@ -162,26 +161,77 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
-  /// 应用内下载 APK 并调起系统安装器（仅 Android）
+  /// 应用内下载 APK 并调起系统安装器（仅 Android），带实时进度对话框
   Future<void> _downloadAndInstall(String ver) async {
     final url =
         'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk';
-    toast(context, '开始下载 v$ver（约 60MB）…');
+    var downloaded = 0;
+    var total = 0;
+    final progress = ValueNotifier<double>(0);
+    // 进度对话框：下载全程可见，完成/失败自动关闭
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('正在下载更新'),
+        content: ValueListenableBuilder<double>(
+          valueListenable: progress,
+          builder: (_, v, __) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              LinearProgressIndicator(value: v >= 1 ? null : v),
+              const SizedBox(height: 12),
+              Text(
+                total > 0 && v < 1
+                    ? '${(v * 100).toStringAsFixed(0)}% · ${(downloaded / 1048576).toStringAsFixed(1)} / ${(total / 1048576).toStringAsFixed(1)} MB'
+                    : v >= 1
+                        ? '下载完成，正在调起安装…'
+                        : '准备下载…',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
     try {
-      final res = await http.get(Uri.parse(url));
-      if (res.statusCode != 200) {
-        toast(context, '下载失败（HTTP ${res.statusCode}）');
-        return;
+      final client = http.Client();
+      http.StreamedResponse res;
+      try {
+        res = await client.send(http.Request('GET', Uri.parse(url)));
+        if (res.statusCode != 200) {
+          if (mounted) Navigator.of(context, rootNavigator: true).pop();
+          toast(context, '下载失败（HTTP ${res.statusCode}）');
+          return;
+        }
+        total = res.contentLength ?? 0;
+        final dir = await getTemporaryDirectory();
+        final file = File('${dir.path}/taozhu-update-$ver.apk');
+        final sink = file.openWrite();
+        try {
+          await for (final chunk in res.stream) {
+            downloaded += chunk.length;
+            if (total > 0) progress.value = downloaded / total;
+            sink.add(chunk);
+          }
+          await sink.flush();
+        } finally {
+          await sink.close();
+        }
+      } finally {
+        client.close();
       }
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/taozhu-update-$ver.apk');
-      await file.writeAsBytes(res.bodyBytes);
+      progress.value = 1;
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       toast(context, '下载完成，正在调起安装…');
-      final result = await OpenFilex.open(file.path);
+      final result = await OpenFilex.open(File('${(await getTemporaryDirectory()).path}/taozhu-update-$ver.apk').path);
       if (result.type != ResultType.done) {
         toast(context, '调起安装失败：${result.message}');
       }
     } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       toast(context, '下载失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
@@ -216,14 +266,6 @@ class _MyPageState extends State<MyPage> {
           Card(
             child: Column(
               children: [
-                ListTile(
-                  leading: const Icon(Icons.receipt_long_outlined),
-                  title: const Text('账本'),
-                  subtitle: const Text('出货 / 进货 / 收款历史，可修改、删除', style: TextStyle(fontSize: 12)),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const LedgerPage()),
-                ),
-                const Divider(height: 1, indent: 56),
                 ListTile(
                   leading: const Icon(Icons.store_outlined),
                   title: const Text('店铺管理'),

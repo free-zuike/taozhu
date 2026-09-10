@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import '../pages/sale_page.dart';
 import '../pages/my_page.dart';
 import '../pages/purchase_page.dart';
+import '../pages/purchase_history_page.dart';
 import '../pages/ledger_page.dart';
 import '../pages/stats_page.dart';
 
 /// 底部悬浮胶囊导航（对齐移动记账信息架构）：
-/// 交易（流水，账本=店铺胶囊筛选，出货·收款）/ 统计 / 中央「记一笔」/ 进货（独立，不分店）/ 我的
+/// 交易（流水，账本=店铺胶囊筛选，出货·收款）/ 统计 / 中央「记一笔」/ 进货（记录，独立不分店）/ 我的
 class BottomShell extends StatefulWidget {
   const BottomShell({super.key});
   @override
@@ -23,7 +24,7 @@ class _BottomShellState extends State<BottomShell> {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [LedgerPage(), StatsPage(), PurchasePage(), MyPage()],
+        children: const [LedgerPage(), StatsPage(), PurchaseHistoryPage(), MyPage()],
       ),
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),

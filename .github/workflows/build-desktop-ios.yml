@@ -103,6 +103,9 @@ jobs:
         working-directory: frontend-flutter
         run: |
           flutter create --org com.taozhu --project-name taozhu_app .
+          # image_picker 需相机/相册用途说明（缺失时真机调用即崩溃）；flutter create 每次全新生成，直接 Add
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string '拍摄出货/进货/收款凭证'" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string '选择出货/进货/收款凭证'" ios/Runner/Info.plist
           flutter build ios --no-codesign
 
       - name: Package & upload iOS (unsigned)
