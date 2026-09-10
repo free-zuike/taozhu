@@ -114,7 +114,8 @@ class _StatsPageState extends State<StatsPage> {
         // 上一结账周期（按店铺起始日）
         return _periodOf(_msd, DateTime(now.year, now.month - 1, now.day.clamp(1, 28)));
       case 'rolling':
-        return (_fmtDate(now), _fmtDate(DateTime(now.year, now.month + 1, now.day)));
+        // 最近 30 天（区间快捷，与顶部「月」视图不重复）
+        return (_fmtDate(DateTime(now.year, now.month, now.day - 30)), _fmtDate(now));
       case 'custom':
         if (_customStart != null && _customEnd != null) {
           return (_fmtDate(_customStart!), _fmtDate(_customEnd!));
@@ -356,9 +357,7 @@ class _StatsPageState extends State<StatsPage> {
       runSpacing: 8,
       children: [
         _pill('今日', 'today'),
-        _pill('本月', 'month'),
-        _pill('上月', 'last'),
-        _pill('滚动月', 'rolling'),
+        _pill('最近30天', 'rolling'),
         _pill('自定义', 'custom', icon: Icons.date_range),
       ],
     );

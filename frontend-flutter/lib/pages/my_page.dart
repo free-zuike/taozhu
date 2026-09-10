@@ -370,42 +370,58 @@ class _MyPageState extends State<MyPage> {
 
   /// Android：应用内更新走系统下载器（DownloadManager）——
   /// 后台下载、通知栏（下滑栏）实时进度、退出应用仍继续，完成后引导安装。
+  /// 直链失败自动切换镜像源重试（gh-proxy / ghfast），避免直连受限导致下载失败。
   Future<void> _downloadAndInstall(String ver) async {
     _downloading = true;
-    final url =
-        'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk';
     final fileName = 'taozhu-update-$ver.apk';
+    final urls = [
+      'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
+      'https://gh-proxy.com/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
+      'https://ghfast.top/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
+    ];
     try {
-      final id = await _dlChannel.invokeMethod<int>('enqueue', {'url': url, 'fileName': fileName});
-      if (id == null) {
-        toast(context, '启动下载失败（系统下载器不可用）');
-        return;
-      }
-      if (!mounted) return;
-      toast(context, '已在后台开始下载，下拉通知栏查看进度');
-      // 轮询系统下载状态（每 3 秒，上限 15 分钟；通知栏本身也在实时显示进度）
-      for (var i = 0; i < 300; i++) {
-        await Future.delayed(const Duration(seconds: 3));
-        if (!mounted) return;
-        final Map st;
-        try {
-          st = await _dlChannel.invokeMethod<Map>('status', {'id': id}) ?? const {};
-        } catch (_) {
+      var urlIdx = 0;
+      while (urlIdx < urls.length) {
+        final id = await _dlChannel
+            .invokeMethod<int>('enqueue', {'url': urls[urlIdx], 'fileName': fileName});
+        if (id == null) {
+          urlIdx++;
           continue;
         }
-        final status = (st['status'] as int?) ?? -1;
-        if (status == 8) {
-          // DownloadManager.STATUS_SUCCESSFUL
-          await _installFromDownloads(fileName);
-          return;
+        if (!mounted) return;
+        toast(context,
+            urlIdx == 0 ? '已在后台开始下载，下拉通知栏查看进度' : '直链受限，已切换镜像源继续下载…');
+        var failed = false;
+        // 轮询系统下载状态（每 3 秒，上限 15 分钟；通知栏本身也在实时显示进度）
+        for (var i = 0; i < 300; i++) {
+          await Future.delayed(const Duration(seconds: 3));
+          if (!mounted) return;
+          final Map st;
+          try {
+            st = await _dlChannel.invokeMethod<Map>('status', {'id': id}) ?? const {};
+          } catch (_) {
+            continue;
+          }
+          final status = (st['status'] as int?) ?? -1;
+          if (status == 8) {
+            // DownloadManager.STATUS_SUCCESSFUL
+            await _installFromDownloads(fileName);
+            return;
+          }
+          if (status == 16) {
+            // DownloadManager.STATUS_FAILED → 换镜像源重试
+            failed = true;
+            break;
+          }
         }
-        if (status == 16) {
-          // DownloadManager.STATUS_FAILED
-          toast(context, '下载失败（通知栏可查看原因），可稍后重试');
-          return;
+        if (failed) {
+          urlIdx++;
+          continue;
         }
+        // 超时（大文件/慢网）：下载仍由系统继续，用户可从通知栏查看
+        return;
       }
-      // 超时（大文件/慢网）：下载仍由系统继续，用户可从通知栏查看
+      toast(context, '下载失败（直链与镜像源均不可达），请稍后重试或从 GitHub Release 页手动下载');
     } catch (e) {
       toast(context, '启动下载失败：${e.toString().replaceFirst('Exception: ', '')}');
     } finally {

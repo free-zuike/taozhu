@@ -16,6 +16,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
   List<Map<String, dynamic>> _payments = [];
   String? _clientId;
   double _selDebt = 0; // 当前选中店铺的应收（欠款）
+  bool _waivedAuto = true; // 平账模式：true=自动（减免=应收-实收），false=手动输入减免
   final _amountCtrl = TextEditingController();
   final _waivedCtrl = TextEditingController(); // 平账减免（实收+减免=账面已收）
   final _dateCtrl = TextEditingController(text: _today());
@@ -80,9 +81,15 @@ class _PaymentsPageState extends State<PaymentsPage> {
     }
   }
 
+  /// 自动平账减免 = 应收 − 实收（非负；差几百几十直接抹平结账）
+  double get _autoWaived {
+    final amount = double.tryParse(_amountCtrl.text) ?? 0;
+    return (_selDebt - amount).clamp(0, double.infinity).toDouble();
+  }
+
   Future<void> _submit() async {
     final amount = double.tryParse(_amountCtrl.text) ?? 0;
-    final waived = double.tryParse(_waivedCtrl.text) ?? 0;
+    final waived = _waivedAuto ? _autoWaived : (double.tryParse(_waivedCtrl.text) ?? 0);
     if (_clientId == null) {
       toast(context, '请选择店铺');
       return;
@@ -111,6 +118,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
           : '已登记收款 ¥${amount.toStringAsFixed(2)}');
       _amountCtrl.clear();
       _waivedCtrl.clear();
+      _waivedAuto = true; // 下次默认自动平账
       _load();
     } catch (e) {
       final msg = e.toString();
@@ -266,15 +274,41 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             controller: _amountCtrl,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
                             decoration: const InputDecoration(labelText: '实收金额（元）', prefixText: '¥ '),
+                            onChanged: (_) => setState(() {}),
                           ),
                           const SizedBox(height: 8),
-                          TextField(
-                            controller: _waivedCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(
-                                labelText: '平账减免（元，可选）',
-                                helperText: '实收 + 减免 = 账面已收；减免后欠款自动结清'),
-                          ),
+                          // 平账：默认自动（减免=应收−实收），可切换手动输入
+                          if (_waivedAuto) ...[
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text('平账减免（自动）：¥${_autoWaived.toStringAsFixed(2)}',
+                                      style: TextStyle(fontSize: 14, color: _c.danger, fontWeight: FontWeight.w600)),
+                                ),
+                                TextButton(
+                                  onPressed: () => setState(() => _waivedAuto = false),
+                                  child: const Text('改手动'),
+                                ),
+                              ],
+                            ),
+                            Text('实收 + 减免 = 账面已收，减免后欠款自动结清',
+                                style: TextStyle(fontSize: 12, color: _c.textSub)),
+                          ] else ...[
+                            TextField(
+                              controller: _waivedCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: const InputDecoration(
+                                  labelText: '平账减免（元）',
+                                  helperText: '实收 + 减免 = 账面已收；减免后欠款自动结清'),
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: () => setState(() => _waivedAuto = true),
+                                child: const Text('改自动'),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 8),
                           TextField(
                             controller: _dateCtrl,
