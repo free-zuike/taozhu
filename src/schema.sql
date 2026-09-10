@@ -60,9 +60,7 @@ CREATE TABLE IF NOT EXISTS purchases (
   created_by TEXT REFERENCES users(id),
   sync_key TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_sync_key ON purchases (sync_key);
-CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases (happened_at);
--- 进货明细
+CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases (happened_at);-- 进货明细
 CREATE TABLE IF NOT EXISTS purchase_items (
   id TEXT PRIMARY KEY,
   purchase_id TEXT NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
@@ -85,7 +83,6 @@ CREATE TABLE IF NOT EXISTS sales (
   created_by TEXT REFERENCES users(id),
   sync_key TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_sync_key ON sales (sync_key);
 CREATE INDEX IF NOT EXISTS idx_sales_client ON sales (client_id);
 CREATE INDEX IF NOT EXISTS idx_sales_date ON sales (happened_at);
 -- 出货明细：快照 sale_price 与 cost_price（出货当时的进价），毛利=Σ((sale-cost)*qty) 不受日后改价影响
@@ -117,7 +114,6 @@ CREATE TABLE IF NOT EXISTS payments (
   created_by TEXT REFERENCES users(id),
   sync_key TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_sync_key ON payments (sync_key);
 CREATE INDEX IF NOT EXISTS idx_payments_client ON payments (client_id);
 CREATE INDEX IF NOT EXISTS idx_payments_date ON payments (happened_at);
 
