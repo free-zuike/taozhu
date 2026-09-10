@@ -300,87 +300,40 @@ class _StatsPageState extends State<StatsPage> {
                   Text('$start ~ $end（${_spanDays} 天${_mode == 'range' && _msd > 1 ? ' · 每月 $_msd 日起算' : ''}）',
                       style: const TextStyle(color: Color(0xFF909399), fontSize: 12)),
                   const SizedBox(height: 12),
-                  _summaryCards(),
-                  const SizedBox(height: 16),
-                  Text(_mode == 'year' ? '月度出货趋势（元）' : '每日出货趋势（元）',
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                  const SizedBox(height: 20),
+                  _sectionTitle(_mode == 'year' ? '月度出货趋势' : '每日出货趋势'),
                   const SizedBox(height: 8),
                   _lineChart(),
                   const SizedBox(height: 20),
-                  Text('分类排行（出货额）', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                  _sectionTitle('分类排行（出货额）'),
                   const SizedBox(height: 8),
                   for (final (i, c) in _cats.indexed)
-                    Card(
-                      child: ListTile(
-                        dense: true,
-                        leading: CircleAvatar(
-                          radius: 14,
-                          backgroundColor: const Color(0xFFF8C91C).withOpacity(0.18),
-                          child: Text('${i + 1}',
-                              style: const TextStyle(fontSize: 12, color: Color(0xFFB8860B), fontWeight: FontWeight.w700)),
-                        ),
-                        title: Text('${c['category']}'),
-                        subtitle: Text('${c['quantity']} 件'),
-                        trailing: Text('¥${fmtMoney(_num(c['amount']))}',
-                            style: const TextStyle(fontWeight: FontWeight.w700)),
-                      ),
-                    ),
-                  if (_cats.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(20),
-                      child: Center(child: Text('该区间暂无分类数据', style: TextStyle(color: Colors.grey))),
-                    ),
+                    _rankCard(i + 1, const Color(0xFFF59E0B), '${c['category']}', '${c['quantity']} 件',
+                        '¥${fmtMoney(_num(c['amount']))}'),
+                  if (_cats.isEmpty) _empty('该区间暂无分类数据', Icons.category_outlined),
                   const SizedBox(height: 20),
-                  Text('商品排行（出货额）', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                  _sectionTitle('商品排行（出货额）'),
                   const SizedBox(height: 8),
                   for (final (i, it) in _itemsStats.indexed)
-                    Card(
-                      child: ListTile(
-                        dense: true,
-                        leading: CircleAvatar(
-                          radius: 14,
-                          backgroundColor: const Color(0xFF409EFF).withOpacity(0.12),
-                          child: Text('${i + 1}',
-                              style: const TextStyle(fontSize: 12, color: Color(0xFF409EFF), fontWeight: FontWeight.w700)),
-                        ),
-                        title: Text('${it['name']}'),
-                        subtitle: Text('${it['quantity']} ${it['unit']}'),
-                        trailing: Text('¥${fmtMoney(_num(it['amount']))}',
-                            style: const TextStyle(fontWeight: FontWeight.w700)),
-                      ),
-                    ),
-                  if (_itemsStats.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(20),
-                      child: Center(child: Text('该区间暂无出货', style: TextStyle(color: Colors.grey))),
-                    ),
+                    _rankCard(i + 1, const Color(0xFF409EFF), '${it['name']}', '${it['quantity']} ${it['unit']}',
+                        '¥${fmtMoney(_num(it['amount']))}'),
+                  if (_itemsStats.isEmpty) _empty('该区间暂无出货', Icons.sell_outlined),
                   if (_clientId == null && _mode != 'year') ...[
                     const SizedBox(height: 20),
-                    const Text('按店结账（元）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                    _sectionTitle('按店结账（元）'),
                     const SizedBox(height: 8),
-                    for (final c in _clientsStats)
-                      Card(
-                        child: ListTile(
-                          dense: true,
-                          title: Text('${c['name']}'),
-                          subtitle: Text(
-                              '出货 ¥${fmtMoney(_num(c['sales_total']))} · 已收 ¥${fmtMoney(_num(c['paid_total']))}'),
-                          trailing: Text(
-                            '欠 ¥${fmtMoney(_num(c['sales_total']) - _num(c['paid_total']))}',
-                            style: TextStyle(
-                              color: _num(c['sales_total']) > _num(c['paid_total'])
-                                  ? const Color(0xFFF56C6C)
-                                  : const Color(0xFF67C23A),
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
+                    for (final (i, c) in _clientsStats.indexed)
+                      _rankCard(
+                        i + 1,
+                        const Color(0xFF22C55E),
+                        '${c['name']}',
+                        '出货 ¥${fmtMoney(_num(c['sales_total']))} · 已收 ¥${fmtMoney(_num(c['paid_total']))}',
+                        '欠 ¥${fmtMoney(_num(c['sales_total']) - _num(c['paid_total']))}',
+                        amountColor: _num(c['sales_total']) > _num(c['paid_total'])
+                            ? const Color(0xFFF56C6C)
+                            : const Color(0xFF67C23A),
                       ),
-                    if (_clientsStats.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Center(child: Text('该区间暂无数据', style: TextStyle(color: Colors.grey))),
-                      ),
+                    if (_clientsStats.isEmpty) _empty('该区间暂无数据', Icons.store_outlined),
                   ],
                 ],
               ),
@@ -535,6 +488,7 @@ class _StatsPageState extends State<StatsPage> {
           SizedBox(
             width: itemW,
             child: Card(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               child: Padding(
                 padding: const EdgeInsets.all(14),
                 child: Column(
@@ -562,14 +516,88 @@ class _StatsPageState extends State<StatsPage> {
     );
   }
 
+  /// 区块标题：主色竖条 + 加粗文字
+  Widget _sectionTitle(String t) {
+    return Row(
+      children: [
+        Container(
+          width: 4,
+          height: 14,
+          decoration: BoxDecoration(color: _primary, borderRadius: BorderRadius.circular(2)),
+        ),
+        const SizedBox(width: 8),
+        Text(t, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+      ],
+    );
+  }
+
+  /// 排行卡片：序号底色块 + 标题/副标题 + 金额（圆角 12，亮白/暗 #1C1C1E）
+  Widget _rankCard(int rank, Color color, String title, String subtitle, String amount,
+      {Color? amountColor}) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(9)),
+            child: Center(
+              child: Text('$rank',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Text(subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF909399))),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(amount,
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w700, color: amountColor ?? _primary)),
+        ],
+      ),
+    );
+  }
+
+  /// 空态：图标 + 文案
+  Widget _empty(String text, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: Column(
+        children: [
+          Icon(icon, size: 36, color: const Color(0xFFD0D5DD)),
+          const SizedBox(height: 10),
+          Text(text, style: const TextStyle(color: Colors.grey)),
+        ],
+      ),
+    );
+  }
+
   // ── 折线图（自绘） ──
   Widget _lineChart() {
     final items = _mode == 'year' ? _months : _days;
     if (items.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(24),
-        child: Center(child: Text('该区间暂无数据', style: TextStyle(color: Colors.grey))),
-      );
+      return _empty('该区间暂无数据', Icons.show_chart);
     }
     final values = items.map<double>((x) => _num(x['sales_total'])).toList();
     final labels = items.map((x) => '${x[_mode == 'year' ? 'month' : 'day']}').toList();
