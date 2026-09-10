@@ -59,18 +59,24 @@ authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, 
 // 源3 jsDelivr CDN 镜像读取仓库版本文件（GitHub API 不可达时的兜底，国内可达性好）。
 // 返回 ready=false 表示该版本 release 已创建但安装包（CI 构建）尚未就绪——前端应提示"构建中"而非引导下载。
 // 全部失败返回 latest=''，前端手动兜底。10 分钟内复用成功结果，避免反复打外网。
-let latestCache: { at: number; latest: string; ready: boolean } | null = null;
+let latestCache: { at: number; latest: string; ready: boolean; notes: string } | null = null;
 const LATEST_CACHE_MS = 10 * 60 * 1000;
 
 interface VersionProbe {
   v: string;
   ready: boolean;
+  notes?: string;
 }
 
 authRouter.get('/latest-version', async (c) => {
   const now = Date.now();
   if (latestCache && now - latestCache.at < LATEST_CACHE_MS) {
-    return c.json({ current: APP_VERSION, latest: latestCache.latest, ready: latestCache.ready });
+    return c.json({
+      current: APP_VERSION,
+      latest: latestCache.latest,
+      ready: latestCache.ready,
+      notes: latestCache.notes,
+    });
   }
   const checkGitHub = async (): Promise<VersionProbe | null> => {
     try {
@@ -79,13 +85,17 @@ authRouter.get('/latest-version', async (c) => {
         signal: AbortSignal.timeout(6000),
       });
       if (!res.ok) return null;
-      const d = (await res.json()) as { tag_name?: string; assets?: Array<{ name?: string }> };
+      const d = (await res.json()) as {
+        tag_name?: string;
+        assets?: Array<{ name?: string }>;
+        body?: string;
+      };
       const v = String(d.tag_name ?? '').replace(/^taozhu-v/, '');
       if (!v) return null;
       // 安装包资产（flutter-app-<ver>.apk）已上传才算就绪，否则是 CI 构建中的空 release
       const assets = d.assets ?? [];
       const ready = assets.some((a) => a.name === `flutter-app-${v}.apk`);
-      return { v, ready };
+      return { v, ready, notes: d.body ?? '' };
     } catch {
       return null;
     }
@@ -116,11 +126,11 @@ authRouter.get('/latest-version', async (c) => {
   for (const check of [checkGitHub, checkAsset, checkJsDelivr]) {
     const r = await check();
     if (r) {
-      latestCache = { at: now, latest: r.v, ready: r.ready };
-      return c.json({ current: APP_VERSION, latest: r.v, ready: r.ready });
+      latestCache = { at: now, latest: r.v, ready: r.ready, notes: r.notes ?? '' };
+      return c.json({ current: APP_VERSION, latest: r.v, ready: r.ready, notes: r.notes ?? '' });
     }
   }
-  return c.json({ current: APP_VERSION, latest: '', ready: false });
+  return c.json({ current: APP_VERSION, latest: '', ready: false, notes: '' });
 });
 
 // 统计系统是否已初始化（前端引导页判断）

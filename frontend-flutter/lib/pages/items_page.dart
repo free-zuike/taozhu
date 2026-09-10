@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../theme.dart';
 import 'router.dart';
 
 class ItemsPage extends StatefulWidget {
@@ -11,6 +12,7 @@ class ItemsPage extends StatefulWidget {
 }
 
 class _ItemsPageState extends State<ItemsPage> {
+  TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _items = [];
   bool _loading = true;
   Timer? _searchTimer;
@@ -66,7 +68,7 @@ class _ItemsPageState extends State<ItemsPage> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFF56C6C)),
+            style: FilledButton.styleFrom(backgroundColor: _c.danger),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('删除'),
           ),
@@ -135,7 +137,7 @@ class _ItemsPageState extends State<ItemsPage> {
                                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
                                     const SizedBox(width: 8),
                                     Text('${it['category_name'] ?? ''}${((it['category_name'] as String?) ?? '').isEmpty ? (it['category'] ?? '') : ''}',
-                                        style: const TextStyle(color: Color(0xFF909399))),
+                                        style: TextStyle(color: _c.textSub)),
                                   ]),
                                   const SizedBox(height: 6),
                                   for (final p in (it['prices'] as List? ?? []))
@@ -143,7 +145,7 @@ class _ItemsPageState extends State<ItemsPage> {
                                       padding: const EdgeInsets.symmetric(vertical: 2),
                                       child: Text(
                                           '${p['unit']}：进 ¥${p['purchase_price']} → 出 ¥${p['sale_price']}',
-                                          style: const TextStyle(color: Color(0xFF606266), fontSize: 13)),
+                                          style: TextStyle(color: _c.textSub, fontSize: 13)),
                                     ),
                                 ],
                               ),
@@ -152,7 +154,7 @@ class _ItemsPageState extends State<ItemsPage> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 IconButton(
-                                  icon: const Icon(Icons.edit_outlined, size: 20, color: Color(0xFF409EFF)),
+                                  icon: Icon(Icons.edit_outlined, size: 20, color: _c.primary),
                                   tooltip: '编辑',
                                   onPressed: () async {
                                     await Navigator.of(context)
@@ -161,7 +163,7 @@ class _ItemsPageState extends State<ItemsPage> {
                                   },
                                 ),
                                 IconButton(
-                                  icon: const Icon(Icons.delete_outline, color: Color(0xFFF56C6C)),
+                                  icon: Icon(Icons.delete_outline, color: _c.danger),
                                   onPressed: () => _delete(it['id'] as String, '${it['name']}'),
                                 ),
                               ],
@@ -173,7 +175,7 @@ class _ItemsPageState extends State<ItemsPage> {
                   if (_items.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(32),
-                      child: Center(child: Text('暂无商品，点右下角 + 添加', style: TextStyle(color: Colors.grey))),
+                      child: Center(child: Text('暂无商品，点右下角 + 添加', style: TextStyle(color: _c.textSub))),
                     ),
                 ],
               ),
@@ -194,6 +196,7 @@ class _ItemEditPage extends StatefulWidget {
 }
 
 class _ItemEditPageState extends State<_ItemEditPage> {
+  TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   final _nameCtrl = TextEditingController();
   late final List<Map<String, TextEditingController>> _priceRows;
   late final List<String?> _priceIds; // 与 _priceRows 平行：null=新增行（编辑模式下用于区分增/改/删）
@@ -376,7 +379,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.close, color: Color(0xFF909399)),
+                      icon: Icon(Icons.close, color: _c.textSub),
                       onPressed: _priceRows.length > 1
                           ? () => setState(() {
                                 _priceRows.removeAt(i);

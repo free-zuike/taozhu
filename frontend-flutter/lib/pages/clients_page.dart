@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../theme.dart';
 import 'router.dart';
 
 class ClientsPage extends StatefulWidget {
@@ -11,6 +12,7 @@ class ClientsPage extends StatefulWidget {
 }
 
 class _ClientsPageState extends State<ClientsPage> {
+  TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _clients = [];
   List<Map<String, dynamic>> _cats = [];
   bool _loading = true;
@@ -147,7 +149,7 @@ class _ClientsPageState extends State<ClientsPage> {
                 const Align(
                   alignment: Alignment.centerLeft,
                   child: Text('暂无店铺分类，可先在「我的 → 分类管理」创建',
-                      style: TextStyle(color: Color(0xFF909399), fontSize: 12)),
+                      style: TextStyle(color: _c.textSub, fontSize: 12)),
                 ),
               ],
             ],
@@ -201,7 +203,7 @@ class _ClientsPageState extends State<ClientsPage> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFF56C6C)),
+            style: FilledButton.styleFrom(backgroundColor: _c.danger),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('删除'),
           ),
@@ -270,10 +272,10 @@ class _ClientsPageState extends State<ClientsPage> {
                               mainAxisAlignment: MainAxisAlignment.center,
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
-                                const Text('欠款', style: TextStyle(fontSize: 11, color: Color(0xFF909399))),
+                                Text('欠款', style: TextStyle(fontSize: 11, color: _c.textSub)),
                                 Text('¥${_debt(c).toStringAsFixed(2)}',
                                     style: TextStyle(
-                                        color: _debt(c) > 0 ? const Color(0xFFF56C6C) : const Color(0xFF67C23A),
+                                        color: _debt(c) > 0 ? _c.danger : _c.success,
                                         fontWeight: FontWeight.w600)),
                               ],
                             ),
@@ -282,7 +284,7 @@ class _ClientsPageState extends State<ClientsPage> {
                               onPressed: () => _edit(c),
                             ),
                             IconButton(
-                              icon: const Icon(Icons.delete_outline, size: 20, color: Color(0xFFF56C6C)),
+                              icon: Icon(Icons.delete_outline, size: 20, color: _c.danger),
                               onPressed: () => _delete(c),
                             ),
                           ],
@@ -292,7 +294,7 @@ class _ClientsPageState extends State<ClientsPage> {
                   if (_clients.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(32),
-                      child: Center(child: Text('暂无店铺，点右上角 ＋ 添加', style: TextStyle(color: Colors.grey))),
+                      child: Center(child: Text('暂无店铺，点右上角 ＋ 添加', style: TextStyle(color: _c.textSub))),
                     ),
                 ],
               ),

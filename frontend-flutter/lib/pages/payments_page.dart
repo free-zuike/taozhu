@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../theme.dart';
 import 'router.dart';
 
 class PaymentsPage extends StatefulWidget {
@@ -10,6 +11,7 @@ class PaymentsPage extends StatefulWidget {
 }
 
 class _PaymentsPageState extends State<PaymentsPage> {
+  TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _clients = [];
   List<Map<String, dynamic>> _payments = [];
   String? _clientId;
@@ -200,7 +202,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFF56C6C)),
+            style: FilledButton.styleFrom(backgroundColor: _c.danger),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('撤销'),
           ),
@@ -257,7 +259,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             Padding(
                               padding: const EdgeInsets.only(top: 6, bottom: 4),
                               child: Text('应收 ¥${_selDebt.toStringAsFixed(2)}',
-                                  style: const TextStyle(color: Color(0xFFF56C6C), fontSize: 13)),
+                                  style: TextStyle(color: _c.danger, fontSize: 13)),
                             ),
                           const SizedBox(height: 8),
                           TextField(
@@ -303,7 +305,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                     Card(
                       child: ListTile(
                         dense: true,
-                        leading: const Icon(Icons.check_circle_outline, color: Color(0xFF67C23A)),
+                        leading: Icon(Icons.check_circle_outline, color: _c.success),
                         title: Text('${p['client_name']}'),
                         subtitle: Text([
                           _date(p['happened_at']),
@@ -314,14 +316,14 @@ class _PaymentsPageState extends State<PaymentsPage> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text('¥${p['amount']}',
-                                style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF67C23A))),
+                                style: TextStyle(fontWeight: FontWeight.w700, color: _c.success)),
                             IconButton(
-                              icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF409EFF)),
+                              icon: Icon(Icons.edit_outlined, size: 18, color: _c.primary),
                               tooltip: '编辑',
                               onPressed: () => _edit(p),
                             ),
                             IconButton(
-                              icon: const Icon(Icons.undo, size: 18, color: Color(0xFF909399)),
+                              icon: Icon(Icons.undo, size: 18, color: _c.textSub),
                               tooltip: '撤销',
                               onPressed: () => _revoke(p),
                             ),
@@ -332,7 +334,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                   if (_payments.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(32),
-                      child: Center(child: Text('暂无收款记录', style: TextStyle(color: Colors.grey))),
+                      child: Center(child: Text('暂无收款记录', style: TextStyle(color: _c.textSub))),
                     ),
                 ],
               ),

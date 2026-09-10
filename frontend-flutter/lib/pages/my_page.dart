@@ -215,27 +215,52 @@ class _MyPageState extends State<MyPage> {
         return;
       }
       if (!mounted) return;
+      final notes = '${d['notes'] ?? ''}'.trim();
       final isAndroid = defaultTargetPlatform == TargetPlatform.android;
       final isDesktop = defaultTargetPlatform == TargetPlatform.windows ||
           defaultTargetPlatform == TargetPlatform.macOS ||
           defaultTargetPlatform == TargetPlatform.linux;
       final action = await showDialog<String>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('发现新版本'),
-          content: Text(isAndroid
-              ? '当前 v$APP_VERSION\n最新 v$ver\n\n点击「立即更新」将在后台下载（通知栏可见进度），完成后自动提示安装。'
-              : isDesktop
-                  ? '当前 v$APP_VERSION\n最新 v$ver\n\n点击「立即更新」将在应用内下载安装包（含进度），完成后引导解压覆盖安装。'
-                  : '当前 v$APP_VERSION\n最新 v$ver\n\n点击「复制下载链接」后粘贴到浏览器下载。'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('取消')),
-            if (isAndroid || isDesktop)
-              FilledButton(onPressed: () => Navigator.pop(ctx, 'update'), child: const Text('立即更新'))
-            else
-              FilledButton(onPressed: () => Navigator.pop(ctx, 'copy'), child: const Text('复制下载链接')),
-          ],
-        ),
+        builder: (ctx) {
+          final c = Theme.of(ctx).extension<TaozhuColors>()!;
+          return AlertDialog(
+            title: const Text('发现新版本'),
+            content: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('当前 v$APP_VERSION → 最新 v$ver',
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  if (notes.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    const Text('更新内容', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(height: 4),
+                    Text(notes,
+                        style: TextStyle(fontSize: 12, color: c.textSub, height: 1.5)),
+                  ],
+                  const SizedBox(height: 10),
+                  Text(
+                    isAndroid
+                        ? '点击「立即更新」后在后台下载：下拉通知栏可见进度，完成或失败都会在这里提示，可继续使用或退出应用。'
+                        : isDesktop
+                            ? '点击「立即更新」将在应用内下载安装包（含进度），完成后引导解压覆盖安装。'
+                            : '点击「复制下载链接」后粘贴到浏览器下载。',
+                    style: TextStyle(fontSize: 12, color: c.textSub),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('取消')),
+              if (isAndroid || isDesktop)
+                FilledButton(onPressed: () => Navigator.pop(ctx, 'update'), child: const Text('立即更新'))
+              else
+                FilledButton(onPressed: () => Navigator.pop(ctx, 'copy'), child: const Text('复制下载链接')),
+            ],
+          );
+        },
       );
       if (action == 'update') {
         if (isAndroid) {
@@ -265,14 +290,7 @@ class _MyPageState extends State<MyPage> {
         return;
       }
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('已开始后台下载'),
-          content: Text('v$ver 安装包正在后台下载：\n· 下拉通知栏可查看实时进度\n· 可继续使用或退出应用\n\n下载完成后会在此提示安装。'),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('好'))],
-        ),
-      );
+      toast(context, '已在后台开始下载，下拉通知栏查看进度');
       // 轮询系统下载状态（每 3 秒，上限 15 分钟；通知栏本身也在实时显示进度）
       for (var i = 0; i < 300; i++) {
         await Future.delayed(const Duration(seconds: 3));
@@ -442,6 +460,43 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
+  /// 清理更新下载缓存：删除下载目录/临时目录中的旧安装包（APK/zip），释放空间
+  Future<void> _cleanUpdateCache() async {
+    if (kIsWeb) {
+      toast(context, 'Web 版无本地安装包，无需清理');
+      return;
+    }
+    var deleted = 0;
+    var freed = 0.0;
+    Future<void> scan(Directory? dir) async {
+      if (dir == null || !await dir.exists()) return;
+      await for (final f in dir.list(recursive: true, followLinks: false)) {
+        if (f is! File) continue;
+        final name = f.uri.pathSegments.last;
+        if (name.startsWith('taozhu-update') ||
+            name.startsWith('taozhu-windows-') ||
+            name.startsWith('taozhu-macos-') ||
+            name.startsWith('taozhu-linux-')) {
+          try {
+            freed += (await f.length()) / 1048576;
+            await f.delete();
+            deleted++;
+          } catch (_) {}
+        }
+      }
+    }
+
+    try {
+      await scan(await getDownloadsDirectory());
+      await scan(await getTemporaryDirectory());
+      toast(context, deleted > 0
+          ? '已清理 $deleted 个旧安装包，释放约 ${freed.toStringAsFixed(1)} MB'
+          : '没有需要清理的旧安装包');
+    } catch (e) {
+      toast(context, '清理失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
   /// 在系统文件管理器中显示该文件（Windows explorer / macOS 访达 / Linux xdg-open）
   Future<void> _revealFile(File f) async {
     try {
@@ -499,6 +554,7 @@ class _MyPageState extends State<MyPage> {
             _item(Icons.restore_outlined, c.primary, '导入备份', '从备份 JSON 恢复（合并，不覆盖现有）', _importBackup),
             _item(Icons.system_update_alt_outlined, c.primary, '检查更新',
                 kIsWeb ? 'Web 版随部署更新' : '对比最新版本，应用内下载安装', _checkUpdate),
+            _item(Icons.cleaning_services_outlined, c.primary, '清理更新缓存', '删除下载过的旧安装包，释放空间', _cleanUpdateCache),
           ]),
           const SizedBox(height: 18),
           _card([
