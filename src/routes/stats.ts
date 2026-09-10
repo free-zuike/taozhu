@@ -119,6 +119,31 @@ statsRouter.get('/monthly', async (c) => {
   });
 });
 
+// GET /stats/categories?start=&end=&client_id= — 区间内按商品分类聚合出货（额降序）
+statsRouter.get('/categories', async (c) => {
+  const start = c.req.query('start')?.trim();
+  const end = c.req.query('end')?.trim();
+  if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
+  const clientId = c.req.query('client_id')?.trim();
+  const params: unknown[] = [start, end];
+  let cond = ' AND substr(s.happened_at,1,10) BETWEEN ? AND ?';
+  if (clientId) { cond += ' AND s.client_id = ?'; params.push(clientId); }
+  const rows = await c.env.DB.prepare(
+    `SELECT COALESCE(cat.name, '未分类') AS category,
+       SUM(si.quantity) AS quantity, SUM(si.amount) AS amount
+     FROM sale_items si
+     JOIN sales s ON s.id = si.sale_id
+     JOIN items i ON i.id = si.item_id
+     LEFT JOIN categories cat ON cat.id = i.category_id
+     WHERE 1=1${cond}
+     GROUP BY COALESCE(cat.name, '未分类') ORDER BY amount DESC`,
+  ).bind(...params).all<{ category: string; quantity: number; amount: number }>();
+  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  return c.json({
+    categories: rows.results.map((x) => ({ category: x.category, quantity: r(x.quantity), amount: r(x.amount) })),
+  });
+});
+
 // GET /stats/years — 有数据的年份列表（出货/进货/收款并集，升序）
 statsRouter.get('/years', async (c) => {
   const rows = await c.env.DB.prepare(

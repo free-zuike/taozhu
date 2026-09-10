@@ -8,7 +8,9 @@
           <text :class="['value', { placeholder: !clientId }]">{{ clientId ? clientName : '请选择饭店' }}</text>
         </view>
       </picker>
-      <input class="ipt" v-model="amount" type="digit" placeholder="收款金额（必填）" />
+      <input class="ipt" v-model="amount" type="digit" placeholder="实收金额（必填）" />
+      <view v-if="selDebtLabel" class="debt-tip">{{ selDebtLabel }}</view>
+      <input class="ipt" v-model="waived" type="digit" placeholder="平账减免（可选，实收+减免=账面已收）" />
       <input class="ipt" v-model="date" placeholder="日期 YYYY-MM-DD（默认今天）" />
       <input class="ipt" v-model="method" placeholder="方式（现金/微信/转账…）" />
       <input class="ipt" v-model="note" placeholder="备注（可选）" />
@@ -21,7 +23,7 @@
       <view v-for="p in payments" :key="p.id" class="pay-row">
         <view class="pay-left">
           <text class="pay-name">{{ p.client_name }}</text>
-          <text class="pay-meta">{{ p.happened_at }} · {{ p.method || '—' }}</text>
+          <text class="pay-meta">{{ p.happened_at }} · {{ p.method || '—' }}{{ Number(p.waived || 0) > 0 ? ' · 平账¥' + p.waived : '' }}</text>
         </view>
         <text class="pay-amount green">¥{{ fmt(p.amount) }}</text>
         <text class="edit" @click="editPayment(p)">编辑</text>
@@ -35,6 +37,7 @@
       <view class="sheet" @click.stop>
         <view class="sheet-title">编辑收款</view>
         <input class="ipt" v-model="payForm.amount" type="digit" placeholder="金额（元）" />
+        <input class="ipt" v-model="payForm.waived" type="digit" placeholder="平账减免（元）" />
         <input class="ipt" v-model="payForm.date" placeholder="日期 YYYY-MM-DD" />
         <input class="ipt" v-model="payForm.method" placeholder="收款方式" />
         <input class="ipt" v-model="payForm.note" placeholder="备注" />
@@ -54,14 +57,16 @@ const clientName = ref('');
 const clientNames = ref<string[]>([]);
 const clients = ref<Array<{ id: string; name: string; debt: number }>>([]);
 const amount = ref('');
+const waived = ref('');
+const selDebtLabel = ref('');
 const date = ref('');
 const method = ref('');
 const note = ref('');
 const saving = ref(false);
-const payments = ref<Array<{ id: string; client_name: string; happened_at: string; amount: number; method: string; note: string }>>([]);
+const payments = ref<Array<{ id: string; client_name: string; happened_at: string; amount: number; waived?: number; method: string; note: string }>>([]);
 const payForm = ref<{
-  show: boolean; id: string; amount: string; date: string; method: string; note: string;
-}>({ show: false, id: '', amount: '', date: '', method: '', note: '' });
+  show: boolean; id: string; amount: string; waived: string; date: string; method: string; note: string;
+}>({ show: false, id: '', amount: '', waived: '0', date: '', method: '', note: '' });
 
 const fmt = (n: number) => Number(n || 0).toFixed(2);
 
@@ -99,6 +104,7 @@ function onClient(e: { detail: { value: number } }) {
   if (c) {
     clientId.value = c.id;
     clientName.value = `${c.name}（欠 ¥${fmt(c.debt)}）`;
+    selDebtLabel.value = `应收 ¥${fmt(c.debt)}（实收 + 减免 = 账面已收）`;
   }
 }
 
@@ -116,12 +122,14 @@ async function submit() {
     await request('/payments', 'POST', {
       client_id: clientId.value,
       amount: Number(amount.value),
+      waived: Number(waived.value) || 0,
       happened_at: date.value,
       method: method.value.trim(),
       note: note.value.trim(),
     });
     uni.showToast({ title: '收款已登记', icon: 'success' });
     amount.value = '';
+    waived.value = '';
     method.value = '';
     note.value = '';
     date.value = todayLocal();
@@ -137,6 +145,7 @@ function editPayment(p: Record<string, any>) {
   payForm.value = {
     show: true, id: p.id,
     amount: String(p.amount),
+    waived: String(p.waived || 0),
     date: String(p.happened_at || '').slice(0, 10),
     method: p.method || '',
     note: p.note || '',
@@ -145,14 +154,20 @@ function editPayment(p: Record<string, any>) {
 
 async function savePayment() {
   const amt = Number(payForm.value.amount);
+  const wd = Number(payForm.value.waived) || 0;
   if (!amt || amt <= 0) {
     uni.showToast({ title: '请输入有效金额', icon: 'none' });
+    return;
+  }
+  if (wd < 0) {
+    uni.showToast({ title: '减免金额不能为负数', icon: 'none' });
     return;
   }
   saving.value = true;
   try {
     await request(`/payments/${payForm.value.id}`, 'PATCH', {
       amount: amt,
+      waived: wd,
       happened_at: payForm.value.date,
       method: payForm.value.method,
       note: payForm.value.note,
@@ -188,6 +203,7 @@ async function remove(id: string) {
 .value { color: #303133; }
 .placeholder { color: #c0c4cc; }
 .ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.debt-tip { color: #f56c6c; font-size: 24rpx; margin: -8rpx 0 16rpx; }
 .btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .pay-row { display: flex; align-items: center; padding: 16rpx 0; border-bottom: 1rpx solid #f0f0f0; }
 .pay-left { flex: 1; min-width: 0; }

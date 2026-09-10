@@ -1,10 +1,13 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import '../theme.dart';
 import '../version.dart';
@@ -63,6 +66,22 @@ class _MyPageState extends State<MyPage> {
     toast(context, ok > 0 ? '已同步 $ok 条待同步单据' : '没有可同步的待办');
     _loadPending();
     _loadLowStocks();
+  }
+
+  /// 全库备份导出（JSON 文件分享）
+  Future<void> _exportBackup() async {
+    try {
+      final d = await Api.instance.get('/backup');
+      final bytes = Uint8List.fromList(
+          utf8.encode(const JsonEncoder.withIndent('  ').convert(d)));
+      final name = 'taozhu-backup-${DateTime.now().toIso8601String().split('T').first}.json';
+      await Share.shareXFiles(
+        [XFile.fromData(bytes, mimeType: 'application/json', name: name)],
+        text: '陶朱数据备份',
+      );
+    } catch (e) {
+      toast(context, '备份导出失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
   }
 
   Future<void> _logout() async {
@@ -238,6 +257,14 @@ class _MyPageState extends State<MyPage> {
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(
+                  leading: const Icon(Icons.archive_outlined),
+                  title: const Text('数据备份'),
+                  subtitle: const Text('导出全部数据 JSON 文件', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: _exportBackup,
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
                   leading: const Icon(Icons.system_update_alt_outlined),
                   title: const Text('检查更新'),
                   subtitle: const Text('对比 GitHub Release 最新版本', style: TextStyle(fontSize: 12)),
@@ -268,6 +295,14 @@ class _MyPageState extends State<MyPage> {
                   ),
                   trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
                   onTap: () => goPage(context, const StocksPage()),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.save_alt_outlined),
+                  title: const Text('备份导出'),
+                  subtitle: const Text('导出全库 JSON 存档（仅老板）', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: _exportBackup,
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(

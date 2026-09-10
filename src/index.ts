@@ -14,6 +14,7 @@ import { aiRouter } from './routes/ai';
 import { settingsRouter } from './routes/settings';
 import { attachmentsRouter } from './routes/attachments';
 import { stocksRouter } from './routes/stocks';
+import { backupRouter } from './routes/backup';
 import { ensureSchema } from './schema';
 
 type AppEnv = { Bindings: Env; Variables: { user: import('./types').AuthUser } };
@@ -50,6 +51,7 @@ app.route('/api/v1/ai', aiRouter);
 app.route('/api/v1/settings', settingsRouter);
 app.route('/api/v1/attachments', attachmentsRouter);
 app.route('/api/v1/stocks', stocksRouter);
+app.route('/api/v1/backup', backupRouter);
 
 // 静态资源回退：非 API 路径交给 ASSETS（前端 SPA）
 app.all('*', async (c) => {

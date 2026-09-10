@@ -71,6 +71,12 @@
 			"style": {
 				"navigationBarTitleText": "统计"
 			}
+		},
+		{
+			"path": "pages/stocks/stocks",
+			"style": {
+				"navigationBarTitleText": "库存"
+			}
 		}
 	],
 	"tabBar": {

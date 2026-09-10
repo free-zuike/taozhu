@@ -15,7 +15,32 @@ class StatementPage extends StatefulWidget {
 class _StatementPageState extends State<StatementPage> {
   List<Map<String, dynamic>> _clients = [];
   String? _clientId; // null = 全部店铺
-  String _period = 'month'; // month | last | custom
+  String _period = 'month'; // month | last | cycle | cycleLast | custom
+
+  /// 选中店铺的每月起始日（1=自然月）
+  int get _msd {
+    if (_clientId != null) {
+      final c = _clients.where((x) => '${x['id']}' == _clientId).firstOrNull;
+      final v = c?['month_start_day'];
+      if (v is num && v.toInt() >= 1 && v.toInt() <= 28) return v.toInt();
+    }
+    return 1;
+  }
+
+  /// 结账周期（按起始日）：[起始日, 次月起始日-1]；起始日=1 时按自然月
+  (String, String) _cyclePeriod(int startDay, DateTime anchor) {
+    if (startDay <= 1) {
+      return (
+        _fmt(DateTime(anchor.year, anchor.month, 1)),
+        _fmt(DateTime(anchor.year, anchor.month + 1, 0)),
+      );
+    }
+    final thisStart = DateTime(anchor.year, anchor.month, startDay);
+    final (s, e) = anchor.day >= startDay
+        ? (thisStart, DateTime(anchor.year, anchor.month + 1, startDay))
+        : (DateTime(anchor.year, anchor.month - 1, startDay), thisStart);
+    return (_fmt(s), _fmt(e.subtract(const Duration(days: 1))));
+  }
   final _fromCtrl = TextEditingController();
   final _toCtrl = TextEditingController();
   List<Map<String, dynamic>> _sales = [];
@@ -61,6 +86,12 @@ class _StatementPageState extends State<StatementPage> {
       } else if (p == 'last') {
         _fromCtrl.text = _fmt(DateTime(now.year, now.month - 1, 1));
         _toCtrl.text = _fmt(DateTime(now.year, now.month, 0));
+      } else if (p == 'cycle' || p == 'cycleLast') {
+        // 按店铺结账周期（month_start_day）：本期/上期
+        final anchor = p == 'cycle' ? now : DateTime(now.year, now.month - 1, now.day.clamp(1, 28));
+        final (s, e) = _cyclePeriod(_msd, anchor);
+        _fromCtrl.text = s;
+        _toCtrl.text = e;
       }
     });
   }
@@ -246,10 +277,14 @@ class _StatementPageState extends State<StatementPage> {
                   ),
                   const SizedBox(height: 12),
                   SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'month', label: Text('本月')),
-                      ButtonSegment(value: 'last', label: Text('上月')),
-                      ButtonSegment(value: 'custom', label: Text('自定义')),
+                    segments: [
+                      const ButtonSegment(value: 'month', label: Text('本月')),
+                      const ButtonSegment(value: 'last', label: Text('上月')),
+                      if (_msd > 1) ...[
+                        const ButtonSegment(value: 'cycle', label: Text('账期本期')),
+                        const ButtonSegment(value: 'cycleLast', label: Text('账期上期')),
+                      ],
+                      const ButtonSegment(value: 'custom', label: Text('自定义')),
                     ],
                     selected: {_period},
                     onSelectionChanged: (s) => _applyPeriod(s.first),

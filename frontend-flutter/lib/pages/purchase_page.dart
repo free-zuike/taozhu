@@ -244,12 +244,56 @@ class _PurchasePageState extends State<PurchasePage> {
     }
   }
 
+  /// 复制上一笔进货单：预填明细，可修改后提交
+  Future<void> _copyLast() async {
+    try {
+      final d = await Api.instance.get('/purchases?limit=1');
+      final list = ((d['purchases'] as List?) ?? []);
+      if (list.isEmpty) {
+        toast(context, '暂无历史进货单');
+        return;
+      }
+      final last = list.first as Map<String, dynamic>;
+      final items = ((last['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      setState(() {
+        _rows.clear();
+        for (final it in items) {
+          final itemId = '${it['item_id']}';
+          final unit = '${it['unit'] ?? ''}';
+          final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
+          final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+          final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+          if (match == null || price == null) continue;
+          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+          final pp = (it['purchase_price'] as num?)?.toDouble() ?? 0;
+          final row = _PRow()
+            ..itemId = itemId
+            ..priceId = price['id'] as String?
+            ..quantity = qty
+            ..purchasePrice = pp
+            ..qtyCtrl.text = qty.toString()
+            ..priceCtrl.text = pp.toStringAsFixed(2);
+          _rows.add(row);
+        }
+        if (_rows.isEmpty) _rows.add(_PRow());
+      });
+      toast(context, '已复制上一笔进货单，可修改后提交');
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(_editing ? '编辑进货单' : '进货记单'),
         actions: [
+          IconButton(
+            tooltip: '复制上一单',
+            icon: const Icon(Icons.copy_all_outlined),
+            onPressed: _busy ? null : _copyLast,
+          ),
           IconButton(
             tooltip: 'AI 拍照识别',
             icon: const Icon(Icons.camera_alt_outlined),

@@ -18,6 +18,7 @@
       <button class="btn" @click="go('/pages/ledger/ledger')">账本</button>
       <button class="btn" @click="go('/pages/payments/payments')">收款结账</button>
       <button class="btn" @click="go('/pages/statement/statement')">对账单</button>
+      <button class="btn" @click="go('/pages/stocks/stocks')">库存</button>
       <button class="btn" @click="go('/pages/stats/stats')">统计</button>
       <button class="btn" @click="go('/pages/users/users')">账号管理</button>
     </view>

@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string };
-    expect(d.current).toBe('0.14.3.0');
+    expect(d.current).toBe('0.15.0.0');
     expect(typeof d.latest).toBe('string');
   });
 });
@@ -374,5 +374,82 @@ describe('收款平账（waived）', () => {
       clients: Array<{ debt: number }>;
     };
     expect(clients.clients[0].debt).toBe(0);
+  });
+});
+
+describe('统计分类聚合 /stats/categories', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  let clientId: string;
+  let priceId: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+    // 商品分类「蔬菜」+ 白菜
+    const cat = (await (await call(env, 'POST', '/api/v1/categories', token, { type: 'item', name: '蔬菜' })).json()) as { id: string };
+    await call(env, 'POST', '/api/v1/items', token, { name: '白菜', category_id: cat.id, prices: [{ unit: '斤', purchase_price: 1, sale_price: 2 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ id: string; prices: Array<{ id: string }> }>;
+    };
+    priceId = items.items[0].prices[0].id;
+    await call(env, 'POST', '/api/v1/clients', token, { name: '品味轩' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as {
+      clients: Array<{ id: string }>;
+    };
+    clientId = clients.clients[0].id;
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, happened_at: '2026-09-10', items: [{ price_id: priceId, quantity: 20 }] });
+  });
+
+  it('按商品分类聚合出货额与数量', async () => {
+    const d = (await (await call(env, 'GET', '/api/v1/stats/categories?start=2026-09-01&end=2026-09-30', token)).json()) as {
+      categories: Array<{ category: string; quantity: number; amount: number }>;
+    };
+    expect(d.categories.length).toBe(1);
+    expect(d.categories[0].category).toBe('蔬菜');
+    expect(d.categories[0].quantity).toBe(20);
+    expect(d.categories[0].amount).toBe(40);
+  });
+
+  it('无分类商品归入「未分类」', async () => {
+    await call(env, 'POST', '/api/v1/items', token, { name: '散装蛋', prices: [{ unit: '个', purchase_price: 0.5, sale_price: 1 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ id: string; prices: Array<{ id: string }> }>;
+    };
+    const egg = items.items.find((x) => x.name === '散装蛋')!;
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, happened_at: '2026-09-11', items: [{ price_id: egg.prices[0].id, quantity: 10 }] });
+    const d = (await (await call(env, 'GET', '/api/v1/stats/categories?start=2026-09-01&end=2026-09-30', token)).json()) as {
+      categories: Array<{ category: string; quantity: number }>;
+    };
+    expect(d.categories.some((x) => x.category === '未分类')).toBe(true);
+  });
+});
+
+describe('全库备份导出 /backup', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+  });
+
+  it('老板导出全部业务表数据', async () => {
+    const res = await call(env, 'GET', '/api/v1/backup', token);
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { exported_at: string; data: Record<string, unknown[]> };
+    expect(d.data).toHaveProperty('clients');
+    expect(d.data).toHaveProperty('items');
+    expect(d.data).toHaveProperty('sales');
+    expect(d.data).toHaveProperty('stocks');
+    expect(Array.isArray(d.data.payments)).toBe(true);
+  });
+
+  it('店员无权限导出 → 403', async () => {
+    await env.DB.prepare('INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)')
+      .bind(randomId(), 'staff1', await hashPassword('staff123'), 'staff').run();
+    const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });
+    const staffToken = ((await login.json()) as { token: string }).token;
+    expect((await call(env, 'GET', '/api/v1/backup', staffToken)).status).toBe(403);
   });
 });

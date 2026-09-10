@@ -120,6 +120,28 @@ class Api {
 
   // 便捷方法
   Future<Map<String, dynamic>> get(String path) => request(path);
+
+  /// 原始字节请求（全库备份导出等）：成功返回 bodyBytes，失败抛 Exception
+  Future<List<int>> getRaw(String path) async {
+    final base = await _base();
+    if (base.isEmpty) throw Exception('未配置服务器地址');
+    final url = '$base/api/v1$path';
+    final headers = {'Content-Type': 'application/json'};
+    final t = await _token();
+    if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
+    final res = await http.get(Uri.parse(url), headers: headers);
+    if (res.statusCode == 401) {
+      await clearToken();
+      throw Exception('登录已过期，请重新登录');
+    }
+    if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
+    String msg = '请求失败(${res.statusCode})';
+    try {
+      final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      if (d['error'] is String) msg = d['error'] as String;
+    } catch (_) {}
+    throw Exception(msg);
+  }
   Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) =>
       request(path, method: 'POST', body: body);
   Future<Map<String, dynamic>> put(String path, [Map<String, dynamic>? body]) =>
