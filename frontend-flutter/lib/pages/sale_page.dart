@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../api.dart';
 import '../local_freq.dart';
+import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
 
@@ -343,6 +344,7 @@ class _SalePageState extends State<SalePage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       appBar: AppBar(
         title: Text(_editing ? '编辑出货单' : '出货记单'),
@@ -373,21 +375,21 @@ class _SalePageState extends State<SalePage> {
                 icon: const Icon(Icons.add, size: 18),
                 label: const Text('添加商品'),
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF409EFF),
-                  side: const BorderSide(color: Color(0x80409EFF)),
+                  foregroundColor: c.primary,
+                  side: BorderSide(color: c.primary.withOpacity(0.5)),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
               ),
               const Spacer(),
               Text('合计 ¥${fmtMoney(_total)}',
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xFFEF4444))),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: c.danger)),
             ],
           ),
           const SizedBox(height: 14),
           FilledButton(
             style: FilledButton.styleFrom(
               minimumSize: const Size.fromHeight(52),
-              backgroundColor: const Color(0xFF409EFF),
+              backgroundColor: c.primary,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
@@ -401,29 +403,29 @@ class _SalePageState extends State<SalePage> {
 
   /// 填充式输入框装饰（圆角 12、无边框、聚焦主色描边）
   InputDecoration _fieldDec({IconData? icon, String? label, String? hint}) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return InputDecoration(
       labelText: label,
       hintText: hint,
-      prefixIcon: icon == null ? null : Icon(icon, size: 20, color: const Color(0xFF909399)),
+      prefixIcon: icon == null ? null : Icon(icon, size: 20, color: c.textSub),
       filled: true,
-      fillColor: dark ? const Color(0xFF2C2C2E) : const Color(0xFFF5F7FA),
+      fillColor: c.field,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
       enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFF409EFF), width: 1.4),
+        borderSide: BorderSide(color: c.primary, width: 1.4),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
     );
   }
 
-  /// 卡片（亮白/暗 #1C1C1E、radius 16）
+  /// 卡片（主题卡片底、radius 16）
   Widget _card(Widget child) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Container(
       decoration: BoxDecoration(
-        color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+        color: c.card,
         borderRadius: BorderRadius.circular(16),
       ),
       child: child,
@@ -432,6 +434,7 @@ class _SalePageState extends State<SalePage> {
 
   /// 店铺 + 日期信息卡
   Widget _infoCard() {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return _card(Padding(
       padding: const EdgeInsets.all(14),
       child: Column(
@@ -448,7 +451,7 @@ class _SalePageState extends State<SalePage> {
           const SizedBox(height: 10),
           TextField(
             controller: _dateCtrl,
-            style: TextStyle(color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF111827)),
+            style: TextStyle(color: c.textMain),
             decoration: _fieldDec(icon: Icons.calendar_today_outlined, label: '日期', hint: '默认今天，可改为补录历史'),
           ),
         ],
@@ -458,9 +461,8 @@ class _SalePageState extends State<SalePage> {
 
   Widget _buildRow(int i) {
     final row = _rows[i];
-    final primary = const Color(0xFF409EFF);
-    final txtStyle = TextStyle(
-        color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF111827));
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    final txtStyle = TextStyle(color: c.textMain);
     final itemId = row.itemId;
     final prices = itemId == null
         ? <Map<String, dynamic>>[]
@@ -476,12 +478,12 @@ class _SalePageState extends State<SalePage> {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: primary.withOpacity(0.12),
+                  color: c.primary.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Center(
                   child: Text('${i + 1}',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: primary)),
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.primary)),
                 ),
               ),
               const SizedBox(width: 10),
@@ -500,7 +502,7 @@ class _SalePageState extends State<SalePage> {
               const SizedBox(width: 4),
               IconButton(
                 tooltip: '删除此商品',
-                icon: const Icon(Icons.delete_outline, color: Color(0xFFF56C6C)),
+                icon: Icon(Icons.delete_outline, color: c.danger),
                 onPressed: _rows.length > 1 ? () => setState(() => _rows.removeAt(i)) : null,
               ),
             ],

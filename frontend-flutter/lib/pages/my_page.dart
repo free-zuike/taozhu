@@ -459,63 +459,78 @@ class _MyPageState extends State<MyPage> {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _userCard(dark),
+          _userCard(),
           const SizedBox(height: 18),
           _groupTitle('经营'),
           _card([
-            _item(Icons.store_outlined, const Color(0xFF409EFF), '店铺管理', '店铺（账本）列表、新增、编辑',
+            _item(Icons.store_outlined, c.primary, '店铺管理', '店铺（账本）列表、新增、编辑',
                 () => goPage(context, const ClientsPage())),
-            _item(Icons.payments_outlined, const Color(0xFF22C55E), '收款结账', '登记收款、查看收款历史',
+            _item(Icons.payments_outlined, c.success, '收款结账', '登记收款、查看收款历史',
                 () => goPage(context, const PaymentsPage())),
-            _item(Icons.description_outlined, const Color(0xFFF59E0B), '对账单', '按店铺+周期生成对账明细，一键复制发送',
+            _item(Icons.description_outlined, c.warning, '对账单', '按店铺+周期生成对账明细，一键复制发送',
                 () => goPage(context, const StatementPage())),
           ]),
           const SizedBox(height: 18),
           _groupTitle('商品与库存'),
           _card([
-            _item(Icons.inventory_2_outlined, const Color(0xFF409EFF), '库存',
+            _item(Icons.inventory_2_outlined, c.primary, '库存',
                 _lowStocks > 0 ? '有 $_lowStocks 项库存不足，点击查看' : '进货/出货自动维护，盘点与预警',
                 () => goPage(context, const StocksPage()),
                 warn: _lowStocks > 0),
-            _item(Icons.sell_outlined, const Color(0xFF409EFF), '商品管理', '商品与多单位价格', () => goPage(context, const ItemsPage())),
-            _item(Icons.label_outline, const Color(0xFF409EFF), '分类管理', '商品分类 / 店铺分类（两级）',
+            _item(Icons.sell_outlined, c.primary, '商品管理', '商品与多单位价格', () => goPage(context, const ItemsPage())),
+            _item(Icons.label_outline, c.primary, '分类管理', '商品分类 / 店铺分类（两级）',
                 () => goPage(context, const CategoriesPage())),
           ]),
           const SizedBox(height: 18),
           _groupTitle('系统'),
           _card([
             if (_pending > 0)
-              _item(Icons.cloud_upload_outlined, const Color(0xFFF56C6C), '待同步', '$_pending 条断网记的单据等待上传', _syncPending,
+              _item(Icons.cloud_upload_outlined, c.danger, '待同步', '$_pending 条断网记的单据等待上传', _syncPending,
                   warn: true),
-            _item(Icons.people_outline, const Color(0xFF409EFF), '账号管理', '店员/老板账号（仅老板可操作）',
+            _item(Icons.people_outline, c.primary, '账号管理', '店员/老板账号（仅老板可操作）',
                 () => goPage(context, const UsersPage())),
-            _item(Icons.save_alt_outlined, const Color(0xFF409EFF), '备份导出', '导出全库 JSON 存档（仅老板）', _exportBackup),
-            _item(Icons.system_update_alt_outlined, const Color(0xFF409EFF), '检查更新',
-                kIsWeb ? 'Web 版刷新即更新' : '对比最新版本，应用内下载安装', _checkUpdate),
+            _item(Icons.save_alt_outlined, c.primary, '备份导出', '导出全库 JSON 存档（仅老板）', _exportBackup),
+            _item(Icons.restore_outlined, c.primary, '导入备份', '从备份 JSON 恢复（合并，不覆盖现有）', _importBackup),
+            _item(Icons.system_update_alt_outlined, c.primary, '检查更新',
+                kIsWeb ? 'Web 版随部署更新' : '对比最新版本，应用内下载安装', _checkUpdate),
           ]),
           const SizedBox(height: 18),
           _card([
-            SwitchListTile(
-              secondary: const Icon(Icons.dark_mode_outlined),
-              title: const Text('深色模式'),
-              subtitle: const Text('夜间/白天主题切换', style: TextStyle(fontSize: 12)),
-              value: themeNotifier.value == ThemeMode.dark,
-              activeThumbColor: const Color(0xFF409EFF),
-              onChanged: (v) => setThemeMode(v ? ThemeMode.dark : ThemeMode.light),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('主题', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<ThemeMode>(
+                      segments: const [
+                        ButtonSegment(value: ThemeMode.system, label: Text('跟随系统')),
+                        ButtonSegment(value: ThemeMode.light, label: Text('白天')),
+                        ButtonSegment(value: ThemeMode.dark, label: Text('黑夜')),
+                      ],
+                      selected: {themeNotifier.value},
+                      onSelectionChanged: (s) => setThemeMode(s.first),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ]),
           const SizedBox(height: 24),
           OutlinedButton(
             style: OutlinedButton.styleFrom(
               minimumSize: const Size.fromHeight(48),
-              foregroundColor: const Color(0xFFF56C6C),
-              side: const BorderSide(color: Color(0xFFF56C6C)),
+              foregroundColor: c.danger,
+              side: BorderSide(color: c.danger),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             onPressed: _logout,
@@ -524,7 +539,7 @@ class _MyPageState extends State<MyPage> {
           const SizedBox(height: 16),
           Center(
             child: Text('陶朱 v$APP_VERSION',
-                style: const TextStyle(color: Color(0xFF909399), fontSize: 12)),
+                style: TextStyle(color: c.textSub, fontSize: 12)),
           ),
           const SizedBox(height: 16),
         ],
@@ -533,11 +548,12 @@ class _MyPageState extends State<MyPage> {
   }
 
   /// 顶部用户卡：头像 + 角色 + 服务器地址
-  Widget _userCard(bool dark) {
+  Widget _userCard() {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+        color: c.card,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
@@ -546,10 +562,10 @@ class _MyPageState extends State<MyPage> {
             width: 52,
             height: 52,
             decoration: BoxDecoration(
-              color: const Color(0xFF409EFF).withOpacity(0.12),
+              color: c.primary.withOpacity(0.12),
               borderRadius: BorderRadius.circular(16),
             ),
-            child: const Icon(Icons.person_outline, size: 30, color: Color(0xFF409EFF)),
+            child: Icon(Icons.person_outline, size: 30, color: c.primary),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -557,13 +573,13 @@ class _MyPageState extends State<MyPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(_role == 'staff' ? '店员账号' : '老板账号',
-                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: c.textMain)),
                 const SizedBox(height: 3),
                 Text(
                   _base.isEmpty ? '未设置服务器地址' : _base,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF909399)),
+                  style: TextStyle(fontSize: 12, color: c.textSub),
                 ),
               ],
             ),
@@ -573,23 +589,26 @@ class _MyPageState extends State<MyPage> {
     );
   }
 
-  Widget _groupTitle(String t) => Padding(
-        padding: const EdgeInsets.only(left: 4, bottom: 8),
-        child: Text(t, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF909399))),
-      );
+  Widget _groupTitle(String t) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Text(t, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textSub)),
+    );
+  }
 
-  /// 分组圆角白卡（内嵌多个功能项，自动加分隔线）
+  /// 分组圆角卡（内嵌多个功能项，自动加分隔线）
   Widget _card(List<Widget> tiles) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Container(
       decoration: BoxDecoration(
-        color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+        color: c.card,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
         children: [
           for (int i = 0; i < tiles.length; i++) ...[
-            if (i > 0) const Divider(height: 1, indent: 56),
+            if (i > 0) Divider(height: 1, indent: 56, color: c.divider),
             tiles[i],
           ],
         ],
@@ -599,6 +618,7 @@ class _MyPageState extends State<MyPage> {
 
   Widget _item(IconData icon, Color color, String title, String subtitle, VoidCallback onTap,
       {bool warn = false}) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return ListTile(
       leading: Container(
         width: 36,
@@ -607,11 +627,11 @@ class _MyPageState extends State<MyPage> {
         child: Icon(icon, size: 20, color: color),
       ),
       title: Text(title,
-          style: TextStyle(fontSize: 15, color: warn ? const Color(0xFFF56C6C) : null,
+          style: TextStyle(fontSize: 15, color: warn ? c.danger : c.textMain,
               fontWeight: warn ? FontWeight.w600 : null)),
       subtitle: Text(subtitle,
-          style: TextStyle(fontSize: 12, color: warn ? const Color(0xFFF56C6C) : const Color(0xFF909399))),
-      trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+          style: TextStyle(fontSize: 12, color: warn ? c.danger : c.textSub)),
+      trailing: Icon(Icons.chevron_right, color: c.textSub),
       onTap: onTap,
     );
   }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme.dart';
 import '../pages/sale_page.dart';
 import '../pages/my_page.dart';
 import '../pages/purchase_page.dart';
@@ -16,7 +17,6 @@ class BottomShell extends StatefulWidget {
 
 class _BottomShellState extends State<BottomShell> {
   int _index = 0;
-  static const _primary = Color(0xFF409EFF);
 
   @override
   Widget build(BuildContext context) {
@@ -52,8 +52,9 @@ class _BottomShellState extends State<BottomShell> {
   }
 
   Widget _navItem(int i, IconData icon, String label) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     final active = _index == i;
-    final color = active ? _primary : const Color(0xFF909399);
+    final color = active ? c.primary : c.textSub;
     return Expanded(
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
@@ -72,6 +73,7 @@ class _BottomShellState extends State<BottomShell> {
   }
 
   Widget _centerButton() {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: GestureDetector(
@@ -80,9 +82,9 @@ class _BottomShellState extends State<BottomShell> {
           width: 52,
           height: 52,
           decoration: BoxDecoration(
-            color: _primary,
+            color: c.primary,
             shape: BoxShape.circle,
-            boxShadow: [BoxShadow(color: _primary.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, 3))],
+            boxShadow: [BoxShadow(color: c.primary.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, 3))],
           ),
           child: const Icon(Icons.add, color: Colors.white, size: 30),
         ),
