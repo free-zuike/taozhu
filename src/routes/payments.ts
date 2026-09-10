@@ -16,21 +16,27 @@ const nowIso = () => new Date().toISOString();
 paymentsRouter.post('/', adminOnly(), async (c) => {
   const user = c.get('user');
   const body = await c.req.json().catch(() => null) as {
-    client_id?: string; happened_at?: string; amount?: number; waived?: number; method?: string; note?: string;
+    client_id?: string; happened_at?: string; amount?: number; waived?: number; method?: string; note?: string; sync_key?: string;
   } | null;
   const clientId = body?.client_id;
   const amount = Number(body?.amount);
   const waived = Number(body?.waived) || 0;
+  const syncKey = body?.sync_key?.trim() || '';
   if (!clientId) return c.json({ error: '请选择店铺' }, 400);
   if (!Number.isFinite(amount) || amount <= 0) return c.json({ error: '收款金额必须大于 0' }, 400);
   if (!Number.isFinite(waived) || waived < 0) return c.json({ error: '平账减免金额不能为负数' }, 400);
+  // 幂等：同一 sync_key 已存在（离线重放重复投递）→ 返回已有，不重复登记
+  if (syncKey) {
+    const existed = await c.env.DB.prepare('SELECT id FROM payments WHERE sync_key = ?').bind(syncKey).first<{ id: string }>();
+    if (existed) return c.json({ id: existed.id, client_id: clientId, dup: true });
+  }
   const client = await c.env.DB.prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first();
   if (!client) return c.json({ error: '店铺不存在' }, 404);
   const id = randomId();
   const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
   await c.env.DB.prepare(
-    'INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(id, clientId, happenedAt, Math.round(amount * 100) / 100, Math.round(waived * 100) / 100, body?.method?.trim() ?? '', body?.note?.trim() ?? '', user.id).run();
+    'INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(id, clientId, happenedAt, Math.round(amount * 100) / 100, Math.round(waived * 100) / 100, body?.method?.trim() ?? '', body?.note?.trim() ?? '', user.id, syncKey || null).run();
   return c.json({ id, client_id: clientId, happened_at: happenedAt, amount: Math.round(amount * 100) / 100, waived: Math.round(waived * 100) / 100, method: body?.method?.trim() ?? '', note: body?.note?.trim() ?? '' }, 201);
 });
 

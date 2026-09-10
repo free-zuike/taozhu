@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../api.dart';
@@ -216,6 +217,8 @@ class _PurchasePageState extends State<PurchasePage> {
     setState(() => _busy = true);
     final body = {
       'happened_at': _dateCtrl.text.trim(),
+      // 幂等键：离线重放/多端重复提交不会重复建单
+      'sync_key': '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(0x7fffffff)}',
       'items': valid
           .map((r) => {'price_id': r.priceId, 'quantity': r.quantity, 'purchase_price': r.purchasePrice})
           .toList(),

@@ -26,12 +26,22 @@ salesRouter.post('/', async (c) => {
     client_id?: string;
     happened_at?: string;
     note?: string;
+    sync_key?: string; // 客户端幂等键（离线重放/多端提交不重复建单）
     items?: SaleItemInput[];
   } | null;
   const clientId = body?.client_id;
   const items = body?.items ?? [];
+  const syncKey = body?.sync_key?.trim() || '';
   if (!clientId) return c.json({ error: '请选择店铺' }, 400);
   if (!Array.isArray(items) || items.length === 0) return c.json({ error: '请至少添加一种商品' }, 400);
+
+  // 幂等：同一 sync_key 已存在（如离线重放重复投递）→ 直接返回已有单据，不重复建单/不重复扣库存
+  if (syncKey) {
+    const existed = await c.env.DB.prepare('SELECT id FROM sales WHERE sync_key = ?').bind(syncKey).first<{ id: string }>();
+    if (existed) {
+      return c.json({ id: existed.id, client_id: clientId, dup: true, total: 0, items: 0 });
+    }
+  }
 
   const client = await c.env.DB.prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first();
   if (!client) return c.json({ error: '店铺不存在' }, 404);
@@ -52,8 +62,8 @@ salesRouter.post('/', async (c) => {
   let total = 0;
 
   const batch = [
-    c.env.DB.prepare('INSERT INTO sales (id, client_id, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?)')
-      .bind(saleId, clientId, happenedAt, note, user.id),
+    c.env.DB.prepare('INSERT INTO sales (id, client_id, happened_at, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(saleId, clientId, happenedAt, note, user.id, syncKey || null),
   ];
 
   for (const item of items) {

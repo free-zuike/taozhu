@@ -26,9 +26,19 @@ purchasesRouter.post('/', async (c) => {
     happened_at?: string;
     note?: string;
     items?: PurchaseItemInput[];
+    sync_key?: string;
   } | null;
   const items = body?.items ?? [];
+  const syncKey = body?.sync_key?.trim() || '';
   if (!Array.isArray(items) || items.length === 0) return c.json({ error: '请至少添加一种商品' }, 400);
+
+  // 幂等：同一 sync_key 已存在（离线重放重复投递）→ 返回已有单据，不重复建单/不重复加库存
+  if (syncKey) {
+    const existed = await c.env.DB.prepare('SELECT id FROM purchases WHERE sync_key = ?').bind(syncKey).first<{ id: string }>();
+    if (existed) {
+      return c.json({ id: existed.id, dup: true, total: 0, items: 0 });
+    }
+  }
 
   const priceIds = items.map((i) => i.price_id);
   if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
@@ -44,8 +54,8 @@ purchasesRouter.post('/', async (c) => {
   let total = 0;
 
   const batch = [
-    c.env.DB.prepare('INSERT INTO purchases (id, happened_at, note, created_by) VALUES (?, ?, ?, ?)')
-      .bind(purchaseId, happenedAt, note, user.id),
+    c.env.DB.prepare('INSERT INTO purchases (id, happened_at, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?)')
+      .bind(purchaseId, happenedAt, note, user.id, syncKey || null),
   ];
 
   for (const item of items) {

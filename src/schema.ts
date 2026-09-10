@@ -45,8 +45,11 @@ const DDL: string[] = [
     happened_at TEXT NOT NULL,
     note TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    created_by TEXT REFERENCES users(id)
+    created_by TEXT REFERENCES users(id),
+    sync_key TEXT
   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_sync_key ON purchases (sync_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases (happened_at)`,
   `CREATE TABLE IF NOT EXISTS purchase_items (
     id TEXT PRIMARY KEY,
     purchase_id TEXT NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
@@ -64,8 +67,10 @@ const DDL: string[] = [
     happened_at TEXT NOT NULL,
     note TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    created_by TEXT REFERENCES users(id)
+    created_by TEXT REFERENCES users(id),
+    sync_key TEXT
   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_sync_key ON sales (sync_key)`,
   `CREATE INDEX IF NOT EXISTS idx_sales_client ON sales (client_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sales_date ON sales (happened_at)`,
   `CREATE TABLE IF NOT EXISTS sale_items (
@@ -80,6 +85,7 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sale_items_item ON sale_items (item_id)`,
   `CREATE TABLE IF NOT EXISTS payments (
     id TEXT PRIMARY KEY,
     client_id TEXT NOT NULL REFERENCES clients(id),
@@ -89,9 +95,12 @@ const DDL: string[] = [
     method TEXT DEFAULT '',
     note TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    created_by TEXT REFERENCES users(id)
+    created_by TEXT REFERENCES users(id),
+    sync_key TEXT
   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_sync_key ON payments (sync_key)`,
   `CREATE INDEX IF NOT EXISTS idx_payments_client ON payments (client_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_payments_date ON payments (happened_at)`,
   `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -180,6 +189,21 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     const payCols = await db.prepare('PRAGMA table_info(payments)').all<{ name: string }>();
     if (!payCols.results.some((x) => x.name === 'waived')) {
       await db.prepare('ALTER TABLE payments ADD COLUMN waived REAL NOT NULL DEFAULT 0').run();
+    }
+    // v0.16.26.0：单据表幂等键 sync_key（离线重放/多端不重复建单）+ 查询索引
+    for (const t of ['sales', 'purchases', 'payments'] as const) {
+      const cols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
+      if (!cols.results.some((x) => x.name === 'sync_key')) {
+        await db.prepare(`ALTER TABLE ${t} ADD COLUMN sync_key TEXT`).run();
+      }
+    }
+    // CREATE INDEX IF NOT EXISTS 幂等：已存在时 no-op（不耗 D1 写配额），新库补齐索引
+    for (const marker of [
+      'idx_sales_sync_key', 'idx_purchases_sync_key', 'idx_payments_sync_key',
+      'idx_purchases_date', 'idx_payments_date', 'idx_sale_items_item',
+    ]) {
+      const i = DDL.findIndex((s) => s.includes(marker));
+      if (i >= 0) await db.prepare(DDL[i]).run();
     }
     schemaReady = true;
   } catch (err) {

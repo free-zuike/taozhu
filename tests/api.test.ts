@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; notes: string };
-    expect(d.current).toBe('0.16.25.0');
+    expect(d.current).toBe('0.16.26.0');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.notes).toBe('string');
@@ -595,5 +595,62 @@ describe('店员权限收窄（进价打码 / 仅当天出货）', () => {
     };
     expect(d.sales.length).toBe(1);
     expect(d.sales[0].happened_at.slice(0, 10)).toBe(today);
+  });
+});
+describe('单据幂等键（sync_key：离线重放/多端不重复）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+    await env.DB.prepare("INSERT INTO clients (id, name) VALUES (?, ?)").bind('c1', '幂等店').run();
+    await env.DB.prepare('INSERT INTO items (id, name) VALUES (?, ?)').bind('i1', '白菜').run();
+    await env.DB.prepare('INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price) VALUES (?, ?, ?, ?, ?)')
+      .bind('p1', 'i1', '斤', 1, 2).run();
+  });
+
+  it('同一 sync_key 重复提交出货只建一张单、库存只扣一次', async () => {
+    const body = {
+      client_id: 'c1',
+      happened_at: new Date().toISOString().slice(0, 10),
+      sync_key: 'dup-sale-001',
+      items: [{ price_id: 'p1', quantity: 5 }],
+    };
+    const r1 = await call(env, 'POST', '/api/v1/sales', token, body);
+    expect(r1.status).toBe(201);
+    const r2 = await call(env, 'POST', '/api/v1/sales', token, body);
+    expect(r2.status).toBe(200);
+    const d2 = (await r2.json()) as { dup: boolean };
+    expect(d2.dup).toBe(true);
+    const rows = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM sales').all<{ cnt: number }>();
+    expect(rows.results[0].cnt).toBe(1);
+    const stock = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind('i1', '斤').first<{ quantity: number }>();
+    expect(stock?.quantity).toBe(-5); // 只扣一次
+  });
+
+  it('进货/收款同样幂等', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const pb = { happened_at: today, sync_key: 'dup-pu-001', items: [{ price_id: 'p1', quantity: 3 }] };
+    await call(env, 'POST', '/api/v1/purchases', token, pb);
+    const p2 = await call(env, 'POST', '/api/v1/purchases', token, pb);
+    expect(((await p2.json()) as { dup: boolean }).dup).toBe(true);
+    const payBody = { client_id: 'c1', happened_at: today, amount: 10, sync_key: 'dup-pay-001' };
+    await call(env, 'POST', '/api/v1/payments', token, payBody);
+    const pay2 = await call(env, 'POST', '/api/v1/payments', token, payBody);
+    expect(((await pay2.json()) as { dup: boolean }).dup).toBe(true);
+    expect((await env.DB.prepare('SELECT COUNT(*) AS cnt FROM purchases').all<{ cnt: number }>()).results[0].cnt).toBe(1);
+    expect((await env.DB.prepare('SELECT COUNT(*) AS cnt FROM payments').all<{ cnt: number }>()).results[0].cnt).toBe(1);
+  });
+});
+
+describe('索引存在（sqlite_master）', () => {
+  it('单据幂等/日期/明细索引齐全', async () => {
+    const env = (await setup()).env;
+    const idx = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all<{ name: string }>();
+    const names = idx.results.map((r) => r.name);
+    for (const want of ['idx_sales_sync_key', 'idx_purchases_sync_key', 'idx_payments_sync_key', 'idx_purchases_date', 'idx_payments_date', 'idx_sale_items_item']) {
+      expect(names).toContain(want);
+    }
   });
 });
