@@ -382,6 +382,7 @@ class _PurchasePageState extends State<PurchasePage> {
 
   /// 进货日期信息卡
   Widget _infoCard() {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return _card(Padding(
       padding: const EdgeInsets.all(14),
       child: DateField(
@@ -389,7 +390,7 @@ class _PurchasePageState extends State<PurchasePage> {
         icon: Icons.calendar_today_outlined,
         label: '进货日期',
         hint: '点击选择日期（可补录历史）',
-        focusColor: _c.success,
+        focusColor: c.success,
       ),
     ));
   }
