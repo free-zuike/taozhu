@@ -27,6 +27,8 @@ class MyPage extends StatefulWidget {
 
 class _MyPageState extends State<MyPage> {
   String _base = '';
+  int _lowStocks = -1; // 低库存数量（-1=未加载）
+  int _pending = 0; // 待同步单据数
 
   @override
   void initState() {
@@ -34,6 +36,33 @@ class _MyPageState extends State<MyPage> {
     Api.instance.getBase().then((b) {
       if (mounted) setState(() => _base = b);
     });
+    _loadLowStocks();
+    _loadPending();
+  }
+
+  Future<void> _loadLowStocks() async {
+    try {
+      final d = await Api.instance.get('/stocks?below=1');
+      if (!mounted) return;
+      setState(() => _lowStocks = ((d['stocks'] as List?) ?? []).length);
+    } catch (_) {
+      _lowStocks = 0;
+    }
+  }
+
+  Future<void> _loadPending() async {
+    try {
+      final list = await Api.instance.pendingList();
+      if (mounted) setState(() => _pending = list.length);
+    } catch (_) {}
+  }
+
+  /// 重放离线待同步单据
+  Future<void> _syncPending() async {
+    final ok = await Api.instance.syncPending();
+    toast(context, ok > 0 ? '已同步 $ok 条待同步单据' : '没有可同步的待办');
+    _loadPending();
+    _loadLowStocks();
   }
 
   Future<void> _logout() async {
@@ -216,10 +245,27 @@ class _MyPageState extends State<MyPage> {
                   onTap: _checkUpdate,
                 ),
                 const Divider(height: 1, indent: 56),
+                if (_pending > 0) ...[
+                  ListTile(
+                    leading: const Icon(Icons.cloud_upload_outlined, color: Color(0xFFF56C6C)),
+                    title: const Text('待同步', style: TextStyle(color: Color(0xFFF56C6C))),
+                    subtitle: Text('$_pending 条断网记的单据等待上传', style: const TextStyle(fontSize: 12, color: Color(0xFFF56C6C))),
+                    trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                    onTap: _syncPending,
+                  ),
+                  const Divider(height: 1, indent: 56),
+                ],
                 ListTile(
                   leading: const Icon(Icons.inventory_2_outlined),
                   title: const Text('库存'),
-                  subtitle: const Text('进货入库/出货扣减自动维护，盘点与预警', style: TextStyle(fontSize: 12)),
+                  subtitle: Text(
+                    _lowStocks > 0
+                        ? '有 $_lowStocks 项库存不足，点击查看'
+                        : '进货/出货自动维护，盘点与预警',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: _lowStocks > 0 ? const Color(0xFFF56C6C) : null),
+                  ),
                   trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
                   onTap: () => goPage(context, const StocksPage()),
                 ),

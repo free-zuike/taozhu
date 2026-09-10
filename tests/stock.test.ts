@@ -100,6 +100,7 @@ describe('库存（stocks）', () => {
     expect(all.stocks[0].quantity).toBe(5);
     expect(all.stocks[0].min_stock).toBe(10);
     expect(all.stocks[0].low).toBe(true);
+    expect(all.stocks[0].cost_price).toBe(1); // 白菜当前进价
     const below = (await (await call(env, 'GET', '/api/v1/stocks?below=1', token)).json()) as {
       stocks: unknown[];
     };

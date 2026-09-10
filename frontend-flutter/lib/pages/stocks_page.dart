@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../utils/money.dart';
 import 'router.dart';
 
 /// 库存：按 商品+单位 查看/预警/调整（进货自动入库、出货自动扣减，见单据页）
@@ -268,6 +269,21 @@ class _StocksPageState extends State<StocksPage> {
                     child: ListView(
                       padding: const EdgeInsets.all(16),
                       children: [
+                        if (_stocks.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Row(
+                              children: [
+                                const Text('库存金额合计（按当前进价）',
+                                    style: TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                                const Spacer(),
+                                Text(
+                                  '¥${fmtMoney(_stocks.fold<double>(0, (s, x) => s + (((x['quantity'] as num?)?.toDouble() ?? 0) * ((x['cost_price'] as num?)?.toDouble() ?? 0))))}',
+                                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF67C23A)),
+                                ),
+                              ],
+                            ),
+                          ),
                         if (_stocks.isEmpty)
                           const Padding(
                             padding: EdgeInsets.all(32),

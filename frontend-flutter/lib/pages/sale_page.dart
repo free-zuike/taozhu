@@ -259,14 +259,14 @@ class _SalePageState extends State<SalePage> {
       toast(context, '库存不足提醒：${lowStocks.take(2).join('；')}');
     }
     setState(() => _busy = true);
+    final body = {
+      'client_id': _clientId,
+      'happened_at': _dateCtrl.text.trim(),
+      'items': valid
+          .map((r) => {'price_id': r.priceId, 'quantity': r.quantity, 'sale_price': r.salePrice})
+          .toList(),
+    };
     try {
-      final body = {
-        'client_id': _clientId,
-        'happened_at': _dateCtrl.text.trim(),
-        'items': valid
-            .map((r) => {'price_id': r.priceId, 'quantity': r.quantity, 'sale_price': r.salePrice})
-            .toList(),
-      };
       if (_editing) {
         await Api.instance.patch('/sales/${widget.editId}', body);
         toast(context, '已保存修改');
@@ -282,7 +282,14 @@ class _SalePageState extends State<SalePage> {
         });
       }
     } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      final msg = e.toString();
+      // 网络异常：新增单据存入待同步队列（编辑模式不入队）
+      if (msg.contains('地址') && !_editing) {
+        await Api.instance.pendingAdd('sale', body);
+        toast(context, '网络异常，出货单已存入待同步队列');
+      } else {
+        toast(context, msg.replaceFirst('Exception: ', ''));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

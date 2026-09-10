@@ -210,4 +210,59 @@ class Api {
     } catch (_) {}
     throw Exception(msg);
   }
+
+  // ---------- 离线记账队列（断网记单缓存，恢复后重放） ----------
+
+  static const _pendingKey = 'taozhu_pending';
+
+  /// 待同步队列（本地，[{id, type, body, ts}]）
+  Future<List<Map<String, dynamic>>> pendingList() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString(_pendingKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      return ((jsonDecode(raw) as List?) ?? []).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// 网络失败时把单据存入待同步队列
+  Future<void> pendingAdd(String type, Map<String, dynamic> body) async {
+    final list = await pendingList();
+    list.add({
+      'id': '${DateTime.now().millisecondsSinceEpoch}${list.length}',
+      'type': type, // sale | purchase | payment
+      'body': body,
+      'ts': DateTime.now().toIso8601String(),
+    });
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_pendingKey, jsonEncode(list));
+  }
+
+  Future<void> pendingRemove(String id) async {
+    final list = await pendingList();
+    list.removeWhere((x) => '${x['id']}' == id);
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_pendingKey, jsonEncode(list));
+  }
+
+  /// 重放待同步队列；返回成功条数
+  Future<int> syncPending() async {
+    final list = await pendingList();
+    if (list.isEmpty) return 0;
+    var ok = 0;
+    for (final item in list) {
+      final type = '${item['type']}';
+      final path = type == 'purchase' ? '/purchases' : (type == 'payment' ? '/payments' : '/sales');
+      try {
+        await post(path, (item['body'] as Map?)?.cast<String, dynamic>());
+        await pendingRemove('${item['id']}');
+        ok++;
+      } catch (_) {
+        // 单条失败跳过（网络或校验），保留队列
+      }
+    }
+    return ok;
+  }
 }

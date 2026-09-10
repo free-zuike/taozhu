@@ -204,13 +204,13 @@ class _PurchasePageState extends State<PurchasePage> {
       return;
     }
     setState(() => _busy = true);
+    final body = {
+      'happened_at': _dateCtrl.text.trim(),
+      'items': valid
+          .map((r) => {'price_id': r.priceId, 'quantity': r.quantity, 'purchase_price': r.purchasePrice})
+          .toList(),
+    };
     try {
-      final body = {
-        'happened_at': _dateCtrl.text.trim(),
-        'items': valid
-            .map((r) => {'price_id': r.priceId, 'quantity': r.quantity, 'purchase_price': r.purchasePrice})
-            .toList(),
-      };
       if (_editing) {
         await Api.instance.patch('/purchases/${widget.editId}', body);
         toast(context, '已保存修改');
@@ -225,7 +225,14 @@ class _PurchasePageState extends State<PurchasePage> {
         });
       }
     } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      final msg = e.toString();
+      // 网络异常：新增单据存入待同步队列（编辑模式不入队）
+      if (msg.contains('地址') && !_editing) {
+        await Api.instance.pendingAdd('purchase', body);
+        toast(context, '网络异常，进货单已存入待同步队列');
+      } else {
+        toast(context, msg.replaceFirst('Exception: ', ''));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -13,7 +13,8 @@ stocksRouter.use('*', authMiddleware());
 stocksRouter.get('/', async (c) => {
   const q = c.req.query('q')?.trim() ?? '';
   const belowOnly = c.req.query('below') === '1';
-  let sql = `SELECT st.id, st.item_id, st.unit, st.quantity, st.min_stock, i.name AS item_name
+  let sql = `SELECT st.id, st.item_id, st.unit, st.quantity, st.min_stock, i.name AS item_name,
+      (SELECT p.purchase_price FROM item_prices p WHERE p.item_id = st.item_id AND p.unit = st.unit AND p.active = 1 LIMIT 1) AS cost_price
     FROM stocks st JOIN items i ON i.id = st.item_id
     WHERE i.deleted_at IS NULL`;
   const params: string[] = [];
@@ -21,12 +22,12 @@ stocksRouter.get('/', async (c) => {
   if (belowOnly) { sql += ' AND st.quantity < st.min_stock'; }
   sql += ' ORDER BY i.name, st.unit';
   const rows = await c.env.DB.prepare(sql).bind(...params).all<{
-    id: string; item_id: string; unit: string; quantity: number; min_stock: number; item_name: string;
+    id: string; item_id: string; unit: string; quantity: number; min_stock: number; item_name: string; cost_price: number | null;
   }>();
   return c.json({
     stocks: rows.results.map((r) => ({
       id: r.id, item_id: r.item_id, item_name: r.item_name, unit: r.unit,
-      quantity: r.quantity, min_stock: r.min_stock,
+      quantity: r.quantity, min_stock: r.min_stock, cost_price: r.cost_price ?? 0,
       low: r.quantity < r.min_stock,
     })),
   });

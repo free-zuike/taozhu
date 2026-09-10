@@ -94,15 +94,16 @@ class _PaymentsPageState extends State<PaymentsPage> {
       return;
     }
     setState(() => _busy = true);
+    final body = {
+      'client_id': _clientId,
+      'amount': amount,
+      'waived': waived,
+      'happened_at': _dateCtrl.text.trim(),
+      'method': _methodCtrl.text.trim(),
+      'note': _noteCtrl.text.trim(),
+    };
     try {
-      await Api.instance.post('/payments', {
-        'client_id': _clientId,
-        'amount': amount,
-        'waived': waived,
-        'happened_at': _dateCtrl.text.trim(),
-        'method': _methodCtrl.text.trim(),
-        'note': _noteCtrl.text.trim(),
-      });
+      await Api.instance.post('/payments', body);
       toast(context, waived > 0
           ? '已登记：实收 ¥${amount.toStringAsFixed(2)}，平账 ¥${waived.toStringAsFixed(2)}'
           : '已登记收款 ¥${amount.toStringAsFixed(2)}');
@@ -110,7 +111,14 @@ class _PaymentsPageState extends State<PaymentsPage> {
       _waivedCtrl.clear();
       _load();
     } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      final msg = e.toString();
+      // 网络异常：收款存入待同步队列
+      if (msg.contains('地址')) {
+        await Api.instance.pendingAdd('payment', body);
+        toast(context, '网络异常，收款已存入待同步队列');
+      } else {
+        toast(context, msg.replaceFirst('Exception: ', ''));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
