@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
+import '../log.dart';
 import '../theme.dart';
 import '../utils/download.dart';
 import '../version.dart';
@@ -19,6 +20,7 @@ import 'payments_page.dart';
 import 'statement_page.dart';
 import 'users_page.dart';
 import 'stocks_page.dart';
+import 'cleanup_page.dart';
 import 'login_page.dart';
 
 class MyPage extends StatefulWidget {
@@ -46,6 +48,16 @@ class _MyPageState extends State<MyPage> {
     });
     _loadLowStocks();
     _loadPending();
+    _autoSync();
+  }
+
+  /// 自动同步离线待同步单据（静默：成功不打扰，失败留队列下次再试）
+  Future<void> _autoSync() async {
+    await Api.instance.syncPending();
+    if (mounted) {
+      _loadPending();
+      _loadLowStocks();
+    }
   }
 
   Future<void> _loadLowStocks() async {
@@ -461,40 +473,41 @@ class _MyPageState extends State<MyPage> {
   }
 
   /// 清理更新下载缓存：删除下载目录/临时目录中的旧安装包（APK/zip），释放空间
-  Future<void> _cleanUpdateCache() async {
-    if (kIsWeb) {
-      toast(context, 'Web 版无本地安装包，无需清理');
-      return;
-    }
-    var deleted = 0;
-    var freed = 0.0;
-    Future<void> scan(Directory? dir) async {
-      if (dir == null || !await dir.exists()) return;
-      await for (final f in dir.list(recursive: true, followLinks: false)) {
-        if (f is! File) continue;
-        final name = f.uri.pathSegments.last;
-        if (name.startsWith('taozhu-update') ||
-            name.startsWith('taozhu-windows-') ||
-            name.startsWith('taozhu-macos-') ||
-            name.startsWith('taozhu-linux-')) {
-          try {
-            freed += (await f.length()) / 1048576;
-            await f.delete();
-            deleted++;
-          } catch (_) {}
-        }
-      }
-    }
-
-    try {
-      await scan(await getDownloadsDirectory());
-      await scan(await getTemporaryDirectory());
-      toast(context, deleted > 0
-          ? '已清理 $deleted 个旧安装包，释放约 ${freed.toStringAsFixed(1)} MB'
-          : '没有需要清理的旧安装包');
-    } catch (e) {
-      toast(context, '清理失败：${e.toString().replaceFirst('Exception: ', '')}');
-    }
+  /// 查看错误日志（弹层：最近记录 + 清空）
+  Future<void> _showLogs() async {
+    final logs = await readLogs();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('错误日志'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 320,
+          child: logs.isEmpty
+              ? const Center(child: Text('暂无日志', style: TextStyle(color: Color(0xFF909399))))
+              : ListView(
+                  children: [
+                    for (final l in logs.reversed)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Text(l, style: const TextStyle(fontSize: 12, height: 1.4)),
+                      ),
+                  ],
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await clearLogs();
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('清空'),
+          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+        ],
+      ),
+    );
   }
 
   /// 在系统文件管理器中显示该文件（Windows explorer / macOS 访达 / Linux xdg-open）
@@ -554,7 +567,9 @@ class _MyPageState extends State<MyPage> {
             _item(Icons.restore_outlined, c.primary, '导入备份', '从备份 JSON 恢复（合并，不覆盖现有）', _importBackup),
             _item(Icons.system_update_alt_outlined, c.primary, '检查更新',
                 kIsWeb ? 'Web 版随部署更新' : '对比最新版本，应用内下载安装', _checkUpdate),
-            _item(Icons.cleaning_services_outlined, c.primary, '清理更新缓存', '删除下载过的旧安装包，释放空间', _cleanUpdateCache),
+            _item(Icons.cleaning_services_outlined, c.primary, '存储清理', '查看并删除安装包/临时文件，释放空间',
+                () => goPage(context, const CleanupPage())),
+            _item(Icons.receipt_long_outlined, c.primary, '错误日志', '查看最近的操作错误记录（不再弹到页面）', _showLogs),
           ]),
           const SizedBox(height: 18),
           _card([

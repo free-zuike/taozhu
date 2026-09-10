@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../api.dart';
 import '../theme.dart';
 import '../pages/sale_page.dart';
 import '../pages/my_page.dart';
@@ -15,8 +16,28 @@ class BottomShell extends StatefulWidget {
   State<BottomShell> createState() => _BottomShellState();
 }
 
-class _BottomShellState extends State<BottomShell> {
+class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// 回到前台时自动重放离线待同步单据（静默：成功不打扰）
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      Api.instance.syncPending();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

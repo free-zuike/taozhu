@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'log.dart';
 
 class Api {
   Api._();
@@ -98,7 +99,8 @@ class Api {
           res = await http.get(Uri.parse(url), headers: headers);
       }
     } catch (e) {
-      // 网络/DNS/连接异常：统一友好文案，不把底层异常与完整地址甩给用户
+      // 网络/DNS/连接异常：记录日志，页面只给友好提示
+      appLog('net', '$method $path → ${e.toString().split('\n').first}');
       throw Exception('无法连接服务器，请检查网络或服务器地址');
     }
 
@@ -115,6 +117,7 @@ class Api {
       final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (d['error'] is String) msg = d['error'] as String;
     } catch (_) {}
+    appLog('http', '$method $path → ${res.statusCode}: $msg');
     throw Exception(msg);
   }
 
@@ -140,6 +143,7 @@ class Api {
       final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (d['error'] is String) msg = d['error'] as String;
     } catch (_) {}
+    appLog('http', '$method $path → ${res.statusCode}: $msg');
     throw Exception(msg);
   }
   Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) =>
@@ -230,6 +234,7 @@ class Api {
       final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (d['error'] is String) msg = d['error'] as String;
     } catch (_) {}
+    appLog('http', '$method $path → ${res.statusCode}: $msg');
     throw Exception(msg);
   }
 
