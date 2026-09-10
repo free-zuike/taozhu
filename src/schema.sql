@@ -128,3 +128,15 @@ CREATE TABLE IF NOT EXISTS categories (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_categories_type ON categories (type);
+
+-- 库存（按 商品+单位）：进货 +quantity、出货 −quantity；min_stock 为低库存预警阈值
+CREATE TABLE IF NOT EXISTS stocks (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES items(id),
+  unit TEXT NOT NULL,
+  quantity REAL NOT NULL DEFAULT 0,
+  min_stock REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stocks_item_unit ON stocks (item_id, unit);
+CREATE INDEX IF NOT EXISTS idx_categories_type ON categories (type);

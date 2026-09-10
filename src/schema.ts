@@ -105,6 +105,15 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_categories_type ON categories (type)`,
+  `CREATE TABLE IF NOT EXISTS stocks (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES items(id),
+    unit TEXT NOT NULL,
+    quantity REAL NOT NULL DEFAULT 0,
+    min_stock REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_stocks_item_unit ON stocks (item_id, unit)`,
 ];
 
 let schemaReady = false;
@@ -124,10 +133,16 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'categories'",
     ).first<{ name: string }>();
     if (!catTable) {
-      await db.batch([
-        db.prepare(DDL[DDL.length - 2]),
-        db.prepare(DDL[DDL.length - 1]),
-      ]);
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS categories'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
+    }
+    // 库存表（v0.14.0.0）：商品+单位 唯一，进货 + / 出货 −
+    const stockTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'stocks'",
+    ).first<{ name: string }>();
+    if (!stockTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS stocks'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
     }
     for (const t of ['clients', 'items'] as const) {
       const cols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();

@@ -16,6 +16,7 @@ import 'payments_page.dart';
 import 'ledger_page.dart';
 import 'statement_page.dart';
 import 'users_page.dart';
+import 'stocks_page.dart';
 import 'login_page.dart';
 
 class MyPage extends StatefulWidget {
@@ -213,6 +214,14 @@ class _MyPageState extends State<MyPage> {
                   subtitle: const Text('对比 GitHub Release 最新版本', style: TextStyle(fontSize: 12)),
                   trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
                   onTap: _checkUpdate,
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.inventory_2_outlined),
+                  title: const Text('库存'),
+                  subtitle: const Text('进货入库/出货扣减自动维护，盘点与预警', style: TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+                  onTap: () => goPage(context, const StocksPage()),
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(

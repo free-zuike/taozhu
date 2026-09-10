@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
+import { stockDelta } from '../lib/stock';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -73,6 +74,8 @@ salesRouter.post('/', async (c) => {
         'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(siId, saleId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount),
     );
+    // 出货扣减库存
+    batch.push(stockDelta(c.env.DB, price.item_id, price.unit, -qty));
   }
 
   await c.env.DB.batch(batch);
@@ -172,6 +175,13 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
   if (body?.items !== undefined) {
     const items = body.items;
     if (!Array.isArray(items) || items.length === 0) return c.json({ error: '请至少添加一种商品' }, 400);
+    // 编辑替换明细：先回滚原明细的库存（出货扣减恢复），再按新明细扣减
+    const oldItems = await c.env.DB.prepare(
+      'SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)
+      .all<{ item_id: string; unit: string; quantity: number }>();
+    for (const it of oldItems.results) {
+      batch.push(stockDelta(c.env.DB, it.item_id, it.unit, it.quantity));
+    }
     const priceIds = items.map((i) => i.price_id);
     if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
     const placeholders = priceIds.map(() => '?').join(',');
@@ -202,6 +212,8 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
           'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         ).bind(randomId(), id, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount),
       );
+      // 按新明细扣减库存
+      batch.push(stockDelta(c.env.DB, price.item_id, price.unit, -qty));
     }
   } else {
     const tot = await c.env.DB.prepare('SELECT COALESCE(SUM(amount),0) AS total FROM sale_items WHERE sale_id = ?').bind(id).first<{ total: number }>();
@@ -211,9 +223,15 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
   return c.json({ id, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100 });
 });
 
-// DELETE /sales/:id — 删除出货单（级联删明细，仅老板）
+// DELETE /sales/:id — 删除出货单（回滚库存 + 级联删明细，仅老板）
 salesRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM sales WHERE id = ?').bind(id).run();
+  const oldItems = await c.env.DB.prepare(
+    'SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)
+    .all<{ item_id: string; unit: string; quantity: number }>();
+  const batch: D1PreparedStatement[] = oldItems.results
+    .map((it) => stockDelta(c.env.DB, it.item_id, it.unit, it.quantity)); // 出货扣的加回
+  batch.push(c.env.DB.prepare('DELETE FROM sales WHERE id = ?').bind(id));
+  await c.env.DB.batch(batch);
   return c.body(null, 204);
 });
