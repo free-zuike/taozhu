@@ -14,6 +14,9 @@ on:
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -127,3 +130,21 @@ jobs:
         run: npx wrangler deploy
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ steps.account.outputs.account_id }}
+
+      # 统一创建 Release（taozhu-vX）：本 workflow 每 push 最先完成，release 创建时刻严格按推送顺序
+      # 单调递增 → GitHub 列表按版本顺序排列；构建 workflow 只上传资产，不再竞争创建。
+      - name: Create release (统一创建，保证列表顺序)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
+          REL="taozhu-v${VERSION}"
+          git fetch --tags --quiet || true
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" || true
+          fi
+          echo "release $REL 就绪（资产由各构建 workflow 上传）"

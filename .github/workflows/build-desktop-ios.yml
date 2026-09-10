@@ -60,7 +60,8 @@ jobs:
           $notes = "陶朱 v$VERSION 更新内容：`n$log`n`n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。"
           $REL = "taozhu-v$VERSION"
           gh release view $REL 2>$null; if (-not $?) {
-            gh release create $REL --title "陶朱 v$VERSION" --notes $notes
+            # 发布时间固定为该版本 commit 时间（并发创建时保证列表按版本顺序）
+            gh release create $REL --title "陶朱 v$VERSION" --notes $notes --published-at "$(git log -1 --format=%cI)" 2>$null
           }
           gh release edit $REL --title "陶朱 v$VERSION" --notes $notes | Out-Null
           gh release upload $REL "$env:TEMP/taozhu-windows-${VERSION}.zip" --clobber
@@ -111,7 +112,9 @@ jobs:
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
+            # 发布时间固定为该版本 commit 时间（并发创建时保证列表按版本顺序）
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" \
+              --published-at "$(git log -1 --format=%cI)" || true
           fi
           gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
           gh release upload "$REL" "/tmp/taozhu-macos-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber
@@ -165,7 +168,9 @@ jobs:
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
           if ! gh release view "$REL" >/dev/null 2>&1; then
-            gh release create "$REL" --title "陶朱 v${VERSION}" --notes "$NOTES"
+            # 发布时间固定为该版本 commit 时间（并发创建时保证列表按版本顺序）
+            gh release create "$REL" --title "陶朱 v${VERSION}" --notes "$NOTES" \
+              --published-at "$(git log -1 --format=%cI)" || true
           fi
           gh release edit "$REL" --title "陶朱 v${VERSION}" --notes "$NOTES"
           gh release upload "$REL" "/tmp/taozhu-ios-${VERSION}-unsigned.zip" --clobber
