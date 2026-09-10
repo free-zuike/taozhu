@@ -321,7 +321,8 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
-  /// 生成可分享的对账单页面链接（可选失效时间：3 天 / 7 天 / 1 个月 / 永久）  Future<void> _share() async {
+  /// 生成可分享的对账单页面链接（可选失效时间：3 天 / 7 天 / 1 个月 / 永久）
+  Future<void> _share() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
