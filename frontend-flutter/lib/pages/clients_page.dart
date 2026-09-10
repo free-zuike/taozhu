@@ -146,7 +146,7 @@ class _ClientsPageState extends State<ClientsPage> {
                 ],
               ] else ...[
                 const SizedBox(height: 8),
-                const Align(
+                Align(
                   alignment: Alignment.centerLeft,
                   child: Text('暂无店铺分类，可先在「我的 → 分类管理」创建',
                       style: TextStyle(color: _c.textSub, fontSize: 12)),
@@ -292,8 +292,8 @@ class _ClientsPageState extends State<ClientsPage> {
                       ),
                     ),
                   if (_clients.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(32),
+                    Padding(
+                      padding: const EdgeInsets.all(32),
                       child: Center(child: Text('暂无店铺，点右上角 ＋ 添加', style: TextStyle(color: _c.textSub))),
                     ),
                 ],

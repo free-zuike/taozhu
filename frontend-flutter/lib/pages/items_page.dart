@@ -173,8 +173,8 @@ class _ItemsPageState extends State<ItemsPage> {
                       ),
                     ),
                   if (_items.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(32),
+                    Padding(
+                      padding: const EdgeInsets.all(32),
                       child: Center(child: Text('暂无商品，点右下角 + 添加', style: TextStyle(color: _c.textSub))),
                     ),
                 ],

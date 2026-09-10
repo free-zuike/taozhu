@@ -332,8 +332,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
                       ),
                     ),
                   if (_payments.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(32),
+                    Padding(
+                      padding: const EdgeInsets.all(32),
                       child: Center(child: Text('暂无收款记录', style: TextStyle(color: _c.textSub))),
                     ),
                 ],
