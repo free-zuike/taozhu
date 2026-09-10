@@ -23,6 +23,34 @@ shareRouter.post('/', authMiddleware(), adminOnly(), async (c) => {
   return c.json({ token, url, expires_at: expiresAt }, 201);
 });
 
+// GET /api/v1/share — 我的分享列表（最近在前，含到期时间与预览），用于随时取消/删除
+shareRouter.get('/', authMiddleware(), adminOnly(), async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT token, expires_at, created_at, substr(payload, 1, 120) AS preview
+     FROM share_links ORDER BY created_at DESC LIMIT 100`,
+  ).all<{ token: string; expires_at: string | null; created_at: string; preview: string }>();
+  const origin = new URL(c.req.url).origin;
+  const now = new Date().toISOString();
+  return c.json({
+    shares: rows.results.map((r) => ({
+      token: r.token,
+      url: `${origin}/share/${r.token}`,
+      expires_at: r.expires_at,
+      created_at: r.created_at,
+      expired: r.expires_at !== null && r.expires_at < now,
+      preview: r.preview,
+    })),
+  });
+});
+
+// DELETE /api/v1/share/:token — 取消分享（删除链接，页面随即 404）
+shareRouter.delete('/:token', authMiddleware(), adminOnly(), async (c) => {
+  const token = c.req.param('token');
+  const r = await c.env.DB.prepare('DELETE FROM share_links WHERE token = ?').bind(token).run();
+  if ((r.meta.changes ?? 0) === 0) return c.json({ error: '分享不存在' }, 404);
+  return c.json({ ok: true });
+});
+
 /** 渲染分享页 HTML（payload 为前端构造的 { client, from, to, sales[], payments[], debt }） */
 export function renderShareHtml(payloadJson: string): string {
   let data: Record<string, unknown> = {};

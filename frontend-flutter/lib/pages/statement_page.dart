@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:excel/excel.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -169,54 +170,158 @@ class _StatementPageState extends State<StatementPage> {
     toast(context, '对账文本已复制，可直接粘贴发送');
   }
 
-  /// 生成 .xls（HTML 表格，Excel/微信可直接打开）内容，UTF-8 BOM 保证中文不乱码
-  String _buildXls() {
-    final esc = (String s) => s
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;');
-    final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
-    final buf = StringBuffer()
-      ..writeln('<html><head><meta charset="utf-8"><title>陶朱对账单</title></head><body>')
-      ..writeln('<h3>陶朱对账单</h3>')
-      ..writeln('<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse">')
-      ..writeln('<tr><td><b>客户</b></td><td>${esc(clientName)}</td><td><b>账期</b></td><td>${esc(_fromCtrl.text.trim())} 至 ${esc(_toCtrl.text.trim())}</td></tr>')
-      ..writeln('<tr><td><b>出货合计</b></td><td>¥${_saleTotal.toStringAsFixed(2)}（${_sales.length} 笔）</td><td><b>收款合计</b></td><td>¥${_payTotal.toStringAsFixed(2)}（${_payments.length} 笔）</td></tr>')
-      ..writeln('<tr><td><b>期末欠款</b></td><td colspan="3">¥${_debtEnd.toStringAsFixed(2)}</td></tr>')
-      ..writeln('<tr><th>日期</th><th>出货明细</th><th>数量</th><th>金额</th></tr>');
-    for (final s in _sales) {
-      final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
-      if (items.isEmpty) {
-        buf.writeln('<tr><td>${_date(s['happened_at'])}</td><td>${esc('${s['note'] ?? ''}')}</td><td></td><td>¥${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}</td></tr>');
-      }
-      for (final it in items) {
-        buf.writeln('<tr><td>${_date(s['happened_at'])}</td><td>${esc('${it['item_name']}')}</td><td>${it['quantity']}${esc('${it['unit']}')}</td><td>¥${((it['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}</td></tr>');
-      }
-    }
-    buf.writeln('<tr><th>日期</th><th>收款方式</th><th>实收</th><th>平账</th></tr>');
-    for (final p in _payments) {
-      final w = ((p['waived'] as num?)?.toDouble() ?? 0);
-      buf.writeln('<tr><td>${_date(p['happened_at'])}</td><td>${esc('${p['method'] ?? ''}')}</td><td>¥${((p['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}</td><td>${w > 0 ? '¥${w.toStringAsFixed(2)}' : ''}</td></tr>');
-    }
-    buf.writeln('</table></body></html>');
-    return buf.toString();
-  }
-
-  /// 导出 Excel（.xls，HTML 表格格式，微信/Excel 可直接打开）
+/// 导出 Excel（.xlsx 标准格式，excel 包生成，Excel/微信/WPS 直接打开，无扩展名告警）
   Future<void> _exportXls() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
-    final bytes = Uint8List.fromList(utf8.encode('\ufeff${_buildXls()}'));
     final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
-    final name = '陶朱对账单_${clientName}_${_fromCtrl.text.trim()}_${_toCtrl.text.trim()}.xls';
-    await saveBytes(bytes, name, 'application/vnd.ms-excel', '陶朱对账单');
+    final excel = Excel.createExcel();
+    final sheet = excel['对账单'];
+    sheet.setColumnWidth(0, 18);
+    sheet.setColumnWidth(1, 32);
+    sheet.setColumnWidth(2, 14);
+    sheet.setColumnWidth(3, 14);
+    sheet.appendRow([TextCellValue('陶朱对账单')]);
+    sheet.appendRow([TextCellValue('客户'), TextCellValue(clientName)]);
+    sheet.appendRow([TextCellValue('账期'), TextCellValue('${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}')]);
+    sheet.appendRow([TextCellValue('出货合计'), TextCellValue('¥${_saleTotal.toStringAsFixed(2)}（${_sales.length} 笔）')]);
+    sheet.appendRow([TextCellValue('收款合计'), TextCellValue('¥${_payTotal.toStringAsFixed(2)}（${_payments.length} 笔）')]);
+    sheet.appendRow([TextCellValue('期末欠款'), TextCellValue('¥${_debtEnd.toStringAsFixed(2)}')]);
+    sheet.appendRow([TextCellValue('')]);
+    sheet.appendRow([TextCellValue('日期'), TextCellValue('出货明细'), TextCellValue('数量'), TextCellValue('金额')]);
+    for (final s in _sales) {
+      final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
+      if (items.isEmpty) {
+        sheet.appendRow([
+          TextCellValue(_date(s['happened_at'])),
+          TextCellValue('${s['note'] ?? ''}'),
+          TextCellValue(''),
+          TextCellValue('¥${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}'),
+        ]);
+      }
+      for (final it in items) {
+        sheet.appendRow([
+          TextCellValue(_date(s['happened_at'])),
+          TextCellValue('${it['item_name']}'),
+          TextCellValue('${it['quantity']}${it['unit']}'),
+          TextCellValue('¥${((it['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}'),
+        ]);
+      }
+    }
+    sheet.appendRow([TextCellValue('')]);
+    sheet.appendRow([TextCellValue('日期'), TextCellValue('收款方式'), TextCellValue('实收'), TextCellValue('平账')]);
+    for (final p in _payments) {
+      final w = ((p['waived'] as num?)?.toDouble() ?? 0);
+      sheet.appendRow([
+        TextCellValue(_date(p['happened_at'])),
+        TextCellValue('${p['method'] ?? ''}'),
+        TextCellValue('¥${((p['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}'),
+        TextCellValue(w > 0 ? '¥${w.toStringAsFixed(2)}' : ''),
+      ]);
+    }
+    final bytes = excel.encode();
+    if (bytes == null) {
+      toast(context, '导出失败，请重试');
+      return;
+    }
+    final name = '陶朱对账单_${clientName}_${_fromCtrl.text.trim()}_${_toCtrl.text.trim()}.xlsx';
+    await saveBytes(
+        bytes, name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '陶朱对账单');
     if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
   }
 
-  /// 生成可分享的对账单页面链接（可选失效时间：3 天 / 7 天 / 1 个月 / 永久）
-  Future<void> _share() async {
+  /// 我的分享管理：列出历史分享链接（含到期/已过期），可随时取消（删除）
+  Future<void> _manageShares() async {
+    List<Map<String, dynamic>> shares = [];
+    try {
+      final d = await Api.instance.get('/share');
+      shares = ((d['shares'] as List?) ?? []).cast<Map<String, dynamic>>();
+    } catch (e) {
+      toast(context, '获取分享列表失败：${e.toString().replaceFirst('Exception: ', '')}');
+      return;
+    }
+    if (!mounted) return;
+    String fmtExp(String? e) {
+      if (e == null) return '永久有效';
+      final d = DateTime.tryParse(e);
+      return d == null ? '未知' : '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')} 到期';
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('我的分享（可取消）'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 340,
+          child: shares.isEmpty
+              ? const Center(child: Text('暂无分享记录', style: TextStyle(color: Color(0xFF909399))))
+              : ListView(
+                  children: [
+                    for (final s in shares)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${s['expired'] == true ? '已过期 · ' : ''}${fmtExp('${s['expires_at']}')}',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: s['expired'] == true
+                                          ? const Color(0xFF909399)
+                                          : null,
+                                    ),
+                                  ),
+                                  Text('${s['url']}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 11, color: Color(0xFF909399))),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '复制链接',
+                              icon: const Icon(Icons.copy_outlined, size: 18),
+                              onPressed: () async {
+                                await Clipboard.setData(ClipboardData(text: '${s['url']}'));
+                                toast(ctx, '链接已复制');
+                              },
+                            ),
+                            IconButton(
+                              tooltip: '取消分享',
+                              icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFEF4444)),
+                              onPressed: () async {
+                                try {
+                                  await Api.instance.delete('/share/${s['token']}');
+                                  toast(ctx, '已取消该分享');
+                                  if (ctx.mounted) Navigator.pop(ctx);
+                                  _manageShares();
+                                } catch (e) {
+                                  toast(ctx, '取消失败：${e.toString().replaceFirst('Exception: ', '')}');
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+        ),
+        actions: [
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+        ],
+      ),
+    );
+  }
+
+  /// 生成可分享的对账单页面链接（可选失效时间：3 天 / 7 天 / 1 个月 / 永久）  Future<void> _share() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
@@ -288,6 +393,11 @@ class _StatementPageState extends State<StatementPage> {
       appBar: AppBar(
         title: const Text('对账单'),
         actions: [
+          IconButton(
+            tooltip: '我的分享',
+            icon: const Icon(Icons.link_outlined),
+            onPressed: _manageShares,
+          ),
           IconButton(
             tooltip: '分享对账单',
             icon: const Icon(Icons.share_outlined),

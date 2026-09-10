@@ -93,28 +93,39 @@ class Api {
     final t = await _token();
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
 
-    http.Response res;
-    try {
+    // 发起一次请求（按方法分发）
+    Future<http.Response> doReq() async {
       switch (method) {
         case 'POST':
-          res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
-          break;
+          return http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
         case 'PUT':
-          res = await http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
-          break;
+          return http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
         case 'PATCH':
-          res = await http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
-          break;
+          return http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
         case 'DELETE':
-          res = await http.delete(Uri.parse(url), headers: headers);
-          break;
+          return http.delete(Uri.parse(url), headers: headers);
         default:
-          res = await http.get(Uri.parse(url), headers: headers);
+          return http.get(Uri.parse(url), headers: headers);
       }
+    }
+
+    http.Response res;
+    try {
+      res = await doReq();
     } catch (e) {
-      // 网络/DNS/连接异常：记录日志，页面只给友好提示
-      appLog('net', '$method $path → ${e.toString().split('\n').first}');
-      throw Exception('无法连接服务器，请检查网络或服务器地址');
+      // 网络/DNS/连接异常：自动重试 2 次（代理切换/VPN 抖动等偶发失败），仍失败记日志并给友好提示
+      var ok = false;
+      for (var i = 0; i < 2 && !ok; i++) {
+        await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
+        try {
+          res = await doReq();
+          ok = true;
+        } catch (_) {}
+      }
+      if (!ok) {
+        appLog('net', '$method $path → ${e.toString().split('\n').first}');
+        throw Exception('无法连接服务器，请检查网络或服务器地址');
+      }
     }
 
     if (res.statusCode == 401) {

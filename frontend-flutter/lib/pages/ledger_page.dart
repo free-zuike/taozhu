@@ -159,15 +159,17 @@ class _LedgerPageState extends State<LedgerPage> {
                       ),
                       title: Text('${c['name']}',
                           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        '交易 ${(((c['sale_count'] as num?) ?? 0) + ((c['payment_count'] as num?) ?? 0))} 笔 · 欠 ¥${((c['debt'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? const Color(0xFF9CA3AF)
-                              : const Color(0x8A000000),
-                        ),
-                      ),
+                      subtitle: _isStaff
+                          ? null // 店员不显示交易笔数/欠款（经营数据）
+                          : Text(
+                              '交易 ${(((c['sale_count'] as num?) ?? 0) + ((c['payment_count'] as num?) ?? 0))} 笔 · 欠 ¥${((c['debt'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context).brightness == Brightness.dark
+                                    ? const Color(0xFF9CA3AF)
+                                    : const Color(0x8A000000),
+                              ),
+                            ),
                       trailing: '${c['id']}' == _clientId
                           ? const Icon(Icons.check_circle, color: Color(0xFF409EFF), size: 20)
                           : null,

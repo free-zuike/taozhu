@@ -18,11 +18,15 @@ class BottomShell extends StatefulWidget {
 
 class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
   int _index = 0;
+  bool _isStaff = false; // 店员：无统计权限，隐藏统计 tab
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    Api.instance.getRole().then((r) {
+      if (mounted) setState(() => _isStaff = r == 'staff');
+    });
   }
 
   @override
@@ -45,7 +49,9 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [LedgerPage(), StatsPage(), PurchaseHistoryPage(), MyPage()],
+        children: _isStaff
+            ? const [LedgerPage(), PurchaseHistoryPage(), MyPage()]
+            : const [LedgerPage(), StatsPage(), PurchaseHistoryPage(), MyPage()],
       ),
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -61,10 +67,10 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
           child: Row(
             children: [
               _navItem(0, Icons.receipt_long_outlined, '交易'),
-              _navItem(1, Icons.bar_chart_outlined, '统计'),
+              if (!_isStaff) _navItem(1, Icons.bar_chart_outlined, '统计'),
               _centerButton(),
-              _navItem(2, Icons.shopping_cart_outlined, '进货'),
-              _navItem(3, Icons.person_outline, '我的'),
+              _navItem(_isStaff ? 1 : 2, Icons.shopping_cart_outlined, '进货'),
+              _navItem(_isStaff ? 2 : 3, Icons.person_outline, '我的'),
             ],
           ),
         ),

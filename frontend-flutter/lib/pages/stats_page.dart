@@ -286,27 +286,8 @@ class _StatsPageState extends State<StatsPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  // 视图模式（区间 / 月 / 年）
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: SegmentedButton<String>(
-                      style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                      segments: const [
-                        ButtonSegment(value: 'range', label: Text('区间')),
-                        ButtonSegment(value: 'month', label: Text('月')),
-                        ButtonSegment(value: 'year', label: Text('年')),
-                      ],
-                      selected: {_mode},
-                      onSelectionChanged: (s) {
-                        setState(() => _mode = s.first);
-                        _load();
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  if (_mode == 'range') _quickBar(),
-                  if (_mode == 'month') _monthBar(),
-                  if (_mode == 'year') _yearBar(),
+                  // 快捷区间：统一一行（今日 / 最近30天 / 自定义），无重复模式切换
+                  _quickBar(),
                   const SizedBox(height: 6),
                   Text('$start ~ $end（${_spanDays} 天${_mode == 'range' && _msd > 1 ? ' · 每月 $_msd 日起算' : ''}）',
                       style: TextStyle(color: _sub, fontSize: 12)),

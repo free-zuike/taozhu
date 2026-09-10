@@ -58,9 +58,9 @@ authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, 
 // 源1 GitHub Release API（权威，可确认资产就绪）；源2 部署时生成的 /latest.json（本域静态，零网络依赖）；
 // 源3 jsDelivr CDN 镜像读取仓库版本文件（GitHub API 不可达时的兜底，国内可达性好）。
 // 返回 ready=false 表示该版本 release 已创建但安装包（CI 构建）尚未就绪——前端应提示"构建中"而非引导下载。
-// 全部失败返回 latest=''，前端手动兜底。10 分钟内复用成功结果，避免反复打外网。
+// 全部失败返回 latest=''，前端手动兜底。60 秒内复用成功结果（构建中→就绪切换更及时）。
 let latestCache: { at: number; latest: string; ready: boolean; notes: string } | null = null;
-const LATEST_CACHE_MS = 10 * 60 * 1000;
+const LATEST_CACHE_MS = 60 * 1000;
 
 interface VersionProbe {
   v: string;
@@ -100,7 +100,9 @@ authRouter.get('/latest-version', async (c) => {
       return null;
     }
   };
-  const probeVer = (v: string): VersionProbe | null => (v ? { v, ready: true } : null);
+  // 备源（latest.json / jsDelivr）无法验证安装包资产，保守返回 ready=false——
+  // 避免误报"可下载"导致下载失败；GitHub 可达时以 GitHub 资产检测为准
+  const probeVer = (v: string): VersionProbe | null => (v ? { v, ready: false } : null);
   const checkAsset = async (): Promise<VersionProbe | null> => {
     try {
       const r = await c.env.ASSETS.fetch(new Request(new URL('/latest.json', c.req.url)));

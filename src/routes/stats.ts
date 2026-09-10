@@ -7,6 +7,13 @@ type V = { user: AuthUser };
 export const statsRouter = new Hono<{ Bindings: Env; Variables: V }>();
 
 statsRouter.use('*', authMiddleware());
+// 店员无统计权限：经营数据（出货金额/毛利/欠款等）仅老板可见
+statsRouter.use('*', async (c, next) => {
+  if (c.get('user').role === 'staff') {
+    return c.json({ error: '无权限查看统计' }, 403);
+  }
+  await next();
+});
 
 const nowIso = () => new Date().toISOString();
 

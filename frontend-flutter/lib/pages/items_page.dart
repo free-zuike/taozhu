@@ -92,13 +92,20 @@ class _ItemsPageState extends State<ItemsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('商品管理')),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const _ItemEditPage()));
-          _load();
-        },
-        child: const Icon(Icons.add),
+      appBar: AppBar(
+        title: const Text('商品管理'),
+        actions: [
+          // 店员只读（隐藏新增入口）；新增统一在右上角（与店铺管理一致）
+          if (!_isStaff)
+            IconButton(
+              tooltip: '新增商品',
+              icon: const Icon(Icons.add),
+              onPressed: () async {
+                await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const _ItemEditPage()));
+                _load();
+              },
+            ),
+        ],
       ),
       body: Column(
         children: [
@@ -159,19 +166,21 @@ class _ItemsPageState extends State<ItemsPage> {
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                IconButton(
-                                  icon: Icon(Icons.edit_outlined, size: 20, color: _c.primary),
-                                  tooltip: '编辑',
-                                  onPressed: () async {
-                                    await Navigator.of(context)
-                                        .push(MaterialPageRoute(builder: (_) => _ItemEditPage(item: it)));
-                                    _load();
-                                  },
-                                ),
-                                IconButton(
-                                  icon: Icon(Icons.delete_outline, color: _c.danger),
-                                  onPressed: () => _delete(it['id'] as String, '${it['name']}'),
-                                ),
+                                if (!_isStaff) ...[
+                                  IconButton(
+                                    icon: Icon(Icons.edit_outlined, size: 20, color: _c.primary),
+                                    tooltip: '编辑',
+                                    onPressed: () async {
+                                      await Navigator.of(context)
+                                          .push(MaterialPageRoute(builder: (_) => _ItemEditPage(item: it)));
+                                      _load();
+                                    },
+                                  ),
+                                  IconButton(
+                                    icon: Icon(Icons.delete_outline, color: _c.danger),
+                                    onPressed: () => _delete(it['id'] as String, '${it['name']}'),
+                                  ),
+                                ],
                               ],
                             ),
                           ],
@@ -181,7 +190,7 @@ class _ItemsPageState extends State<ItemsPage> {
                   if (_items.isEmpty)
                     Padding(
                       padding: const EdgeInsets.all(32),
-                      child: Center(child: Text('暂无商品，点右下角 + 添加', style: TextStyle(color: _c.textSub))),
+                      child: Center(child: Text('暂无商品，点右上角 ＋ 添加', style: TextStyle(color: _c.textSub))),
                     ),
                 ],
               ),

@@ -370,27 +370,40 @@ class _MyPageState extends State<MyPage> {
 
   /// Android：应用内更新走系统下载器（DownloadManager）——
   /// 后台下载、通知栏（下滑栏）实时进度、退出应用仍继续，完成后引导安装。
-  /// 直链失败自动切换镜像源重试（gh-proxy / ghfast），避免直连受限导致下载失败。
+  /// 多镜像源（同款镜像列表）：下载前轻量探测可用源，选最快可用交给系统下载器；
+  /// 下载失败自动换下一个源；**用户手动取消（CANCELED）立即停止，不换源重试**。
   Future<void> _downloadAndInstall(String ver) async {
     _downloading = true;
     final fileName = 'taozhu-update-$ver.apk';
-    final urls = [
-      'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
-      'https://gh-proxy.com/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
-      'https://ghfast.top/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
+    const prefixes = [
+      '',
+      'https://ghproxy.com/',
+      'https://mirror.ghproxy.com/',
+      'https://gh.ddlc.top/',
+      'https://github.moeyy.xyz/',
+      'https://gh-proxy.com/',
+      'https://ghfast.top/',
     ];
+    final base = 'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk';
+    final urls = [for (final p in prefixes) '$p$base'];
     try {
+      // 下载前并行轻量探测（HEAD Range 0-0），过滤不可达源，避免直接失败
+      final usable = await _probeSources(urls);
+      if (usable.isEmpty) {
+        toast(context, '所有下载源均不可达，请稍后重试或从 GitHub Release 页手动下载');
+        return;
+      }
       var urlIdx = 0;
-      while (urlIdx < urls.length) {
+      while (urlIdx < usable.length) {
         final id = await _dlChannel
-            .invokeMethod<int>('enqueue', {'url': urls[urlIdx], 'fileName': fileName});
+            .invokeMethod<int>('enqueue', {'url': usable[urlIdx], 'fileName': fileName});
         if (id == null) {
           urlIdx++;
           continue;
         }
         if (!mounted) return;
         toast(context,
-            urlIdx == 0 ? '已在后台开始下载，下拉通知栏查看进度' : '直链受限，已切换镜像源继续下载…');
+            urlIdx == 0 ? '已在后台开始下载，下拉通知栏查看进度' : '该下载源失败，已自动切换下一个源…');
         var failed = false;
         // 轮询系统下载状态（每 3 秒，上限 15 分钟；通知栏本身也在实时显示进度）
         for (var i = 0; i < 300; i++) {
@@ -408,8 +421,13 @@ class _MyPageState extends State<MyPage> {
             await _installFromDownloads(fileName);
             return;
           }
+          if (status == 12) {
+            // DownloadManager.STATUS_CANCELED：用户手动取消 → 停止，不换源
+            toast(context, '已取消下载');
+            return;
+          }
           if (status == 16) {
-            // DownloadManager.STATUS_FAILED → 换镜像源重试
+            // DownloadManager.STATUS_FAILED → 换下一个可用源重试
             failed = true;
             break;
           }
@@ -421,12 +439,37 @@ class _MyPageState extends State<MyPage> {
         // 超时（大文件/慢网）：下载仍由系统继续，用户可从通知栏查看
         return;
       }
-      toast(context, '下载失败（直链与镜像源均不可达），请稍后重试或从 GitHub Release 页手动下载');
+      toast(context, '下载失败（所有可用源均失败），请稍后重试或从 GitHub Release 页手动下载');
     } catch (e) {
       toast(context, '启动下载失败：${e.toString().replaceFirst('Exception: ', '')}');
     } finally {
       _downloading = false;
     }
+  }
+
+  /// 并行轻量探测下载源可用性（HEAD + Range，接受 200/206 且 Content-Length>0），返回可用列表
+  Future<List<String>> _probeSources(List<String> urls) async {
+    final results = await Future.wait(urls.map((u) async {
+      try {
+        final client = http.Client();
+        try {
+          final req = http.Request('HEAD', Uri.parse(u));
+          req.headers['Range'] = 'bytes=0-0';
+          req.headers['User-Agent'] = 'Mozilla/5.0';
+          final res = await client.send(req).timeout(const Duration(seconds: 8));
+          final len = res.contentLength ?? -1;
+          if (res.statusCode == 200 || res.statusCode == 206) {
+            return len > 0 || res.statusCode == 200 ? u : null;
+          }
+          return null;
+        } finally {
+          client.close();
+        }
+      } catch (_) {
+        return null;
+      }
+    }));
+    return results.whereType<String>().toList();
   }
 
   /// 下载完成后引导安装（文件在应用下载目录，由系统 DownloadManager 写入）

@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; notes: string };
-    expect(d.current).toBe('0.16.20.0');
+    expect(d.current).toBe('0.16.21.0');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.notes).toBe('string');
@@ -505,6 +505,32 @@ describe('对账单分享（/api/v1/share + /share/:token）', () => {
   it('不存在的 token 返回 404', async () => {
     const page = await app.request('http://localhost/share/no-such-token', {}, env as never);
     expect(page.status).toBe(404);
+  });
+
+  it('分享列表与取消（GET/DELETE /api/v1/share）', async () => {
+    const mk = await call(env, 'POST', '/api/v1/share', token, { payload, ttl_hours: 72 });
+    const created = (await mk.json()) as { token: string };
+    const list = (await (await call(env, 'GET', '/api/v1/share', token)).json()) as {
+      shares: Array<{ token: string; expired: boolean; url: string }>;
+    };
+    expect(list.shares.length).toBe(1);
+    expect(list.shares[0].token).toBe(created.token);
+    expect(list.shares[0].expired).toBe(false);
+    const del = await call(env, 'DELETE', `/api/v1/share/${created.token}`, token);
+    expect(del.status).toBe(200);
+    const after = (await (await call(env, 'GET', '/api/v1/share', token)).json()) as { shares: unknown[] };
+    expect(after.shares.length).toBe(0);
+    const page = await app.request(`http://localhost/share/${created.token}`, {}, env as never);
+    expect(page.status).toBe(404);
+  });
+
+  it('店员不能生成/管理分享（403）', async () => {
+    await env.DB.prepare('INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)')
+      .bind(randomId(), 'staff1', await hashPassword('staff123'), 'staff').run();
+    const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });
+    const staffToken = ((await login.json()) as { token: string }).token;
+    expect((await call(env, 'POST', '/api/v1/share', staffToken, { payload })).status).toBe(403);
+    expect((await call(env, 'GET', '/api/v1/share', staffToken)).status).toBe(403);
   });
 });
 
