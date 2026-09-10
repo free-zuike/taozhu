@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../api.dart';
 import '../local_freq.dart';
+import '../utils/money.dart';
 import 'router.dart';
 
 class PurchasePage extends StatefulWidget {
@@ -302,37 +303,37 @@ class _PurchasePageState extends State<PurchasePage> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          Card(
-            elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: TextField(
-                controller: _dateCtrl,
-                decoration: const InputDecoration(
-                    labelText: '进货日期（YYYY-MM-DD）', helperText: '默认今天，可改为补录历史'),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
+          _infoCard(),
+          const SizedBox(height: 10),
           for (int i = 0; i < _rows.length; i++) _buildRow(i),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Row(
             children: [
-              OutlinedButton(
+              OutlinedButton.icon(
                 onPressed: () => setState(() => _rows.add(_PRow())),
-                child: const Text('+ 添加商品'),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('添加商品'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF67C23A),
+                  side: const BorderSide(color: Color(0x8067C23A)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
               ),
               const Spacer(),
-              Text('合计 ¥${_total.toStringAsFixed(2)}',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFFF56C6C))),
+              Text('合计 ¥${fmtMoney(_total)}',
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xFFEF4444))),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           FilledButton(
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(52),
+              backgroundColor: const Color(0xFF67C23A),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
             onPressed: _busy ? null : _submit,
             child: Text(_busy ? '提交中…' : (_editing ? '保存修改' : '提交进货单')),
           ),
@@ -341,80 +342,149 @@ class _PurchasePageState extends State<PurchasePage> {
     );
   }
 
+  /// 填充式输入框装饰（圆角 12、无边框、聚焦主色描边）
+  InputDecoration _fieldDec({IconData? icon, String? label, String? hint}) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      prefixIcon: icon == null ? null : Icon(icon, size: 20, color: const Color(0xFF909399)),
+      filled: true,
+      fillColor: dark ? const Color(0xFF2C2C2E) : const Color(0xFFF5F7FA),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFF67C23A), width: 1.4),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    );
+  }
+
+  /// 卡片（亮白/暗 #1C1C1E、radius 16）
+  Widget _card(Widget child) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: child,
+    );
+  }
+
+  /// 进货日期信息卡
+  Widget _infoCard() {
+    return _card(Padding(
+      padding: const EdgeInsets.all(14),
+      child: TextField(
+        controller: _dateCtrl,
+        style: TextStyle(
+            color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF111827)),
+        decoration: _fieldDec(icon: Icons.calendar_today_outlined, label: '进货日期', hint: '默认今天，可改为补录历史'),
+      ),
+    ));
+  }
+
   Widget _buildRow(int i) {
     final row = _rows[i];
+    final accent = const Color(0xFF67C23A);
+    final txtStyle = TextStyle(
+        color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF111827));
     final prices = row.itemId == null
         ? <Map<String, dynamic>>[]
         : ((_items.firstWhere((x) => x['id'] == row.itemId)['prices'] as List?) ?? [])
             .cast<Map<String, dynamic>>();
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            DropdownButtonFormField<String>(
-              initialValue: row.itemId,
-              decoration: const InputDecoration(labelText: '商品'),
-              items: _itemMenus,
-              onChanged: (v) => setState(() {
-                row.itemId = v;
-                row.priceId = null;
-              }),
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue: row.priceId,
-              decoration: const InputDecoration(labelText: '单位', helperText: '选单位自动带出默认进价，可再改'),
-              items: prices
-                  .map((p) => DropdownMenuItem(
-                        value: p['id'] as String,
-                        child: Text('${p['unit']}（进 ¥${p['purchase_price']} · 库存 ${p['stock'] ?? 0}）'),
-                      ))
-                  .toList(),
-              onChanged: (v) => setState(() {
-                row.priceId = v;
-                final pp = (prices.firstWhere((p) => p['id'] == v)['purchase_price'] as num).toDouble();
-                row.purchasePrice = pp;
-                row.priceCtrl.text = pp.toStringAsFixed(2);
-                // 上次数量记忆：自动带出该单位上回进的数量
-                final last = _lastQty[v] ?? 0;
-                if (last > 0) {
-                  row.quantity = last;
-                  row.qtyCtrl.text = last.toString();
-                }
-              }),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: row.qtyCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: '数量'),
-                    onChanged: (v) => row.quantity = double.tryParse(v) ?? 0,
-                  ),
+    return _card(Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: accent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: row.priceCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: '进价（可直接改）'),
-                    onChanged: (v) => row.purchasePrice = double.tryParse(v) ?? 0,
-                  ),
+                child: Center(
+                  child: Text('${i + 1}',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: accent)),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.delete, color: Color(0xFFF56C6C)),
-                  onPressed: _rows.length > 1 ? () => setState(() => _rows.removeAt(i)) : null,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: row.itemId,
+                  style: txtStyle,
+                  decoration: _fieldDec(label: '商品'),
+                  items: _itemMenus,
+                  onChanged: (v) => setState(() {
+                    row.itemId = v;
+                    row.priceId = null;
+                  }),
                 ),
-              ],
-            ),
-          ],
-        ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: '删除此商品',
+                icon: const Icon(Icons.delete_outline, color: Color(0xFFF56C6C)),
+                onPressed: _rows.length > 1 ? () => setState(() => _rows.removeAt(i)) : null,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          DropdownButtonFormField<String>(
+            initialValue: row.priceId,
+            style: txtStyle,
+            decoration: _fieldDec(label: '单位（进价 · 库存）'),
+            items: prices
+                .map((p) => DropdownMenuItem(
+                      value: p['id'] as String,
+                      child: Text('${p['unit']}（进 ¥${p['purchase_price']} · 库存 ${p['stock'] ?? 0}）'),
+                    ))
+                .toList(),
+            onChanged: (v) => setState(() {
+              row.priceId = v;
+              final pp = (prices.firstWhere((p) => p['id'] == v)['purchase_price'] as num).toDouble();
+              row.purchasePrice = pp;
+              row.priceCtrl.text = pp.toStringAsFixed(2);
+              // 上次数量记忆：自动带出该单位上回进的数量
+              final last = _lastQty[v] ?? 0;
+              if (last > 0) {
+                row.quantity = last;
+                row.qtyCtrl.text = last.toString();
+              }
+            }),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: row.qtyCtrl,
+                  style: txtStyle,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: _fieldDec(label: '数量'),
+                  onChanged: (v) => row.quantity = double.tryParse(v) ?? 0,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: row.priceCtrl,
+                  style: txtStyle,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: _fieldDec(label: '进价（可直接改）'),
+                  onChanged: (v) => row.purchasePrice = double.tryParse(v) ?? 0,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
-    );
+    ));
   }
 }

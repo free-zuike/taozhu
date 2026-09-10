@@ -368,7 +368,18 @@ class _LedgerPageState extends State<LedgerPage> {
               onPressed: _exportCsv,
             ),
           ],
-          bottom: const TabBar(tabs: [Tab(text: '出货'), Tab(text: '收款')]),
+          bottom: TabBar(
+            tabs: const [Tab(text: '出货'), Tab(text: '收款')],
+            labelColor: const Color(0xFF409EFF),
+            unselectedLabelColor: const Color(0xFF909399),
+            labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            unselectedLabelStyle: const TextStyle(fontSize: 14),
+            indicator: BoxDecoration(
+              color: const Color(0xFF409EFF).withOpacity(0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            indicatorSize: TabBarIndicatorSize.label,
+          ),
         ),
         body: Column(
           children: [
@@ -492,7 +503,13 @@ class _LedgerPageState extends State<LedgerPage> {
           children: [
             Padding(
               padding: const EdgeInsets.all(48),
-              child: Center(child: Text(emptyText, style: const TextStyle(color: Colors.grey))),
+              child: Column(
+                children: [
+                  const Icon(Icons.receipt_long_outlined, size: 40, color: Color(0xFFD0D5DD)),
+                  const SizedBox(height: 12),
+                  Text(emptyText, style: const TextStyle(color: Colors.grey)),
+                ],
+              ),
             ),
           ],
         ),
@@ -515,11 +532,23 @@ class _LedgerPageState extends State<LedgerPage> {
               child: Row(
                 children: [
                   Text(_weekday(e.key),
-                      style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white
+                            : const Color(0xFF111827),
+                      )),
                   const Spacer(),
                   Text(
                     '${e.value.length} 笔 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, r) => s + amountOf(r)))}',
-                    style: const TextStyle(fontSize: 12, color: Color(0x8A000000)),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? const Color(0xFF9CA3AF)
+                          : const Color(0x8A000000),
+                    ),
                   ),
                 ],
               ),

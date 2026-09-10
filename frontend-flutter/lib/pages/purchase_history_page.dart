@@ -243,7 +243,13 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
           children: const [
             Padding(
               padding: EdgeInsets.all(48),
-              child: Center(child: Text('暂无进货记录', style: TextStyle(color: Colors.grey))),
+              child: Column(
+                children: [
+                  Icon(Icons.shopping_cart_outlined, size: 40, color: Color(0xFFD0D5DD)),
+                  SizedBox(height: 12),
+                  Text('暂无进货记录', style: TextStyle(color: Colors.grey)),
+                ],
+              ),
             ),
           ],
         ),
@@ -264,11 +270,22 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
               padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
               child: Row(
                 children: [
-                  Text(_weekday(e.key), style: const TextStyle(fontSize: 12, color: Color(0x8A000000))),
+                  Text(_weekday(e.key),
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white
+                              : const Color(0xFF111827))),
                   const Spacer(),
                   Text(
                     '${e.value.length} 笔 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, r) => s + ((r['total'] as num?)?.toDouble() ?? 0)))}',
-                    style: const TextStyle(fontSize: 12, color: Color(0x8A000000)),
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF9CA3AF)
+                            : const Color(0x8A000000)),
                   ),
                 ],
               ),

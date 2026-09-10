@@ -29,6 +29,7 @@ class MyPage extends StatefulWidget {
 
 class _MyPageState extends State<MyPage> {
   String _base = '';
+  String _role = ''; // admin=老板 / staff=店员（登录/启动时读取）
   int _lowStocks = -1; // 低库存数量（-1=未加载）
   int _pending = 0; // 待同步单据数
 
@@ -37,6 +38,9 @@ class _MyPageState extends State<MyPage> {
     super.initState();
     Api.instance.getBase().then((b) {
       if (mounted) setState(() => _base = b);
+    });
+    Api.instance.getRole().then((r) {
+      if (mounted) setState(() => _role = r);
     });
     _loadLowStocks();
     _loadPending();
@@ -256,138 +260,64 @@ class _MyPageState extends State<MyPage> {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.dns_outlined, color: Color(0xFF409EFF)),
-              title: const Text('服务器地址', style: TextStyle(fontSize: 13, color: Color(0xFF909399))),
-              subtitle: Text(_base.isEmpty ? '未设置' : _base),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: SwitchListTile(
+          _userCard(dark),
+          const SizedBox(height: 18),
+          _groupTitle('经营'),
+          _card([
+            _item(Icons.store_outlined, const Color(0xFF409EFF), '店铺管理', '店铺（账本）列表、新增、编辑',
+                () => goPage(context, const ClientsPage())),
+            _item(Icons.payments_outlined, const Color(0xFF22C55E), '收款结账', '登记收款、查看收款历史',
+                () => goPage(context, const PaymentsPage())),
+            _item(Icons.description_outlined, const Color(0xFFF59E0B), '对账单', '按店铺+周期生成对账明细，一键复制发送',
+                () => goPage(context, const StatementPage())),
+          ]),
+          const SizedBox(height: 18),
+          _groupTitle('商品与库存'),
+          _card([
+            _item(Icons.inventory_2_outlined, const Color(0xFF409EFF), '库存',
+                _lowStocks > 0 ? '有 $_lowStocks 项库存不足，点击查看' : '进货/出货自动维护，盘点与预警',
+                () => goPage(context, const StocksPage()),
+                warn: _lowStocks > 0),
+            _item(Icons.sell_outlined, const Color(0xFF409EFF), '商品管理', '商品与多单位价格', () => goPage(context, const ItemsPage())),
+            _item(Icons.label_outline, const Color(0xFF409EFF), '分类管理', '商品分类 / 店铺分类（两级）',
+                () => goPage(context, const CategoriesPage())),
+          ]),
+          const SizedBox(height: 18),
+          _groupTitle('系统'),
+          _card([
+            if (_pending > 0)
+              _item(Icons.cloud_upload_outlined, const Color(0xFFF56C6C), '待同步', '$_pending 条断网记的单据等待上传', _syncPending,
+                  warn: true),
+            _item(Icons.people_outline, const Color(0xFF409EFF), '账号管理', '店员/老板账号（仅老板可操作）',
+                () => goPage(context, const UsersPage())),
+            _item(Icons.save_alt_outlined, const Color(0xFF409EFF), '备份导出', '导出全库 JSON 存档（仅老板）', _exportBackup),
+            _item(Icons.system_update_alt_outlined, const Color(0xFF409EFF), '检查更新',
+                kIsWeb ? 'Web 版刷新即更新' : '对比最新版本，应用内下载安装', _checkUpdate),
+          ]),
+          const SizedBox(height: 18),
+          _card([
+            SwitchListTile(
               secondary: const Icon(Icons.dark_mode_outlined),
               title: const Text('深色模式'),
               subtitle: const Text('夜间/白天主题切换', style: TextStyle(fontSize: 12)),
               value: themeNotifier.value == ThemeMode.dark,
+              activeThumbColor: const Color(0xFF409EFF),
               onChanged: (v) => setThemeMode(v ? ThemeMode.dark : ThemeMode.light),
             ),
-          ),
-          const SizedBox(height: 12),
-          const Text('功能', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-          const SizedBox(height: 8),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.store_outlined),
-                  title: const Text('店铺管理'),
-                  subtitle: const Text('店铺（账本）列表、新增、编辑', style: TextStyle(fontSize: 12)),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const ClientsPage()),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.payments_outlined),
-                  title: const Text('收款结账'),
-                  subtitle: const Text('登记收款、查看收款历史', style: TextStyle(fontSize: 12)),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const PaymentsPage()),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.description_outlined),
-                  title: const Text('对账单'),
-                  subtitle: const Text('按店铺+周期生成对账明细，一键复制发送', style: TextStyle(fontSize: 12)),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const StatementPage()),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.people_outline),
-                  title: const Text('账号管理'),
-                  subtitle: const Text('店员/老板账号（仅老板可操作）', style: TextStyle(fontSize: 12)),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const UsersPage()),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.archive_outlined),
-                  title: const Text('数据备份'),
-                  subtitle: const Text('导出全部数据 JSON 文件', style: TextStyle(fontSize: 12)),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: _exportBackup,
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.system_update_alt_outlined),
-                  title: const Text('检查更新'),
-                  subtitle: const Text('对比 GitHub Release 最新版本', style: TextStyle(fontSize: 12)),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: _checkUpdate,
-                ),
-                const Divider(height: 1, indent: 56),
-                if (_pending > 0) ...[
-                  ListTile(
-                    leading: const Icon(Icons.cloud_upload_outlined, color: Color(0xFFF56C6C)),
-                    title: const Text('待同步', style: TextStyle(color: Color(0xFFF56C6C))),
-                    subtitle: Text('$_pending 条断网记的单据等待上传', style: const TextStyle(fontSize: 12, color: Color(0xFFF56C6C))),
-                    trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                    onTap: _syncPending,
-                  ),
-                  const Divider(height: 1, indent: 56),
-                ],
-                ListTile(
-                  leading: const Icon(Icons.inventory_2_outlined),
-                  title: const Text('库存'),
-                  subtitle: Text(
-                    _lowStocks > 0
-                        ? '有 $_lowStocks 项库存不足，点击查看'
-                        : '进货/出货自动维护，盘点与预警',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: _lowStocks > 0 ? const Color(0xFFF56C6C) : null),
-                  ),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const StocksPage()),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.save_alt_outlined),
-                  title: const Text('备份导出'),
-                  subtitle: const Text('导出全库 JSON 存档（仅老板）', style: TextStyle(fontSize: 12)),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: _exportBackup,
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.inventory_2_outlined),
-                  title: const Text('商品管理'),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const ItemsPage()),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.label_outline),
-                  title: const Text('分类管理'),
-                  subtitle: const Text('商品分类 / 店铺分类（两级）', style: TextStyle(fontSize: 12)),
-                  trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
-                  onTap: () => goPage(context, const CategoriesPage()),
-                ),
-              ],
-            ),
-          ),
+          ]),
           const SizedBox(height: 24),
           OutlinedButton(
             style: OutlinedButton.styleFrom(
               minimumSize: const Size.fromHeight(48),
               foregroundColor: const Color(0xFFF56C6C),
               side: const BorderSide(color: Color(0xFFF56C6C)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             onPressed: _logout,
             child: const Text('退出登录'),
@@ -400,6 +330,90 @@ class _MyPageState extends State<MyPage> {
           const SizedBox(height: 16),
         ],
       ),
+    );
+  }
+
+  /// 顶部用户卡：头像 + 角色 + 服务器地址
+  Widget _userCard(bool dark) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: const Color(0xFF409EFF).withOpacity(0.12),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Icon(Icons.person_outline, size: 30, color: Color(0xFF409EFF)),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_role == 'staff' ? '店员账号' : '老板账号',
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 3),
+                Text(
+                  _base.isEmpty ? '未设置服务器地址' : _base,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF909399)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _groupTitle(String t) => Padding(
+        padding: const EdgeInsets.only(left: 4, bottom: 8),
+        child: Text(t, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF909399))),
+      );
+
+  /// 分组圆角白卡（内嵌多个功能项，自动加分隔线）
+  Widget _card(List<Widget> tiles) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF1C1C1E) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          for (int i = 0; i < tiles.length; i++) ...[
+            if (i > 0) const Divider(height: 1, indent: 56),
+            tiles[i],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _item(IconData icon, Color color, String title, String subtitle, VoidCallback onTap,
+      {bool warn = false}) {
+    return ListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+        child: Icon(icon, size: 20, color: color),
+      ),
+      title: Text(title,
+          style: TextStyle(fontSize: 15, color: warn ? const Color(0xFFF56C6C) : null,
+              fontWeight: warn ? FontWeight.w600 : null)),
+      subtitle: Text(subtitle,
+          style: TextStyle(fontSize: 12, color: warn ? const Color(0xFFF56C6C) : const Color(0xFF909399))),
+      trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+      onTap: onTap,
     );
   }
 }
