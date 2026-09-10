@@ -55,54 +55,72 @@ authRouter.get('/me', authMiddleware(), async (c) => {
 authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, version: APP_VERSION }));
 
 // GET /auth/latest-version — 检查更新（无鉴权）：多源探测 + 短缓存。
-// 源1 GitHub Release API（权威）；源2 部署时生成的 /latest.json（本域静态，零网络依赖）；
+// 源1 GitHub Release API（权威，可确认资产就绪）；源2 部署时生成的 /latest.json（本域静态，零网络依赖）；
 // 源3 jsDelivr CDN 镜像读取仓库版本文件（GitHub API 不可达时的兜底，国内可达性好）。
-// 全部失败返回 latest=''，前端手动兜底复制链接。10 分钟内复用成功结果，避免反复打外网。
-let latestCache: { at: number; latest: string } | null = null;
+// 返回 ready=false 表示该版本 release 已创建但安装包（CI 构建）尚未就绪——前端应提示"构建中"而非引导下载。
+// 全部失败返回 latest=''，前端手动兜底。10 分钟内复用成功结果，避免反复打外网。
+let latestCache: { at: number; latest: string; ready: boolean } | null = null;
 const LATEST_CACHE_MS = 10 * 60 * 1000;
+
+interface VersionProbe {
+  v: string;
+  ready: boolean;
+}
 
 authRouter.get('/latest-version', async (c) => {
   const now = Date.now();
   if (latestCache && now - latestCache.at < LATEST_CACHE_MS) {
-    return c.json({ current: APP_VERSION, latest: latestCache.latest });
+    return c.json({ current: APP_VERSION, latest: latestCache.latest, ready: latestCache.ready });
   }
-  const checkGitHub = async (): Promise<string> => {
+  const checkGitHub = async (): Promise<VersionProbe | null> => {
     try {
       const res = await fetch('https://api.github.com/repos/free-zuike/taozhu/releases/latest', {
         headers: { 'User-Agent': 'taozhu-worker', Accept: 'application/vnd.github+json' },
         signal: AbortSignal.timeout(6000),
       });
-      if (!res.ok) return '';
-      const d = (await res.json()) as { tag_name?: string };
-      return String(d.tag_name ?? '').replace(/^taozhu-v/, '');
-    } catch { return ''; }
+      if (!res.ok) return null;
+      const d = (await res.json()) as { tag_name?: string; assets?: Array<{ name?: string }> };
+      const v = String(d.tag_name ?? '').replace(/^taozhu-v/, '');
+      if (!v) return null;
+      // 安装包资产（flutter-app-<ver>.apk）已上传才算就绪，否则是 CI 构建中的空 release
+      const assets = d.assets ?? [];
+      const ready = assets.some((a) => a.name === `flutter-app-${v}.apk`);
+      return { v, ready };
+    } catch {
+      return null;
+    }
   };
-  const checkAsset = async (): Promise<string> => {
+  const probeVer = (v: string): VersionProbe | null => (v ? { v, ready: true } : null);
+  const checkAsset = async (): Promise<VersionProbe | null> => {
     try {
       const r = await c.env.ASSETS.fetch(new Request(new URL('/latest.json', c.req.url)));
-      if (!r.ok) return '';
+      if (!r.ok) return null;
       const d = (await r.json()) as { version?: string };
-      return String(d.version ?? '').trim();
-    } catch { return ''; }
+      return probeVer(String(d.version ?? '').trim());
+    } catch {
+      return null;
+    }
   };
-  const checkJsDelivr = async (): Promise<string> => {
+  const checkJsDelivr = async (): Promise<VersionProbe | null> => {
     try {
       const res = await fetch('https://fastly.jsdelivr.net/gh/free-zuike/taozhu@main/frontend-flutter/lib/version.dart', {
         signal: AbortSignal.timeout(6000),
       });
-      if (!res.ok) return '';
+      if (!res.ok) return null;
       const m = /APP_VERSION = '([^']+)'/.exec(await res.text());
-      return m?.[1] ?? '';
-    } catch { return ''; }
+      return probeVer(m?.[1] ?? '');
+    } catch {
+      return null;
+    }
   };
   for (const check of [checkGitHub, checkAsset, checkJsDelivr]) {
-    const v = await check();
-    if (v) {
-      latestCache = { at: now, latest: v };
-      return c.json({ current: APP_VERSION, latest: v });
+    const r = await check();
+    if (r) {
+      latestCache = { at: now, latest: r.v, ready: r.ready };
+      return c.json({ current: APP_VERSION, latest: r.v, ready: r.ready });
     }
   }
-  return c.json({ current: APP_VERSION, latest: '' });
+  return c.json({ current: APP_VERSION, latest: '', ready: false });
 });
 
 // 统计系统是否已初始化（前端引导页判断）

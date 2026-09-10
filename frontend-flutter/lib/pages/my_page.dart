@@ -7,9 +7,9 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import '../theme.dart';
+import '../utils/download.dart';
 import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
@@ -71,19 +71,64 @@ class _MyPageState extends State<MyPage> {
     _loadLowStocks();
   }
 
-  /// 全库备份导出（JSON 文件分享）
+  /// 全库备份导出：Web 直接下载文件；移动/桌面弹系统分享保存
   Future<void> _exportBackup() async {
     try {
       final d = await Api.instance.get('/backup');
       final bytes = Uint8List.fromList(
           utf8.encode(const JsonEncoder.withIndent('  ').convert(d)));
       final name = 'taozhu-backup-${DateTime.now().toIso8601String().split('T').first}.json';
-      await Share.shareXFiles(
-        [XFile.fromData(bytes, mimeType: 'application/json', name: name)],
-        text: '陶朱数据备份',
-      );
+      await saveBytes(bytes, name, 'application/json', '陶朱数据备份');
+      if (kIsWeb) toast(context, '备份已导出');
     } catch (e) {
       toast(context, '备份导出失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
+  /// 从备份 JSON 合并导入（仅老板）：相同 ID 跳过，只新增本地没有的记录
+  Future<void> _importBackup() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('导入备份'),
+        content: const Text('将备份文件中的记录合并到当前账本：\n· 相同 ID 的记录跳过（不覆盖现有数据）\n· 只新增备份里有、本地没有的记录\n\n建议导入前先导出留底。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('选择文件并导入')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      final text = await pickTextFile();
+      if (text == null || text.trim().isEmpty) {
+        if (!kIsWeb) toast(context, '当前平台暂不支持导入，请用 Web 端导入');
+        return;
+      }
+      final raw = jsonDecode(text);
+      if (raw is! Map || raw['data'] is! Map) {
+        toast(context, '不是有效的备份文件');
+        return;
+      }
+      final data = (raw['data'] as Map).cast<String, dynamic>();
+      final r = await Api.instance.post('/backup/import', {'data': data});
+      final report = (r['report'] as Map?) ?? {};
+      final total = ((r['total_inserted'] as num?) ?? 0).toInt();
+      if (!mounted) return;
+      final detail = report.entries.map((e) {
+        final v = (e.value as Map?) ?? const {};
+        return '${e.key}: 新增 ${v['inserted']} · 跳过 ${v['skipped']}';
+      }).join('\n');
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('导入完成'),
+          content: Text('共新增 $total 条记录：\n$detail'),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('好'))],
+        ),
+      );
+    } catch (e) {
+      toast(context, '导入失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
 
@@ -108,15 +153,26 @@ class _MyPageState extends State<MyPage> {
 
   /// 检查更新：走后端代理（Worker 代查 GitHub Release），避免 App/Web 直连 GitHub 被网络干扰
   Future<void> _checkUpdate() async {
-    // Web 端特殊处理：页面随部署自动更新，刷新即为最新，无需下载安装
+    // Web 端特殊处理：版本由部署方控制，刷新不升级（fork 实例需重新部署）。仅如实提示版本号
     if (kIsWeb) {
-      toast(context, 'Web 版随部署自动更新，刷新页面即为最新版本');
+      try {
+        final d = await Api.instance.get('/auth/latest-version');
+        final ver = '${d['latest'] ?? ''}';
+        toast(context, ver.isEmpty
+            ? '当前部署版本 v$APP_VERSION'
+            : _older(APP_VERSION, ver)
+                ? '官方最新 v$ver（当前部署 v$APP_VERSION）：此部署未包含新版，需在服务器重新部署后刷新'
+                : '当前已是最新版本 v$APP_VERSION');
+      } catch (_) {
+        toast(context, '检查更新失败，请稍后再试');
+      }
       return;
     }
     final releaseUrl = 'https://github.com/free-zuike/taozhu/releases/latest';
     try {
       final d = await Api.instance.get('/auth/latest-version');
       final ver = '${d['latest'] ?? ''}';
+      final ready = d['ready'] != false; // null/true 均视为就绪（备源无法确认资产）
       if (ver.isEmpty) {
         // 后端也未能获取（GitHub 不可达）——手动兜底
         if (!mounted) return;
@@ -124,7 +180,7 @@ class _MyPageState extends State<MyPage> {
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text('检查更新失败'),
-            content: Text('暂时无法获取最新版本（GitHub 网络受限）。\n当前版本 v$APP_VERSION\n\n可手动打开 GitHub Release 页查看并下载 APK。'),
+            content: Text('暂时无法获取最新版本（更新源网络受限）。\n当前版本 v$APP_VERSION\n\n可手动打开 GitHub Release 页查看并下载 APK。'),
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
               FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('复制链接')),
@@ -141,18 +197,38 @@ class _MyPageState extends State<MyPage> {
         toast(context, '当前已是最新版本 v$APP_VERSION');
         return;
       }
+      if (!ready) {
+        // release 已建但 CI 尚未传完安装包：提示稍后再试，不引导下载
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('新版本构建中'),
+            content: Text('新版本 v$ver 正在打包构建，安装包尚未就绪。\n请过几分钟再试（检查更新会自动重试）。'),
+            actions: [
+              FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+            ],
+          ),
+        );
+        return;
+      }
       if (!mounted) return;
-      final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+      final isAndroid = defaultTargetPlatform == TargetPlatform.android;
+      final isDesktop = defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.linux;
       final action = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('发现新版本'),
           content: Text(isAndroid
-              ? '当前 v$APP_VERSION\n最新 v$ver\n\n点击「立即更新」将在应用内下载并安装新版 APK。'
-              : '当前 v$APP_VERSION\n最新 v$ver\n\n点击「复制下载链接」后粘贴到浏览器下载。'),
+              ? '当前 v$APP_VERSION\n最新 v$ver\n\n点击「立即更新」将在后台下载（通知栏可见进度），完成后自动提示安装。'
+              : isDesktop
+                  ? '当前 v$APP_VERSION\n最新 v$ver\n\n点击「立即更新」将在应用内下载安装包（含进度），完成后引导解压覆盖安装。'
+                  : '当前 v$APP_VERSION\n最新 v$ver\n\n点击「复制下载链接」后粘贴到浏览器下载。'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('取消')),
-            if (isAndroid)
+            if (isAndroid || isDesktop)
               FilledButton(onPressed: () => Navigator.pop(ctx, 'update'), child: const Text('立即更新'))
             else
               FilledButton(onPressed: () => Navigator.pop(ctx, 'copy'), child: const Text('复制下载链接')),
@@ -160,7 +236,11 @@ class _MyPageState extends State<MyPage> {
         ),
       );
       if (action == 'update') {
-        await _downloadAndInstall(ver);
+        if (isAndroid) {
+          await _downloadAndInstall(ver);
+        } else if (isDesktop) {
+          await _downloadDesktop(ver);
+        }
       } else if (action == 'copy') {
         await Clipboard.setData(ClipboardData(text: releaseUrl));
         toast(context, '已复制下载链接');
@@ -170,18 +250,107 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
-  /// 应用内下载 APK 并调起系统安装器（仅 Android），带实时进度对话框。
-  /// 直链（GitHub）失败时自动换镜像站（gh-proxy 等），避免直连受限。
+  /// Android：应用内更新走系统下载器（DownloadManager）——
+  /// 后台下载、通知栏（下滑栏）实时进度、退出应用仍继续，完成后引导安装。
   Future<void> _downloadAndInstall(String ver) async {
+    final url =
+        'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk';
+    final fileName = 'taozhu-update-$ver.apk';
+    try {
+      final id = await _dlChannel.invokeMethod<int>('enqueue', {'url': url, 'fileName': fileName});
+      if (id == null) {
+        toast(context, '启动下载失败（系统下载器不可用）');
+        return;
+      }
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('已开始后台下载'),
+          content: Text('v$ver 安装包正在后台下载：\n· 下拉通知栏可查看实时进度\n· 可继续使用或退出应用\n\n下载完成后会在此提示安装。'),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('好'))],
+        ),
+      );
+      // 轮询系统下载状态（每 3 秒，上限 15 分钟；通知栏本身也在实时显示进度）
+      for (var i = 0; i < 300; i++) {
+        await Future.delayed(const Duration(seconds: 3));
+        if (!mounted) return;
+        final Map st;
+        try {
+          st = await _dlChannel.invokeMethod<Map>('status', {'id': id}) ?? const {};
+        } catch (_) {
+          continue;
+        }
+        final status = (st['status'] as int?) ?? -1;
+        if (status == 8) {
+          // DownloadManager.STATUS_SUCCESSFUL
+          await _installFromDownloads(fileName);
+          return;
+        }
+        if (status == 16) {
+          // DownloadManager.STATUS_FAILED
+          toast(context, '下载失败（通知栏可查看原因），可稍后重试');
+          return;
+        }
+      }
+      // 超时（大文件/慢网）：下载仍由系统继续，用户可从通知栏查看
+    } catch (e) {
+      toast(context, '启动下载失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
+  /// 下载完成后引导安装（文件在应用下载目录，由系统 DownloadManager 写入）
+  Future<void> _installFromDownloads(String fileName) async {
+    if (!mounted) return;
+    final install = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('更新下载完成'),
+        content: Text('安装包已就绪（$fileName）。\n立即安装？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('稍后')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('立即安装')),
+        ],
+      ),
+    );
+    if (install != true) return;
+    try {
+      final dir = await getDownloadsDirectory();
+      final file = File('${dir?.path}/$fileName');
+      if (!file.existsSync()) {
+        toast(context, '未找到安装包，请从通知栏或下载目录打开');
+        return;
+      }
+      final result = await OpenFilex.open(file.path);
+      if (result.type != ResultType.done) {
+        toast(context, '调起安装失败：${result.message}');
+      }
+    } catch (e) {
+      toast(context, '安装失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
+  /// 桌面端（Windows/macOS/Linux）：应用内下载对应系统安装包（前台进度条），
+  /// 直链失败自动换镜像，保存到下载目录后引导解压覆盖安装。
+  Future<void> _downloadDesktop(String ver) async {
+    final fileName = switch (defaultTargetPlatform) {
+      TargetPlatform.windows => 'taozhu-windows-$ver.zip',
+      TargetPlatform.macOS => 'taozhu-macos-$ver.zip',
+      TargetPlatform.linux => 'taozhu-linux-$ver.zip',
+      _ => '',
+    };
+    if (fileName.isEmpty) {
+      toast(context, '当前平台暂不支持应用内下载');
+      return;
+    }
     final urls = [
-      'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
-      'https://gh-proxy.com/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
-      'https://ghfast.top/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk',
+      'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/$fileName',
+      'https://gh-proxy.com/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/$fileName',
+      'https://ghfast.top/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/$fileName',
     ];
     var downloaded = 0;
     var total = 0;
     final progress = ValueNotifier<double>(0);
-    // 进度对话框：下载全程可见，完成/失败自动关闭
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -199,7 +368,7 @@ class _MyPageState extends State<MyPage> {
                 total > 0 && v < 1
                     ? '${(v * 100).toStringAsFixed(0)}% · ${(downloaded / 1048576).toStringAsFixed(1)} / ${(total / 1048576).toStringAsFixed(1)} MB'
                     : v >= 1
-                        ? '下载完成，正在调起安装…'
+                        ? '下载完成…'
                         : '准备下载…',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13),
@@ -209,52 +378,80 @@ class _MyPageState extends State<MyPage> {
         ),
       ),
     );
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/taozhu-update-$ver.apk');
-    var ok = false;
-    for (final url in urls) {
-      downloaded = 0;
-      total = 0;
-      progress.value = 0;
-      final client = http.Client();
-      try {
-        final res = await client.send(http.Request('GET', Uri.parse(url)));
-        // 非 200 或响应明显不是 APK（镜像返回 HTML 错误页）→ 换下一个源
-        if (res.statusCode != 200 || (res.contentLength ?? 0) < 1000000) {
-          client.close();
-          continue;
-        }
-        total = res.contentLength ?? 0;
-        final sink = file.openWrite();
+    try {
+      final dir = await getDownloadsDirectory();
+      final file = File('${dir?.path}/$fileName');
+      var ok = false;
+      for (final url in urls) {
+        downloaded = 0;
+        total = 0;
+        progress.value = 0;
+        final client = http.Client();
         try {
-          await for (final chunk in res.stream) {
-            downloaded += chunk.length;
-            if (total > 0) progress.value = downloaded / total;
-            sink.add(chunk);
+          final res = await client.send(http.Request('GET', Uri.parse(url)));
+          // 非 200 或响应明显不是安装包（镜像返回 HTML 错误页）→ 换下一个源
+          if (res.statusCode != 200 || (res.contentLength ?? 0) < 1000000) {
+            client.close();
+            continue;
           }
-          await sink.flush();
+          total = res.contentLength ?? 0;
+          final sink = file.openWrite();
+          try {
+            await for (final chunk in res.stream) {
+              downloaded += chunk.length;
+              if (total > 0) progress.value = downloaded / total;
+              sink.add(chunk);
+            }
+            await sink.flush();
+          } finally {
+            await sink.close();
+          }
+          ok = true;
+        } catch (_) {
+          // 网络/超时：换下一个源
         } finally {
-          await sink.close();
+          client.close();
         }
-        ok = true;
-      } catch (_) {
-        // 网络/超时：换下一个源
-      } finally {
-        client.close();
+        if (ok) break;
       }
-      if (ok) break;
-    }
-    if (!ok) {
+      if (!ok) {
+        if (mounted) Navigator.of(context, rootNavigator: true).pop();
+        toast(context, '下载失败（直链与镜像均不可达），可稍后重试');
+        return;
+      }
+      progress.value = 1;
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
-      toast(context, '下载失败（直链与镜像均不可达）。可稍后重试，或用浏览器打开 GitHub Release 页下载 APK。');
-      return;
+      if (!mounted) return;
+      final act = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('下载完成'),
+          content: Text('安装包已保存到下载目录：\n$fileName\n\n桌面版更新需手动操作：解压后覆盖替换旧程序即可。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, 'open'), child: const Text('打开文件夹')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, 'ok'), child: const Text('好')),
+          ],
+        ),
+      );
+      if (act == 'open') await _revealFile(file);
+    } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      toast(context, '下载失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
-    progress.value = 1;
-    if (mounted) Navigator.of(context, rootNavigator: true).pop();
-    toast(context, '下载完成，正在调起安装…');
-    final result = await OpenFilex.open(file.path);
-    if (result.type != ResultType.done) {
-      toast(context, '调起安装失败：${result.message}');
+  }
+
+  /// 在系统文件管理器中显示该文件（Windows explorer / macOS 访达 / Linux xdg-open）
+  Future<void> _revealFile(File f) async {
+    try {
+      if (defaultTargetPlatform == TargetPlatform.windows) {
+        await Process.run('explorer', ['/select,', f.path]);
+      } else if (defaultTargetPlatform == TargetPlatform.macOS) {
+        await Process.run('open', ['-R', f.path]);
+      } else {
+        await Process.run('xdg-open', [f.parent.path]);
+      }
+    } catch (_) {
+      toast(context, '已保存到下载目录，可手动打开');
     }
   }
 

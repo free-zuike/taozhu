@@ -70,6 +70,75 @@ jobs:
           #     tools:node="remove" 对不存在的权限是 no-op，未来依赖升级也安全。
           sed -i 's|<manifest xmlns:android="http://schemas.android.com/apk/res/android">|<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<application|<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove"/><uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/><uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/><application|' android/app/src/main/AndroidManifest.xml
+          # ②f 应用内更新 = 系统下载器（DownloadManager）：重写 MainActivity，注入 MethodChannel 'taozhu/download'
+          #     后台下载 + 通知栏（下滑栏）实时进度 + 下载完成回调状态，应用退到后台/被杀仍继续下载。
+          mkdir -p android/app/src/main/kotlin/com/taozhu/app
+          cat > android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt <<'KOTLIN_EOF'
+package com.taozhu.app
+
+import android.app.DownloadManager
+import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+
+class MainActivity : FlutterActivity() {
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "taozhu/download")
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "enqueue" -> {
+                            val url = call.argument<String>("url")
+                            val fileName = call.argument<String>("fileName") ?: "taozhu-update.apk"
+                            if (url.isNullOrEmpty()) result.error("no_url", "缺少下载地址", null)
+                            else result.success(enqueue(url, fileName))
+                        }
+                        "status" -> {
+                            val id = call.argument<Number>("id")?.toLong()
+                            if (id == null) result.error("no_id", "缺少下载任务 id", null)
+                            else result.success(queryStatus(id))
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (e: Exception) {
+                    result.error("dl_error", e.message, null)
+                }
+            }
+    }
+
+    private fun enqueue(url: String, fileName: String): Long {
+        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val req = DownloadManager.Request(Uri.parse(url))
+        req.setTitle("陶朱更新")
+        req.setDescription("正在下载新版本安装包…")
+        // 通知栏可见 + 下载完成通知；应用目录（免存储权限，各 Android 版本可用）
+        req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        req.setDestinationInExternalFilesDir(applicationContext, Environment.DIRECTORY_DOWNLOADS, fileName)
+        req.setMimeType("application/vnd.android.package-archive")
+        req.setAllowedOverMetered(true)
+        return dm.enqueue(req)
+    }
+
+    private fun queryStatus(id: Long): Map<String, Any> {
+        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val q = DownloadManager.Query().setFilterById(id)
+        dm.query(q).use { c ->
+            if (c.moveToFirst()) {
+                val downloaded = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                return mapOf("downloaded" to downloaded, "total" to total, "status" to status)
+            }
+        }
+        return mapOf("downloaded" to 0L, "total" to 0L, "status" to DownloadManager.STATUS_FAILED)
+    }
+}
+KOTLIN_EOF
+          echo "MainActivity.kt 已注入 DownloadManager 通道"
           # ③ 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
           sed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml || true
