@@ -93,19 +93,24 @@ class Api {
     final t = await _token();
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
 
-    // 发起一次请求（按方法分发）
+    // 发起一次请求（按方法分发）；15s 超时防止网络不可达时页面无限转圈
     Future<http.Response> doReq() async {
       switch (method) {
         case 'POST':
-          return http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
+          return http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
+              .timeout(const Duration(seconds: 15));
         case 'PUT':
-          return http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
+          return http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
+              .timeout(const Duration(seconds: 15));
         case 'PATCH':
-          return http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}));
+          return http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
+              .timeout(const Duration(seconds: 15));
         case 'DELETE':
-          return http.delete(Uri.parse(url), headers: headers);
+          return http.delete(Uri.parse(url), headers: headers)
+              .timeout(const Duration(seconds: 15));
         default:
-          return http.get(Uri.parse(url), headers: headers);
+          return http.get(Uri.parse(url), headers: headers)
+              .timeout(const Duration(seconds: 15));
       }
     }
 
