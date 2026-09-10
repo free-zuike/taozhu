@@ -4,6 +4,7 @@ import '../api.dart';
 import '../local_freq.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../widgets/date_field.dart';
 import 'router.dart';
 
 class PurchasePage extends StatefulWidget {
@@ -26,6 +27,7 @@ class _PRow {
 
 class _PurchasePageState extends State<PurchasePage> {
   List<Map<String, dynamic>> _items = [];
+  bool _isStaff = false; // 店员不可见进价（进货价手填）
   // 商品下拉菜单项缓存：行组件不再每次 build 重建 items（目录大时明显降卡顿）
   List<DropdownMenuItem<String>> _itemMenus = [];
   final List<_PRow> _rows = [_PRow()];
@@ -54,6 +56,9 @@ class _PurchasePageState extends State<PurchasePage> {
   @override
   void initState() {
     super.initState();
+    Api.instance.getRole().then((r) {
+      if (mounted) setState(() => _isStaff = r == 'staff');
+    });
     _load();
   }
 
@@ -377,13 +382,14 @@ class _PurchasePageState extends State<PurchasePage> {
 
   /// 进货日期信息卡
   Widget _infoCard() {
-    final c = Theme.of(context).extension<TaozhuColors>()!;
     return _card(Padding(
       padding: const EdgeInsets.all(14),
-      child: TextField(
+      child: DateField(
         controller: _dateCtrl,
-        style: TextStyle(color: c.textMain),
-        decoration: _fieldDec(icon: Icons.calendar_today_outlined, label: '进货日期', hint: '默认今天，可改为补录历史'),
+        icon: Icons.calendar_today_outlined,
+        label: '进货日期',
+        hint: '点击选择日期（可补录历史）',
+        focusColor: _c.success,
       ),
     ));
   }
@@ -444,7 +450,9 @@ class _PurchasePageState extends State<PurchasePage> {
             items: prices
                 .map((p) => DropdownMenuItem(
                       value: p['id'] as String,
-                      child: Text('${p['unit']}（进 ¥${p['purchase_price']} · 库存 ${p['stock'] ?? 0}）'),
+                      child: Text(_isStaff
+                          ? '${p['unit']}（库存 ${p['stock'] ?? 0}）'
+                          : '${p['unit']}（进 ¥${p['purchase_price']} · 库存 ${p['stock'] ?? 0}）'),
                     ))
                 .toList(),
             onChanged: (v) => setState(() {
@@ -478,7 +486,7 @@ class _PurchasePageState extends State<PurchasePage> {
                   controller: row.priceCtrl,
                   style: txtStyle,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: _fieldDec(label: '进价（可直接改）'),
+                  decoration: _fieldDec(label: _isStaff ? '进价（手工填写）' : '进价（可直接改）'),
                   onChanged: (v) => row.purchasePrice = double.tryParse(v) ?? 0,
                 ),
               ),

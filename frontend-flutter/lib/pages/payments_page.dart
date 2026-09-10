@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../theme.dart';
+import '../widgets/date_field.dart';
 import 'router.dart';
 
 class PaymentsPage extends StatefulWidget {
@@ -310,10 +311,10 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             ),
                           ],
                           const SizedBox(height: 8),
-                          TextField(
+                          DateField(
                             controller: _dateCtrl,
-                            decoration: const InputDecoration(
-                                labelText: '日期（YYYY-MM-DD）', helperText: '默认今天，可改为补录历史'),
+                            label: '日期',
+                            hint: '默认今天，可补录历史',
                           ),
                           const SizedBox(height: 8),
                           TextField(

@@ -24,12 +24,17 @@ class _LedgerPageState extends State<LedgerPage> {
   List<Map<String, dynamic>> _clients = [];
   String? _clientId; // 账本（店铺）维度：必选，默认第一个；无店铺时自动建「默认店铺」
   String _range = 'month'; // month | 2m | 3m | all
+  bool _isStaff = false; // 店员账号：仅当天出货视角
   bool _loading = true;
   bool _offline = false; // 本次加载走了本地缓存（无网络）
 
   @override
   void initState() {
     super.initState();
+    // 店员账号：仅当天出货视角（后端强制当天）
+    Api.instance.getRole().then((r) {
+      if (mounted) setState(() => _isStaff = r == 'staff');
+    });
     _load();
   }
 
@@ -376,7 +381,9 @@ class _LedgerPageState extends State<LedgerPage> {
             ),
           ],
           bottom: TabBar(
-            tabs: const [Tab(text: '出货'), Tab(text: '收款')],
+            tabs: _isStaff
+                ? const [Tab(text: '出货')]
+                : const [Tab(text: '出货'), Tab(text: '收款')],
             labelColor: c.primary,
             unselectedLabelColor: c.textSub,
             labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
@@ -452,38 +459,50 @@ class _LedgerPageState extends State<LedgerPage> {
                     ),
                   const SizedBox(height: 8),
                   // 时间范围：当月 / 最近2个月 / 最近3个月 / 全部（Wrap 自动换行，文字完整显示）
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final r in const [
-                        ('month', '当月'),
-                        ('2m', '最近2个月'),
-                        ('3m', '最近3个月'),
-                        ('all', '全部流水'),
-                      ])
-                        ChoiceChip(
-                          label: Text(r.$2, style: const TextStyle(fontSize: 13)),
-                          visualDensity: VisualDensity.compact,
-                          selected: _range == r.$1,
-                          onSelected: (_) {
-                            setState(() => _range = r.$1);
-                            _load();
-                          },
-                        ),
-                    ],
-                  ),
+                  // 店员账号：仅当天出货（后端强制），隐藏范围选择
+                  if (!_isStaff)
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final r in const [
+                          ('month', '当月'),
+                          ('2m', '最近2个月'),
+                          ('3m', '最近3个月'),
+                          ('all', '全部流水'),
+                        ])
+                          ChoiceChip(
+                            label: Text(r.$2, style: const TextStyle(fontSize: 13)),
+                            visualDensity: VisualDensity.compact,
+                            selected: _range == r.$1,
+                            onSelected: (_) {
+                              setState(() => _range = r.$1);
+                              _load();
+                            },
+                          ),
+                      ],
+                    ),
+                  if (_isStaff)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text('今日送货记录', style: TextStyle(fontSize: 12, color: c.textSub)),
+                    ),
                 ],
               ),
             ),
             Expanded(
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
-                  : TabBarView(children: [
-                      _buildList('暂无偿付记录', _sales, _saleCard,
-                          (s) => ((s['total'] as num?)?.toDouble() ?? 0)),
-                      _buildList('暂无收款记录', _payments, _paymentCard,
-                          (p) => ((p['amount'] as num?)?.toDouble() ?? 0)),
+                  : TabBarView(children: _isStaff
+                      ? [
+                          _buildList('今日暂无出货记录', _sales, _saleCard,
+                              (s) => ((s['total'] as num?)?.toDouble() ?? 0)),
+                        ]
+                      : [
+                          _buildList('暂无偿付记录', _sales, _saleCard,
+                              (s) => ((s['total'] as num?)?.toDouble() ?? 0)),
+                          _buildList('暂无收款记录', _payments, _paymentCard,
+                              (p) => ((p['amount'] as num?)?.toDouble() ?? 0)),
                     ]),
             ),
           ],

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../api.dart';
 import '../utils/download.dart';
+import '../widgets/date_field.dart';
 import 'router.dart';
 
 /// 对账单：按店铺 + 周期汇总出货/收款/期末欠款，一键复制文本发送给客户
@@ -208,7 +209,8 @@ class _StatementPageState extends State<StatementPage> {
       return;
     }
     final bytes = Uint8List.fromList(utf8.encode('\ufeff${_buildXls()}'));
-    final name = 'taozhu-对账单-${_fromCtrl.text.trim()}-${_toCtrl.text.trim()}.xls';
+    final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
+    final name = '陶朱对账单_${clientName}_${_fromCtrl.text.trim()}_${_toCtrl.text.trim()}.xls';
     await saveBytes(bytes, name, 'application/vnd.ms-excel', '陶朱对账单');
     if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
   }
@@ -291,11 +293,6 @@ class _StatementPageState extends State<StatementPage> {
             icon: const Icon(Icons.share_outlined),
             onPressed: _share,
           ),
-          IconButton(
-            tooltip: '复制对账文本',
-            icon: const Icon(Icons.copy_outlined),
-            onPressed: _copy,
-          ),
         ],
       ),
       body: ListView(
@@ -337,9 +334,10 @@ class _StatementPageState extends State<StatementPage> {
                   Row(
                     children: [
                       Expanded(
-                        child: TextField(
+                        child: DateField(
                           controller: _fromCtrl,
-                          decoration: const InputDecoration(labelText: '开始日期', isDense: true),
+                          label: '开始日期',
+                          lastDate: DateTime(DateTime.now().year + 5, 12, 31),
                         ),
                       ),
                       const Padding(
@@ -347,9 +345,10 @@ class _StatementPageState extends State<StatementPage> {
                         child: Text('至'),
                       ),
                       Expanded(
-                        child: TextField(
+                        child: DateField(
                           controller: _toCtrl,
-                          decoration: const InputDecoration(labelText: '结束日期', isDense: true),
+                          label: '结束日期',
+                          lastDate: DateTime(DateTime.now().year + 5, 12, 31),
                         ),
                       ),
                     ],

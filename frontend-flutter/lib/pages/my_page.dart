@@ -633,16 +633,19 @@ class _MyPageState extends State<MyPage> {
         children: [
           _userCard(),
           const SizedBox(height: 18),
-          _groupTitle('经营'),
-          _card([
-            _item(Icons.store_outlined, c.primary, '店铺管理', '店铺（账本）列表、新增、编辑',
-                () => goPage(context, const ClientsPage())),
-            _item(Icons.payments_outlined, c.success, '收款结账', '登记收款、查看收款历史',
-                () => goPage(context, const PaymentsPage())),
-            _item(Icons.description_outlined, c.warning, '对账单', '按店铺+周期生成对账明细，一键复制发送',
-                () => goPage(context, const StatementPage())),
-          ]),
-          const SizedBox(height: 18),
+          // 店员账号：仅送货视角，隐藏经营类功能（收款/对账/店铺管理）
+          if (_role != 'staff') ...[
+            _groupTitle('经营'),
+            _card([
+              _item(Icons.store_outlined, c.primary, '店铺管理', '店铺（账本）列表、新增、编辑',
+                  () => goPage(context, const ClientsPage())),
+              _item(Icons.payments_outlined, c.success, '收款结账', '登记收款、查看收款历史',
+                  () => goPage(context, const PaymentsPage())),
+              _item(Icons.description_outlined, c.warning, '对账单', '按店铺+周期生成对账明细，一键复制发送',
+                  () => goPage(context, const StatementPage())),
+            ]),
+            const SizedBox(height: 18),
+          ],
           _groupTitle('商品与库存'),
           _card([
             _item(Icons.inventory_2_outlined, c.primary, '库存',
@@ -656,15 +659,19 @@ class _MyPageState extends State<MyPage> {
           const SizedBox(height: 18),
           _groupTitle('系统'),
           _card([
-            _item(Icons.dns_outlined, c.primary, '服务器地址',
-                kIsWeb ? '当前：${_base.isEmpty ? Uri.base.origin : _base}' : '修改连接服务器地址', _editBase),
+            if (_role != 'staff')
+              _item(Icons.dns_outlined, c.primary, '服务器地址',
+                  kIsWeb ? '当前：${_base.isEmpty ? Uri.base.origin : _base}' : '修改连接服务器地址', _editBase),
             if (_pending > 0)
               _item(Icons.cloud_upload_outlined, c.danger, '待同步', '$_pending 条断网记的单据等待上传', _syncPending,
                   warn: true),
-            _item(Icons.people_outline, c.primary, '账号管理', '店员/老板账号（仅老板可操作）',
-                () => goPage(context, const UsersPage())),
-            _item(Icons.save_alt_outlined, c.primary, '备份导出', '导出全库 JSON 存档（仅老板）', _exportBackup),
-            _item(Icons.restore_outlined, c.primary, '导入备份', '从备份 JSON 恢复（合并，不覆盖现有）', _importBackup),
+            if (_role != 'staff')
+              _item(Icons.people_outline, c.primary, '账号管理', '店员/老板账号（仅老板可操作）',
+                  () => goPage(context, const UsersPage())),
+            if (_role != 'staff')
+              _item(Icons.save_alt_outlined, c.primary, '备份导出', '导出全库 JSON 存档（仅老板）', _exportBackup),
+            if (_role != 'staff')
+              _item(Icons.restore_outlined, c.primary, '导入备份', '从备份 JSON 恢复（合并，不覆盖现有）', _importBackup),
             _item(Icons.system_update_alt_outlined, c.primary, '检查更新',
                 kIsWeb ? 'Web 版随部署更新' : '对比最新版本，应用内下载安装', _checkUpdate),
             _item(Icons.cleaning_services_outlined, c.primary, '存储清理', '查看并删除安装包/临时文件，释放空间',

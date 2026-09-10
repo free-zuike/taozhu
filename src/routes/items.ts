@@ -11,18 +11,23 @@ itemsRouter.use('*', authMiddleware());
 
 const nowIso = () => new Date().toISOString();
 
-function serialize(item: ItemRow & { category?: string | null; category_name?: string | null }, prices: unknown[]) {
+function serialize(item: ItemRow & { category?: string | null; category_name?: string | null }, prices: unknown[], canSeeCost: boolean) {
+  // 员工不可见进价（purchase_price 打码，防泄露采购成本）
+  const list = canSeeCost
+    ? prices
+    : (prices as Record<string, unknown>[]).map((p) => ({ ...p, purchase_price: 0 }));
   return {
     id: item.id, name: item.name,
     category: item.category ?? '',
     category_id: item.category_id ?? '',
     category_name: item.category_name ?? '',
-    prices,
+    prices: list,
   };
 }
 
 // GET /items?q= — 商品列表（含价格组合，不含已删）
 itemsRouter.get('/', async (c) => {
+  const canSeeCost = c.get('user').role === 'admin';
   const q = c.req.query('q')?.trim() ?? '';
   const rows = q
     ? await c.env.DB.prepare(
@@ -37,11 +42,12 @@ itemsRouter.get('/', async (c) => {
     list.push(p);
     byItem.set((p as { item_id: string }).item_id, list);
   }
-  return c.json({ items: rows.results.map((r) => serialize(r, byItem.get(r.id) ?? [])) });
+  return c.json({ items: rows.results.map((r) => serialize(r, byItem.get(r.id) ?? [], canSeeCost)) });
 });
 
 // GET /items/summary — 记单用的简化目录（id/名称/价格组合/当前库存），全员可读、不含管理字段
 itemsRouter.get('/summary', async (c) => {
+  const canSeeCost = c.get('user').role === 'admin';
   const rows = await c.env.DB.prepare(
     `SELECT i.id, i.name, i.category,
             (SELECT json_group_array(json_object('id', p.id, 'unit', p.unit, 'sale_price', p.sale_price, 'purchase_price', p.purchase_price,
@@ -50,7 +56,11 @@ itemsRouter.get('/summary', async (c) => {
      FROM items i WHERE i.deleted_at IS NULL ORDER BY i.name`).all();
   const items = rows.results.map((r) => {
     const pr = (r as { prices: string | null }).prices;
-    return { id: r.id, name: r.name, category: r.category ?? '', prices: pr ? JSON.parse(pr) : [] };
+    const list = pr ? (JSON.parse(pr) as Record<string, unknown>[]) : [];
+    return {
+      id: r.id, name: r.name, category: r.category ?? '',
+      prices: canSeeCost ? list : list.map((p) => ({ ...p, purchase_price: 0 })),
+    };
   });
   return c.json({ items });
 });

@@ -4,6 +4,7 @@ import '../api.dart';
 import '../local_freq.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../widgets/date_field.dart';
 import 'router.dart';
 
 class SalePage extends StatefulWidget {
@@ -449,10 +450,11 @@ class _SalePageState extends State<SalePage> {
             onChanged: (v) => setState(() => _clientId = v),
           ),
           const SizedBox(height: 10),
-          TextField(
+          DateField(
             controller: _dateCtrl,
-            style: TextStyle(color: c.textMain),
-            decoration: _fieldDec(icon: Icons.calendar_today_outlined, label: '日期', hint: '默认今天，可改为补录历史'),
+            icon: Icons.calendar_today_outlined,
+            label: '日期',
+            hint: '点击选择日期（可补录历史）',
           ),
         ],
       ),

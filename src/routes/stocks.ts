@@ -11,6 +11,7 @@ stocksRouter.use('*', authMiddleware());
 
 // GET /stocks?q=&below=1 — 库存列表（含商品名；below=1 仅低于阈值）
 stocksRouter.get('/', async (c) => {
+  const canSeeCost = c.get('user').role === 'admin';
   const q = c.req.query('q')?.trim() ?? '';
   const belowOnly = c.req.query('below') === '1';
   let sql = `SELECT st.id, st.item_id, st.unit, st.quantity, st.min_stock, i.name AS item_name,
@@ -27,9 +28,11 @@ stocksRouter.get('/', async (c) => {
   return c.json({
     stocks: rows.results.map((r) => ({
       id: r.id, item_id: r.item_id, item_name: r.item_name, unit: r.unit,
-      quantity: r.quantity, min_stock: r.min_stock, cost_price: r.cost_price ?? 0,
+      quantity: r.quantity, min_stock: r.min_stock,
+      cost_price: canSeeCost ? (r.cost_price ?? 0) : 0,
       low: r.quantity < r.min_stock,
     })),
+    can_see_cost: canSeeCost,
   });
 });
 

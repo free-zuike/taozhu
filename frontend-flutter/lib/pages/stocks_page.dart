@@ -15,6 +15,7 @@ class StocksPage extends StatefulWidget {
 class _StocksPageState extends State<StocksPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _stocks = [];
+  bool _canSeeCost = true; // 店员不可见成本核算（后端 cost_price 打码）
   bool _loading = true;
   bool _belowOnly = false; // 只看预警（低于阈值）
   Timer? _searchTimer;
@@ -41,6 +42,7 @@ class _StocksPageState extends State<StocksPage> {
       if (!mounted) return;
       setState(() {
         _stocks = ((d['stocks'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _canSeeCost = d['can_see_cost'] != false;
         _loading = false;
       });
     } catch (e) {
@@ -271,7 +273,7 @@ class _StocksPageState extends State<StocksPage> {
                     child: ListView(
                       padding: const EdgeInsets.all(16),
                       children: [
-                        if (_stocks.isNotEmpty)
+                        if (_stocks.isNotEmpty && _canSeeCost)
                           Padding(
                             padding: const EdgeInsets.only(bottom: 8),
                             child: Row(

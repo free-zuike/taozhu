@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; notes: string };
-    expect(d.current).toBe('0.16.18.0');
+    expect(d.current).toBe('0.16.19.0');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.notes).toBe('string');
@@ -505,5 +505,69 @@ describe('对账单分享（/api/v1/share + /share/:token）', () => {
   it('不存在的 token 返回 404', async () => {
     const page = await app.request('http://localhost/share/no-such-token', {}, env as never);
     expect(page.status).toBe(404);
+  });
+});
+
+describe('店员权限收窄（进价打码 / 仅当天出货）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  let staffToken: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+    await env.DB.prepare('INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)')
+      .bind(randomId(), 'staff1', await hashPassword('staff123'), 'staff').run();
+    const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });
+    staffToken = ((await login.json()) as { token: string }).token;
+  });
+
+  it('店员商品目录看不到进价（purchase_price 打码为 0），老板可见', async () => {
+    const mk = await call(env, 'POST', '/api/v1/items', token, { name: '白菜', prices: [{ unit: '斤', purchase_price: 1.5, sale_price: 2.5 }] });
+    expect(mk.status).toBe(201);
+    const staffD = await call(env, 'GET', '/api/v1/items/summary', staffToken).then((r) => r.json()) as {
+      items: Array<{ prices: Array<{ purchase_price: number }> }>;
+    };
+    expect(staffD.items[0].prices[0].purchase_price).toBe(0);
+    const adminD = await call(env, 'GET', '/api/v1/items/summary', token).then((r) => r.json()) as {
+      items: Array<{ prices: Array<{ purchase_price: number }> }>;
+    };
+    expect(adminD.items[0].prices[0].purchase_price).toBe(1.5);
+  });
+
+  it('店员库存看不到成本核算（cost_price 为 0 / can_see_cost=false），老板可见', async () => {
+    await call(env, 'POST', '/api/v1/items', token, { name: '白菜', prices: [{ unit: '斤', purchase_price: 1.5, sale_price: 2.5 }] });
+    const items = await call(env, 'GET', '/api/v1/items/summary', token).then((r) => r.json()) as {
+      items: Array<{ id: string; prices: Array<{ id: string }> }>;
+    };
+    await call(env, 'POST', '/api/v1/purchases', token, {
+      happened_at: new Date().toISOString().slice(0, 10),
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 10 }],
+    });
+    const staffD = await call(env, 'GET', '/api/v1/stocks', staffToken).then((r) => r.json()) as {
+      stocks: Array<{ cost_price: number }>;
+      can_see_cost: boolean;
+    };
+    expect(staffD.can_see_cost).toBe(false);
+    expect(staffD.stocks[0].cost_price).toBe(0);
+    const adminD = await call(env, 'GET', '/api/v1/stocks', token).then((r) => r.json()) as { can_see_cost: boolean };
+    expect(adminD.can_see_cost).toBe(true);
+  });
+
+  it('店员只能看到当天的出货记录（忽略传入日期）', async () => {
+    await env.DB.prepare("INSERT INTO clients (id, name) VALUES (?, ?)").bind('c1', '测试饭店').run();
+    await call(env, 'POST', '/api/v1/items', token, { name: '白菜', prices: [{ unit: '斤', purchase_price: 1.5, sale_price: 2.5 }] });
+    const items = await call(env, 'GET', '/api/v1/items/summary', token).then((r) => r.json()) as {
+      items: Array<{ id: string; prices: Array<{ id: string }> }>;
+    };
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: 'c1', happened_at: yesterday, items: [{ price_id: items.items[0].prices[0].id, quantity: 2 }] });
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: 'c1', happened_at: today, items: [{ price_id: items.items[0].prices[0].id, quantity: 3 }] });
+    const d = await call(env, 'GET', '/api/v1/sales?date_from=2020-01-01', staffToken).then((r) => r.json()) as {
+      sales: Array<{ happened_at: string }>;
+    };
+    expect(d.sales.length).toBe(1);
+    expect(d.sales[0].happened_at.slice(0, 10)).toBe(today);
   });
 });

@@ -84,6 +84,7 @@ salesRouter.post('/', async (c) => {
 
 // GET /sales?client_id=&date_from=&date_to=&limit=&offset= — 出货单列表（含明细与总额，分页）
 salesRouter.get('/', async (c) => {
+  const user = c.get('user');
   const clientId = c.req.query('client_id')?.trim();
   const dateFrom = c.req.query('date_from')?.trim();
   const dateTo = c.req.query('date_to')?.trim();
@@ -91,9 +92,16 @@ salesRouter.get('/', async (c) => {
 
   let where = ' WHERE 1=1';
   const params: string[] = [];
-  if (clientId) { where += ' AND s.client_id = ?'; params.push(clientId); }
-  if (dateFrom) { where += ' AND s.happened_at >= ?'; params.push(dateFrom); }
-  if (dateTo) { where += ' AND s.happened_at <= ?'; params.push(dateTo); }
+  // 店员权限：仅可见当天送货记录（送货对单场景），强制锁定当天，忽略传入日期
+  if (user.role === 'staff') {
+    const today = new Date().toISOString().slice(0, 10);
+    where += ' AND s.happened_at >= ? AND s.happened_at <= ?';
+    params.push(today, today);
+  } else {
+    if (clientId) { where += ' AND s.client_id = ?'; params.push(clientId); }
+    if (dateFrom) { where += ' AND s.happened_at >= ?'; params.push(dateFrom); }
+    if (dateTo) { where += ' AND s.happened_at <= ?'; params.push(dateTo); }
+  }
 
   const countRow = await c.env.DB.prepare(
     `SELECT COUNT(*) AS cnt FROM sales s ${where}`).bind(...params).first<{ cnt: number }>();

@@ -15,11 +15,15 @@ class _ItemsPageState extends State<ItemsPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _items = [];
   bool _loading = true;
+  bool _isStaff = false; // 店员不可见进价
   Timer? _searchTimer;
 
   @override
   void initState() {
     super.initState();
+    Api.instance.getRole().then((r) {
+      if (mounted) setState(() => _isStaff = r == 'staff');
+    });
     _load();
   }
 
@@ -144,7 +148,9 @@ class _ItemsPageState extends State<ItemsPage> {
                                     Padding(
                                       padding: const EdgeInsets.symmetric(vertical: 2),
                                       child: Text(
-                                          '${p['unit']}：进 ¥${p['purchase_price']} → 出 ¥${p['sale_price']}',
+                                          _isStaff
+                                              ? '${p['unit']}：出 ¥${p['sale_price']}'
+                                              : '${p['unit']}：进 ¥${p['purchase_price']} → 出 ¥${p['sale_price']}',
                                           style: TextStyle(color: _c.textSub, fontSize: 13)),
                                     ),
                                 ],
