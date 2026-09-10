@@ -46,9 +46,7 @@ class _StocksPageState extends State<StocksPage> {
     }
   }
 
-  void _refresh() {
-    _load(q: _searchTimer == null ? '' : '', below: _belowOnly);
-  }
+  Future<void> _refresh() => _load(q: '', below: _belowOnly);
 
   /// 单行编辑：数量 / 预警阈值
   Future<void> _edit(Map<String, dynamic> s) async {
