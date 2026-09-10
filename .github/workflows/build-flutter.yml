@@ -73,72 +73,10 @@ jobs:
           # ②f 应用内更新 = 系统下载器（DownloadManager）：重写 MainActivity，注入 MethodChannel 'taozhu/download'
           #     后台下载 + 通知栏（下滑栏）实时进度 + 下载完成回调状态，应用退到后台/被杀仍继续下载。
           mkdir -p android/app/src/main/kotlin/com/taozhu/app
-          cat > android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt <<'KOTLIN_EOF'
-package com.taozhu.app
-
-import android.app.DownloadManager
-import android.content.Context
-import android.net.Uri
-import android.os.Environment
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodChannel
-
-class MainActivity : FlutterActivity() {
-    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "taozhu/download")
-            .setMethodCallHandler { call, result ->
-                try {
-                    when (call.method) {
-                        "enqueue" -> {
-                            val url = call.argument<String>("url")
-                            val fileName = call.argument<String>("fileName") ?: "taozhu-update.apk"
-                            if (url.isNullOrEmpty()) result.error("no_url", "缺少下载地址", null)
-                            else result.success(enqueue(url, fileName))
-                        }
-                        "status" -> {
-                            val id = call.argument<Number>("id")?.toLong()
-                            if (id == null) result.error("no_id", "缺少下载任务 id", null)
-                            else result.success(queryStatus(id))
-                        }
-                        else -> result.notImplemented()
-                    }
-                } catch (e: Exception) {
-                    result.error("dl_error", e.message, null)
-                }
-            }
-    }
-
-    private fun enqueue(url: String, fileName: String): Long {
-        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val req = DownloadManager.Request(Uri.parse(url))
-        req.setTitle("陶朱更新")
-        req.setDescription("正在下载新版本安装包…")
-        // 通知栏可见 + 下载完成通知；应用目录（免存储权限，各 Android 版本可用）
-        req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        req.setDestinationInExternalFilesDir(applicationContext, Environment.DIRECTORY_DOWNLOADS, fileName)
-        req.setMimeType("application/vnd.android.package-archive")
-        req.setAllowedOverMetered(true)
-        return dm.enqueue(req)
-    }
-
-    private fun queryStatus(id: Long): Map<String, Any> {
-        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val q = DownloadManager.Query().setFilterById(id)
-        dm.query(q).use { c ->
-            if (c.moveToFirst()) {
-                val downloaded = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                return mapOf("downloaded" to downloaded, "total" to total, "status" to status)
-            }
-        }
-        return mapOf("downloaded" to 0L, "total" to 0L, "status" to DownloadManager.STATUS_FAILED)
-    }
-}
-KOTLIN_EOF
-          echo "MainActivity.kt 已注入 DownloadManager 通道"
+          # ②f 应用内更新 = 系统下载器（DownloadManager）：重写 MainActivity 注入 MethodChannel 'taozhu/download'
+          #     后台下载 + 通知栏（下滑栏）实时进度。源码以 base64 内联（heredoc 多行在 YAML 块标量中会因缩进破坏 workflow 解析）
+          echo 'cGFja2FnZSBjb20udGFvemh1LmFwcAoKaW1wb3J0IGFuZHJvaWQuYXBwLkRvd25sb2FkTWFuYWdlcgppbXBvcnQgYW5kcm9pZC5jb250ZW50LkNvbnRleHQKaW1wb3J0IGFuZHJvaWQubmV0LlVyaQppbXBvcnQgYW5kcm9pZC5vcy5FbnZpcm9ubWVudAppbXBvcnQgaW8uZmx1dHRlci5lbWJlZGRpbmcuYW5kcm9pZC5GbHV0dGVyQWN0aXZpdHkKaW1wb3J0IGlvLmZsdXR0ZXIuZW1iZWRkaW5nLmVuZ2luZS5GbHV0dGVyRW5naW5lCmltcG9ydCBpby5mbHV0dGVyLnBsdWdpbi5jb21tb24uTWV0aG9kQ2hhbm5lbAoKY2xhc3MgTWFpbkFjdGl2aXR5IDogRmx1dHRlckFjdGl2aXR5KCkgewogICAgb3ZlcnJpZGUgZnVuIGNvbmZpZ3VyZUZsdXR0ZXJFbmdpbmUoZmx1dHRlckVuZ2luZTogRmx1dHRlckVuZ2luZSkgewogICAgICAgIHN1cGVyLmNvbmZpZ3VyZUZsdXR0ZXJFbmdpbmUoZmx1dHRlckVuZ2luZSkKICAgICAgICBNZXRob2RDaGFubmVsKGZsdXR0ZXJFbmdpbmUuZGFydEV4ZWN1dG9yLmJpbmFyeU1lc3NlbmdlciwgInRhb3podS9kb3dubG9hZCIpCiAgICAgICAgICAgIC5zZXRNZXRob2RDYWxsSGFuZGxlciB7IGNhbGwsIHJlc3VsdCAtPgogICAgICAgICAgICAgICAgdHJ5IHsKICAgICAgICAgICAgICAgICAgICB3aGVuIChjYWxsLm1ldGhvZCkgewogICAgICAgICAgICAgICAgICAgICAgICAiZW5xdWV1ZSIgLT4gewogICAgICAgICAgICAgICAgICAgICAgICAgICAgdmFsIHVybCA9IGNhbGwuYXJndW1lbnQ8U3RyaW5nPigidXJsIikKICAgICAgICAgICAgICAgICAgICAgICAgICAgIHZhbCBmaWxlTmFtZSA9IGNhbGwuYXJndW1lbnQ8U3RyaW5nPigiZmlsZU5hbWUiKSA/OiAidGFvemh1LXVwZGF0ZS5hcGsiCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBpZiAodXJsLmlzTnVsbE9yRW1wdHkoKSkgcmVzdWx0LmVycm9yKCJub191cmwiLCAibWlzc2luZyB1cmwiLCBudWxsKQogICAgICAgICAgICAgICAgICAgICAgICAgICAgZWxzZSByZXN1bHQuc3VjY2VzcyhlbnF1ZXVlKHVybCwgZmlsZU5hbWUpKQogICAgICAgICAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgICAgICAgICAgICAgICJzdGF0dXMiIC0+IHsKICAgICAgICAgICAgICAgICAgICAgICAgICAgIHZhbCBpZCA9IGNhbGwuYXJndW1lbnQ8TnVtYmVyPigiaWQiKT8udG9Mb25nKCkKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGlmIChpZCA9PSBudWxsKSByZXN1bHQuZXJyb3IoIm5vX2lkIiwgIm1pc3NpbmcgaWQiLCBudWxsKQogICAgICAgICAgICAgICAgICAgICAgICAgICAgZWxzZSByZXN1bHQuc3VjY2VzcyhxdWVyeVN0YXR1cyhpZCkpCiAgICAgICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgICAgICAgICAgZWxzZSAtPiByZXN1bHQubm90SW1wbGVtZW50ZWQoKQogICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIH0gY2F0Y2ggKGU6IEV4Y2VwdGlvbikgewogICAgICAgICAgICAgICAgICAgIHJlc3VsdC5lcnJvcigiZGxfZXJyb3IiLCBlLm1lc3NhZ2UsIG51bGwpCiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgIH0KICAgIH0KCiAgICBwcml2YXRlIGZ1biBlbnF1ZXVlKHVybDogU3RyaW5nLCBmaWxlTmFtZTogU3RyaW5nKTogTG9uZyB7CiAgICAgICAgdmFsIGRtID0gZ2V0U3lzdGVtU2VydmljZShDb250ZXh0LkRPV05MT0FEX1NFUlZJQ0UpIGFzIERvd25sb2FkTWFuYWdlcgogICAgICAgIHZhbCByZXEgPSBEb3dubG9hZE1hbmFnZXIuUmVxdWVzdChVcmkucGFyc2UodXJsKSkKICAgICAgICByZXEuc2V0VGl0bGUoInRhb3podSB1cGRhdGUiKQogICAgICAgIHJlcS5zZXREZXNjcmlwdGlvbigiZG93bmxvYWRpbmcgbmV3IHZlcnNpb24iKQogICAgICAgIC8vIOmAmuefpeagj+WPr+ingSArIOS4i+i9veWujOaIkOmAmuefpe+8m+W6lOeUqOebruW9le+8iOWFjeWtmOWCqOadg+mZkO+8jOWQhCBBbmRyb2lkIOeJiOacrOWPr+eUqO+8iQogICAgICAgIHJlcS5zZXROb3RpZmljYXRpb25WaXNpYmlsaXR5KERvd25sb2FkTWFuYWdlci5SZXF1ZXN0LlZJU0lCSUxJVFlfVklTSUJMRV9OT1RJRllfQ09NUExFVEVEKQogICAgICAgIHJlcS5zZXREZXN0aW5hdGlvbkluRXh0ZXJuYWxGaWxlc0RpcihhcHBsaWNhdGlvbkNvbnRleHQsIEVudmlyb25tZW50LkRJUkVDVE9SWV9ET1dOTE9BRFMsIGZpbGVOYW1lKQogICAgICAgIHJlcS5zZXRNaW1lVHlwZSgiYXBwbGljYXRpb24vdm5kLmFuZHJvaWQucGFja2FnZS1hcmNoaXZlIikKICAgICAgICByZXEuc2V0QWxsb3dlZE92ZXJNZXRlcmVkKHRydWUpCiAgICAgICAgcmV0dXJuIGRtLmVucXVldWUocmVxKQogICAgfQoKICAgIHByaXZhdGUgZnVuIHF1ZXJ5U3RhdHVzKGlkOiBMb25nKTogTWFwPFN0cmluZywgQW55PiB7CiAgICAgICAgdmFsIGRtID0gZ2V0U3lzdGVtU2VydmljZShDb250ZXh0LkRPV05MT0FEX1NFUlZJQ0UpIGFzIERvd25sb2FkTWFuYWdlcgogICAgICAgIHZhbCBxID0gRG93bmxvYWRNYW5hZ2VyLlF1ZXJ5KCkuc2V0RmlsdGVyQnlJZChpZCkKICAgICAgICBkbS5xdWVyeShxKS51c2UgeyBjIC0+CiAgICAgICAgICAgIGlmIChjLm1vdmVUb0ZpcnN0KCkpIHsKICAgICAgICAgICAgICAgIHZhbCBkb3dubG9hZGVkID0gYy5nZXRMb25nKGMuZ2V0Q29sdW1uSW5kZXhPclRocm93KERvd25sb2FkTWFuYWdlci5DT0xVTU5fQllURVNfRE9XTkxPQURFRF9TT19GQVIpKQogICAgICAgICAgICAgICAgdmFsIHRvdGFsID0gYy5nZXRMb25nKGMuZ2V0Q29sdW1uSW5kZXhPclRocm93KERvd25sb2FkTWFuYWdlci5DT0xVTU5fVE9UQUxfU0laRV9CWVRFUykpCiAgICAgICAgICAgICAgICB2YWwgc3RhdHVzID0gYy5nZXRJbnQoYy5nZXRDb2x1bW5JbmRleE9yVGhyb3coRG93bmxvYWRNYW5hZ2VyLkNPTFVNTl9TVEFUVVMpKQogICAgICAgICAgICAgICAgcmV0dXJuIG1hcE9mKCJkb3dubG9hZGVkIiB0byBkb3dubG9hZGVkLCAidG90YWwiIHRvIHRvdGFsLCAic3RhdHVzIiB0byBzdGF0dXMpCiAgICAgICAgICAgIH0KICAgICAgICB9CiAgICAgICAgcmV0dXJuIG1hcE9mKCJkb3dubG9hZGVkIiB0byAwTCwgInRvdGFsIiB0byAwTCwgInN0YXR1cyIgdG8gRG93bmxvYWRNYW5hZ2VyLlNUQVRVU19GQUlMRUQpCiAgICB9Cn0=' | base64 -d > android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt
+          grep -q "DownloadManager" android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt && echo "MainActivity 注入 OK"
           # ③ 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
           sed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml || true
