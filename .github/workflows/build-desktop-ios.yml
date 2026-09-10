@@ -57,7 +57,7 @@ jobs:
           $prev = (git tag --sort=-version:refname | Where-Object { $_ -ne "taozhu-v$VERSION" } | Select-Object -First 1)
           if ($prev) { $log = git log --format='- %s' --no-merges "$prev..HEAD" } else { $log = git log --format='- %s' --no-merges -8 }
           if (-not $log) { $log = "- 同步版本 $VERSION" }
-          $notes = "陶朱 v$VERSION 更新内容：`n$log`n`n本版本全部产物：Android APK / Web / Windows / iOS / 微信小程序。"
+          $notes = "陶朱 v$VERSION 更新内容：`n$log`n`n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。"
           $REL = "taozhu-v$VERSION"
           gh release view $REL 2>$null; if (-not $?) {
             gh release create $REL --title "陶朱 v$VERSION" --notes $notes
@@ -162,7 +162,7 @@ jobs:
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
           if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
-          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / iOS / 微信小程序。' "$VERSION" "$LOG")
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
           if ! gh release view "$REL" >/dev/null 2>&1; then
             gh release create "$REL" --title "陶朱 v${VERSION}" --notes "$NOTES"

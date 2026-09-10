@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
+import '../local_db.dart';
 import '../log.dart';
 import '../theme.dart';
 import '../utils/download.dart';
@@ -32,6 +33,8 @@ class MyPage extends StatefulWidget {
 class _MyPageState extends State<MyPage> {
   /// Android 系统下载器通道（MainActivity 注入，见 build-flutter.yml ②f）
   static const _dlChannel = MethodChannel('taozhu/download');
+  /// 更新下载进行中（防止重复下载）
+  static bool _downloading = false;
   String _base = '';
   String _role = ''; // admin=老板 / staff=店员（登录/启动时读取）
   int _lowStocks = -1; // 低库存数量（-1=未加载）
@@ -147,10 +150,65 @@ class _MyPageState extends State<MyPage> {
   }
 
   Future<void> _logout() async {
-    await Api.instance.clearToken();
+    await _clearAccountData();
     if (!mounted) return;
     Navigator.of(context)
         .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginPage()), (r) => false);
+  }
+
+  /// 切换账号：清空当前账号本地数据（token/缓存/离线队列/本地库）后回登录页，防账号数据串号
+  Future<void> _switchAccount() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('切换账号'),
+        content: const Text('将清除当前账号的本地缓存与离线数据（不会影响服务器数据），返回登录页。\n\n换账号登录后数据互相隔离。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('切换账号')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _logout();
+  }
+
+  /// 清除当前账号本地数据：token/角色/接口缓存/离线队列 + 本地数据库
+  Future<void> _clearAccountData() async {
+    await Api.instance.clearLocalData();
+    await LocalDb.clearAll();
+  }
+
+  /// 修改服务器地址（App/桌面端入口；Web 自动用访问域名）
+  Future<void> _editBase() async {
+    final ctrl = TextEditingController(text: _base);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('服务器地址'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(hintText: '如 https://您的域名'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final v = ctrl.text.trim();
+    if (v.isEmpty) {
+      toast(context, '地址不能为空');
+      return;
+    }
+    await Api.instance.setBase(v);
+    setState(() => _base = v);
+    toast(context, '已保存，重启应用后生效');
   }
 
   /// 版本号比较：a < b ?（四段 x.y.z.w）
@@ -167,6 +225,11 @@ class _MyPageState extends State<MyPage> {
 
   /// 检查更新：走后端代理（Worker 代查 GitHub Release），避免 App/Web 直连 GitHub 被网络干扰
   Future<void> _checkUpdate() async {
+    // 更新下载进行中：不重复弹更新/重复下载
+    if (_downloading) {
+      toast(context, '更新正在后台下载中，下拉通知栏可查看进度');
+      return;
+    }
     // Web 端特殊处理：版本由部署方控制，刷新不升级（fork 实例需重新部署）。仅如实提示版本号
     if (kIsWeb) {
       try {
@@ -212,18 +275,19 @@ class _MyPageState extends State<MyPage> {
         return;
       }
       if (!ready) {
-        // release 已建但 CI 尚未传完安装包：提示稍后再试，不引导下载
+        // release 已建但 CI 尚未传完安装包：提示后自动轮询，就绪时提醒
         if (!mounted) return;
         await showDialog<void>(
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text('新版本构建中'),
-            content: Text('新版本 v$ver 正在打包构建，安装包尚未就绪。\n请过几分钟再试（检查更新会自动重试）。'),
+            content: Text('新版本 v$ver 正在打包构建，安装包尚未就绪。\n我会自动检查（每 30 秒一次，最多约 2 分钟），就绪后提醒你。'),
             actions: [
               FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
             ],
           ),
         );
+        _waitForReady(ver);
         return;
       }
       if (!mounted) return;
@@ -289,9 +353,25 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
+  /// 构建中就绪自动重试：每 30 秒查一次，安装包就绪后提醒（最多约 2 分钟）
+  Future<void> _waitForReady(String ver) async {
+    for (var i = 0; i < 4; i++) {
+      await Future.delayed(const Duration(seconds: 30));
+      if (!mounted) return;
+      try {
+        final d = await Api.instance.get('/auth/latest-version');
+        if ('${d['latest'] ?? ''}' == ver && d['ready'] != false) {
+          toast(context, 'v$ver 安装包已就绪，可以更新了');
+          return;
+        }
+      } catch (_) {}
+    }
+  }
+
   /// Android：应用内更新走系统下载器（DownloadManager）——
   /// 后台下载、通知栏（下滑栏）实时进度、退出应用仍继续，完成后引导安装。
   Future<void> _downloadAndInstall(String ver) async {
+    _downloading = true;
     final url =
         'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk';
     final fileName = 'taozhu-update-$ver.apk';
@@ -328,6 +408,8 @@ class _MyPageState extends State<MyPage> {
       // 超时（大文件/慢网）：下载仍由系统继续，用户可从通知栏查看
     } catch (e) {
       toast(context, '启动下载失败：${e.toString().replaceFirst('Exception: ', '')}');
+    } finally {
+      _downloading = false;
     }
   }
 
@@ -558,6 +640,8 @@ class _MyPageState extends State<MyPage> {
           const SizedBox(height: 18),
           _groupTitle('系统'),
           _card([
+            _item(Icons.dns_outlined, c.primary, '服务器地址',
+                kIsWeb ? '当前：${_base.isEmpty ? Uri.base.origin : _base}' : '修改连接服务器地址', _editBase),
             if (_pending > 0)
               _item(Icons.cloud_upload_outlined, c.danger, '待同步', '$_pending 条断网记的单据等待上传', _syncPending,
                   warn: true),
@@ -594,15 +678,33 @@ class _MyPageState extends State<MyPage> {
             ),
           ]),
           const SizedBox(height: 24),
-          OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(48),
-              foregroundColor: c.danger,
-              side: BorderSide(color: c.danger),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: _logout,
-            child: const Text('退出登录'),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                    foregroundColor: c.danger,
+                    side: BorderSide(color: c.danger),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: _logout,
+                  child: const Text('退出登录'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                    backgroundColor: c.primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: _switchAccount,
+                  child: const Text('切换账号'),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
           Center(

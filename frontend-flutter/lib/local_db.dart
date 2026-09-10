@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sembast/sembast.dart';
@@ -61,5 +62,18 @@ class LocalDb {
     } catch (_) {
       return [];
     }
+  }
+
+  /// 清空本地库（切换账号/退出时调用，防止账号数据串号）：关库 + 删数据文件
+  static Future<void> clearAll() async {
+    if (kIsWeb) return;
+    try {
+      final db = await _open();
+      await db?.close();
+      _db = null;
+      final dir = await getApplicationDocumentsDirectory();
+      final f = File('${dir.path}/taozhu.db');
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
   }
 }

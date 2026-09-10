@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
@@ -31,11 +32,13 @@ class _LoginPageState extends State<LoginPage> {
     } catch (_) {
       setState(() => _initialized = true);
     }
-    _baseCtrl.text = await Api.instance.getBase();
+    _baseCtrl.text = kIsWeb ? Uri.base.origin : await Api.instance.getBase();
   }
 
   Future<void> _submit() async {
-    if (_baseCtrl.text.trim().isEmpty) {
+    // Web：自动使用当前访问的域名作为服务器地址（自部署/fork 都正确）；App/桌面手动填写
+    final base = kIsWeb ? Uri.base.origin : _baseCtrl.text.trim();
+    if (base.isEmpty) {
       _toast('请先填写服务器地址（必填）：您自己的服务器，如 https://您的域名');
       return;
     }
@@ -45,7 +48,7 @@ class _LoginPageState extends State<LoginPage> {
     }
     setState(() => _busy = true);
     try {
-      await Api.instance.setBase(_baseCtrl.text);
+      await Api.instance.setBase(base);
       final d = _initialized
           ? await Api.instance.post('/auth/login', {
               'username': _userCtrl.text.trim(),
@@ -117,8 +120,16 @@ class _LoginPageState extends State<LoginPage> {
                       textAlign: TextAlign.center,
                       style: TextStyle(color: c.textSub, fontSize: 13)),
                   const SizedBox(height: 28),
-                  _field(_baseCtrl, Icons.dns_outlined, '服务器地址', '您的服务器地址，如 https://xxx.com'),
-                  const SizedBox(height: 14),
+                  if (kIsWeb) ...[
+                    // Web：自动使用当前访问的域名，无需填写
+                    Text('当前服务器：${Uri.base.origin}',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: c.textSub, fontSize: 12)),
+                    const SizedBox(height: 14),
+                  ] else ...[
+                    _field(_baseCtrl, Icons.dns_outlined, '服务器地址', '您的服务器地址，如 https://xxx.com'),
+                    const SizedBox(height: 14),
+                  ],
                   _field(_userCtrl, Icons.person_outline, '登录名', null),
                   const SizedBox(height: 14),
                   TextField(

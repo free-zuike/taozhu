@@ -67,7 +67,7 @@ jobs:
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
           if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
-          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / iOS / 微信小程序。' "$VERSION" "$LOG")
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" \

@@ -51,6 +51,19 @@ class Api {
 
   Future<bool> hasToken() async => (await _token())?.isNotEmpty ?? false;
 
+  /// 清除当前账号的本地数据（切换账号/退出时调用，防数据串号）：
+  /// token、角色、接口缓存（taozhu_cache_*）、离线待同步队列
+  Future<void> clearLocalData() async {
+    final p = await SharedPreferences.getInstance();
+    p.remove(_tokenKey);
+    p.remove(_roleKey);
+    p.remove(_pendingKey);
+    final keys = p.getKeys().where((k) => k.startsWith(_cachePrefix)).toList();
+    for (final k in keys) {
+      await p.remove(k);
+    }
+  }
+
   /// 当前账号角色（登录时缓存；老板=admin / 店员=staff）
   Future<void> setRole(String role) async {
     (await SharedPreferences.getInstance()).setString(_roleKey, role);
