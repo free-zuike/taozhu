@@ -98,6 +98,8 @@ jobs:
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
+          # 等待 release 创建（deploy 或并发先到者创建，最多 5 分钟）
+          for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # 发布时间固定为该版本 commit 时间（多个 workflow 并发竞争创建时，保证 Release 列表按版本顺序排列）
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
