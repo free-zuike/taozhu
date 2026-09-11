@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../log.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/download.dart';
 import '../version.dart';
@@ -38,7 +39,8 @@ class _MyPageState extends State<MyPage> {
   String _base = '';
   String _role = ''; // admin=老板 / staff=店员（登录/启动时读取）
   int _lowStocks = -1; // 低库存数量（-1=未加载）
-  int _pending = 0; // 待同步单据数
+  int _pending = 0; // 待同步单据数（合并旧 Api 队列 + 新 SyncService 队列）
+  String _lastSync = ''; // 上次同步时间（人类可读）
 
   @override
   void initState() {
@@ -75,14 +77,25 @@ class _MyPageState extends State<MyPage> {
 
   Future<void> _loadPending() async {
     try {
-      final list = await Api.instance.pendingList();
-      if (mounted) setState(() => _pending = list.length);
+      // 两个队列合并：旧 Api.pendingList（SharedPreferences）+ 新 SyncService（LocalDb.local_changes）
+      final legacy = await Api.instance.pendingList();
+      final changes = await LocalDb.getPendingChanges();
+      if (!mounted) return;
+      setState(() => _pending = legacy.length + changes.length);
     } catch (_) {}
   }
 
-  /// 重放离线待同步单据
+  /// 重放离线待同步单据（两个队列依次推）
   Future<void> _syncPending() async {
-    final ok = await Api.instance.syncPending();
+    var ok = 0;
+    try {
+      ok += await Api.instance.syncPending();
+    } catch (_) {}
+    try {
+      ok += await SyncService.pushPending();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _lastSync = '刚刚');
     toast(context, ok > 0 ? '已同步 $ok 条待同步单据' : '没有可同步的待办');
     _loadPending();
     _loadLowStocks();
@@ -700,8 +713,12 @@ class _MyPageState extends State<MyPage> {
               _item(Icons.dns_outlined, c.primary, '服务器地址',
                   kIsWeb ? '当前：${_base.isEmpty ? Uri.base.origin : _base}' : '修改连接服务器地址', _editBase),
             if (_pending > 0)
-              _item(Icons.cloud_upload_outlined, c.danger, '待同步', '$_pending 条断网记的单据等待上传', _syncPending,
+              _item(Icons.cloud_upload_outlined, c.danger, '待同步',
+                  '$_pending 条单据等待上传${_lastSync.isEmpty ? '' : '（上次：$_lastSync）'}',
+                  _syncPending,
                   warn: true),
+            else if (!kIsWeb && _lastSync.isNotEmpty)
+              _item(Icons.cloud_done_outlined, c.primary, '已同步', '上次同步：$_lastSync'),
             if (_role != 'staff')
               _item(Icons.people_outline, c.primary, '账号管理', '店员/老板账号（仅老板可操作）',
                   () => goPage(context, const UsersPage())),
