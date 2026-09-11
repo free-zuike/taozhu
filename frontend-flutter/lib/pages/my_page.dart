@@ -718,7 +718,7 @@ class _MyPageState extends State<MyPage> {
                   _syncPending,
                   warn: true),
             if (_pending == 0 && !kIsWeb && _lastSync.isNotEmpty)
-              _item(Icons.cloud_done_outlined, c.primary, '已同步', '上次同步：$_lastSync'),
+              _item(Icons.cloud_done_outlined, c.primary, '已同步', '上次同步：$_lastSync', () {}),
             if (_role != 'staff')
               _item(Icons.people_outline, c.primary, '账号管理', '店员/老板账号（仅老板可操作）',
                   () => goPage(context, const UsersPage())),
