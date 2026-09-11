@@ -241,7 +241,8 @@ describe('检查更新代理（/auth/latest-version）', () => {
     expect(typeof d.building).toBe('boolean');
     expect(typeof d.source).toBe('string');
     expect(typeof d.notes).toBe('string');
-  });
+    // 末尾第三个参数=用例超时：GitHub/jsDelivr 探测各 6s 超时（测试环境境外网络不佳），默认 5s 不够
+  }, 60000);
 });
 
 describe('商品价格组（增/改/停用）', () => {
