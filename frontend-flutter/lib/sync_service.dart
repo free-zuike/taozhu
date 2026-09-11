@@ -1,0 +1,215 @@
+import 'dart:async';
+import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'api.dart';
+import 'local_db.dart';
+
+/// 同步服务（增量式）：本地库增量 upsert/delete + 变更队列批量推送。
+///
+/// 流程：
+/// - 启动/回前台 → fullSync（首次）或 pullChanges（增量），合并到本地库
+/// - 写本地优先（下一批写入口改造）→ 入 local_changes 队列 → debounce 250ms 触发 pushPending
+/// - push 成功移除队列；失败留队列下次重试
+///
+/// Web 端禁用（本地库无意义）；移动/桌面端启用。
+class SyncService {
+  SyncService._();
+  static const _cursorKey = 'taozhu_sync_cursor';
+  static const _deviceIdKey = 'taozhu_device_id';
+  static const _fullDoneKey = 'taozhu_sync_full_done';
+
+  static String? _deviceId;
+  static bool _syncing = false;
+  static Timer? _debounce;
+
+  /// 设备 ID（首次生成随机 UUID，持久化；pull/push 用）
+  static Future<String> deviceId() async {
+    if (_deviceId != null) return _deviceId!;
+    final p = await SharedPreferences.getInstance();
+    var id = p.getString(_deviceIdKey);
+    if (id == null || id.isEmpty) {
+      id = _genUuid();
+      await p.setString(_deviceIdKey, id);
+    }
+    _deviceId = id;
+    return id;
+  }
+
+  /// 生成简易 UUID（时间戳+随机，足够设备标识唯一性）
+  static String _genUuid() {
+    final r = Random();
+    final hex = DateTime.now().microsecondsSinceEpoch.toRadixString(16);
+    final rand = List.generate(16, (_) => r.nextInt(16).toRadixString(16)).join();
+    return '$hex${rand.substring(0, 16)}'.substring(0, 32);
+  }
+
+  /// 是否已完成首次全量同步
+  static Future<bool> isFullDone() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getBool(_fullDoneKey) ?? false;
+  }
+
+  /// 首次全量同步（新设备/重装）：拉全部实体一次到位，比逐条 pull 快
+  static Future<int> fullSync() async {
+    if (kIsWeb) return 0;
+    try {
+      final d = await Api.instance.get('/sync/full');
+      if (d == null) return 0;
+      final clients = (d['clients'] as List?) ?? [];
+      final items = (d['items'] as List?) ?? [];
+      final categories = (d['categories'] as List?) ?? [];
+      final sales = (d['sales'] as List?) ?? [];
+      final purchases = (d['purchases'] as List?) ?? [];
+      final payments = (d['payments'] as List?) ?? [];
+      await LocalDb.putAll('clients', clients.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('items', items.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('categories', categories.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('sales', sales.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('purchases', purchases.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('payments', payments.cast<Map<String, dynamic>>());
+      final cursor = d['server_cursor'] as int? ?? 0;
+      final p = await SharedPreferences.getInstance();
+      await p.setInt(_cursorKey, cursor);
+      await p.setBool(_fullDoneKey, true);
+      return clients.length + items.length + sales.length + purchases.length + payments.length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 增量拉取（按游标；排除自己设备回声）：upsert/delete 合并到本地库
+  static Future<int> pullChanges() async {
+    if (kIsWeb) return 0;
+    if (_syncing) return 0;
+    _syncing = true;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final since = p.getInt(_cursorKey) ?? 0;
+      final did = await deviceId();
+      var total = 0;
+      var hasMore = true;
+      while (hasMore) {
+        final d = await Api.instance.get('/sync/pull?since=$since&limit=500&device_id=$did');
+        if (d == null) break;
+        final changes = (d['changes'] as List?) ?? [];
+        for (final raw in changes) {
+          final ch = raw as Map<String, dynamic>;
+          final entityType = '${ch['entity_type'] ?? ''}';
+          final id = '${ch['entity_sync_id'] ?? ''}';
+          final action = '${ch['action'] ?? 'upsert'}';
+          final payload = ch['payload'] as Map<String, dynamic>? ?? {};
+          final store = _storeOf(entityType);
+          if (store.isEmpty) continue;
+          if (action == 'delete') {
+            await LocalDb.deleteOne(store, id);
+          } else {
+            // 软删（client/item deleted_at 非空）→ 本地删行（历史单据有快照不丢）
+            final deletedAt = payload['deleted_at'];
+            if (deletedAt != null && '$deletedAt'.isNotEmpty) {
+              await LocalDb.deleteOne(store, id);
+            } else {
+              await LocalDb.upsertOne(store, payload);
+            }
+          }
+          total++;
+        }
+        final newCursor = d['server_cursor'] as int? ?? since;
+        if (newCursor > since) await p.setInt(_cursorKey, newCursor);
+        hasMore = d['has_more'] == true;
+        if (changes.isEmpty) break;
+      }
+      return total;
+    } catch (_) {
+      return 0;
+    } finally {
+      _syncing = false;
+    }
+  }
+
+  /// 推送本地待同步队列（批量 POST /sync/push）；成功移除，失败留队列
+  static Future<int> pushPending() async {
+    if (kIsWeb) return 0;
+    try {
+      final pending = await LocalDb.getPendingChanges();
+      if (pending.isEmpty) return 0;
+      final did = await deviceId();
+      final changes = pending.map((x) {
+        final m = Map<String, dynamic>.from(x);
+        m.remove('id'); // 队列内部 id 不传服务端
+        return m;
+      }).toList();
+      final d = await Api.instance.post('/sync/push', {'device_id': did, 'changes': changes});
+      if (d == null) return 0;
+      final accepted = d['accepted'] as int? ?? 0;
+      // 接受的按入队顺序移除（服务端 LWW 拒绝的留队列下次重试或由用户新写覆盖）
+      var removed = 0;
+      for (final x in pending) {
+        if (removed >= accepted) break;
+        final id = x['id'];
+        if (id is int) {
+          await LocalDb.removePendingChange(id);
+          removed++;
+        }
+      }
+      // 推送成功后顺便拉取一次（其他设备的变更）
+      await pullChanges();
+      return accepted;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 入队一条本地变更（写本地优先时调用；触发 debounce 推送）
+  static Future<void> enqueueChange({
+    required String entityType,
+    required String entitySyncId,
+    String action = 'upsert',
+    required Map<String, dynamic> payload,
+  }) async {
+    if (kIsWeb) return;
+    await LocalDb.addPendingChange({
+      'id': DateTime.now().microsecondsSinceEpoch,
+      'entity_type': entityType,
+      'entity_sync_id': entitySyncId,
+      'action': action,
+      'payload': payload,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    });
+    _schedulePush();
+  }
+
+  /// debounce 250ms 触发推送（写后批量，避免逐条请求）
+  static void _schedulePush() {
+    if (kIsWeb) return;
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () {
+      pushPending();
+    });
+  }
+
+  /// 启动/回前台同步：首次 full，后续增量 pull + 推送待发
+  static Future<void> sync() async {
+    if (kIsWeb) return;
+    final done = await isFullDone();
+    if (!done) {
+      await fullSync();
+    } else {
+      await pullChanges();
+    }
+    await pushPending();
+  }
+
+  /// 实体类型 → 本地 store 名映射
+  static String _storeOf(String entityType) {
+    switch (entityType) {
+      case 'client': return 'clients';
+      case 'item': return 'items';
+      case 'category': return 'categories';
+      case 'sale': return 'sales';
+      case 'purchase': return 'purchases';
+      case 'payment': return 'payments';
+      default: return '';
+    }
+  }
+}

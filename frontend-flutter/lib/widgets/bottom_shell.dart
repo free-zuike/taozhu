@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../pages/sale_page.dart';
 import '../pages/my_page.dart';
@@ -27,6 +28,8 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _isStaff = r == 'staff');
     });
+    // 启动同步：首次 full，后续增量 pull + 推送待发（静默）
+    SyncService.sync();
   }
 
   @override
@@ -35,11 +38,12 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  /// 回到前台时自动重放离线待同步单据（静默：成功不打扰）
+  /// 回到前台时同步：增量拉取其他设备变更 + 重放离线待同步单据（静默）
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       Api.instance.syncPending();
+      SyncService.sync();
     }
   }
 
