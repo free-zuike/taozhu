@@ -59,13 +59,14 @@ authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, 
 // 源3 jsDelivr CDN 镜像读取仓库版本文件（GitHub API 不可达时的兜底，国内可达性好）。
 // 返回 ready=false 表示该版本 release 已创建但安装包（CI 构建）尚未就绪——前端应提示"构建中"而非引导下载。
 // 全部失败返回 latest=''，前端手动兜底。60 秒内复用成功结果（构建中→就绪切换更及时）。
-let latestCache: { at: number; latest: string; ready: boolean; building: boolean; notes: string } | null = null;
+let latestCache: { at: number; latest: string; ready: boolean; building: boolean; source: 'github' | 'backup'; notes: string } | null = null;
 const LATEST_CACHE_MS = 60 * 1000;
 
 interface VersionProbe {
   v: string;
   ready: boolean;
-  building?: boolean; // true=release 刚创建且资产未就绪（CI 真实构建中）；false/缺省=非构建中
+  building?: boolean;
+  source: 'github' | 'backup'; // github=GitHub 实时确认（权威）；backup=备源兜底（无法确认安装文件）
   notes?: string;
 }
 
@@ -77,6 +78,7 @@ authRouter.get('/latest-version', async (c) => {
       latest: latestCache.latest,
       ready: latestCache.ready,
       building: latestCache.building ?? false,
+      source: latestCache.source,
       notes: latestCache.notes,
     });
   }
@@ -100,14 +102,14 @@ authRouter.get('/latest-version', async (c) => {
       if (!assets.some((a) => a.name === `flutter-app-${v}.apk`)) {
         return null;
       }
-      return { v, ready: true, building: false, notes: d.body ?? '' };
+      return { v, ready: true, building: false, source: 'github', notes: d.body ?? '' };
     } catch {
       return null;
     }
   };
-  // 备源（latest.json / jsDelivr）：无法验证安装文件是否存在 → ready=false（不提示可更新），
-  // 前端仅在 GitHub 完全不可达时作为版本号兜底显示"暂无可用更新"
-  const probeVer = (v: string): VersionProbe | null => (v ? { v, ready: false, building: false } : null);
+  // 备源（latest.json / jsDelivr）：无法验证安装文件是否存在 → ready=false（不提示可更新）且 source='backup'
+  const probeVer = (v: string): VersionProbe | null =>
+    v ? { v, ready: false, building: false, source: 'backup' } : null;
   const checkAsset = async (): Promise<VersionProbe | null> => {
     try {
       const r = await c.env.ASSETS.fetch(new Request(new URL('/latest.json', c.req.url)));
@@ -133,17 +135,21 @@ authRouter.get('/latest-version', async (c) => {
   for (const check of [checkGitHub, checkAsset, checkJsDelivr]) {
     const r = await check();
     if (r) {
-      latestCache = { at: now, latest: r.v, ready: r.ready, building: r.building ?? false, notes: r.notes ?? '' };
+      latestCache = {
+        at: now, latest: r.v, ready: r.ready, building: r.building ?? false,
+        source: r.source, notes: r.notes ?? '',
+      };
       return c.json({
         current: APP_VERSION,
         latest: r.v,
         ready: r.ready,
         building: r.building ?? false,
+        source: r.source,
         notes: r.notes ?? '',
       });
     }
   }
-  return c.json({ current: APP_VERSION, latest: '', ready: false, building: false, notes: '' });
+  return c.json({ current: APP_VERSION, latest: '', ready: false, building: false, source: 'backup', notes: '' });
 });
 
 // 统计系统是否已初始化（前端引导页判断）

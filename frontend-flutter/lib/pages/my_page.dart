@@ -276,9 +276,13 @@ class _MyPageState extends State<MyPage> {
         return;
       }
       if (!ready) {
-        // 语义：没有安装文件就不提示新版本（静默；最多提示暂无可用更新，绝不报"构建中"）
+        // 语义：没有安装文件就不提示新版本。source=backup 说明 GitHub 探测超时走了备源（无法确认安装包）——
+        // 提示"更新源连接问题"（如开启代理导致），而非误导性的"安装文件未就绪"
         if (!mounted) return;
-        toast(context, '官方有 v$ver，但安装文件尚未就绪，暂无可用更新');
+        final fromBackup = '${d['source'] ?? ''}' == 'backup';
+        toast(context, fromBackup
+            ? '暂时无法连接更新源（GitHub），请稍后重试；如开启了代理可尝试关闭后直连'
+            : '官方有 v$ver，但安装文件尚未就绪，暂无可用更新');
         return;
       }
       if (!mounted) return;
