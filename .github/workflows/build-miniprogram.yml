@@ -39,16 +39,16 @@ jobs:
           WX_PRIVATE_KEY: ${{ secrets.WX_PRIVATE_KEY }}
         run: |
           VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || echo "0.0.0")
+          # 微信版本号要求 x.y.z（三段），截版本前三段
+          MP_VER=$(echo "$VERSION" | cut -d. -f1-3)
           echo "$WX_PRIVATE_KEY" | base64 -d > /tmp/private.key
           npx miniprogram-ci@latest upload \
             --pp frontend-uni/dist/build/mp-weixin \
             --pkp /tmp/private.key \
             --appid "$WX_APPID" \
+            --upload-version "$MP_VER" \
             --upload-message "陶朱 v$VERSION 自动上传" \
             -r 1 \
-            --enable-es6 true \
-            --enable-es7 true \
-            --auto-prefix WX \
             || echo "::warning::微信上传失败（密钥/网络/白名单），详见日志；zip 产物已留底"
           rm -f /tmp/private.key
 
