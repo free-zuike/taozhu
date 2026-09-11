@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
+import { buildPayload, recordChange } from '../lib/sync';
 import type { AuthUser, ClientRow, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -57,6 +58,7 @@ clientsRouter.post('/', adminOnly(), async (c) => {
   const id = randomId();
   await c.env.DB.prepare('INSERT INTO clients (id, name, contact, phone, note, category_id, start_date, end_date, month_start_day) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(id, name, body?.contact?.trim() ?? '', body?.phone?.trim() ?? '', body?.note?.trim() ?? '', body?.category_id ?? null, body?.start_date?.trim() ?? null, body?.end_date?.trim() ?? null, msd).run();
+  await recordChange(c.env.DB, { entity_type: 'client', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'client', id), updated_by_username: c.get('user').username });
   return c.json({ id, name, contact: body?.contact?.trim() ?? '', phone: body?.phone?.trim() ?? '', note: body?.note?.trim() ?? '', category_id: body?.category_id ?? '', start_date: body?.start_date?.trim() ?? '', end_date: body?.end_date?.trim() ?? '', month_start_day: msd, debt: 0 }, 201);
 });
 
@@ -82,6 +84,7 @@ clientsRouter.patch('/:id', adminOnly(), async (c) => {
       msd,
       id,
     ).run();
+  await recordChange(c.env.DB, { entity_type: 'client', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'client', id), updated_by_username: c.get('user').username });
   return c.json({ ok: true });
 });
 
@@ -97,5 +100,6 @@ function normalizeStartDay(v: unknown): number | null {
 clientsRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('UPDATE clients SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(nowIso(), id).run();
+  await recordChange(c.env.DB, { entity_type: 'client', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'client', id), updated_by_username: c.get('user').username });
   return c.body(null, 204);
 });

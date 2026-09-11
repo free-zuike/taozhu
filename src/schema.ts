@@ -130,6 +130,17 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_share_links_expires ON share_links (expires_at)`,
+  `CREATE TABLE IF NOT EXISTS sync_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_sync_id TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'upsert',
+    payload_json TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    updated_by_device_id TEXT,
+    updated_by_username TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON sync_changes (entity_type, entity_sync_id)`,
 ];
 
 let schemaReady = false;
@@ -166,6 +177,14 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     ).first<{ name: string }>();
     if (!shareTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS share_links'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
+    }
+    // 同步变更流（v0.17.0.0）：append-only 变更日志（id=游标）
+    const syncTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sync_changes'",
+    ).first<{ name: string }>();
+    if (!syncTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS sync_changes'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
     }
     for (const t of ['clients', 'items'] as const) {

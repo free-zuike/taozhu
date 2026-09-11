@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
+import { buildPayload, recordChange } from '../lib/sync';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -37,6 +38,7 @@ paymentsRouter.post('/', adminOnly(), async (c) => {
   await c.env.DB.prepare(
     'INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind(id, clientId, happenedAt, Math.round(amount * 100) / 100, Math.round(waived * 100) / 100, body?.method?.trim() ?? '', body?.note?.trim() ?? '', user.id, syncKey || null).run();
+  await recordChange(c.env.DB, { entity_type: 'payment', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'payment', id), updated_by_username: user.username });
   return c.json({ id, client_id: clientId, happened_at: happenedAt, amount: Math.round(amount * 100) / 100, waived: Math.round(waived * 100) / 100, method: body?.method?.trim() ?? '', note: body?.note?.trim() ?? '' }, 201);
 });
 
@@ -83,6 +85,7 @@ paymentsRouter.patch('/:id', adminOnly(), async (c) => {
     'UPDATE payments SET client_id = ?, happened_at = ?, amount = ?, waived = ?, method = ?, note = ? WHERE id = ?')
     .bind(clientId, body?.happened_at?.trim() || pay.happened_at, Math.round(amount * 100) / 100,
       Math.round(waived * 100) / 100, body?.method?.trim() ?? pay.method ?? '', body?.note?.trim() ?? pay.note ?? '', id).run();
+  await recordChange(c.env.DB, { entity_type: 'payment', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'payment', id), updated_by_username: c.get('user').username });
   return c.json({ ok: true });
 });
 
@@ -90,5 +93,6 @@ paymentsRouter.patch('/:id', adminOnly(), async (c) => {
 paymentsRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM payments WHERE id = ?').bind(id).run();
+  await recordChange(c.env.DB, { entity_type: 'payment', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
   return c.body(null, 204);
 });

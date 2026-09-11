@@ -2,12 +2,19 @@
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
+import { buildPayload, recordChange } from '../lib/sync';
 import type { AuthUser, Env, ItemRow } from '../types';
 
 type V = { user: AuthUser };
 export const itemsRouter = new Hono<{ Bindings: Env; Variables: V }>();
 
 itemsRouter.use('*', authMiddleware());
+
+/** 记录商品变更（价格组合改动也视为商品整体变更，payload 为最新快照） */
+async function noteItemChange(db: D1Database, itemId: string, username: string): Promise<void> {
+  const payload = await buildPayload(db, 'item', itemId);
+  if (payload) await recordChange(db, { entity_type: 'item', entity_sync_id: itemId, payload, updated_by_username: username });
+}
 
 const nowIso = () => new Date().toISOString();
 
@@ -90,6 +97,7 @@ itemsRouter.post('/', adminOnly(), async (c) => {
       .bind(pid, id, unit, Number(p.purchase_price) || 0, Number(p.sale_price) || 0).run();
     priceIds.push(pid);
   }
+  await noteItemChange(c.env.DB, id, c.get('user').username);
   return c.json({ id, name, category: body?.category?.trim() ?? '', category_id: body?.category_id ?? '', prices: priceIds }, 201);
 });
 
@@ -111,6 +119,7 @@ itemsRouter.patch('/:id', adminOnly(), async (c) => {
       body?.category_id !== undefined ? body.category_id : item.category_id,
       id,
     ).run();
+  await noteItemChange(c.env.DB, id, c.get('user').username);
   return c.json({ id, name: name || item.name, category: body?.category?.trim() ?? item.category ?? '' });
 });
 
@@ -120,6 +129,7 @@ itemsRouter.delete('/:id', adminOnly(), async (c) => {
   await c.env.DB.prepare(
     'UPDATE items SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(nowIso(), id).run();
   await c.env.DB.prepare('UPDATE item_prices SET active = 0 WHERE item_id = ?').bind(id).run();
+  await noteItemChange(c.env.DB, id, c.get('user').username);
   return c.body(null, 204);
 });
 
@@ -133,6 +143,7 @@ itemsRouter.post('/:id/prices', adminOnly(), async (c) => {
   await c.env.DB.prepare(
     'INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price) VALUES (?, ?, ?, ?, ?)')
     .bind(id, itemId, unit, Number(body?.purchase_price) || 0, Number(body?.sale_price) || 0).run();
+  await noteItemChange(c.env.DB, itemId, c.get('user').username);
   return c.json({ id, item_id: itemId, unit, purchase_price: Number(body?.purchase_price) || 0, sale_price: Number(body?.sale_price) || 0 }, 201);
 });
 
@@ -151,12 +162,17 @@ itemsRouter.patch('/item-prices/:id', adminOnly(), async (c) => {
       body?.active !== undefined ? Number(body.active) : 1,
       id,
     ).run();
+  await noteItemChange(c.env.DB, (price as { item_id: string }).item_id, c.get('user').username);
   return c.json({ ok: true });
 });
 
 // DELETE /item-prices/:id — 停用该单位价
 itemsRouter.delete('/item-prices/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('UPDATE item_prices SET active = 0 WHERE id = ?').bind(id).run();
+  const price = await c.env.DB.prepare('SELECT item_id FROM item_prices WHERE id = ?').bind(id).first<{ item_id: string }>();
+  if (price) {
+    await c.env.DB.prepare('UPDATE item_prices SET active = 0 WHERE id = ?').bind(id).run();
+    await noteItemChange(c.env.DB, price.item_id, c.get('user').username);
+  }
   return c.body(null, 204);
 });

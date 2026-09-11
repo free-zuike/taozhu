@@ -16,6 +16,7 @@ import { attachmentsRouter } from './routes/attachments';
 import { stocksRouter } from './routes/stocks';
 import { backupRouter } from './routes/backup';
 import { shareRouter, renderShareHtml } from './routes/share';
+import { syncRouter } from './routes/sync';
 import { ensureSchema } from './schema';
 
 type AppEnv = { Bindings: Env; Variables: { user: import('./types').AuthUser } };
@@ -54,6 +55,7 @@ app.route('/api/v1/attachments', attachmentsRouter);
 app.route('/api/v1/stocks', stocksRouter);
 app.route('/api/v1/backup', backupRouter);
 app.route('/api/v1/share', shareRouter);
+app.route('/api/v1/sync', syncRouter);
 
 // 对账单分享页（公开只读：token 随机且可选过期，数据为生成时快照）
 app.get('/share/:token', async (c) => {

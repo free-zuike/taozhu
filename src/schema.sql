@@ -154,3 +154,17 @@ CREATE TABLE IF NOT EXISTS share_links (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_share_links_expires ON share_links (expires_at);
+
+-- 同步变更流（append-only，id 自增即拉取游标；业务表即投影）。
+-- 每写操作追加一行；实体多次变更按 id 递增，pull 按游标增量下发。
+CREATE TABLE IF NOT EXISTS sync_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type TEXT NOT NULL,
+  entity_sync_id TEXT NOT NULL,
+  action TEXT NOT NULL DEFAULT 'upsert',
+  payload_json TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL,
+  updated_by_device_id TEXT,
+  updated_by_username TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON sync_changes (entity_type, entity_sync_id);

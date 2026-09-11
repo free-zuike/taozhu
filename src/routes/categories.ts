@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
+import { buildPayload, recordChange } from '../lib/sync';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -54,6 +55,7 @@ categoriesRouter.post('/', adminOnly(), async (c) => {
   const id = randomId();
   await c.env.DB.prepare('INSERT INTO categories (id, type, name, parent_id) VALUES (?, ?, ?, ?)')
     .bind(id, body.type, name, body.parent_id ?? null).run();
+  await recordChange(c.env.DB, { entity_type: 'category', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'category', id), updated_by_username: c.get('user').username });
   return c.json({ id, type: body.type, name, parent_id: body.parent_id ?? null }, 201);
 });
 
@@ -73,6 +75,7 @@ categoriesRouter.patch('/:id', adminOnly(), async (c) => {
   const name = body?.name?.trim();
   await c.env.DB.prepare('UPDATE categories SET name = ?, parent_id = ? WHERE id = ?')
     .bind(name || cat.name, body?.parent_id !== undefined ? body.parent_id : cat.parent_id, id).run();
+  await recordChange(c.env.DB, { entity_type: 'category', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'category', id), updated_by_username: c.get('user').username });
   return c.json({ ok: true });
 });
 
@@ -90,5 +93,6 @@ categoriesRouter.delete('/:id', adminOnly(), async (c) => {
     await c.env.DB.prepare("UPDATE items SET category_id = NULL, category = '' WHERE category_id = ?").bind(id).run();
   }
   await c.env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id).run();
+  await recordChange(c.env.DB, { entity_type: 'category', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
   return c.body(null, 204);
 });

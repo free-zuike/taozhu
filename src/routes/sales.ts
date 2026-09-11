@@ -4,6 +4,7 @@ import { randomId } from '../lib/password';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
 import { stockDelta } from '../lib/stock';
+import { buildPayload, recordChange } from '../lib/sync';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -89,6 +90,7 @@ salesRouter.post('/', async (c) => {
   }
 
   await c.env.DB.batch(batch);
+  await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: user.username });
   return c.json({ id: saleId, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100, items: saleItemIds.length }, 201);
 });
 
@@ -238,6 +240,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
     total = tot?.total ?? 0;
   }
   await c.env.DB.batch(batch);
+  await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'sale', id), updated_by_username: c.get('user').username });
   return c.json({ id, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100 });
 });
 
@@ -251,5 +254,6 @@ salesRouter.delete('/:id', adminOnly(), async (c) => {
     .map((it) => stockDelta(c.env.DB, it.item_id, it.unit, it.quantity)); // 出货扣的加回
   batch.push(c.env.DB.prepare('DELETE FROM sales WHERE id = ?').bind(id));
   await c.env.DB.batch(batch);
+  await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
   return c.body(null, 204);
 });
