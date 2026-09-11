@@ -130,11 +130,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     }
   }
 
-  String _date(Object? v) {
-    final s = '$v';
-    return s.length >= 10 ? s.substring(0, 10) : s;
-  }
-
   String _weekday(String date) {
     final d = DateTime.tryParse(date);
     if (d == null) return date;
