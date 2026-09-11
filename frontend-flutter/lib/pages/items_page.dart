@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
 
@@ -80,13 +82,19 @@ class _ItemsPageState extends State<ItemsPage> {
       ),
     );
     if (ok != true) return;
-    try {
-      await Api.instance.delete('/items/$id');
-      toast(context, '已删除');
-      _load();
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    // 软删：本地删行 + 队列推送 upsert 带 deleted_at（prices 补 active:1 防服务端恢复时跳过）
+    final item = _items.where((x) => x['id'] == id).firstOrNull;
+    if (item != null) {
+      final delPayload = Map<String, dynamic>.from(item);
+      delPayload['deleted_at'] = DateTime.now().toIso8601String();
+      final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+      for (final p in prices) { p['active'] = 1; }
+      delPayload['prices'] = prices;
+      await LocalDb.deleteOne('items', id);
+      await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
     }
+    toast(context, '已删除，正在同步');
+    _load();
   }
 
   @override
@@ -298,50 +306,27 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       return;
     }
     setState(() => _busy = true);
-    try {
-      final catName = _cats.where((c) => '${c['id']}' == _categoryId).map((c) => '${c['name']}').firstOrNull;
-      if (_editing) {
-        final id = '${widget.item!['id']}';
-        await Api.instance.patch('/items/$id', {
-          'name': name,
-          'category': catName ?? '',
-          'category_id': _categoryId,
-        });
-        // 既有价格更新 / 新增价格
-        await Future.wait(rows.map((r) async {
-          final pid = r['priceId'] as String?;
-          final body = {'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell']};
-          if (pid != null) {
-            await Api.instance.patch('/items/item-prices/$pid', body);
-          } else {
-            await Api.instance.post('/items/$id/prices', body);
-          }
-        }));
-        // 被移除的既有价格 → 停用（DELETE /item-prices/:id）
-        final origIds = ((widget.item!['prices'] as List?) ?? [])
-            .map((p) => '${(p as Map)['id'] ?? ''}')
-            .where((s) => s.isNotEmpty)
-            .toSet();
-        final nowIds = rows.map((r) => r['priceId'] as String?).whereType<String>().toSet();
-        for (final gone in origIds.difference(nowIds)) {
-          await Api.instance.delete('/items/item-prices/$gone');
-        }
-        toast(context, '已保存');
-      } else {
-        await Api.instance.post('/items', {
-          'name': name,
-          'category': catName ?? '',
-          'category_id': _categoryId,
-          'prices': rows.map((r) => {'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell']}).toList(),
-        });
-        toast(context, '已添加');
-      }
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
-    } finally {
-      if (mounted) setState(() => _busy = false);
+    // 写本地优先：构建完整 item payload（含 prices）→ 落本地库 → 入队列 → debounce push
+    final catName = _cats.where((c) => '${c['id']}' == _categoryId).map((c) => '${c['name']}').firstOrNull;
+    final itemId = _editing ? '${widget.item!['id']}' : 'i${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+    final pricesPayload = <Map<String, dynamic>>[];
+    for (final r in rows) {
+      final pid = (r['priceId'] as String?) ?? 'pr${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+      pricesPayload.add({
+        'id': pid, 'item_id': itemId, 'unit': r['unit'],
+        'purchase_price': r['buy'], 'sale_price': r['sell'], 'active': 1,
+      });
     }
+    final payload = {
+      'id': itemId, 'name': name, 'category': catName ?? '',
+      'category_id': _categoryId ?? '', 'deleted_at': null,
+      'prices': pricesPayload,
+    };
+    await LocalDb.upsertOne('items', payload);
+    await SyncService.enqueueChange(entityType: 'item', entitySyncId: itemId, payload: payload);
+    toast(context, _editing ? '已保存，正在同步' : '已添加，正在同步');
+    if (mounted) Navigator.pop(context, true);
+    if (mounted) setState(() => _busy = false);
   }
 
   @override
