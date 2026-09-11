@@ -89,31 +89,25 @@ authRouter.get('/latest-version', async (c) => {
       if (!res.ok) return null;
       const d = (await res.json()) as {
         tag_name?: string;
-        created_at?: string;
         assets?: Array<{ name?: string }>;
         body?: string;
       };
       const v = String(d.tag_name ?? '').replace(/^taozhu-v/, '');
       if (!v) return null;
-      const notes = d.body ?? '';
-      // APK 资产已上传 → 可更新
+      // 语义：有安装文件才提示新版本。APK 资产存在 → 可更新；不存在 → 该版本不参与提示（返回 null，
+      // 由后续源决定，前端最多提示"暂无可用更新"，绝不再报"构建中"）
       const assets = d.assets ?? [];
-      if (assets.some((a) => a.name === `flutter-app-${v}.apk`)) {
-        return { v, ready: true, building: false, notes };
+      if (!assets.some((a) => a.name === `flutter-app-${v}.apk`)) {
+        return null;
       }
-      // release 存在但无 APK：仅当 release 刚创建（15 分钟内，CI 真实构建中）才提示"构建中"；
-      // 创建已久仍无资产 = 构建失败/缺失 → 不算构建中，前端提示"安装包不可用"而非无限"构建中"
-      const created = d.created_at ? Date.parse(d.created_at) : 0;
-      const building = !Number.isNaN(created) && now - created < 15 * 60 * 1000;
-      return { v, ready: false, building, notes };
+      return { v, ready: true, building: false, notes: d.body ?? '' };
     } catch {
       return null;
     }
   };
-  // 备源（latest.json / jsDelivr）：部署版本即视为可更新（该版本确实已发布）——
-  // 避免 GitHub API 受限时一直误报"构建中"；下载失败由前端"探测+多镜像"兜底；
-  // GitHub 可达时以 GitHub 资产检测为准（精确 ready）
-  const probeVer = (v: string): VersionProbe | null => (v ? { v, ready: true } : null);
+  // 备源（latest.json / jsDelivr）：无法验证安装文件是否存在 → ready=false（不提示可更新），
+  // 前端仅在 GitHub 完全不可达时作为版本号兜底显示"暂无可用更新"
+  const probeVer = (v: string): VersionProbe | null => (v ? { v, ready: false, building: false } : null);
   const checkAsset = async (): Promise<VersionProbe | null> => {
     try {
       const r = await c.env.ASSETS.fetch(new Request(new URL('/latest.json', c.req.url)));

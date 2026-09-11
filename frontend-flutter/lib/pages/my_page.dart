@@ -275,39 +275,9 @@ class _MyPageState extends State<MyPage> {
         return;
       }
       if (!ready) {
+        // 语义：没有安装文件就不提示新版本（静默；最多提示暂无可用更新，绝不报"构建中"）
         if (!mounted) return;
-        final building = d['building'] != false; // release 刚创建（CI 真实构建中）才提示"构建中"
-        if (building) {
-          // 真实构建中：提示后自动轮询，就绪时提醒
-          await showDialog<void>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('新版本构建中'),
-              content: Text('新版本 v$ver 正在打包构建，安装包尚未就绪。\n我会自动检查（每 30 秒一次，最多约 2 分钟），就绪后提醒你。'),
-              actions: [
-                FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-              ],
-            ),
-          );
-          _waitForReady(ver);
-        } else {
-          // 非构建中（构建失败/资产缺失）：不提示"构建中"，给出可用说明与手动兜底
-          final copy = await showDialog<bool>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('安装包暂不可用'),
-              content: Text('新版本 v$ver 的安装包当前不可用（可能构建未成功）。\n\n可稍后重试，或打开 GitHub Release 页查看/下载。'),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('复制下载链接')),
-              ],
-            ),
-          );
-          if (copy == true) {
-            await Clipboard.setData(ClipboardData(text: releaseUrl));
-            toast(context, '已复制 GitHub Release 链接');
-          }
-        }
+        toast(context, '官方有 v$ver，但安装文件尚未就绪，暂无可用更新');
         return;
       }
       if (!mounted) return;

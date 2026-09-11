@@ -235,7 +235,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; notes: string };
-    expect(d.current).toBe('0.16.28.0');
+    expect(d.current).toBe('0.16.29.0');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
@@ -532,6 +532,18 @@ describe('对账单分享（/api/v1/share + /share/:token）', () => {
     const staffToken = ((await login.json()) as { token: string }).token;
     expect((await call(env, 'POST', '/api/v1/share', staffToken, { payload })).status).toBe(403);
     expect((await call(env, 'GET', '/api/v1/share', staffToken)).status).toBe(403);
+  });
+
+  it('分享延期（PATCH extend_days / permanent）', async () => {
+    const mk = await call(env, 'POST', '/api/v1/share', token, { payload, ttl_hours: 1 });
+    const created = (await mk.json()) as { token: string };
+    const p1 = await call(env, 'PATCH', `/api/v1/share/${created.token}`, token, { extend_days: 7 });
+    expect(p1.status).toBe(200);
+    const d1 = (await p1.json()) as { expires_at: string };
+    expect(new Date(d1.expires_at).getTime()).toBeGreaterThan(Date.now() + 5 * 86400000);
+    const p2 = await call(env, 'PATCH', `/api/v1/share/${created.token}`, token, { permanent: true });
+    expect(((await p2.json()) as { expires_at: string | null }).expires_at).toBeNull();
+    expect((await call(env, 'PATCH', '/api/v1/share/no-such-token', token, { extend_days: 7 })).status).toBe(404);
   });
 });
 

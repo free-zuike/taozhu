@@ -7,8 +7,9 @@ compatibility_flags = ["nodejs_compat"]
 [assets]
 directory = "./public"
 binding = "ASSETS"
-# SPA：未匹配路径（/login、/sale 等前端路由）回退 index.html
-not_found_handling = "single-page-application"
+# 前端是 Flutter hash 路由（/#/...），真实路径只有 / 与 /share/*——无需 SPA fallback。
+# none：未匹配路径（如 /share/:token）一定进入 Worker 路由，绝不回退 index.html（登录页）
+not_found_handling = "none"
 
 [[d1_databases]]
 binding = "DB"

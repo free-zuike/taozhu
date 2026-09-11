@@ -51,6 +51,28 @@ shareRouter.delete('/:token', authMiddleware(), adminOnly(), async (c) => {
   return c.json({ ok: true });
 });
 
+// PATCH /api/v1/share/:token — 延期（body: {extend_days: N} 追加 N 天；{permanent: true} 永久）
+shareRouter.patch('/:token', authMiddleware(), adminOnly(), async (c) => {
+  const token = c.req.param('token');
+  const body = await c.req.json().catch(() => null) as { extend_days?: number; permanent?: boolean } | null;
+  const row = await c.env.DB.prepare('SELECT expires_at FROM share_links WHERE token = ?').bind(token)
+    .first<{ expires_at: string | null }>();
+  if (!row) return c.json({ error: '分享不存在' }, 404);
+  let expiresAt: string | null;
+  if (body?.permanent) {
+    expiresAt = null;
+  } else {
+    const days = Number(body?.extend_days) || 0;
+    if (days <= 0) return c.json({ error: 'extend_days 需大于 0，或使用 permanent' }, 400);
+    const base = row.expires_at && row.expires_at >= new Date().toISOString()
+      ? Date.parse(row.expires_at)
+      : Date.now();
+    expiresAt = new Date(base + days * 86400000).toISOString();
+  }
+  await c.env.DB.prepare('UPDATE share_links SET expires_at = ? WHERE token = ?').bind(expiresAt, token).run();
+  return c.json({ ok: true, expires_at: expiresAt });
+});
+
 /** 渲染分享页 HTML（payload 为前端构造的 { client, from, to, sales[], payments[], debt }） */
 export function renderShareHtml(payloadJson: string): string {
   let data: Record<string, unknown> = {};

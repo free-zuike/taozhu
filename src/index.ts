@@ -59,15 +59,19 @@ app.route('/api/v1/share', shareRouter);
 app.get('/share/:token', async (c) => {
   const token = c.req.param('token');
   const row = await c.env.DB.prepare(
-    'SELECT payload, expires_at FROM share_links WHERE token = ?',
-  ).bind(token).first<{ payload: string; expires_at: string | null }>();
+    'SELECT payload, expires_at, created_at FROM share_links WHERE token = ?',
+  ).bind(token).first<{ payload: string; expires_at: string | null; created_at: string | null }>();
+  const noStore = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
   if (!row) {
-    return c.html('<meta charset="utf-8"><div style="font-family:sans-serif;padding:40px;text-align:center;color:#909399">分享不存在或已被删除</div>', 404);
+    return new Response('<meta charset="utf-8"><div style="font-family:sans-serif;padding:40px;text-align:center;color:#909399">分享不存在或已被删除</div>', { status: 404, headers: noStore });
   }
   if (row.expires_at && row.expires_at < new Date().toISOString()) {
-    return c.html('<meta charset="utf-8"><div style="font-family:sans-serif;padding:40px;text-align:center;color:#909399">该分享已过期</div>', 410);
+    return new Response('<meta charset="utf-8"><div style="font-family:sans-serif;padding:40px;text-align:center;color:#909399">该分享已过期</div>', { status: 410, headers: noStore });
   }
-  return c.html(renderShareHtml(row.payload));
+  // 页脚附链接编号与生成时间：便于确认打开的就是分享页（而非被缓存的登录页）
+  const stamp = `链接编号 ${token.slice(0, 8)} · 生成时间 ${(row.created_at ?? '').slice(0, 16).replace('T', ' ')}`;
+  const html = renderShareHtml(row.payload).replace('</body>', `<div class="footer">${stamp}</div></body>`);
+  return new Response(html, { status: 200, headers: noStore });
 });
 
 // 静态资源回退：非 API 路径交给 ASSETS（前端 SPA）

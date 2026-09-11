@@ -161,22 +161,60 @@ class _StatementPageState extends State<StatementPage> {
     return buf.toString();
   }
 
-  Future<void> _copy() async {
-    if (!_loaded) {
-      toast(context, '请先生成对账单');
-      return;
-    }
-    await Clipboard.setData(ClipboardData(text: _buildText()));
-    toast(context, '对账文本已复制，可直接粘贴发送');
-  }
-
-/// 导出 Excel（.xlsx 标准格式，excel 包生成，Excel/微信/WPS 直接打开，无扩展名告警）
+/// 导出 Excel：先选格式（完整明细 / 按日汇总打印版）→ 生成 → 预览 → 确认导出
   Future<void> _exportXls() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
     final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
+    final format = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('导出格式'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'detail'),
+            child: const Text('完整明细（逐行出货 / 收款）', style: TextStyle(fontSize: 15)),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'daily'),
+            child: const Text('按日汇总（打印版：每天销售总额）', style: TextStyle(fontSize: 15)),
+          ),
+        ],
+      ),
+    );
+    if (format == null || !mounted) return;
+    final excel = format == 'daily' ? _buildDailyExcel(clientName) : _buildDetailExcel(clientName);
+    final bytes = excel.encode();
+    if (bytes == null) {
+      toast(context, '导出失败，请重试');
+      return;
+    }
+    // 预览确认
+    final preview = _previewText(format == 'daily', clientName);
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('导出预览'),
+        content: SingleChildScrollView(
+          child: Text(preview, style: const TextStyle(fontSize: 12, height: 1.6)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('导出')),
+        ],
+      ),
+    );
+    if (go != true) return;
+    final name = '陶朱对账单_${clientName}_${_fromCtrl.text.trim()}_${_toCtrl.text.trim()}.xlsx';
+    await saveBytes(
+        Uint8List.fromList(bytes), name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '陶朱对账单');
+    if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
+  }
+
+  /// 完整明细版 Excel
+  Excel _buildDetailExcel(String clientName) {
     final excel = Excel.createExcel();
     final sheet = excel['对账单'];
     sheet.setColumnWidth(0, 18);
@@ -221,15 +259,86 @@ class _StatementPageState extends State<StatementPage> {
         TextCellValue(w > 0 ? '¥${w.toStringAsFixed(2)}' : ''),
       ]);
     }
-    final bytes = excel.encode();
-    if (bytes == null) {
-      toast(context, '导出失败，请重试');
-      return;
+    return excel;
+  }
+
+  /// 按日汇总版 Excel（打印友好：每天销售总额，分块 1-10 / 11-20 / 21-30 / 31+，末行总额）
+  Excel _buildDailyExcel(String clientName) {
+    final excel = Excel.createExcel();
+    final sheet = excel['对账单'];
+    sheet.setColumnWidth(0, 16);
+    sheet.setColumnWidth(1, 16);
+    sheet.appendRow([TextCellValue('陶朱对账单（按日汇总）')]);
+    sheet.appendRow([TextCellValue('客户'), TextCellValue(clientName)]);
+    sheet.appendRow([TextCellValue('账期'), TextCellValue('${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}')]);
+    final byDay = _salesByDay();
+    if (byDay.isEmpty) {
+      sheet.appendRow([TextCellValue('本期无出货')]);
+      return excel;
     }
-    final name = '陶朱对账单_${clientName}_${_fromCtrl.text.trim()}_${_toCtrl.text.trim()}.xlsx';
-    await saveBytes(
-        Uint8List.fromList(bytes), name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '陶朱对账单');
-    if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
+    final days = byDay.keys.toList()..sort();
+    final first = DateTime.parse(days.first);
+    final blocks = <int, List<String>>{};
+    for (final d in days) {
+      final dt = DateTime.parse(d);
+      final dayNo = dt.difference(DateTime(first.year, first.month, first.day)).inDays + 1;
+      final b = (dayNo - 1) ~/ 10;
+      (blocks[b] ??= []).add(d);
+    }
+    double total = 0;
+    final bKeys = blocks.keys.toList()..sort();
+    for (final b in bKeys) {
+      final title = b >= 3 ? '31 天及以后' : '第 ${b * 10 + 1}-${(b + 1) * 10} 天';
+      sheet.appendRow([TextCellValue(title)]);
+      for (final d in blocks[b]!) {
+        final v = byDay[d] ?? 0;
+        total += v;
+        sheet.appendRow([TextCellValue(d), TextCellValue('¥${v.toStringAsFixed(2)}')]);
+      }
+    }
+    sheet.appendRow([TextCellValue('销售总额'), TextCellValue('¥${total.toStringAsFixed(2)}')]);
+    return excel;
+  }
+
+  /// 出货按日聚合（日期 → 当日销售总额）
+  Map<String, double> _salesByDay() {
+    final byDay = <String, double>{};
+    for (final s in _sales) {
+      final d = _date(s['happened_at']);
+      byDay[d] = (byDay[d] ?? 0) + ((s['total'] as num?)?.toDouble() ?? 0);
+    }
+    return byDay;
+  }
+
+  /// 导出预览文本
+  String _previewText(bool daily, String clientName) {
+    final buf = StringBuffer()
+      ..writeln('客户：$clientName')
+      ..writeln('账期：${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}');
+    if (daily) {
+      buf.writeln('—— 按日汇总（销售总额）——');
+      final byDay = _salesByDay();
+      final days = byDay.keys.toList()..sort();
+      for (final d in days.take(12)) {
+        buf.writeln('$d  ¥${(byDay[d] ?? 0).toStringAsFixed(2)}');
+      }
+      if (days.length > 12) buf.writeln('… 共 ${days.length} 天');
+      final total = byDay.values.fold<double>(0, (a, b) => a + b);
+      buf.writeln('销售总额 ¥${total.toStringAsFixed(2)}');
+    } else {
+      buf.writeln('—— 出货明细（${_sales.length} 笔）——');
+      var shown = 0;
+      for (final s in _sales) {
+        if (shown >= 8) break;
+        final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
+        final first = items.isEmpty ? '${s['note'] ?? ''}' : '${items.first['item_name']} 等 ${items.length} 项';
+        buf.writeln('${_date(s['happened_at'])} $first ¥${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}');
+        shown++;
+      }
+      if (_sales.length > 8) buf.writeln('… 共 ${_sales.length} 笔');
+      buf.writeln('收款 ${_payments.length} 笔 · 期末欠款 ¥${_debtEnd.toStringAsFixed(2)}');
+    }
+    return buf.toString();
   }
 
   /// 我的分享管理：列出历史分享链接（含到期/已过期），可随时取消（删除）
@@ -294,6 +403,39 @@ class _StatementPageState extends State<StatementPage> {
                                 toast(ctx, '链接已复制');
                               },
                             ),
+                            if (s['expired'] != true)
+                              IconButton(
+                                tooltip: '延期',
+                                icon: const Icon(Icons.update_outlined, size: 18, color: Color(0xFF409EFF)),
+                                onPressed: () async {
+                                  const opts = [('+3 天', 3), ('+7 天', 7), ('+30 天', 30), ('永久', 0)];
+                                  final sel = await showDialog<String>(
+                                    context: ctx,
+                                    builder: (dctx) => SimpleDialog(
+                                      title: const Text('延长分享有效期'),
+                                      children: [
+                                        for (final o in opts)
+                                          SimpleDialogOption(
+                                            onPressed: () => Navigator.pop(dctx, '${o.$2}'),
+                                            child: Text(o.$1, style: const TextStyle(fontSize: 15)),
+                                          ),
+                                      ],
+                                    ),
+                                  );
+                                  if (sel == null) return;
+                                  try {
+                                    final body = sel == '0'
+                                        ? {'permanent': true}
+                                        : {'extend_days': int.parse(sel)};
+                                    await Api.instance.patch('/share/${s['token']}', body);
+                                    toast(ctx, '已延期');
+                                    if (ctx.mounted) Navigator.pop(ctx);
+                                    _manageShares();
+                                  } catch (e) {
+                                    toast(ctx, '延期失败：${e.toString().replaceFirst('Exception: ', '')}');
+                                  }
+                                },
+                              ),
                             IconButton(
                               tooltip: '取消分享',
                               icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFEF4444)),
@@ -442,27 +584,17 @@ class _StatementPageState extends State<StatementPage> {
                     onSelectionChanged: (s) => _applyPeriod(s.first),
                   ),
                   const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: DateField(
-                          controller: _fromCtrl,
-                          label: '开始日期',
-                          lastDate: DateTime(DateTime.now().year + 5, 12, 31),
-                        ),
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 8),
-                        child: Text('至'),
-                      ),
-                      Expanded(
-                        child: DateField(
-                          controller: _toCtrl,
-                          label: '结束日期',
-                          lastDate: DateTime(DateTime.now().year + 5, 12, 31),
-                        ),
-                      ),
-                    ],
+                  // 账期（自定义时）：日期选择器竖排，避免并排截断日期
+                  DateField(
+                    controller: _fromCtrl,
+                    label: '开始日期',
+                    lastDate: DateTime(DateTime.now().year + 5, 12, 31),
+                  ),
+                  const SizedBox(height: 8),
+                  DateField(
+                    controller: _toCtrl,
+                    label: '结束日期',
+                    lastDate: DateTime(DateTime.now().year + 5, 12, 31),
                   ),
                   const SizedBox(height: 12),
                   FilledButton(
@@ -530,20 +662,16 @@ class _StatementPageState extends State<StatementPage> {
                 ),
               ),
             const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _copy,
-                    icon: const Icon(Icons.copy_outlined, size: 18),
-                    label: const Text('复制文本'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _exportXls,
-                    icon: const Icon(Icons.table_chart_outlined, size: 18),
+            // 导出 Excel（支持格式选择：完整明细 / 按日汇总打印版）
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(46),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: _exportXls,
+              icon: const Icon(Icons.table_chart_outlined, size: 18),
+              label: const Text('导出 Excel'),
+            ),
                     label: const Text('导出 Excel'),
                   ),
                 ),
