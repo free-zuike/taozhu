@@ -319,35 +319,53 @@ class _PurchasePageState extends State<PurchasePage> {
           const SizedBox(height: 10),
           for (int i = 0; i < _rows.length; i++) _buildRow(i),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              OutlinedButton.icon(
-                onPressed: () => setState(() => _rows.add(_PRow())),
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('添加商品'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: c.success,
-                  side: BorderSide(color: c.success.withOpacity(0.5)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-              const Spacer(),
-              Text('合计 ¥${fmtMoney(_total)}',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: c.danger)),
-            ],
-          ),
-          const SizedBox(height: 14),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              minimumSize: const Size.fromHeight(52),
-              backgroundColor: c.success,
+          // 添加商品（提交栏固定在底部悬浮）
+          OutlinedButton.icon(
+            onPressed: () => setState(() => _rows.add(_PRow())),
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('添加商品'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: c.success,
+              side: BorderSide(color: c.success.withOpacity(0.5)),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
-            onPressed: _busy ? null : _submit,
-            child: Text(_busy ? '提交中…' : (_editing ? '保存修改' : '提交进货单')),
           ),
         ],
+      ),
+      // 底部悬浮栏：合计 + 提交 固定可见，长单无需滚到底
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          decoration: BoxDecoration(
+            color: c.card,
+            border: Border(top: BorderSide(color: c.divider)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('合计', style: TextStyle(fontSize: 12, color: c.textSub)),
+                    Text('¥${fmtMoney(_total)}',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: c.danger)),
+                  ],
+                ),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(140, 48),
+                  backgroundColor: c.success,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+                onPressed: _busy ? null : _submit,
+                child: Text(_busy ? '提交中…' : (_editing ? '保存修改' : '提交进货单')),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -251,6 +251,18 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                   const Icon(Icons.shopping_cart_outlined, size: 40, color: Color(0xFFD0D5DD)),
                   const SizedBox(height: 12),
                   Text('暂无进货记录', style: TextStyle(color: c.textSub)),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: c.success,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () => Navigator.of(context)
+                        .push(MaterialPageRoute(builder: (_) => const PurchasePage()))
+                        .then((_) => _load()),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('＋ 记一笔进货'),
+                  ),
                 ],
               ),
             ),

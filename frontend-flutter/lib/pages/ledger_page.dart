@@ -9,7 +9,9 @@ import '../utils/money.dart';
 import 'router.dart';
 import 'clients_page.dart';
 import 'sale_page.dart';
+import 'payments_page.dart';
 import 'attachment_panel.dart';
+import '../../widgets/web_max_width.dart';
 
 /// 交易（账本=店铺）：出货 / 收款流水，按店铺+时间范围，支持编辑删除与附件（按日期分组列表）
 class LedgerPage extends StatefulWidget {
@@ -180,6 +182,14 @@ class _LedgerPageState extends State<LedgerPage> {
             ),
             const Divider(height: 1),
             ListTile(
+              leading: const Icon(Icons.add_business_outlined, color: Color(0xFF409EFF)),
+              title: const Text('新增店铺'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _addClientQuick();
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.manage_search_outlined, color: Color(0xFF409EFF)),
               title: const Text('管理店铺（账本）'),
               onTap: () {
@@ -197,6 +207,43 @@ class _LedgerPageState extends State<LedgerPage> {
     if (selected != null && selected != _clientId) {
       setState(() => _clientId = selected);
       _load();
+    }
+  }
+
+  /// 记单场景快速新增店铺（对话框，创建后自动选中）
+  Future<void> _addClientQuick() async {
+    final nameCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('新增店铺'),
+        content: TextField(
+          controller: nameCtrl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: '店铺名称 *'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('创建')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) {
+      toast(context, '请输入店铺名称');
+      return;
+    }
+    try {
+      final d = await Api.instance.post('/clients', {'name': name});
+      final id = '${d['id'] ?? ''}';
+      if (mounted) {
+        if (id.isNotEmpty) _clientId = id;
+        toast(context, '已创建店铺「$name」');
+        _load();
+      }
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -397,7 +444,7 @@ class _LedgerPageState extends State<LedgerPage> {
             indicatorSize: TabBarIndicatorSize.label,
           ),
         ),
-        body: Column(
+        body: webMaxWidth(Column(
           children: [
             if (_offline)
               Container(
@@ -498,16 +545,29 @@ class _LedgerPageState extends State<LedgerPage> {
                   : TabBarView(children: _isStaff
                       ? [
                           _buildList('今日暂无出货记录', _sales, _saleCard,
-                              (s) => ((s['total'] as num?)?.toDouble() ?? 0)),
+                              (s) => ((s['total'] as num?)?.toDouble() ?? 0),
+                              emptyActionLabel: '＋ 记一笔出货',
+                              onEmptyAction: () => Navigator.of(context)
+                                  .push(MaterialPageRoute(builder: (_) => const SalePage()))
+                                  .then((_) => _load())),
                         ]
                       : [
                           _buildList('暂无偿付记录', _sales, _saleCard,
-                              (s) => ((s['total'] as num?)?.toDouble() ?? 0)),
+                              (s) => ((s['total'] as num?)?.toDouble() ?? 0),
+                              emptyActionLabel: '＋ 记一笔出货',
+                              onEmptyAction: () => Navigator.of(context)
+                                  .push(MaterialPageRoute(builder: (_) => const SalePage()))
+                                  .then((_) => _load())),
                           _buildList('暂无收款记录', _payments, _paymentCard,
-                              (p) => ((p['amount'] as num?)?.toDouble() ?? 0)),
+                              (p) => ((p['amount'] as num?)?.toDouble() ?? 0),
+                              emptyActionLabel: '＋ 去收款',
+                              onEmptyAction: () => Navigator.of(context)
+                                  .push(MaterialPageRoute(builder: (_) => const PaymentsPage()))
+                                  .then((_) => _load())),
                     ]),
             ),
           ],
+        ),
         ),
       ),
     );
@@ -517,8 +577,10 @@ class _LedgerPageState extends State<LedgerPage> {
     String emptyText,
     List<Map<String, dynamic>> rows,
     Widget Function(Map<String, dynamic>) card,
-    double Function(Map<String, dynamic>) amountOf,
-  ) {
+    double Function(Map<String, dynamic>) amountOf, {
+    String? emptyActionLabel,
+    VoidCallback? onEmptyAction,
+  }) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     if (rows.isEmpty) {
       return RefreshIndicator(
@@ -532,7 +594,19 @@ class _LedgerPageState extends State<LedgerPage> {
                 children: [
                   const Icon(Icons.receipt_long_outlined, size: 40, color: Color(0xFFD0D5DD)),
                   const SizedBox(height: 12),
-                  Text(emptyText, style: const TextStyle(color: Colors.grey)),
+                  Text(emptyText, style: TextStyle(color: c.textSub)),
+                  if (emptyActionLabel != null) ...[
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: c.primary,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: onEmptyAction,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: Text(emptyActionLabel),
+                    ),
+                  ],
                 ],
               ),
             ),
