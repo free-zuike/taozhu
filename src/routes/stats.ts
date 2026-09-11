@@ -287,3 +287,46 @@ statsRouter.get('/items', async (c) => {
     })),
   });
 });
+
+// GET /stats/category-statement?category_id=&start=&end= — 按店铺分类（美食城多档口）汇总对账：
+// 分类下每个档口的 出货/收款(含减免)/期末欠款 + 总合计。欠款口径 = 各档口独立结算再求和。
+statsRouter.get('/category-statement', async (c) => {
+  const categoryId = c.req.query('category_id')?.trim();
+  const start = c.req.query('start')?.trim();
+  const end = c.req.query('end')?.trim();
+  if (!categoryId || !start || !end) return c.json({ error: 'category_id / start / end 必填' }, 400);
+  const cat = await c.env.DB.prepare(
+    "SELECT name FROM categories WHERE id = ? AND type = 'client'",
+  ).bind(categoryId).first<{ name: string }>();
+  if (!cat) return c.json({ error: '店铺分类不存在' }, 404);
+  const rows = await c.env.DB.prepare(
+    `SELECT c.id, c.name,
+       COALESCE((SELECT SUM(si.amount) FROM sale_items si JOIN sales s ON s.id = si.sale_id
+                  WHERE s.client_id = c.id AND substr(s.happened_at,1,10) BETWEEN ? AND ?), 0) AS sales_total,
+       COALESCE((SELECT SUM(p.amount) FROM payments p
+                  WHERE p.client_id = c.id AND substr(p.happened_at,1,10) BETWEEN ? AND ?), 0) AS paid_total,
+       COALESCE((SELECT SUM(p.waived) FROM payments p
+                  WHERE p.client_id = c.id AND substr(p.happened_at,1,10) BETWEEN ? AND ?), 0) AS waived_total,
+       (COALESCE((SELECT SUM(si.amount) FROM sale_items si JOIN sales s ON s.id = si.sale_id
+                   WHERE s.client_id = c.id AND substr(s.happened_at,1,10) <= ?), 0)
+        - COALESCE((SELECT SUM(p.amount + p.waived) FROM payments p
+                     WHERE p.client_id = c.id AND substr(p.happened_at,1,10) <= ?), 0)) AS debt
+     FROM clients c
+     WHERE c.category_id = ? AND c.deleted_at IS NULL
+     ORDER BY c.name`,
+  ).bind(start, end, start, end, start, end, end, end, categoryId).all<{
+    id: string; name: string; sales_total: number; paid_total: number; waived_total: number; debt: number;
+  }>();
+  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const clients = rows.results.map((x) => ({
+    id: x.id, name: x.name,
+    sales_total: r(x.sales_total), paid_total: r(x.paid_total),
+    waived_total: r(x.waived_total), debt: r(x.debt),
+  }));
+  const sum = (k: 'sales_total' | 'paid_total' | 'debt') => clients.reduce((s, x) => s + x[k], 0);
+  return c.json({
+    category_name: cat.name, from: start, to: end,
+    clients,
+    total: { sales_total: r(sum('sales_total')), paid_total: r(sum('paid_total')), debt: r(sum('debt')) },
+  });
+});

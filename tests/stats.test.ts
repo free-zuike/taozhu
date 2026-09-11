@@ -236,3 +236,58 @@ describe('店员权限：统计接口拒绝访问（403，经营数据仅老板�
     expect(d.can_see_profit).toBe(true);
   });
 });
+
+describe('按店铺分类汇总对账（美食城多档口总账）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+    // 店铺分类「美食城」+ 两个档口（client）
+    await env.DB.prepare("INSERT INTO categories (id, type, name) VALUES (?, 'client', ?)").bind('cat-food', '美食城').run();
+    await env.DB.prepare("INSERT INTO clients (id, name, category_id) VALUES (?, ?, ?)").bind('stall-1', '1号档', 'cat-food').run();
+    await env.DB.prepare("INSERT INTO clients (id, name, category_id) VALUES (?, ?, ?)").bind('stall-2', '2号档', 'cat-food').run();
+    await env.DB.prepare('INSERT INTO items (id, name) VALUES (?, ?)').bind('i-1', '白菜').run();
+    await env.DB.prepare('INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price) VALUES (?, ?, ?, ?, ?)')
+      .bind('p-1', 'i-1', '斤', 1, 2).run();
+  });
+
+  it('聚合分类下各档口出货/收款/期末欠款与总合计', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    // 1号档出货 5 斤（100 元，单价 2 → sale_items amount=10，重复两次=20）、2号档出货 10 斤=20
+    // 用直接插入保证可控金额
+    await env.DB.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-1', 'stall-1', `${today}T08:00:00.000Z`).run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-1', 's-1', 'i-1', '斤', 10, 2, 1, 20).run();
+    await env.DB.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-2', 'stall-2', `${today}T09:00:00.000Z`).run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-2', 's-2', 'i-1', '斤', 15, 2, 1, 30).run();
+    // 1号档收款 8 元（欠 12）
+    await env.DB.prepare('INSERT INTO payments (id, client_id, happened_at, amount) VALUES (?, ?, ?, ?)')
+      .bind('pay-1', 'stall-1', `${today}T10:00:00.000Z`, 8).run();
+
+    const d = (await (await call(env, 'GET', `/api/v1/stats/category-statement?category_id=cat-food&start=${today}&end=${today}`, token)).json()) as {
+      category_name: string;
+      clients: Array<{ id: string; sales_total: number; paid_total: number; debt: number }>;
+      total: { sales_total: number; paid_total: number; debt: number };
+    };
+    expect(d.category_name).toBe('美食城');
+    expect(d.clients.length).toBe(2);
+    expect(d.total.sales_total).toBe(50); // 20 + 30
+    expect(d.total.paid_total).toBe(8);
+    expect(d.total.debt).toBe(42); // (20-8) + 30
+    const stall1 = d.clients.find((x) => x.id === 'stall-1');
+    expect(stall1?.sales_total).toBe(20);
+    expect(stall1?.debt).toBe(12);
+  });
+
+  it('店员无权限查看分类总账（403）', async () => {
+    await env.DB.prepare('INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)')
+      .bind(randomId(), 'staff1', await hashPassword('staff123'), 'staff').run();
+    const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });
+    const staffToken = ((await login.json()) as { token: string }).token;
+    const res = await call(env, 'GET', '/api/v1/stats/category-statement?category_id=cat-food&start=2026-09-01&end=2026-09-30', staffToken);
+    expect(res.status).toBe(403);
+  });
+});
