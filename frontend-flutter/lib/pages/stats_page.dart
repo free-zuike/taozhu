@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../widgets/web_max_width.dart';
 import 'router.dart';
 
 /// 统计：店铺胶囊选择 + 周期胶囊（今日/本月/上月/滚动月/自定义） + 日/月/年视图

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../widgets/web_max_width.dart';
 import 'router.dart';
 import 'purchase_page.dart';
 import 'attachment_panel.dart';
