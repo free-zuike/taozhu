@@ -21,6 +21,14 @@ class _CacheFile {
   int size; // 字节；0=未知
   bool selected = false;
   _CacheFile(this.name, this.size, [this.path = '']);
+
+  /// 文件类型：apk=安装包 / zip=压缩包 / other=其他临时文件
+  String get kind {
+    final n = name.toLowerCase();
+    if (n.endsWith('.apk')) return 'apk';
+    if (n.endsWith('.zip')) return 'zip';
+    return 'other';
+  }
 }
 
 class _CleanupPageState extends State<CleanupPage> {
@@ -215,34 +223,55 @@ class _CleanupPageState extends State<CleanupPage> {
                     : ListView(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
                         children: [
-                          Container(
-                            decoration: BoxDecoration(
-                              color: c.card,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Column(
-                              children: [
-                                for (final f in _files)
-                                  // InkWell 整行点击=安装（APK）；右侧 checkbox 仍用于勾选删除
-                                  InkWell(
-                                    onTap: () => _installFile(f),
-                                    child: CheckboxListTile(
-                                      dense: true,
-                                      value: f.selected,
-                                      secondary: Icon(Icons.insert_drive_file_outlined, color: c.primary),
-                                      title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                      subtitle: Text(
-                                        f.name.toLowerCase().endsWith('.apk') && f.path.isNotEmpty
-                                            ? '${_fmtSize(f.size)} · 点击安装'
-                                            : _fmtSize(f.size),
-                                        style: TextStyle(fontSize: 12, color: c.textSub),
+                          for (final g in const [('apk', '安装包（APK）', Icons.android), ('zip', '压缩包（Zip）', Icons.archive_outlined), ('other', '临时文件', Icons.description_outlined)])
+                            if (_files.any((f) => f.kind == g.$1)) ...[
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(4, 10, 4, 6),
+                                child: Row(
+                                  children: [
+                                    Icon(g.$3, size: 16, color: c.textSub),
+                                    const SizedBox(width: 6),
+                                    Text(g.$2, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textSub)),
+                                    const Spacer(),
+                                    // 本组内已选数（方便全选/删除前核对）
+                                    Text('本组 ${_files.where((f) => f.kind == g.$1 && f.selected).length} 项已选',
+                                        style: TextStyle(fontSize: 11, color: c.textSub)),
+                                  ],
+                                ),
+                              ),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: c.card,
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Column(
+                                  children: [
+                                    for (final f in _files.where((f) => f.kind == g.$1))
+                                      // 整行点击=勾选删除；APK 行尾独立「安装」按钮（CheckboxListTile 消费点击，行级 InkWell 安装早已失效）
+                                      CheckboxListTile(
+                                        dense: true,
+                                        value: f.selected,
+                                        secondary: Icon(f.kind == 'apk' ? Icons.android : (f.kind == 'zip' ? Icons.archive_outlined : Icons.insert_drive_file_outlined),
+                                            color: f.kind == 'apk' ? c.success : c.primary),
+                                        title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        subtitle: Text(
+                                          f.kind == 'apk' ? '${_fmtSize(f.size)} · APK 安装包' : '${_fmtSize(f.size)} · ${f.kind == 'zip' ? '压缩包' : '临时文件'}',
+                                          style: TextStyle(fontSize: 12, color: c.textSub),
+                                        ),
+                                        onChanged: (v) => setState(() => f.selected = v ?? false),
+                                        trailing: f.kind == 'apk'
+                                            ? IconButton(
+                                                tooltip: '安装',
+                                                icon: const Icon(Icons.system_update_alt_outlined, size: 20),
+                                                color: c.primary,
+                                                onPressed: () => _installFile(f),
+                                              )
+                                            : null,
                                       ),
-                                      onChanged: (v) => setState(() => f.selected = v ?? false),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
+                                  ],
+                                ),
+                              ),
+                            ],
                         ],
                       ),
           ),

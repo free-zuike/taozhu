@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'local_db.dart';
@@ -9,8 +9,9 @@ import 'local_db.dart';
 ///
 /// 流程：
 /// - 启动/回前台 → fullSync（首次）或 pullChanges（增量），合并到本地库
-/// - 写本地优先（下一批写入口改造）→ 入 local_changes 队列 → debounce 250ms 触发 pushPending
+/// - 写本地优先 → 入 local_changes 队列 → debounce 250ms 触发 pushPending
 /// - push 成功移除队列；失败留队列下次重试
+/// - 任一同步动作完成后 bump version（页面监听后重读本地库，实现"本地优先 + 后台静默刷新"）
 ///
 /// Web 端禁用（本地库无意义）；移动/桌面端启用。
 class SyncService {
@@ -18,6 +19,10 @@ class SyncService {
   static const _cursorKey = 'taozhu_sync_cursor';
   static const _deviceIdKey = 'taozhu_device_id';
   static const _fullDoneKey = 'taozhu_sync_full_done';
+  static const _lastSyncKey = 'taozhu_sync_last_at';
+
+  /// 同步版本号：任何 full/pull/push 完成后 +1。页面监听它，版本变化后从本地库重读展示。
+  static final ChangeNotifier version = ChangeNotifier();
 
   static String? _deviceId;
   static bool _syncing = false;
@@ -50,6 +55,29 @@ class SyncService {
     return p.getBool(_fullDoneKey) ?? false;
   }
 
+  /// 记录本次同步时间并通知监听者（本地库已被服务端数据刷新）
+  static Future<void> _markSynced() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_lastSyncKey, DateTime.now().toIso8601String());
+    version.notifyListeners();
+  }
+
+  /// 上次成功同步时间（null=从未同步过）
+  static Future<String?> lastSyncAt() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_lastSyncKey);
+  }
+
+  /// 本地待推送变更数（local_changes 队列）
+  static Future<int> pendingCount() async {
+    if (kIsWeb) return 0;
+    try {
+      return (await LocalDb.getPendingChanges()).length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// 首次全量同步（新设备/重装）：拉全部实体一次到位，比逐条 pull 快
   static Future<int> fullSync() async {
     if (kIsWeb) return 0;
@@ -72,6 +100,7 @@ class SyncService {
       final p = await SharedPreferences.getInstance();
       await p.setInt(_cursorKey, cursor);
       await p.setBool(_fullDoneKey, true);
+      await _markSynced();
       return clients.length + items.length + sales.length + purchases.length + payments.length;
     } catch (_) {
       return 0;
@@ -119,6 +148,7 @@ class SyncService {
         hasMore = d['has_more'] == true;
         if (changes.isEmpty) break;
       }
+      if (total > 0 || since == 0) await _markSynced();
       return total;
     } catch (_) {
       return 0;

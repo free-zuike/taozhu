@@ -20,6 +20,7 @@ import 'categories_page.dart';
 import 'clients_page.dart';
 import 'payments_page.dart';
 import 'statement_page.dart';
+import 'sync_panel_page.dart';
 import 'users_page.dart';
 import 'stocks_page.dart';
 import 'cleanup_page.dart';
@@ -80,9 +81,20 @@ class _MyPageState extends State<MyPage> {
       // 两个队列合并：旧 Api.pendingList（SharedPreferences）+ 新 SyncService（LocalDb.local_changes）
       final legacy = await Api.instance.pendingList();
       final changes = await LocalDb.getPendingChanges();
+      final lastSync = await SyncService.lastSyncAt();
       if (!mounted) return;
-      setState(() => _pending = legacy.length + changes.length);
+      setState(() {
+        _pending = legacy.length + changes.length;
+        if (lastSync != null && lastSync.isNotEmpty) _lastSync = _fmtSyncTime(lastSync);
+      });
     } catch (_) {}
+  }
+
+  /// ISO 时间 → 人类可读（如 9月11日 19:05）
+  static String _fmtSyncTime(String iso) {
+    final t = DateTime.tryParse(iso)?.toLocal();
+    if (t == null) return iso;
+    return '${t.month}月${t.day}日 ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
   }
 
   /// 重放离线待同步单据（两个队列依次推）
@@ -719,6 +731,7 @@ class _MyPageState extends State<MyPage> {
                   warn: true),
             if (_pending == 0 && !kIsWeb && _lastSync.isNotEmpty)
               _item(Icons.cloud_done_outlined, c.primary, '已同步', '上次同步：$_lastSync', () {}),
+            _item(Icons.sync_alt, c.primary, '同步状态', '本地与服务器数据差异、上次同步时间', () => goPage(context, const SyncPanelPage())),
             if (_role != 'staff')
               _item(Icons.people_outline, c.primary, '账号管理', '店员/老板账号（仅老板可操作）',
                   () => goPage(context, const UsersPage())),

@@ -282,6 +282,21 @@ describe('同步（增量式）', () => {
     expect(d.server_cursor).toBeGreaterThan(0);
   });
 
+  it('stats 返回服务器各实体计数与游标（差异面板数据源）', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店B' });
+    const res = await call(env, 'GET', '/api/v1/sync/stats', token);
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as Record<string, number>;
+    expect(d.clients).toBe(2);
+    expect(d.items).toBe(0);
+    expect(d.categories).toBe(0);
+    expect(d.sales).toBe(0);
+    expect(d.purchases).toBe(0);
+    expect(d.payments).toBe(0);
+    expect(d.server_cursor).toBeGreaterThanOrEqual(2);
+  });
+
   it('staff full/拉取：item 进价与单据进价快照打码为 0', async () => {
     const staffToken = await loginStaff(env);
     await call(env, 'POST', '/api/v1/items', token, {

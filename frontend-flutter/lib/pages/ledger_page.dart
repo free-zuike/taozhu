@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
@@ -36,7 +37,19 @@ class _LedgerPageState extends State<LedgerPage> {
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _isStaff = r == 'staff');
     });
+    // 同步完成后本地库变了 → 重新从本地读（本地优先，网络静默）
+    SyncService.version.addListener(_onSync);
     _load();
+  }
+
+  @override
+  void dispose() {
+    SyncService.version.removeListener(_onSync);
+    super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) _load();
   }
 
   static String _fmtDate(DateTime d) =>
@@ -71,33 +84,34 @@ class _LedgerPageState extends State<LedgerPage> {
     return params.isEmpty ? '' : '?${params.join('&')}';
   }
 
+  /// 本地优先加载：① 读本地库镜像（按当前店铺+范围过滤）立即展示——有就秒开，空就显示空态；
+  /// ② 触发后台同步（SyncService 完成后 version 通知会再来 _load 一次）；③ 网络刷新静默合并写库。
+  /// 页面不因网络慢而空白/转圈。
   Future<void> _load() async {
-    // ① 本地数据库镜像秒开（离线可见、免等待）——与网络查询一致的店铺+时间范围过滤，避免闪现全部记录
-    var clients = await LocalDb.getAllByName('clients');
+    final firstLocal = await LocalDb.getAllByName('clients');
     var sales = await LocalDb.getAll('sales');
     var payments = await LocalDb.getAll('payments');
-    if (_clientId == null && clients.isNotEmpty) {
-      _clientId = '${clients.first['id']}';
+    if (_clientId == null && firstLocal.isNotEmpty) {
+      _clientId = '${firstLocal.first['id']}';
     }
     if (_clientId != null) {
       sales = _filterByClient(sales, _clientId!);
       payments = _filterByClient(payments, _clientId!);
     }
-    if (clients.isNotEmpty && sales.isNotEmpty && mounted) {
+    if (mounted) {
       setState(() {
-        _clients = clients;
+        _clients = firstLocal;
         _sales = sales;
         _payments = payments;
         _loading = false;
+        _offline = false;
       });
     }
-    // ② 网络刷新 + 写本地库
+    // 网络刷新（静默）：慢/失败不阻塞展示，失败时本地数据已展示
     try {
       final cr = await Api.instance.get('/clients');
-      clients = ((cr['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-      if (clients.isEmpty) {
-        clients = [await Api.instance.post('/clients', {'name': '默认店铺'})];
-      }
+      var clients = ((cr['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (clients.isEmpty) clients = [await Api.instance.post('/clients', {'name': '默认店铺'})];
       if (!mounted) return;
       if (_clientId == null || !clients.any((c) => '${c['id']}' == _clientId)) {
         _clientId = '${clients.first['id']}';
@@ -107,30 +121,26 @@ class _LedgerPageState extends State<LedgerPage> {
         Api.instance.get('/payments${_clientQuery()}'),
       ]);
       if (!mounted) return;
-      sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
-      payments = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
-      // ③ 镜像写库（增量 upsert，不删本地未推送的单）
+      final netSales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final netPays = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+      // 镜像写库（增量 upsert，不删本地未推送的单）
       await Future.wait([
         LocalDb.upsertList('clients', clients),
-        LocalDb.upsertList('sales', sales),
-        LocalDb.upsertList('payments', payments),
+        LocalDb.upsertList('sales', netSales),
+        LocalDb.upsertList('payments', netPays),
       ]);
       if (!mounted) return;
       setState(() {
-        _offline = false;
-        _sales = sales;
-        _payments = payments;
         _clients = clients;
+        _sales = _filterByClient(netSales, _clientId!);
+        _payments = _filterByClient(netPays, _clientId!);
         _loading = false;
+        _offline = false;
       });
     } catch (e) {
-      // 网络失败：有本地数据则标记离线；无数据才报错
-      if (!mounted) return;
-      setState(() {
-        _offline = clients.isNotEmpty || sales.isNotEmpty;
-        _loading = false;
-      });
-      if (clients.isEmpty && sales.isEmpty) {
+      // 网络失败不打扰（本地数据已展示）；本地无数据时才提示
+      if (mounted && firstLocal.isEmpty) {
+        setState(() => _offline = true);
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       }
     }
