@@ -31,6 +31,27 @@ jobs:
           npm ci
           npm run build:mp-weixin
 
+      - name: Upload to WeChat platform (miniprogram-ci)
+        # 仅在配了密钥时上传；未配则跳过（只打 zip 留底）
+        if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' }}
+        env:
+          WX_APPID: ${{ secrets.WX_APPID }}
+          WX_PRIVATE_KEY: ${{ secrets.WX_PRIVATE_KEY }}
+        run: |
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || echo "0.0.0")
+          echo "$WX_PRIVATE_KEY" | base64 -d > /tmp/private.key
+          npx miniprogram-ci@latest upload \
+            --pp frontend-uni/dist/build/mp-weixin \
+            --pkp /tmp/private.key \
+            --appid "$WX_APPID" \
+            --upload-message "陶朱 v$VERSION 自动上传" \
+            -r 1 \
+            --enable-es6 true \
+            --enable-es7 true \
+            --auto-prefix WX \
+            || echo "::warning::微信上传失败（密钥/网络/白名单），详见日志；zip 产物已留底"
+          rm -f /tmp/private.key
+
       - name: Upload miniprogram package (artifact backup)
         uses: actions/upload-artifact@v4
         with:
