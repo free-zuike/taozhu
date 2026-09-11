@@ -247,26 +247,33 @@ class _CleanupPageState extends State<CleanupPage> {
                                 child: Column(
                                   children: [
                                     for (final f in _files.where((f) => f.kind == g.$1))
-                                      // 整行点击=勾选删除；APK 行尾独立「安装」按钮（CheckboxListTile 消费点击，行级 InkWell 安装早已失效）
-                                      CheckboxListTile(
+                                      // 整行点击=勾选删除；APK 行尾独立「安装」按钮（CheckboxListTile 无 trailing，用 ListTile+Checkbox 组合）
+                                      ListTile(
                                         dense: true,
-                                        value: f.selected,
-                                        secondary: Icon(f.kind == 'apk' ? Icons.android : (f.kind == 'zip' ? Icons.archive_outlined : Icons.insert_drive_file_outlined),
+                                        leading: Icon(f.kind == 'apk' ? Icons.android : (f.kind == 'zip' ? Icons.archive_outlined : Icons.insert_drive_file_outlined),
                                             color: f.kind == 'apk' ? c.success : c.primary),
                                         title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
                                         subtitle: Text(
                                           f.kind == 'apk' ? '${_fmtSize(f.size)} · APK 安装包' : '${_fmtSize(f.size)} · ${f.kind == 'zip' ? '压缩包' : '临时文件'}',
                                           style: TextStyle(fontSize: 12, color: c.textSub),
                                         ),
-                                        onChanged: (v) => setState(() => f.selected = v ?? false),
-                                        trailing: f.kind == 'apk'
-                                            ? IconButton(
+                                        onTap: () => setState(() => f.selected = !f.selected),
+                                        trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (f.kind == 'apk')
+                                              IconButton(
                                                 tooltip: '安装',
                                                 icon: const Icon(Icons.system_update_alt_outlined, size: 20),
                                                 color: c.primary,
                                                 onPressed: () => _installFile(f),
-                                              )
-                                            : null,
+                                              ),
+                                            Checkbox(
+                                              value: f.selected,
+                                              onChanged: (v) => setState(() => f.selected = v ?? false),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                   ],
                                 ),
