@@ -223,19 +223,22 @@ class _CleanupPageState extends State<CleanupPage> {
                             child: Column(
                               children: [
                                 for (final f in _files)
-                                  CheckboxListTile(
-                                    dense: true,
-                                    value: f.selected,
-                                    secondary: Icon(Icons.insert_drive_file_outlined, color: c.primary),
-                                    title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                    subtitle: Text(
-                                      f.name.toLowerCase().endsWith('.apk') && f.path.isNotEmpty
-                                          ? '${_fmtSize(f.size)} · 点击安装'
-                                          : _fmtSize(f.size),
-                                      style: TextStyle(fontSize: 12, color: c.textSub),
-                                    ),
-                                    onChanged: (v) => setState(() => f.selected = v ?? false),
+                                  // InkWell 整行点击=安装（APK）；右侧 checkbox 仍用于勾选删除
+                                  InkWell(
                                     onTap: () => _installFile(f),
+                                    child: CheckboxListTile(
+                                      dense: true,
+                                      value: f.selected,
+                                      secondary: Icon(Icons.insert_drive_file_outlined, color: c.primary),
+                                      title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                      subtitle: Text(
+                                        f.name.toLowerCase().endsWith('.apk') && f.path.isNotEmpty
+                                            ? '${_fmtSize(f.size)} · 点击安装'
+                                            : _fmtSize(f.size),
+                                        style: TextStyle(fontSize: 12, color: c.textSub),
+                                      ),
+                                      onChanged: (v) => setState(() => f.selected = v ?? false),
+                                    ),
                                   ),
                               ],
                             ),
