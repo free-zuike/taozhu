@@ -181,7 +181,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('进货记录')),
-      body: Column(
+      body: webMaxWidth(Column(
         children: [
           if (_offline)
             Container(
@@ -232,6 +232,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                 : _buildList(),
           ),
         ],
+      ),
       ),
     );
   }

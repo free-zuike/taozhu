@@ -247,7 +247,7 @@ class _StatsPageState extends State<StatsPage> {
     final (start, end) = _viewRange;
     return Scaffold(
       appBar: AppBar(title: const Text('统计报表')),
-      body: _loading
+      body: webMaxWidth(_loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _load,
@@ -382,6 +382,7 @@ class _StatsPageState extends State<StatsPage> {
                   )),
             ],
           ),
+        ),
         ),
       ),
     );

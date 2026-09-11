@@ -12,6 +12,7 @@ import '../local_db.dart';
 import '../log.dart';
 import '../theme.dart';
 import '../utils/download.dart';
+import '../widgets/web_max_width.dart';
 import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
@@ -661,7 +662,7 @@ class _MyPageState extends State<MyPage> {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
-      body: ListView(
+      body: webMaxWidth(ListView(
         padding: const EdgeInsets.all(16),
         children: [
           _userCard(),
@@ -769,6 +770,7 @@ class _MyPageState extends State<MyPage> {
           ),
           const SizedBox(height: 16),
         ],
+      ),
       ),
     );
   }
