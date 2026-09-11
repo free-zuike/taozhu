@@ -231,13 +231,14 @@ describe('检查更新代理（/auth/latest-version）', () => {
   let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
   beforeEach(async () => { env = (await setup()).env; });
 
-  it('无需登录返回 200，含 current 版本与 ready/notes 字段；GitHub 不可达时 latest 为空串不报错', async () => {
+  it('无需登录返回 200，含 current 版本与 ready/building/notes 字段；GitHub 不可达时 latest 为空串不报错', async () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
-    const d = (await res.json()) as { current: string; latest: string; ready: boolean; notes: string };
-    expect(d.current).toBe('0.16.27.0');
+    const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; notes: string };
+    expect(d.current).toBe('0.16.28.0');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
+    expect(typeof d.building).toBe('boolean');
     expect(typeof d.notes).toBe('string');
   });
 });
