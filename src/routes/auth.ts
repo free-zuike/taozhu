@@ -100,9 +100,10 @@ authRouter.get('/latest-version', async (c) => {
       return null;
     }
   };
-  // 备源（latest.json / jsDelivr）无法验证安装包资产，保守返回 ready=false——
-  // 避免误报"可下载"导致下载失败；GitHub 可达时以 GitHub 资产检测为准
-  const probeVer = (v: string): VersionProbe | null => (v ? { v, ready: false } : null);
+  // 备源（latest.json / jsDelivr）：部署版本即视为可更新（该版本确实已发布）——
+  // 避免 GitHub API 受限时一直误报"构建中"；下载失败由前端"探测+多镜像"兜底；
+  // GitHub 可达时以 GitHub 资产检测为准（精确 ready）
+  const probeVer = (v: string): VersionProbe | null => (v ? { v, ready: true } : null);
   const checkAsset = async (): Promise<VersionProbe | null> => {
     try {
       const r = await c.env.ASSETS.fetch(new Request(new URL('/latest.json', c.req.url)));
