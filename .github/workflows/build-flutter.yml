@@ -38,6 +38,29 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Flutter version (Gradle 缓存键)
+        id: fver
+        working-directory: frontend-flutter
+        run: echo "ver=$(flutter --version 2>/dev/null | sed -n 's/^Flutter \([0-9.]*\).*/\1/p')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Gradle dependencies (Android 构建提速)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ steps.fver.outputs.ver }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
       - name: Generate platforms (android/web/...)
         working-directory: frontend-flutter
         run: flutter create --org com.taozhu --project-name taozhu_app .

@@ -78,6 +78,30 @@ class SyncService {
     }
   }
 
+  /// 队列里待推送的"删除"实体 id 集合（delete action 或 upsert 带非空 deleted_at）：
+  /// 推送落地前，列表页网络刷新要用它过滤，防止"刚删的又出现"（服务端还没收到删除）。
+  static Future<Set<String>> pendingDeletedIds(String entityType) async {
+    if (kIsWeb) return {};
+    try {
+      final pending = await LocalDb.getPendingChanges();
+      return pending
+          .where((c) => '${c['entity_type']}' == entityType)
+          .where((c) {
+            if ('${c['action']}' == 'delete') return true;
+            final payload = c['payload'];
+            if (payload is Map) {
+              final dt = payload['deleted_at'];
+              return dt != null && '$dt'.isNotEmpty;
+            }
+            return false;
+          })
+          .map((c) => '${c['entity_sync_id']}')
+          .toSet();
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// 首次全量同步（新设备/重装）：拉全部实体一次到位，比逐条 pull 快
   static Future<int> fullSync() async {
     if (kIsWeb) return 0;
@@ -114,7 +138,7 @@ class SyncService {
     _syncing = true;
     try {
       final p = await SharedPreferences.getInstance();
-      final since = p.getInt(_cursorKey) ?? 0;
+      var since = p.getInt(_cursorKey) ?? 0;
       final did = await deviceId();
       var total = 0;
       var hasMore = true;
@@ -144,7 +168,10 @@ class SyncService {
           total++;
         }
         final newCursor = d['server_cursor'] as int? ?? since;
-        if (newCursor > since) await p.setInt(_cursorKey, newCursor);
+        // 推进本地游标再拉下一页；游标无进展立即退出，防止服务端异常导致死循环
+        if (newCursor <= since) break;
+        since = newCursor;
+        await p.setInt(_cursorKey, since);
         hasMore = d['has_more'] == true;
         if (changes.isEmpty) break;
       }

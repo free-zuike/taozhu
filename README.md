@@ -67,6 +67,6 @@ src/                     后端（Hono 路由 + D1 schema + 认证 + AI）
 frontend-flutter/        Flutter 主端（lib/pages 各业务页，lib/api.dart 请求封装）
 frontend-uni/            微信小程序（uni-app）
 tests/                   后端端到端测试（sql.js 内存库 + 真路由）
-.github/workflows/       deploy / build-flutter / build-web-release / build-miniprogram / build-desktop-ios
+.github/workflows/       deploy（含 Web 构建与 release 上传）/ build-flutter / build-miniprogram / build-desktop-ios / build-linux
 public/                  部署时由 Flutter Web 构建产物覆盖（勿手动提交）
 ```

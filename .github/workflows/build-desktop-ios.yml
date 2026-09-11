@@ -15,6 +15,9 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      # Windows 下 pub 缓存默认在 %LOCALAPPDATA%\Pub\Cache，改为仓库内统一路径便于 actions/cache
+      PUB_CACHE: ${{ github.workspace }}\.pub-cache
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +41,14 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      - name: Cache Flutter pub dependencies (Windows)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PUB_CACHE }}
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
 
       - name: Generate platforms & build Windows exe
         working-directory: frontend-flutter
@@ -94,6 +105,14 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
       - name: Generate platforms & build macOS
         working-directory: frontend-flutter
         run: |
@@ -148,6 +167,14 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
 
       - name: Generate platforms & build iOS (unsigned)
         working-directory: frontend-flutter

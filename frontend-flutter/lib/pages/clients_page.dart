@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
@@ -69,10 +70,18 @@ class _ClientsPageState extends State<ClientsPage> {
       final d = await Api.instance
           .get(searching ? '/clients?q=${Uri.encodeQueryComponent(q)}' : '/clients');
       final rows = ((d['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-      if (!searching) await LocalDb.upsertList('clients', rows);
+      // 本地已删除但尚未推送落地的店铺：过滤掉再展示/写库，防止"删了又出现"
+      var visible = rows;
+      if (!searching) {
+        final hideIds = await SyncService.pendingDeletedIds('client');
+        if (hideIds.isNotEmpty) {
+          visible = rows.where((r) => !hideIds.contains('${r['id']}')).toList();
+        }
+        await LocalDb.upsertList('clients', visible);
+      }
       if (!mounted) return;
       setState(() {
-        _clients = rows;
+        _clients = visible;
         _loading = false;
       });
     } catch (e) {
@@ -224,12 +233,23 @@ class _ClientsPageState extends State<ClientsPage> {
       ),
     );
     if (ok != true) return;
-    // 软删：本地删行 + 队列推送 upsert 带 deleted_at（服务端软删，历史单据引用不断）
-    final delPayload = Map<String, dynamic>.from(c);
-    delPayload['deleted_at'] = DateTime.now().toIso8601String();
-    await LocalDb.deleteOne('clients', '${c['id']}');
-    await SyncService.enqueueChange(entityType: 'client', entitySyncId: '${c['id']}', payload: delPayload);
-    toast(context, '已删除，正在同步');
+    if (kIsWeb) {
+      // Web 无本地库/同步队列：直连接口软删（App 走本地优先队列）
+      try {
+        await Api.instance.delete('/clients/${c['id']}');
+        toast(context, '已删除');
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+        return;
+      }
+    } else {
+      // 软删：本地删行 + 队列推送 upsert 带 deleted_at（服务端软删，历史单据引用不断）
+      final delPayload = Map<String, dynamic>.from(c);
+      delPayload['deleted_at'] = DateTime.now().toIso8601String();
+      await LocalDb.deleteOne('clients', '${c['id']}');
+      await SyncService.enqueueChange(entityType: 'client', entitySyncId: '${c['id']}', payload: delPayload);
+      toast(context, '已删除，正在同步');
+    }
     _load();
   }
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
@@ -59,10 +60,19 @@ class _ItemsPageState extends State<ItemsPage> {
       final d = await Api.instance
           .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
       final rows = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-      if (!searching) await LocalDb.upsertList('items', rows);
+      // 本地已删除但尚未推送落地的商品：过滤掉再展示/写库，防止"删了又出现"
+      //（推送成功后的 pull 会以 deleted_at 变化正式删除本地行）
+      var visible = rows;
+      if (!searching) {
+        final hideIds = await SyncService.pendingDeletedIds('item');
+        if (hideIds.isNotEmpty) {
+          visible = rows.where((r) => !hideIds.contains('${r['id']}')).toList();
+        }
+        await LocalDb.upsertList('items', visible);
+      }
       if (!mounted) return;
       setState(() {
-        _items = rows;
+        _items = visible;
         _loading = false;
       });
     } catch (e) {
@@ -89,18 +99,29 @@ class _ItemsPageState extends State<ItemsPage> {
       ),
     );
     if (ok != true) return;
-    // 软删：本地删行 + 队列推送 upsert 带 deleted_at（prices 补 active:1 防服务端恢复时跳过）
-    final item = _items.where((x) => x['id'] == id).firstOrNull;
-    if (item != null) {
-      final delPayload = Map<String, dynamic>.from(item);
-      delPayload['deleted_at'] = DateTime.now().toIso8601String();
-      final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
-      for (final p in prices) { p['active'] = 1; }
-      delPayload['prices'] = prices;
-      await LocalDb.deleteOne('items', id);
-      await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
+    if (kIsWeb) {
+      // Web 无本地库/同步队列：直连接口软删（App 走本地优先队列）
+      try {
+        await Api.instance.delete('/items/$id');
+        toast(context, '已删除');
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+        return;
+      }
+    } else {
+      // 软删：本地删行 + 队列推送 upsert 带 deleted_at（prices 补 active:1 防服务端恢复时跳过）
+      final item = _items.where((x) => x['id'] == id).firstOrNull;
+      if (item != null) {
+        final delPayload = Map<String, dynamic>.from(item);
+        delPayload['deleted_at'] = DateTime.now().toIso8601String();
+        final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+        for (final p in prices) { p['active'] = 1; }
+        delPayload['prices'] = prices;
+        await LocalDb.deleteOne('items', id);
+        await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
+      }
+      toast(context, '已删除，正在同步');
     }
-    toast(context, '已删除，正在同步');
     _load();
   }
 

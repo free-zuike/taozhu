@@ -44,6 +44,14 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
       - name: Build Web (Flutter) with production API_BASE
         working-directory: frontend-flutter
         run: |
@@ -54,12 +62,22 @@ jobs:
           mkdir -p web/canvaskit
           curl -fsSL -o web/canvaskit/canvaskit.js "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.js"
           curl -fsSL -o web/canvaskit/canvaskit.wasm "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.wasm"
+          # 站点构建：注入生产 API_BASE → Web 端登录地址留空即连生产
           flutter build web --dart-define=API_BASE=https://taozhu.freezuike-3f7.workers.dev --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/
+          # Release 分发构建（个人自托管 zip）：不注入默认地址 → 登录页必须自填服务器地址
+          flutter build web --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ -o build/web-standalone
 
       - name: Swap public dir with Flutter web build
         run: |
           rm -rf public
           cp -r frontend-flutter/build/web public
+
+      - name: Package web zip (个人自托管分发，同版本固定名)
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
+          cd frontend-flutter/build/web-standalone && zip -qr "/tmp/web-${VERSION}.zip" . && cd -
+          echo "web_zip=/tmp/web-${VERSION}.zip" >> "$GITHUB_ENV"
+          echo "包: web-${VERSION}.zip"
 
       # 检查更新兜底源：随部署生成 latest.json（与后端版本一致，Worker 在读 GitHub 失败时返回它）
       - name: Generate latest.json (version metadata)
@@ -148,3 +166,12 @@ jobs:
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" || true
           fi
           echo "release $REL 就绪（资产由各构建 workflow 上传）"
+
+      # Web 分发 zip 上传（原 build-web-release 职责，已并入本 workflow 省一套 Flutter 环境）
+      - name: Upload web zip to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
+          gh release upload "taozhu-v${VERSION}" "${{ env.web_zip }}" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "uploaded: web-${VERSION}.zip"
