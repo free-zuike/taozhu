@@ -42,6 +42,20 @@ class LocalDb {
     } catch (_) {}
   }
 
+  /// 增量 upsert 多行（按 id 覆盖，不删整表；在线刷新合并用，保留本地未推送的单）
+  static Future<void> upsertList(String storeName, List<Map<String, dynamic>> rows) async {
+    final db = await _open();
+    if (db == null) return;
+    try {
+      final store = stringMapStoreFactory.store(storeName);
+      for (final r in rows) {
+        final id = '${r['id'] ?? ''}';
+        if (id.isEmpty) continue;
+        await store.record(id).put(db, r);
+      }
+    } catch (_) {}
+  }
+
   /// 增量 upsert 单行（按 id 覆盖；不删整表，增量 pull 合并用）
   static Future<void> upsertOne(String storeName, Map<String, dynamic> row) async {
     final db = await _open();

@@ -69,8 +69,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
       localClients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
       localPays = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
       await Future.wait([
-        LocalDb.putAll('clients', localClients),
-        LocalDb.putAll('payments', localPays),
+        LocalDb.upsertList('clients', localClients),
+        LocalDb.upsertList('payments', localPays),
       ]);
       if (!mounted) return;
       setState(() {

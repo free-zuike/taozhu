@@ -53,7 +53,7 @@ class _ItemsPageState extends State<ItemsPage> {
       final d = await Api.instance
           .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
       final rows = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-      if (!searching) await LocalDb.putAll('items', rows);
+      if (!searching) await LocalDb.upsertList('items', rows);
       if (!mounted) return;
       setState(() {
         _items = rows;

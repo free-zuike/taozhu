@@ -60,7 +60,7 @@ class _ClientsPageState extends State<ClientsPage> {
       final d = await Api.instance
           .get(searching ? '/clients?q=${Uri.encodeQueryComponent(q)}' : '/clients');
       final rows = ((d['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-      if (!searching) await LocalDb.putAll('clients', rows);
+      if (!searching) await LocalDb.upsertList('clients', rows);
       if (!mounted) return;
       setState(() {
         _clients = rows;

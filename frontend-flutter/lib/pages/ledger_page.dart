@@ -102,11 +102,11 @@ class _LedgerPageState extends State<LedgerPage> {
       if (!mounted) return;
       sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
       payments = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
-      // ③ 镜像写库（不阻塞渲染）
+      // ③ 镜像写库（增量 upsert，不删本地未推送的单）
       await Future.wait([
-        LocalDb.putAll('clients', clients),
-        LocalDb.putAll('sales', sales),
-        LocalDb.putAll('payments', payments),
+        LocalDb.upsertList('clients', clients),
+        LocalDb.upsertList('sales', sales),
+        LocalDb.upsertList('payments', payments),
       ]);
       if (!mounted) return;
       setState(() {
