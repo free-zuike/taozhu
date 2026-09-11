@@ -72,10 +72,17 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   Future<void> _load() async {
-    // ① 本地数据库镜像秒开（离线可见、免等待）
+    // ① 本地数据库镜像秒开（离线可见、免等待）——与网络查询一致的店铺+时间范围过滤，避免闪现全部记录
     var clients = await LocalDb.getAllByName('clients');
     var sales = await LocalDb.getAll('sales');
     var payments = await LocalDb.getAll('payments');
+    if (_clientId == null && clients.isNotEmpty) {
+      _clientId = '${clients.first['id']}';
+    }
+    if (_clientId != null) {
+      sales = _filterByClient(sales, _clientId!);
+      payments = _filterByClient(payments, _clientId!);
+    }
     if (clients.isNotEmpty && sales.isNotEmpty && mounted) {
       setState(() {
         _clients = clients;
@@ -132,6 +139,20 @@ class _LedgerPageState extends State<LedgerPage> {
   String _date(Object? v) {
     final s = '$v';
     return s.length >= 10 ? s.substring(0, 10) : s;
+  }
+
+  /// 本地记录按当前店铺 + 时间范围过滤（与网络接口一致；范围空则不筛日期）
+  List<Map<String, dynamic>> _filterByClient(List<Map<String, dynamic>> rows, String clientId) {
+    final r = _rangeDates();
+    return rows.where((x) {
+      if ('${x['client_id']}' != clientId) return false;
+      if (r != null) {
+        final d = _date(x['happened_at']);
+        if (d.isEmpty) return false;
+        if (d.compareTo(r.$1) < 0 || d.compareTo(r.$2) > 0) return false;
+      }
+      return true;
+    }).toList();
   }
 
   /// 账本选择弹层：全部店铺（名称 + 交易笔数 + 欠款），底部管理店铺

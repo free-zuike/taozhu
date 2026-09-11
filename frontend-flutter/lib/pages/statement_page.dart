@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../api.dart';
 import '../utils/download.dart';
 import '../utils/money.dart';
+import '../theme.dart';
 import '../widgets/date_field.dart';
 import 'router.dart';
 
@@ -17,6 +18,7 @@ class StatementPage extends StatefulWidget {
 }
 
 class _StatementPageState extends State<StatementPage> {
+  TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _clients = [];
   String? _clientId; // null = 全部店铺
   List<Map<String, dynamic>> _cats = []; // 店铺分类（美食城等，按分类汇总档口）
@@ -399,7 +401,7 @@ class _StatementPageState extends State<StatementPage> {
           width: double.maxFinite,
           height: 340,
           child: shares.isEmpty
-              ? const Center(child: Text('暂无分享记录', style: TextStyle(color: Color(0xFF909399))))
+              ? Center(child: Text('暂无分享记录', style: TextStyle(color: _c.textSub)))
               : ListView(
                   children: [
                     for (final s in shares)
@@ -417,14 +419,14 @@ class _StatementPageState extends State<StatementPage> {
                                       fontSize: 13,
                                       fontWeight: FontWeight.w600,
                                       color: s['expired'] == true
-                                          ? const Color(0xFF909399)
+                                          ? _c.textSub
                                           : null,
                                     ),
                                   ),
                                   Text('${s['url']}',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 11, color: Color(0xFF909399))),
+                                      style: TextStyle(fontSize: 11, color: _c.textSub)),
                                 ],
                               ),
                             ),
@@ -439,7 +441,7 @@ class _StatementPageState extends State<StatementPage> {
                             if (s['expired'] != true)
                               IconButton(
                                 tooltip: '延期',
-                                icon: const Icon(Icons.update_outlined, size: 18, color: Color(0xFF409EFF)),
+                                icon: Icon(Icons.update_outlined, size: 18, color: _c.primary),
                                 onPressed: () async {
                                   const opts = [('+3 天', 3), ('+7 天', 7), ('+30 天', 30), ('永久', 0)];
                                   final sel = await showDialog<String>(
@@ -471,7 +473,7 @@ class _StatementPageState extends State<StatementPage> {
                               ),
                             IconButton(
                               tooltip: '取消分享',
-                              icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFEF4444)),
+                              icon: Icon(Icons.delete_outline, size: 18, color: _c.danger),
                               onPressed: () async {
                                 try {
                                   await Api.instance.delete('/share/${s['token']}');
@@ -565,6 +567,7 @@ class _StatementPageState extends State<StatementPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = _c;
     return Scaffold(
       appBar: AppBar(
         title: const Text('对账单'),
@@ -669,55 +672,55 @@ class _StatementPageState extends State<StatementPage> {
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: _statCard('出货合计', '¥${_saleTotal.toStringAsFixed(2)}', const Color(0xFFF56C6C))),
+                Expanded(child: _statCard('出货合计', '¥${_saleTotal.toStringAsFixed(2)}', c.danger)),
                 const SizedBox(width: 12),
-                Expanded(child: _statCard('收款合计（实收）', '¥${_payTotal.toStringAsFixed(2)}', const Color(0xFF67C23A))),
+                Expanded(child: _statCard('收款合计（实收）', '¥${_payTotal.toStringAsFixed(2)}', c.success)),
               ],
             ),
             if (_waivedTotal > 0) ...[
               const SizedBox(height: 12),
-              _statCard('减免合计（平账）', '¥${_waivedTotal.toStringAsFixed(2)}', const Color(0xFFE6A23C)),
+              _statCard('减免合计（平账）', '¥${_waivedTotal.toStringAsFixed(2)}', c.warning),
             ],
             const SizedBox(height: 12),
             _statCard('期末欠款（累计）', '¥${_debtEnd.toStringAsFixed(2)}',
-                _debtEnd > 0 ? const Color(0xFFF56C6C) : const Color(0xFF67C23A)),
+                _debtEnd > 0 ? c.danger : c.success),
             const SizedBox(height: 16),
             const Text('出货明细', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
             const SizedBox(height: 8),
             if (_sales.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: Text('周期内无出货', style: TextStyle(color: Colors.grey)),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text('周期内无出货', style: TextStyle(color: c.textSub)),
               ),
             for (final s in _sales)
               Card(
                 child: ListTile(
                   dense: true,
-                  leading: const Icon(Icons.storefront, size: 20, color: Color(0xFF409EFF)),
+                  leading: Icon(Icons.storefront, size: 20, color: _c.primary),
                   title: Text('${s['client_name'] ?? ''}'),
                   subtitle: Text('${_date(s['happened_at'])} · ${(s['items'] as List? ?? []).length} 项'),
                   trailing: Text('¥${(s['total'] as num?)?.toStringAsFixed(2) ?? '-'}',
-                      style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFF56C6C))),
+                      style: TextStyle(fontWeight: FontWeight.w700, color: c.danger)),
                 ),
               ),
             const SizedBox(height: 8),
             const Text('收款明细', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
             const SizedBox(height: 8),
             if (_payments.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: Text('周期内无收款', style: TextStyle(color: Colors.grey)),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text('周期内无收款', style: TextStyle(color: c.textSub)),
               ),
             for (final p in _payments)
               Card(
                 child: ListTile(
                   dense: true,
-                  leading: const Icon(Icons.check_circle_outline, size: 20, color: Color(0xFF67C23A)),
+                  leading: Icon(Icons.check_circle_outline, size: 20, color: c.success),
                   title: Text('${p['client_name'] ?? ''}'),
                   subtitle: Text(
                       '${_date(p['happened_at'])}${(p['method'] as String? ?? '').isNotEmpty ? ' · ${p['method']}' : ''}'),
                   trailing: Text('¥${(p['amount'] as num?)?.toStringAsFixed(2) ?? '-'}',
-                      style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF67C23A))),
+                      style: TextStyle(fontWeight: FontWeight.w700, color: c.success)),
                 ),
               ),
             const SizedBox(height: 8),
@@ -747,34 +750,34 @@ class _StatementPageState extends State<StatementPage> {
     final t = (v['total'] as Map?) ?? const {};
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       _statCard('总账 · ${v['category_name']}（${clients.length} 档口）', '${v['from']} 至 ${v['to']}',
-          const Color(0xFF909399)),
+          _c.textSub),
       const SizedBox(height: 12),
       Row(children: [
-        Expanded(child: _statCard('总出货', '¥${fmtMoney(_num(t['sales_total']))}', const Color(0xFFF56C6C))),
+        Expanded(child: _statCard('总出货', '¥${fmtMoney(_num(t['sales_total']))}', _c.danger)),
         const SizedBox(width: 12),
-        Expanded(child: _statCard('总收款', '¥${fmtMoney(_num(t['paid_total']))}', const Color(0xFF67C23A))),
+        Expanded(child: _statCard('总收款', '¥${fmtMoney(_num(t['paid_total']))}', _c.success)),
       ]),
       const SizedBox(height: 12),
-      _statCard('总欠款（期末）', '¥${fmtMoney(_num(t['debt']))}', const Color(0xFFF59E0B)),
+      _statCard('总欠款（期末）', '¥${fmtMoney(_num(t['debt']))}', _c.warning),
       const SizedBox(height: 16),
       const Text('各档口（单店对账请下拉选档口）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
       const SizedBox(height: 8),
       if (clients.isEmpty)
-        const Padding(
-          padding: EdgeInsets.all(12),
-          child: Text('该分类下暂无档口', style: TextStyle(color: Colors.grey)),
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Text('该分类下暂无档口', style: TextStyle(color: _c.textSub)),
         ),
       for (final cl in clients)
         Card(
           child: ListTile(
             dense: true,
-            leading: const Icon(Icons.storefront, size: 20, color: Color(0xFF409EFF)),
+            leading: Icon(Icons.storefront, size: 20, color: _c.primary),
             title: Text('${cl['name']}'),
             subtitle: Text('出货 ¥${fmtMoney(_num(cl['sales_total']))} · 收款 ¥${fmtMoney(_num(cl['paid_total']))}'),
             trailing: Text('欠 ¥${fmtMoney(_num(cl['debt']))}',
                 style: TextStyle(
                     fontWeight: FontWeight.w600,
-                    color: _num(cl['debt']) > 0 ? const Color(0xFFF56C6C) : const Color(0xFF67C23A))),
+                    color: _num(cl['debt']) > 0 ? _c.danger : _c.success)),
           ),
         ),
     ]);
@@ -787,7 +790,7 @@ class _StatementPageState extends State<StatementPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: const TextStyle(color: Color(0xFF909399), fontSize: 13)),
+            Text(label, style: TextStyle(color: _c.textSub, fontSize: 13)),
             const SizedBox(height: 6),
             Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: color)),
           ],

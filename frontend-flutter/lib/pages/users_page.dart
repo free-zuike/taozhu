@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../theme.dart';
 import 'router.dart';
 
 /// 账号管理（仅老板，后端 adminOnly；店员打开会收到 403 提示）
@@ -10,6 +11,7 @@ class UsersPage extends StatefulWidget {
 }
 
 class _UsersPageState extends State<UsersPage> {
+  TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _users = [];
   bool _loading = true;
 
@@ -113,7 +115,7 @@ class _UsersPageState extends State<UsersPage> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFF56C6C)),
+            style: FilledButton.styleFrom(backgroundColor: _c.danger),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('删除'),
           ),
@@ -132,6 +134,7 @@ class _UsersPageState extends State<UsersPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = _c;
     return Scaffold(
       appBar: AppBar(
         title: const Text('账号管理'),
@@ -152,8 +155,8 @@ class _UsersPageState extends State<UsersPage> {
                         leading: Icon(
                           '${u['role']}' == 'admin' ? Icons.verified_user : Icons.person_outline,
                           color: '${u['role']}' == 'admin'
-                              ? const Color(0xFFF56C6C)
-                              : const Color(0xFF409EFF),
+                              ? c.danger
+                              : c.primary,
                         ),
                         title: Text('${u['username']}'),
                         subtitle: Text('${u['role']}' == 'admin' ? '老板' : '店员'),
@@ -161,11 +164,11 @@ class _UsersPageState extends State<UsersPage> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              icon: const Icon(Icons.edit_outlined, size: 20, color: Color(0xFF409EFF)),
+                              icon: Icon(Icons.edit_outlined, size: 20, color: c.primary),
                               onPressed: () => _addOrEdit(u),
                             ),
                             IconButton(
-                              icon: const Icon(Icons.delete_outline, size: 20, color: Color(0xFFF56C6C)),
+                              icon: Icon(Icons.delete_outline, size: 20, color: c.danger),
                               onPressed: () => _delete(u),
                             ),
                           ],
@@ -173,9 +176,9 @@ class _UsersPageState extends State<UsersPage> {
                       ),
                     ),
                   if (_users.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(32),
-                      child: Center(child: Text('暂无账号', style: TextStyle(color: Colors.grey))),
+                    Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Center(child: Text('暂无账号', style: TextStyle(color: c.textSub))),
                     ),
                 ],
               ),

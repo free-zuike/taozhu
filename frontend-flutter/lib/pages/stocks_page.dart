@@ -239,7 +239,7 @@ class _StocksPageState extends State<StocksPage> {
           IconButton(
             tooltip: '只看预警',
             icon: Icon(Icons.notification_important_outlined,
-                color: _belowOnly ? const Color(0xFFF56C6C) : null),
+                color: _belowOnly ? _c.danger : null),
             onPressed: () => setState(() {
               _belowOnly = !_belowOnly;
               _refresh();
@@ -283,41 +283,39 @@ class _StocksPageState extends State<StocksPage> {
                                 const Spacer(),
                                 Text(
                                   '¥${fmtMoney(_stocks.fold<double>(0, (s, x) => s + (((x['quantity'] as num?)?.toDouble() ?? 0) * ((x['cost_price'] as num?)?.toDouble() ?? 0))))}',
-                                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF67C23A)),
+                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _c.success),
                                 ),
                               ],
                             ),
                           ),
                         if (_stocks.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.all(32),
-                            child: Center(child: Text('暂无库存记录\n进货后自动入库，可点右上角盘点初始化', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))),
+                          Padding(
+                            padding: const EdgeInsets.all(32),
+                            child: Center(child: Text('暂无库存记录\n进货后自动入库，可点右上角盘点初始化', textAlign: TextAlign.center, style: TextStyle(color: _c.textSub))),
                           ),
                         for (final s in _stocks)
                           Card(
                             margin: const EdgeInsets.symmetric(vertical: 3),
                             elevation: 0,
                             color: (s['low'] == true)
-                                ? const Color(0xFFFEF0F0)
-                                : (Theme.of(context).brightness == Brightness.dark
-                                    ? const Color(0xFF1C1C1E)
-                                    : Colors.white),
+                                ? _c.danger.withOpacity(0.1)
+                                : _c.card,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                               side: BorderSide(
-                                  color: s['low'] == true ? const Color(0xFFF56C6C).withOpacity(0.5) : const Color(0x0F000000)),
+                                  color: s['low'] == true ? _c.danger.withOpacity(0.5) : _c.divider),
                             ),
                             child: ListTile(
                               leading: CircleAvatar(
                                 radius: 16,
                                 backgroundColor: (s['low'] == true
-                                        ? const Color(0xFFF56C6C)
-                                        : const Color(0xFF67C23A))
+                                        ? _c.danger
+                                        : _c.success)
                                     .withOpacity(0.12),
                                 child: Icon(
                                   s['low'] == true ? Icons.warning_amber_outlined : Icons.inventory_2_outlined,
                                   size: 16,
-                                  color: s['low'] == true ? const Color(0xFFF56C6C) : const Color(0xFF67C23A),
+                                  color: s['low'] == true ? _c.danger : _c.success,
                                 ),
                               ),
                               title: Text('${s['item_name']}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
@@ -328,7 +326,7 @@ class _StocksPageState extends State<StocksPage> {
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w700,
-                                  color: s['low'] == true ? const Color(0xFFF56C6C) : const Color(0xFF67C23A),
+                                  color: s['low'] == true ? _c.danger : _c.success,
                                 ),
                               ),
                               onTap: () => _edit(s),

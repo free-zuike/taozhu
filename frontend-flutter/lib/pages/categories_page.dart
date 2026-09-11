@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../theme.dart';
 import 'router.dart';
 
 /// 分类管理：商品分类 / 店铺分类（两级）
@@ -10,6 +11,7 @@ class CategoriesPage extends StatefulWidget {
 }
 
 class _CategoriesPageState extends State<CategoriesPage> {
+  TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   String _type = 'item';
   List<Map<String, dynamic>> _cats = [];
   bool _loading = true;
@@ -99,7 +101,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFF56C6C)),
+            style: FilledButton.styleFrom(backgroundColor: _c.danger),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('删除'),
           ),
@@ -118,6 +120,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = _c;
     return Scaffold(
       appBar: AppBar(
         title: const Text('分类管理'),
@@ -153,10 +156,10 @@ class _CategoriesPageState extends State<CategoriesPage> {
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                       children: [
                         if (_top.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.all(32),
+                          Padding(
+                            padding: const EdgeInsets.all(32),
                             child: Center(
-                                child: Text('暂无分类，点右上角 ＋ 添加', style: TextStyle(color: Colors.grey))),
+                                child: Text('暂无分类，点右上角 ＋ 添加', style: TextStyle(color: colors.textSub))),
                           ),
                         for (final c in _top) ...[
                           _itemTile(c, indent: false),
@@ -177,7 +180,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
       child: ListTile(
         contentPadding: EdgeInsets.only(left: indent ? 32 : 16, right: 8),
         leading: Icon(indent ? Icons.subdirectory_arrow_right : (isParent ? Icons.folder : Icons.label_outline),
-            color: const Color(0xFF409EFF), size: 20),
+            color: _c.primary, size: 20),
         title: Text('${c['name']}', style: TextStyle(fontWeight: indent ? FontWeight.w400 : FontWeight.w600)),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
@@ -193,7 +196,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
               onPressed: () => _rename(c),
             ),
             IconButton(
-              icon: const Icon(Icons.delete_outline, size: 20, color: Color(0xFFF56C6C)),
+              icon: Icon(Icons.delete_outline, size: 20, color: _c.danger),
               onPressed: () => _delete(c),
             ),
           ],
