@@ -2,7 +2,9 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../api.dart';
+import '../local_db.dart';
 import '../local_freq.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/date_field.dart';
@@ -215,43 +217,50 @@ class _PurchasePageState extends State<PurchasePage> {
       return;
     }
     setState(() => _busy = true);
-    final body = {
-      'happened_at': _dateCtrl.text.trim(),
-      // 幂等键：离线重放/多端重复提交不会重复建单
-      'sync_key': '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(0x7fffffff)}',
-      'items': valid
-          .map((r) => {'price_id': r.priceId, 'quantity': r.quantity, 'purchase_price': r.purchasePrice})
-          .toList(),
-    };
-    try {
-      if (_editing) {
-        await Api.instance.patch('/purchases/${widget.editId}', body);
-        toast(context, '已保存修改');
-        if (mounted) Navigator.pop(context, true);
-      } else {
-        await Api.instance.post('/purchases', body);
-        await Freq.bump(valid.map((r) => r.priceId ?? ''));
-        for (final r in valid) {
-          await Freq.saveLastQty(r.priceId ?? '', r.quantity);
-        }
-        toast(context, '已提交，合计 ¥${_total.toStringAsFixed(2)}');
-        setState(() {
-          _rows.clear();
-          _rows.add(_PRow());
-        });
-      }
-    } catch (e) {
-      final msg = e.toString();
-      // 网络异常：新增单据存入待同步队列（编辑模式不入队）
-      if (msg.contains('地址') && !_editing) {
-        await Api.instance.pendingAdd('purchase', body);
-        toast(context, '网络异常，进货单已存入待同步队列');
-      } else {
-        toast(context, msg.replaceFirst('Exception: ', ''));
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
+    // 写本地优先：构建完整 payload → 落本地库 → 入队列 → debounce push
+    final purchaseId = _editing
+        ? widget.editId!
+        : 'p${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+    final itemsPayload = <Map<String, dynamic>>[];
+    var totalCalc = 0.0;
+    for (final r in valid) {
+      final opt = _items.where((x) => x['id'] == r.itemId).firstOrNull;
+      final prices = ((opt?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final price = prices.where((p) => p['id'] == r.priceId).firstOrNull;
+      final amount = (r.quantity * r.purchasePrice * 100).round() / 100;
+      totalCalc += amount;
+      itemsPayload.add({
+        'id': 'pi${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}',
+        'purchase_id': purchaseId,
+        'item_id': r.itemId,
+        'item_name': opt?['name'] ?? '',
+        'unit': price?['unit'] ?? '',
+        'quantity': r.quantity,
+        'purchase_price': r.purchasePrice,
+        'amount': amount,
+      });
     }
+    final payload = {
+      'id': purchaseId,
+      'happened_at': _dateCtrl.text.trim(),
+      'note': '',
+      'total': (totalCalc * 100).round() / 100,
+      'items': itemsPayload,
+    };
+    await LocalDb.upsertOne('purchases', payload);
+    await SyncService.enqueueChange(
+      entityType: 'purchase',
+      entitySyncId: purchaseId,
+      action: 'upsert',
+      payload: payload,
+    );
+    await Freq.bump(valid.map((r) => r.priceId ?? ''));
+    for (final r in valid) {
+      await Freq.saveLastQty(r.priceId ?? '', r.quantity);
+    }
+    toast(context, _editing ? '已保存，正在同步' : '已提交，合计 ¥${_total.toStringAsFixed(2)}');
+    if (mounted) Navigator.pop(context, true);
+    if (mounted) setState(() => _busy = false);
   }
 
   /// 复制上一笔进货单：预填明细，可修改后提交

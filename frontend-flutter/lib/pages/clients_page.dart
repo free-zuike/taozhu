@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
 
@@ -173,25 +175,26 @@ class _ClientsPageState extends State<ClientsPage> {
       return;
     }
     final categoryId = selSubId ?? selTopId;
-    try {
-      if (c == null) {
-        await Api.instance.post('/clients', {
-          'name': name,
-          'month_start_day': msd,
-          if (categoryId != null) 'category_id': categoryId,
-        });
-      } else {
-        await Api.instance.patch('/clients/${c['id']}', {
-          'name': name,
-          'month_start_day': msd,
-          'category_id': categoryId,
-        });
-      }
-      toast(context, '已保存');
-      _load();
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    // 写本地优先
+    if (c == null) {
+      final id = 'c${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+      final payload = {
+        'id': id, 'name': name, 'contact': '', 'phone': '', 'note': '',
+        'start_date': '', 'end_date': '', 'month_start_day': msd,
+        'category_id': categoryId ?? '', 'deleted_at': null,
+      };
+      await LocalDb.upsertOne('clients', payload);
+      await SyncService.enqueueChange(entityType: 'client', entitySyncId: id, payload: payload);
+    } else {
+      final payload = Map<String, dynamic>.from(c);
+      payload['name'] = name;
+      payload['month_start_day'] = msd;
+      payload['category_id'] = categoryId ?? '';
+      await LocalDb.upsertOne('clients', payload);
+      await SyncService.enqueueChange(entityType: 'client', entitySyncId: '${c['id']}', payload: payload);
     }
+    toast(context, '已保存，正在同步');
+    _load();
   }
 
   Future<void> _delete(Map<String, dynamic> c) async {
@@ -211,13 +214,13 @@ class _ClientsPageState extends State<ClientsPage> {
       ),
     );
     if (ok != true) return;
-    try {
-      await Api.instance.delete('/clients/${c['id']}');
-      toast(context, '已删除');
-      _load();
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
-    }
+    // 软删：本地删行 + 队列推送 upsert 带 deleted_at（服务端软删，历史单据引用不断）
+    final delPayload = Map<String, dynamic>.from(c);
+    delPayload['deleted_at'] = DateTime.now().toIso8601String();
+    await LocalDb.deleteOne('clients', '${c['id']}');
+    await SyncService.enqueueChange(entityType: 'client', entitySyncId: '${c['id']}', payload: delPayload);
+    toast(context, '已删除，正在同步');
+    _load();
   }
 
   @override

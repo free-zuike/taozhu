@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../widgets/date_field.dart';
 import 'router.dart';
@@ -105,37 +106,32 @@ class _PaymentsPageState extends State<PaymentsPage> {
       return;
     }
     setState(() => _busy = true);
-    final body = {
+    // 写本地优先：落本地库 + 入队列 → debounce push
+    final payId = 'pay${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+    final payload = {
+      'id': payId,
       'client_id': _clientId,
-      'amount': amount,
-      'waived': waived,
+      'amount': (amount * 100).round() / 100,
+      'waived': (waived * 100).round() / 100,
       'happened_at': _dateCtrl.text.trim(),
-      // 幂等键：离线重放/多端重复提交不会重复登记
-      'sync_key': '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(0x7fffffff)}',
       'method': _methodCtrl.text.trim(),
       'note': _noteCtrl.text.trim(),
     };
-    try {
-      await Api.instance.post('/payments', body);
-      toast(context, waived > 0
-          ? '已登记：实收 ¥${amount.toStringAsFixed(2)}，平账 ¥${waived.toStringAsFixed(2)}'
-          : '已登记收款 ¥${amount.toStringAsFixed(2)}');
-      _amountCtrl.clear();
-      _waivedCtrl.clear();
-      _waivedAuto = true; // 下次默认自动平账
-      _load();
-    } catch (e) {
-      final msg = e.toString();
-      // 网络异常：收款存入待同步队列
-      if (msg.contains('地址')) {
-        await Api.instance.pendingAdd('payment', body);
-        toast(context, '网络异常，收款已存入待同步队列');
-      } else {
-        toast(context, msg.replaceFirst('Exception: ', ''));
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+    await LocalDb.upsertOne('payments', payload);
+    await SyncService.enqueueChange(
+      entityType: 'payment',
+      entitySyncId: payId,
+      action: 'upsert',
+      payload: payload,
+    );
+    toast(context, waived > 0
+        ? '已登记：实收 ¥${amount.toStringAsFixed(2)}，平账 ¥${waived.toStringAsFixed(2)}'
+        : '已登记收款 ¥${amount.toStringAsFixed(2)}');
+    _amountCtrl.clear();
+    _waivedCtrl.clear();
+    _waivedAuto = true;
+    _load();
+    if (mounted) setState(() => _busy = false);
   }
 
   Future<void> _edit(Map<String, dynamic> p) async {
