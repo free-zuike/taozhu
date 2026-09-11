@@ -33,12 +33,25 @@ class _StocksPageState extends State<StocksPage> {
   }
 
   Future<void> _load({String q = '', bool below = false}) async {
+    // ① 缓存兜底秒开（离线/慢网先展示上次数据，不再无限转圈）
+    if (!below && q.isEmpty) {
+      final cached = await Api.instance.getCachedRaw('/stocks');
+      if (cached != null && mounted) {
+        _canSeeCost = cached['can_see_cost'] != false;
+        setState(() {
+          _stocks = ((cached['stocks'] as List?) ?? []).cast<Map<String, dynamic>>();
+          _loading = false;
+        });
+      }
+    }
+    // ② 网络刷新 + 写缓存
     try {
       final params = <String>[];
       if (q.isNotEmpty) params.add('q=${Uri.encodeQueryComponent(q)}');
       if (below) params.add('below=1');
       final query = params.isEmpty ? '' : '?${params.join('&')}';
       final d = await Api.instance.get('/stocks$query');
+      if (!below && q.isEmpty) await Api.instance.setCache('/stocks', d);
       if (!mounted) return;
       setState(() {
         _stocks = ((d['stocks'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -47,7 +60,7 @@ class _StocksPageState extends State<StocksPage> {
       });
     } catch (e) {
       setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (_stocks.isEmpty) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 

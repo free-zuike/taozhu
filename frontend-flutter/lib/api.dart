@@ -93,28 +93,28 @@ class Api {
     final t = await _token();
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
 
-    // 发起一次请求（按方法分发）；15s 超时防止网络不可达时页面无限转圈
+    // 发起一次请求（按方法分发）；8s 超时防止网络不可达时页面无限转圈
     Future<http.Response> doReq() async {
       switch (method) {
         case 'POST':
           return http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 8));
         case 'PUT':
           return http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 8));
         case 'PATCH':
           return http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 8));
         case 'DELETE':
           return http.delete(Uri.parse(url), headers: headers)
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 8));
         default:
           return http.get(Uri.parse(url), headers: headers)
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 8));
       }
     }
 
-    // 网络异常自动重试（最多 3 次，代理切换/VPN 抖动等偶发失败）：成功返回，重试耗尽抛出
+    // 网络异常自动重试（最多 2 次，代理切换/VPN 抖动等偶发失败）：成功返回，重试耗尽抛出
     Future<http.Response> retry() async {
       var attempts = 0;
       while (true) {
@@ -122,8 +122,8 @@ class Api {
           return await doReq();
         } catch (_) {
           attempts++;
-          if (attempts >= 3) rethrow;
-          await Future.delayed(Duration(milliseconds: 500 * attempts));
+          if (attempts >= 2) rethrow;
+          await Future.delayed(Duration(milliseconds: 300));
         }
       }
     }

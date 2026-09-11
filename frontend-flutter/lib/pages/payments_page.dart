@@ -37,11 +37,13 @@ class _PaymentsPageState extends State<PaymentsPage> {
   @override
   void initState() {
     super.initState();
+    SyncService.version.addListener(_onSync);
     _load();
   }
 
   @override
   void dispose() {
+    SyncService.version.removeListener(_onSync);
     _amountCtrl.dispose();
     _waivedCtrl.dispose();
     _dateCtrl.dispose();
@@ -50,17 +52,22 @@ class _PaymentsPageState extends State<PaymentsPage> {
     super.dispose();
   }
 
+  void _onSync() {
+    if (mounted) _load();
+  }
+
   Future<void> _load() async {
-    // ① 本地数据库秒开（店铺目录 + 收款历史，离线可见）
+    // ① 本地数据库秒开（店铺目录 + 收款历史，离线可见；即使为空也先展示空态）
     var localClients = await LocalDb.getAllByName('clients');
     var localPays = await LocalDb.getAll('payments');
-    if (localClients.isNotEmpty && mounted) {
-      setState(() => _clients = localClients);
+    if (mounted) {
+      setState(() {
+        _clients = localClients;
+        _payments = localPays;
+        _loading = false;
+      });
     }
-    if (localPays.isNotEmpty && mounted) {
-      setState(() => _payments = localPays);
-    }
-    // ② 网络刷新 + 写本地库
+    // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
     try {
       final results = await Future.wait([
         Api.instance.get('/clients'),
@@ -79,8 +86,11 @@ class _PaymentsPageState extends State<PaymentsPage> {
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (localClients.isEmpty && localPays.isEmpty) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      }
     }
   }
 

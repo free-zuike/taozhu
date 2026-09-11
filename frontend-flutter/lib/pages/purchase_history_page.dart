@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
@@ -22,7 +24,18 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   @override
   void initState() {
     super.initState();
+    SyncService.version.addListener(_onSync);
     _load();
+  }
+
+  @override
+  void dispose() {
+    SyncService.version.removeListener(_onSync);
+    super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) _load();
   }
 
   String _dateQuery() {
@@ -38,12 +51,23 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    // ① 本地库秒开（含空态；不再等网络转圈）
+    final local = await LocalDb.getAll('purchases');
+    if (mounted) {
+      setState(() {
+        _purchases = _filterByRange(local);
+        _loading = false;
+      });
+    }
+    // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
     try {
       final d = await Api.instance.get('/purchases?${_dateQuery()}&limit=500');
       if (!mounted) return;
+      final rows = ((d['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
+      await LocalDb.upsertList('purchases', rows);
+      if (!mounted) return;
       setState(() {
-        _purchases = ((d['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _purchases = _filterByRange(rows);
         _loading = false;
         _offline = false;
       });
@@ -51,10 +75,28 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _offline = true;
+        _offline = local.isEmpty;
       });
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (local.isEmpty) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
+  }
+
+  /// 本地全量镜像按当前范围过滤（与网络接口的 date_from/date_to 一致）
+  List<Map<String, dynamic>> _filterByRange(List<Map<String, dynamic>> rows) {
+    if (_range == 'all') return rows;
+    final now = DateTime.now();
+    final months = _range == '2m' ? 1 : (_range == '3m' ? 2 : 0);
+    final from = _fmt(DateTime(now.year, now.month - months, 1));
+    final to = _fmt(now);
+    return rows.where((x) {
+      final d = _date(x['happened_at']);
+      return d.isNotEmpty && d.compareTo(from) >= 0 && d.compareTo(to) <= 0;
+    }).toList();
+  }
+
+  String _date(Object? v) {
+    final s = '$v';
+    return s.length >= 10 ? s.substring(0, 10) : s;
   }
 
   Future<void> _editPurchase(Map<String, dynamic> p) async {

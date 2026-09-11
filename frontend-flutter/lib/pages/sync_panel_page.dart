@@ -40,8 +40,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
-    // 本地计数（Web 无本地库 → 全部 0）
+    // 本地数据立即可得，先渲染（不再被服务器请求阻塞转圈）
     final local = <String, int>{};
     for (final (store, _) in _entities) {
       local[store] = (await LocalDb.getAll(store)).length;
@@ -55,20 +54,20 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       _pending = pending;
       _deviceId = deviceId;
       _lastSync = lastSync ?? '';
+      _loading = false;
     });
-    // 服务器统计
+    // 服务器统计异步到达后更新（慢/失败不影响已展示的本地数据）
     try {
       final d = await Api.instance.get('/sync/stats');
       if (!mounted) return;
       setState(() {
         _serverStats = d;
-        _loading = false;
+        _error = null;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '');
-        _loading = false;
       });
     }
   }

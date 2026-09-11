@@ -23,14 +23,20 @@ class _ClientsPageState extends State<ClientsPage> {
   @override
   void initState() {
     super.initState();
+    SyncService.version.addListener(_onSync);
     _load();
     _loadCats();
   }
 
   @override
   void dispose() {
+    SyncService.version.removeListener(_onSync);
     _searchTimer?.cancel();
     super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) _load();
   }
 
   Future<void> _loadCats() async {
@@ -49,13 +55,16 @@ class _ClientsPageState extends State<ClientsPage> {
     final searching = q.isNotEmpty;
     // 搜索时不读本地、不写本地，走最新网络结果
     if (!searching) {
-      // ① 本地数据库秒开（离线可见）
+      // ① 本地数据库秒开（离线可见；即使为空也先展示空态，不再等网络转圈）
       final local = await LocalDb.getAllByName('clients');
-      if (local.isNotEmpty && mounted) {
-        setState(() => _clients = local);
+      if (mounted) {
+        setState(() {
+          _clients = local;
+          _loading = false;
+        });
       }
     }
-    // ② 网络刷新 + 写本地库
+    // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
     try {
       final d = await Api.instance
           .get(searching ? '/clients?q=${Uri.encodeQueryComponent(q)}' : '/clients');
@@ -67,8 +76,9 @@ class _ClientsPageState extends State<ClientsPage> {
         _loading = false;
       });
     } catch (e) {
+      if (!mounted || searching) return;
       setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (_clients.isEmpty) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 

@@ -26,29 +26,35 @@ class _ItemsPageState extends State<ItemsPage> {
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _isStaff = r == 'staff');
     });
+    SyncService.version.addListener(_onSync);
     _load();
   }
 
   @override
   void dispose() {
+    SyncService.version.removeListener(_onSync);
     _searchTimer?.cancel();
     super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) _load();
   }
 
   Future<void> _load({String q = ''}) async {
     final searching = q.isNotEmpty;
     // 搜索时不读本地、不写本地，走最新网络结果
     if (!searching) {
-      // ① 本地数据库秒开（离线可见）
+      // ① 本地数据库秒开（离线可见；即使为空也先展示空态，不再等网络转圈）
       final local = await LocalDb.getAllByName('items');
-      if (local.isNotEmpty && mounted) {
+      if (mounted) {
         setState(() {
           _items = local;
           _loading = false;
         });
       }
     }
-    // ② 网络刷新 + 写本地库
+    // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
     try {
       final d = await Api.instance
           .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
@@ -60,8 +66,9 @@ class _ItemsPageState extends State<ItemsPage> {
         _loading = false;
       });
     } catch (e) {
+      if (!mounted || searching) return;
       setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (_items.isEmpty) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
 
@@ -23,19 +25,44 @@ class _CategoriesPageState extends State<CategoriesPage> {
   @override
   void initState() {
     super.initState();
+    SyncService.version.addListener(_onSync);
     _load();
   }
 
+  @override
+  void dispose() {
+    SyncService.version.removeListener(_onSync);
+    super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) _load();
+  }
+
   Future<void> _load() async {
+    // ① 本地库秒开（含空态；不再等网络转圈）
+    final local = await LocalDb.getAll('categories');
+    if (mounted) {
+      setState(() {
+        final byType = local.where((x) => '${x['type']}' == _type).toList();
+        _cats = byType;
+        _loading = false;
+      });
+    }
+    // ② 网络刷新 + 写本地库（静默）
     try {
       final d = await Api.instance.get('/categories?type=$_type');
+      final rows = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+      await LocalDb.upsertList('categories', rows);
+      if (!mounted) return;
       setState(() {
-        _cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _cats = rows;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (local.isEmpty) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
