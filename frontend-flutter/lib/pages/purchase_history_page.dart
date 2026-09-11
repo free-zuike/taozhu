@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
 import '../utils/money.dart';
-import '../widgets/web_max_width.dart';
 import 'router.dart';
 import 'purchase_page.dart';
 import 'attachment_panel.dart';
@@ -182,7 +181,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('进货记录')),
-      body: webMaxWidth(Column(
+      body: Column(
         children: [
           if (_offline)
             Container(
@@ -233,7 +232,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                 : _buildList(),
           ),
         ],
-      ),
       ),
     );
   }

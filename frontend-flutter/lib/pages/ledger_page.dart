@@ -11,7 +11,6 @@ import 'clients_page.dart';
 import 'sale_page.dart';
 import 'payments_page.dart';
 import 'attachment_panel.dart';
-import '../../widgets/web_max_width.dart';
 
 /// 交易（账本=店铺）：出货 / 收款流水，按店铺+时间范围，支持编辑删除与附件（按日期分组列表）
 class LedgerPage extends StatefulWidget {
@@ -444,7 +443,7 @@ class _LedgerPageState extends State<LedgerPage> {
             indicatorSize: TabBarIndicatorSize.label,
           ),
         ),
-        body: webMaxWidth(Column(
+        body: Column(
           children: [
             if (_offline)
               Container(
@@ -567,7 +566,6 @@ class _LedgerPageState extends State<LedgerPage> {
                     ]),
             ),
           ],
-        ),
         ),
       ),
     );
