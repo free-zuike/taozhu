@@ -41,10 +41,21 @@ class _ClientsPageState extends State<ClientsPage> {
   }
 
   Future<void> _loadCats() async {
-    try {
-      final d = await Api.instance.get('/categories?type=client');
-      setState(() => _cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>());
-    } catch (_) {}
+    // 原生：本地镜像（同步驱动）；Web：直连服务器
+    var rows = <Map<String, dynamic>>[];
+    if (kIsWeb) {
+      try {
+        final d = await Api.instance.get('/categories?type=client');
+        rows = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } catch (_) {
+        return;
+      }
+    } else {
+      rows = (await LocalDb.getAll('categories'))
+          .where((x) => '${x['type'] ?? ''}' == 'client')
+          .toList();
+    }
+    if (mounted) setState(() => _cats = rows);
   }
 
   List<Map<String, dynamic>> get _topCats =>
@@ -54,40 +65,50 @@ class _ClientsPageState extends State<ClientsPage> {
 
   Future<void> _load({String q = ''}) async {
     final searching = q.isNotEmpty;
-    // 搜索时不读本地、不写本地，走最新网络结果
-    if (!searching) {
-      // ① 本地数据库秒开（离线可见；即使为空也先展示空态，不再等网络转圈）
-      final local = await LocalDb.getAllByName('clients');
-      if (mounted) {
+    if (kIsWeb) {
+      // Web（无本地库）：普通加载本地秒开 + 网络刷新；搜索直连服务器
+      if (!searching) {
+        final local = await LocalDb.getAllByName('clients');
+        if (mounted) {
+          setState(() {
+            _clients = local;
+            _loading = false;
+          });
+        }
+      }
+      // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
+      try {
+        final d = await Api.instance
+            .get(searching ? '/clients?q=${Uri.encodeQueryComponent(q)}' : '/clients');
+        final rows = ((d['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+        // 本地已删除但尚未推送落地的店铺：过滤掉再展示/写库，防止"删了又出现"
+        var visible = rows;
+        if (!searching) {
+          final hideIds = await SyncService.pendingDeletedIds('client');
+          if (hideIds.isNotEmpty) {
+            visible = rows.where((r) => !hideIds.contains('${r['id']}')).toList();
+          }
+          await LocalDb.upsertList('clients', visible);
+        }
+        if (!mounted) return;
         setState(() {
-          _clients = local;
+          _clients = visible;
           _loading = false;
         });
+      } catch (_) {
+        // 离线：本地缓存已展示，错误已记日志，不再弹提示
+        if (!mounted || searching) return;
+        setState(() => _loading = false);
       }
+      return;
     }
-    // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
-    try {
-      final d = await Api.instance
-          .get(searching ? '/clients?q=${Uri.encodeQueryComponent(q)}' : '/clients');
-      final rows = ((d['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-      // 本地已删除但尚未推送落地的店铺：过滤掉再展示/写库，防止"删了又出现"
-      var visible = rows;
-      if (!searching) {
-        final hideIds = await SyncService.pendingDeletedIds('client');
-        if (hideIds.isNotEmpty) {
-          visible = rows.where((r) => !hideIds.contains('${r['id']}')).toList();
-        }
-        await LocalDb.upsertList('clients', visible);
-      }
-      if (!mounted) return;
+    // 原生：列表页刷新只读本地库（同步只由「我的」页/进应用自动同步驱动）；搜索也搜本地镜像
+    final local = await LocalDb.getAllByName('clients');
+    if (mounted) {
       setState(() {
-        _clients = visible;
+        _clients = searching ? local.where((x) => '${x['name'] ?? ''}'.contains(q)).toList() : local;
         _loading = false;
       });
-    } catch (_) {
-      // 离线：本地缓存已展示，错误已记日志，不再弹提示
-      if (!mounted || searching) return;
-      setState(() => _loading = false);
     }
   }
 

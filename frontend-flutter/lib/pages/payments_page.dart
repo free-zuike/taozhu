@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
@@ -17,6 +18,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _clients = [];
   List<Map<String, dynamic>> _payments = [];
+  /// 本地计算的各店应收（欠款）：Σ出货 − Σ收款（原生本地化用；Web 用服务端 debt 字段）
+  Map<String, double> _clientDebt = {};
   String? _clientId;
   double _selDebt = 0; // 当前选中店铺的应收（欠款）
   bool _waivedAuto = true; // 平账模式：true=自动（减免=应收-实收），false=手动输入减免
@@ -58,8 +61,33 @@ class _PaymentsPageState extends State<PaymentsPage> {
 
   Future<void> _load() async {
     // ① 本地数据库秒开（店铺目录 + 收款历史，离线可见；即使为空也先展示空态）
-    var localClients = await LocalDb.getAllByName('clients');
-    var localPays = await LocalDb.getAll('payments');
+    final localClients = await LocalDb.getAllByName('clients');
+    final localPays = await LocalDb.getAll('payments');
+    // 原生本地化：列表页刷新只读本地，同步只由「我的」页/进应用自动同步驱动
+    if (!kIsWeb) {
+      // 本地计算各店应收（欠款）：Σ出货总额 − Σ收款金额（与后端口径一致）
+      final s = <String, double>{};
+      final p = <String, double>{};
+      for (final x in await LocalDb.getAll('sales')) {
+        final id = '${x['client_id']}';
+        s[id] = (s[id] ?? 0) + ((x['total'] as num?)?.toDouble() ?? 0);
+      }
+      for (final x in await LocalDb.getAll('payments')) {
+        final id = '${x['client_id']}';
+        p[id] = (p[id] ?? 0) + ((x['amount'] as num?)?.toDouble() ?? 0);
+      }
+      _clientDebt = {
+        for (final id in {...s.keys, ...p.keys}) id: (s[id] ?? 0) - (p[id] ?? 0),
+      };
+      if (mounted) {
+        setState(() {
+          _clients = localClients;
+          _payments = localPays;
+          _loading = false;
+        });
+      }
+      return;
+    }
     if (mounted) {
       setState(() {
         _clients = localClients;
@@ -67,22 +95,22 @@ class _PaymentsPageState extends State<PaymentsPage> {
         _loading = false;
       });
     }
-    // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
+    // ② Web（无本地库）：直连服务器刷新（静默；失败保留本地展示）
     try {
       final results = await Future.wait([
         Api.instance.get('/clients'),
         Api.instance.get('/payments?limit=50'),
       ]);
-      localClients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-      localPays = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final netClients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final netPays = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
       await Future.wait([
-        LocalDb.upsertList('clients', localClients),
-        LocalDb.upsertList('payments', localPays),
+        LocalDb.upsertList('clients', netClients),
+        LocalDb.upsertList('payments', netPays),
       ]);
       if (!mounted) return;
       setState(() {
-        _clients = localClients;
-        _payments = localPays;
+        _clients = netClients;
+        _payments = netPays;
         _loading = false;
       });
     } catch (_) {
@@ -90,6 +118,13 @@ class _PaymentsPageState extends State<PaymentsPage> {
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  /// 店铺欠款：服务端 debt 字段优先（Web），本地镜像缺失时用本地汇总兜底（原生）
+  double _debtOf(Map<String, dynamic> c) {
+    final v = (c['debt'] as num?)?.toDouble();
+    if (v != null) return v;
+    return _clientDebt['${c['id']}'] ?? 0;
   }
 
   /// 自动平账减免 = 应收 − 实收（非负；差几百几十直接抹平结账）
@@ -265,12 +300,12 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             items: _clients
                                 .map((c) => DropdownMenuItem(
                                     value: c['id'] as String,
-                                    child: Text('${c['name']}（欠 ¥${((c['debt'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}）')))
+                                    child: Text('${c['name']}（欠 ¥${_debtOf(c).toStringAsFixed(2)}）')))
                                 .toList(),
                             onChanged: (v) => setState(() {
                               _clientId = v;
                               final c = _clients.where((x) => x['id'] == v).firstOrNull;
-                              _selDebt = ((c?['debt'] as num?)?.toDouble() ?? 0);
+                              _selDebt = c == null ? 0 : _debtOf(c);
                             }),
                           ),
                           if (_clientId != null)

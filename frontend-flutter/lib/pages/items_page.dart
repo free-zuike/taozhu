@@ -44,41 +44,51 @@ class _ItemsPageState extends State<ItemsPage> {
 
   Future<void> _load({String q = ''}) async {
     final searching = q.isNotEmpty;
-    // 搜索时不读本地、不写本地，走最新网络结果
-    if (!searching) {
-      // ① 本地数据库秒开（离线可见；即使为空也先展示空态，不再等网络转圈）
-      final local = await LocalDb.getAllByName('items');
-      if (mounted) {
+    if (kIsWeb) {
+      // Web（无本地库）：普通加载本地秒开 + 网络刷新；搜索直连服务器
+      if (!searching) {
+        final local = await LocalDb.getAllByName('items');
+        if (mounted) {
+          setState(() {
+            _items = local;
+            _loading = false;
+          });
+        }
+      }
+      // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
+      try {
+        final d = await Api.instance
+            .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
+        final rows = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        // 本地已删除但尚未推送落地的商品：过滤掉再展示/写库，防止"删了又出现"
+        //（推送成功后的 pull 会以 deleted_at 变化正式删除本地行）
+        var visible = rows;
+        if (!searching) {
+          final hideIds = await SyncService.pendingDeletedIds('item');
+          if (hideIds.isNotEmpty) {
+            visible = rows.where((r) => !hideIds.contains('${r['id']}')).toList();
+          }
+          await LocalDb.upsertList('items', visible);
+        }
+        if (!mounted) return;
         setState(() {
-          _items = local;
+          _items = visible;
           _loading = false;
         });
+      } catch (_) {
+        // 离线：本地缓存已展示，错误已记日志，不再弹提示
+        if (!mounted || searching) return;
+        setState(() => _loading = false);
       }
+      return;
     }
-    // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
-    try {
-      final d = await Api.instance
-          .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
-      final rows = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-      // 本地已删除但尚未推送落地的商品：过滤掉再展示/写库，防止"删了又出现"
-      //（推送成功后的 pull 会以 deleted_at 变化正式删除本地行）
-      var visible = rows;
-      if (!searching) {
-        final hideIds = await SyncService.pendingDeletedIds('item');
-        if (hideIds.isNotEmpty) {
-          visible = rows.where((r) => !hideIds.contains('${r['id']}')).toList();
-        }
-        await LocalDb.upsertList('items', visible);
-      }
-      if (!mounted) return;
+    // 原生：列表页刷新只读本地库（同步只由「我的」页/进应用自动同步驱动）；搜索也搜本地镜像
+    final local = await LocalDb.getAllByName('items');
+    if (mounted) {
       setState(() {
-        _items = visible;
+        _items = searching ? local.where((x) => '${x['name'] ?? ''}'.contains(q)).toList() : local;
         _loading = false;
       });
-    } catch (_) {
-      // 离线：本地缓存已展示，错误已记日志，不再弹提示
-      if (!mounted || searching) return;
-      setState(() => _loading = false);
     }
   }
 

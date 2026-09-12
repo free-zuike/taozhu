@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
+import '../widgets/user_avatar.dart';
 import 'router.dart';
 
-/// 账号管理（仅老板，后端 adminOnly；店员打开会收到 403 提示）
+/// 账号管理（仅老板，后端 adminOnly；店员打开会收到 403 提示）。
+/// embed=true 时只渲染内容（供「成员」页 Tab 嵌入，顶部自带新增按钮行）。
 class UsersPage extends StatefulWidget {
-  const UsersPage({super.key});
+  const UsersPage({super.key, this.embed = false});
+  final bool embed;
   @override
   State<UsersPage> createState() => _UsersPageState();
 }
@@ -135,6 +138,70 @@ class _UsersPageState extends State<UsersPage> {
   @override
   Widget build(BuildContext context) {
     final c = _c;
+    final body = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : RefreshIndicator(
+            onRefresh: _load,
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                for (final u in _users)
+                  Card(
+                    child: ListTile(
+                      leading: UserAvatar(
+                        size: 36,
+                        name: '${u['display_name'] ?? u['username']}',
+                        hasAvatar: false,
+                      ),
+                      title: Text('${u['display_name'] ?? u['username']}'),
+                      subtitle: Text('${'${u['role']}' == 'admin' ? '老板' : '店员'} · 登录 ${u['username']}'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: Icon(Icons.edit_outlined, size: 20, color: c.primary),
+                            onPressed: () => _addOrEdit(u),
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.delete_outline, size: 20, color: c.danger),
+                            onPressed: () => _delete(u),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_users.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Center(child: Text('暂无账号', style: TextStyle(color: c.textSub))),
+                  ),
+              ],
+            ),
+          );
+    if (widget.embed) {
+      // 「成员」页 Tab 嵌入：顶部提示 + 新增按钮（原 AppBar 操作挪到这里）
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('成员管理（仅老板可操作）',
+                      style: TextStyle(fontSize: 13, color: c.textSub)),
+                ),
+                IconButton(
+                  tooltip: '新增成员',
+                  icon: Icon(Icons.add, color: c.primary),
+                  onPressed: () => _addOrEdit(),
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: body),
+        ],
+      );
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('账号管理'),
@@ -142,47 +209,7 @@ class _UsersPageState extends State<UsersPage> {
           IconButton(onPressed: () => _addOrEdit(), icon: const Icon(Icons.add)),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  for (final u in _users)
-                    Card(
-                      child: ListTile(
-                        leading: Icon(
-                          '${u['role']}' == 'admin' ? Icons.verified_user : Icons.person_outline,
-                          color: '${u['role']}' == 'admin'
-                              ? c.danger
-                              : c.primary,
-                        ),
-                        title: Text('${u['display_name'] ?? u['username']}'),
-                        subtitle: Text('${'${u['role']}' == 'admin' ? '老板' : '店员'} · 登录 ${u['username']}'),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: Icon(Icons.edit_outlined, size: 20, color: c.primary),
-                              onPressed: () => _addOrEdit(u),
-                            ),
-                            IconButton(
-                              icon: Icon(Icons.delete_outline, size: 20, color: c.danger),
-                              onPressed: () => _delete(u),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  if (_users.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: Center(child: Text('暂无账号', style: TextStyle(color: c.textSub))),
-                    ),
-                ],
-              ),
-            ),
+      body: body,
     );
   }
 }

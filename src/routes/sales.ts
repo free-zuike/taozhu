@@ -5,6 +5,7 @@ import { adminOnly, authMiddleware } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
 import { stockDelta } from '../lib/stock';
 import { buildPayload, recordChange } from '../lib/sync';
+import { deleteEntityAttachments } from '../lib/image-key';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -155,6 +156,41 @@ salesRouter.get('/', async (c) => {
   });
 });
 
+// POST /sales/items/date — 批量改明细行日期（出货流水「日期栏批量编辑」用；不改库存/金额/店铺）
+salesRouter.post('/items/date', async (c) => {
+  const body = await c.req.json().catch(() => null) as { updates?: Array<{ item_id?: string; happened_at?: string }> } | null;
+  const updates = (body?.updates ?? []).filter((u) => u && u.item_id && u.happened_at).slice(0, 500);
+  if (updates.length === 0) return c.json({ error: '请提供明细行 id 与目标日期' }, 400);
+  for (const u of updates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(u.happened_at!)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
+  }
+  const ids = updates.map((u) => u.item_id!);
+  const rows = await c.env.DB.prepare(
+    `SELECT id, sale_id FROM sale_items WHERE id IN (${ids.map(() => '?').join(',')})`,
+  ).bind(...ids).all<{ id: string; sale_id: string }>();
+  if (rows.results.length === 0) return c.json({ error: '明细行不存在' }, 404);
+  const byId = new Map(rows.results.map((r) => [r.id, r.sale_id]));
+  const batch: D1PreparedStatement[] = [];
+  for (const u of updates) {
+    const saleId = byId.get(u.item_id!);
+    if (saleId) batch.push(c.env.DB.prepare('UPDATE sale_items SET happened_at = ? WHERE id = ?').bind(u.happened_at, u.item_id));
+  }
+  await c.env.DB.batch(batch);
+  // 单据日期自动取明细最大日期（与记单页 orderDate=最大行日期口径一致）
+  const saleIds = [...new Set(rows.results.map((r) => r.sale_id))];
+  const dateBatch: D1PreparedStatement[] = saleIds.map((sid) =>
+    c.env.DB.prepare(
+      `UPDATE sales SET happened_at = (
+         SELECT MAX(COALESCE(happened_at, '')) FROM sale_items WHERE sale_id = ?
+       ) WHERE id = ? AND EXISTS (SELECT 1 FROM sale_items WHERE sale_id = ?)`,
+    ).bind(sid, sid, sid));
+  await c.env.DB.batch(dateBatch);
+  for (const sid of saleIds) {
+    await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: sid, payload: await buildPayload(c.env.DB, 'sale', sid), updated_by_username: c.get('user').username });
+  }
+  return c.json({ updated: batch.length });
+});
+
 // GET /sales/:id — 单张出货单详情
 salesRouter.get('/:id', async (c) => {
   const id = c.req.param('id');
@@ -231,8 +267,9 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       const amount = Math.round(qty * effectiveSale * 100) / 100;
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(randomId(), id, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount),
+          'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).bind(randomId(), id, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
+          item.happened_at?.trim() || happenedAt),
       );
       // 按新明细扣减库存
       batch.push(stockDelta(c.env.DB, price.item_id, price.unit, -qty));
@@ -246,6 +283,29 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
   return c.json({ id, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100 });
 });
 
+// DELETE /sales/items/:id — 删除单条出货明细行（出货流水行级删除；回滚该行库存，重算单据日期）
+salesRouter.delete('/items/:id', async (c) => {
+  const id = c.req.param('id');
+  const row = await c.env.DB.prepare(
+    'SELECT id, sale_id, item_id, unit, quantity FROM sale_items WHERE id = ?',
+  ).bind(id).first<{ id: string; sale_id: string; item_id: string; unit: string; quantity: number }>();
+  if (!row) return c.json({ error: '明细行不存在' }, 404);
+  const saleId = row.sale_id;
+  const batch: D1PreparedStatement[] = [
+    stockDelta(c.env.DB, row.item_id, row.unit, row.quantity), // 出货扣减恢复
+    c.env.DB.prepare('DELETE FROM sale_items WHERE id = ?').bind(id),
+  ];
+  await c.env.DB.batch(batch);
+  // 单据日期自动取剩余明细最大日期（空明细则保持原样）
+  await c.env.DB.prepare(
+    `UPDATE sales SET happened_at = (
+       SELECT MAX(COALESCE(happened_at, '')) FROM sale_items WHERE sale_id = ?
+     ) WHERE id = ? AND EXISTS (SELECT 1 FROM sale_items WHERE sale_id = ?)`,
+  ).bind(saleId, saleId, saleId).run();
+  await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: c.get('user').username });
+  return c.json({ ok: true });
+});
+
 // DELETE /sales/:id — 删除出货单（回滚库存 + 级联删明细，仅老板）
 salesRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
@@ -257,5 +317,9 @@ salesRouter.delete('/:id', adminOnly(), async (c) => {
   batch.push(c.env.DB.prepare('DELETE FROM sales WHERE id = ?').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
+  // 删除交易附带的凭证图片（孤儿文件清理，best-effort 不阻塞删除）
+  try {
+    await deleteEntityAttachments(c.env, 'sale', id);
+  } catch (_) {}
   return c.body(null, 204);
 });

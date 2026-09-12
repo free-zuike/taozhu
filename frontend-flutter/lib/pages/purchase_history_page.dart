@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
@@ -59,25 +60,28 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         _loading = false;
       });
     }
-    // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
-    try {
-      final d = await Api.instance.get('/purchases?${_dateQuery()}&limit=500');
-      if (!mounted) return;
-      final rows = ((d['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
-      await LocalDb.upsertList('purchases', rows);
-      if (!mounted) return;
-      setState(() {
-        _purchases = _filterByRange(rows);
-        _loading = false;
-        _offline = false;
-      });
-    } catch (_) {
-      // 离线：本地缓存已展示，错误已记日志，不再弹提示
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _offline = local.isEmpty;
-      });
+    // 原生本地化：列表页刷新只读本地，同步只由「我的」页/进应用自动同步驱动。
+    if (kIsWeb) {
+      // ② Web（无本地库）：直连服务器刷新（静默；失败保留本地展示）
+      try {
+        final d = await Api.instance.get('/purchases?${_dateQuery()}&limit=500');
+        if (!mounted) return;
+        final rows = ((d['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
+        await LocalDb.upsertList('purchases', rows);
+        if (!mounted) return;
+        setState(() {
+          _purchases = _filterByRange(rows);
+          _loading = false;
+          _offline = false;
+        });
+      } catch (_) {
+        // 离线：本地缓存已展示，错误已记日志，不再弹提示
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _offline = local.isEmpty;
+        });
+      }
     }
   }
 

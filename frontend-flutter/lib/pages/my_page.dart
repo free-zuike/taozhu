@@ -18,13 +18,13 @@ import 'clients_page.dart';
 import 'payments_page.dart';
 import 'statement_page.dart';
 import 'sync_panel_page.dart';
-import 'users_page.dart';
 import 'stocks_page.dart';
 import 'cleanup_page.dart';
 import 'login_page.dart';
-import 'account_settings_page.dart';
+import 'members_page.dart';
 import 'logs_page.dart';
 import 'backup_page.dart';
+import '../widgets/user_avatar.dart';
 
 class MyPage extends StatefulWidget {
   const MyPage({super.key});
@@ -653,14 +653,13 @@ class _MyPageState extends State<MyPage> {
         children: [
           _userCard(),
           const SizedBox(height: 18),
-          // 账号与同步（账号卡下方、经营上方）：同步状态 + 账号设置
+          // 账号与同步（账号卡下方、经营上方）：同步状态 + 成员（账号设置+账号管理，移到同步下方）
           _card([
             _item(Icons.sync_alt, c.primary, '同步状态', _syncSubtitle(),
                 () => goPage(context, const SyncPanelPage())),
-            _item(Icons.manage_accounts_outlined, c.primary, '账号设置',
-                '头像、用户名、密码、两步验证、服务器地址',
+            _item(Icons.people_outline, c.primary, '成员', '账号设置 · 店员/老板账号',
                 () => Navigator.of(context)
-                    .push(MaterialPageRoute(builder: (_) => const AccountSettingsPage()))
+                    .push(MaterialPageRoute(builder: (_) => const MembersPage()))
                     .then((_) => _loadProfile())),
           ]),
           const SizedBox(height: 18),
@@ -690,9 +689,6 @@ class _MyPageState extends State<MyPage> {
           const SizedBox(height: 18),
           _groupTitle('系统'),
           _card([
-            if (_role != 'staff')
-              _item(Icons.people_outline, c.primary, '账号管理', '店员/老板账号（仅老板可操作）',
-                  () => goPage(context, const UsersPage())),
             if (_role != 'staff')
               _item(Icons.backup_outlined, c.primary, '数据备份', '导出全库存档 / 从备份合并恢复',
                   () => goPage(context, const BackupPage())),
@@ -780,29 +776,19 @@ class _MyPageState extends State<MyPage> {
           Container(
             width: 52,
             height: 52,
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
               color: c.primary.withOpacity(0.12),
               shape: BoxShape.circle,
             ),
-            clipBehavior: Clip.antiAlias,
-            child: _avatarLocalPath.isNotEmpty
-                ? Image.file(
-                    File(_avatarLocalPath),
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: 30, color: c.primary),
-                  )
-                : _avatar && _avatarUrl.isNotEmpty
-                    ? Image.network(
-                        _avatarUrl,
-                        fit: BoxFit.cover,
-                        headers: _avatarToken.isEmpty ? null : {'Authorization': 'Bearer $_avatarToken'},
-                        // 加载中保留占位图标，避免头像"短暂消失"
-                        loadingBuilder: (_, child, progress) => progress == null
-                            ? child
-                            : Icon(Icons.person_outline, size: 30, color: c.primary),
-                        errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: 30, color: c.primary),
-                      )
-                    : Icon(Icons.person_outline, size: 30, color: c.primary),
+            child: UserAvatar(
+              size: 52,
+              name: _username,
+              localPath: _avatarLocalPath.isEmpty ? null : _avatarLocalPath,
+              hasAvatar: _avatar && _avatarUrl.isNotEmpty,
+              url: _avatarUrl,
+              token: _avatarToken,
+            ),
           ),
           const SizedBox(width: 14),
           Expanded(

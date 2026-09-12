@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,12 +7,15 @@ import '../api.dart';
 import '../avatar_cache.dart';
 import '../log.dart';
 import '../theme.dart';
+import '../widgets/user_avatar.dart';
 import 'router.dart';
 
 /// 账号设置（自助）：头像 / 用户名 / 密码 / 两步验证（TOTP）/ 服务器地址。
 /// 老板与店员都能改自己的资料；服务器地址仅 App/桌面端可改（Web 自动用访问域名）。
+/// embed=true 时只渲染内容（供「成员」页 Tab 嵌入，不带自己的 AppBar）。
 class AccountSettingsPage extends StatefulWidget {
-  const AccountSettingsPage({super.key});
+  const AccountSettingsPage({super.key, this.embed = false});
+  final bool embed;
   @override
   State<AccountSettingsPage> createState() => _AccountSettingsPageState();
 }
@@ -342,36 +344,35 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
-    return Scaffold(
-      appBar: AppBar(title: const Text('账号设置')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _headerCard(c),
-                const SizedBox(height: 18),
-                _groupTitle(c, '账号'),
-                _card(c, [
-                  _tile(c, Icons.alternate_email_outlined, '登录账号', _account.isEmpty ? '—' : _account, null),
-                  _tile(c, Icons.badge_outlined, '用户名', _username.isEmpty ? '—' : _username, _changeUsername),
-                  _tile(c, Icons.lock_reset_outlined, '修改密码', '需验证当前密码', _changePassword),
-                  _tile(c,
-                      _totpOn ? Icons.verified_user_outlined : Icons.security_outlined,
-                      '两步验证', _totpOn ? '已开启（登录需验证码）' : '未开启（建议开启）', _toggleTotp,
-                      warn: _totpOn),
-                ]),
-                const SizedBox(height: 18),
-                _groupTitle(c, '服务器'),
-                _card(c, [
-                  _tile(c, Icons.dns_outlined, '服务器地址',
-                      kIsWeb ? Uri.base.origin : (_base.isEmpty ? '未设置' : _base),
-                      _editBase),
-                ]),
-                const SizedBox(height: 24),
-              ],
-            ),
-    );
+    final body = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              _headerCard(c),
+              const SizedBox(height: 18),
+              _groupTitle(c, '账号'),
+              _card(c, [
+                _tile(c, Icons.alternate_email_outlined, '登录账号', _account.isEmpty ? '—' : _account, null),
+                _tile(c, Icons.badge_outlined, '用户名', _username.isEmpty ? '—' : _username, _changeUsername),
+                _tile(c, Icons.lock_reset_outlined, '修改密码', '需验证当前密码', _changePassword),
+                _tile(c,
+                    _totpOn ? Icons.verified_user_outlined : Icons.security_outlined,
+                    '两步验证', _totpOn ? '已开启（登录需验证码）' : '未开启（建议开启）', _toggleTotp,
+                    warn: _totpOn),
+              ]),
+              const SizedBox(height: 18),
+              _groupTitle(c, '服务器'),
+              _card(c, [
+                _tile(c, Icons.dns_outlined, '服务器地址',
+                    kIsWeb ? Uri.base.origin : (_base.isEmpty ? '未设置' : _base),
+                    _editBase),
+              ]),
+              const SizedBox(height: 24),
+            ],
+          );
+    if (widget.embed) return body; // 「成员」页 Tab 嵌入（无 AppBar）
+    return Scaffold(appBar: AppBar(title: const Text('账号设置')), body: body);
   }
 
   Widget _headerCard(TaozhuColors c) {
@@ -407,34 +408,13 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   }
 
   Widget _avatarWidget(TaozhuColors c, double size) {
-    final local = _avatarLocalPath.isEmpty ? null : File(_avatarLocalPath);
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: c.primary.withOpacity(0.12),
-        shape: BoxShape.circle,
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: local != null
-          ? Image.file(
-              local,
-              fit: BoxFit.cover,
-              // 本地副本异常时回退占位，避免空白
-              errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
-            )
-          : _avatar && _avatarUrl.isNotEmpty
-              ? Image.network(
-                  _avatarUrl,
-                  fit: BoxFit.cover,
-                  headers: _avatarToken.isEmpty ? null : {'Authorization': 'Bearer $_avatarToken'},
-                  // 加载中保留占位图标，避免头像"短暂消失"
-                  loadingBuilder: (_, child, progress) => progress == null
-                      ? child
-                      : Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
-                  errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
-                )
-              : Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
+    return UserAvatar(
+      size: size,
+      name: _username,
+      localPath: _avatarLocalPath.isEmpty ? null : _avatarLocalPath,
+      hasAvatar: _avatar && _avatarUrl.isNotEmpty,
+      url: _avatarUrl,
+      token: _avatarToken,
     );
   }
 

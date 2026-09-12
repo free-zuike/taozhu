@@ -5,6 +5,7 @@ import { adminOnly, authMiddleware } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
 import { stockDelta } from '../lib/stock';
 import { buildPayload, recordChange } from '../lib/sync';
+import { deleteEntityAttachments } from '../lib/image-key';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -193,8 +194,9 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       const amount = Math.round(qty * effective * 100) / 100;
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ).bind(randomId(), id, price.item_id, price.unit, qty, effective, amount),
+          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ).bind(randomId(), id, price.item_id, price.unit, qty, effective, amount,
+          item.happened_at?.trim() || happenedAt),
       );
       // 按新明细增加库存
       batch.push(stockDelta(c.env.DB, price.item_id, price.unit, qty));
@@ -219,5 +221,9 @@ purchasesRouter.delete('/:id', adminOnly(), async (c) => {
   batch.push(c.env.DB.prepare('DELETE FROM purchases WHERE id = ?').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
+  // 删除进货单附带的凭证图片（孤儿文件清理，best-effort 不阻塞删除）
+  try {
+    await deleteEntityAttachments(c.env, 'purchase', id);
+  } catch (_) {}
   return c.body(null, 204);
 });

@@ -173,6 +173,89 @@ describe('记单与欠款联动（核心业务）', () => {
   });
 });
 
+describe('出货明细行级操作（改期 / 单行删除，交易页流水行用）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  let clientId: string;
+  let priceId: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+    await call(env, 'POST', '/api/v1/items', token, { name: '白菜', prices: [{ unit: '斤', purchase_price: 2.0, sale_price: 2.5 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string; prices: Array<{ id: string }> }> };
+    priceId = items.items[0].prices[0].id;
+    await call(env, 'POST', '/api/v1/clients', token, { name: '品味轩' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    clientId = clients.clients[0].id;
+  });
+
+  it('行级改期：只改目标行日期，单据日期随最大行日期', async () => {
+    const sale = (await (await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clientId, happened_at: '2026-09-06',
+      items: [
+        { price_id: priceId, quantity: 10, happened_at: '2026-09-05' },
+        { price_id: priceId, quantity: 20, happened_at: '2026-09-06' },
+      ],
+    })).json()) as { id: string };
+    const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sales: Array<{ id: string; happened_at: string; items: Array<{ id: string; happened_at: string | null }> }>;
+    };
+    const detail = list.sales.find((s) => s.id === sale.id)!;
+    expect(detail.happened_at).toBe('2026-09-06');
+    const day5 = detail.items.find((i) => i.happened_at === '2026-09-05')!;
+    // 把 09-05 那一行改到 09-04 → 单据日期仍为 09-06（最大行日期）
+    const move = await call(env, 'POST', '/api/v1/sales/items/date', token, {
+      updates: [{ item_id: day5.id, happened_at: '2026-09-04' }],
+    });
+    expect(move.status).toBe(200);
+    const after = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sales: Array<{ id: string; happened_at: string; items: Array<{ id: string; happened_at: string | null }> }>;
+    };
+    const d2 = after.sales.find((s) => s.id === sale.id)!;
+    expect(d2.happened_at).toBe('2026-09-06');
+    expect(d2.items.map((i) => i.happened_at).sort()).toEqual(['2026-09-04', '2026-09-06']);
+    // 全量改到同一天：单据日期跟随
+    const moveAll = await call(env, 'POST', '/api/v1/sales/items/date', token, {
+      updates: d2.items.map((i) => ({ item_id: i.id, happened_at: '2026-09-10' })),
+    });
+    expect(moveAll.status).toBe(200);
+    const afterAll = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sales: Array<{ id: string; happened_at: string; items: Array<{ happened_at: string | null }> }>;
+    };
+    const d3 = afterAll.sales.find((s) => s.id === sale.id)!;
+    expect(d3.happened_at).toBe('2026-09-10');
+    // 空 updates / 坏日期 400
+    expect((await call(env, 'POST', '/api/v1/sales/items/date', token, { updates: [] })).status).toBe(400);
+    expect((await call(env, 'POST', '/api/v1/sales/items/date', token, { updates: [{ item_id: day5.id, happened_at: '09-06' }] })).status).toBe(400);
+  });
+
+  it('单行删除：只删该行，总额联动；不存在的行 404', async () => {
+    const sale = (await (await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clientId, happened_at: '2026-09-06',
+      items: [
+        { price_id: priceId, quantity: 10, happened_at: '2026-09-05' },
+        { price_id: priceId, quantity: 20, happened_at: '2026-09-06' },
+      ],
+    })).json()) as { id: string };
+    const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sales: Array<{ id: string; items: Array<{ id: string; quantity: number }>; total: number }>;
+    };
+    const detail = list.sales.find((s) => s.id === sale.id)!;
+    const first = detail.items[0];
+    const del = await call(env, 'DELETE', `/api/v1/sales/items/${first.id}`, token);
+    expect(del.status).toBe(200);
+    const after = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sales: Array<{ id: string; items: Array<{ quantity: number }>; total: number }>;
+    };
+    const d2 = after.sales.find((s) => s.id === sale.id)!;
+    expect(d2.items).toHaveLength(1); // 只删第一行，第二行保留
+    expect(d2.items[0].quantity).toBe(20);
+    expect(d2.total).toBe(50); // 20 × 2.5
+    expect((await call(env, 'DELETE', '/api/v1/sales/items/nope', token)).status).toBe(404);
+  });
+});
+
 describe('列表分页（limit/offset + total）', () => {
   let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
   let token: string;
@@ -235,7 +318,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string };
-    expect(d.current).toBe('0.17.25.0');
+    expect(d.current).toBe('0.17.26.0');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');

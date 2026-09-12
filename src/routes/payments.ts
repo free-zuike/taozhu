@@ -4,6 +4,7 @@ import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
 import { buildPayload, recordChange } from '../lib/sync';
+import { deleteEntityAttachments } from '../lib/image-key';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -94,5 +95,9 @@ paymentsRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM payments WHERE id = ?').bind(id).run();
   await recordChange(c.env.DB, { entity_type: 'payment', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
+  // 撤销收款时一并清理其附件文件（孤儿文件清理，best-effort 不阻塞）
+  try {
+    await deleteEntityAttachments(c.env, 'payment', id);
+  } catch (_) {}
   return c.body(null, 204);
 });

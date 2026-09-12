@@ -3,6 +3,7 @@ import 'package:excel/excel.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../log.dart';
@@ -56,6 +57,8 @@ class _StatementPageState extends State<StatementPage> {
   double _debtEnd = 0;
   bool _loading = false;
   bool _loaded = false;
+  /// Excel 导出排版配置（前端自定义，本机持久化）
+  _XlsCfg _xls = _XlsCfg();
 
   static String _fmt(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -65,6 +68,7 @@ class _StatementPageState extends State<StatementPage> {
     super.initState();
     _loadClients();
     _applyPeriod('month');
+    _loadXlsCfg();
   }
 
   @override
@@ -193,38 +197,121 @@ class _StatementPageState extends State<StatementPage> {
     return buf.toString();
   }
 
-/// 导出 Excel：先选格式（完整明细 / 按日汇总打印版）→ 生成 → 预览 → 确认导出
+/// 导出 Excel：排版前端自定义（标题/表头信息行/明细粒度/明细列，本机记忆）
   Future<void> _exportXls() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
     final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
-    final format = await showDialog<String>(
+    final cfg = _xls.copy();
+    final titleCtrl = TextEditingController(text: cfg.title);
+    final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('导出格式'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, 'detail'),
-            child: const Text('完整明细（逐行出货 / 收款）', style: TextStyle(fontSize: 15)),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('导出排版设置'),
+          scrollable: true,
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                decoration: const InputDecoration(labelText: '标题（Excel 首行）'),
+              ),
+              const SizedBox(height: 4),
+              const Text('表头信息行',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              SwitchListTile(
+                dense: true, contentPadding: EdgeInsets.zero,
+                title: const Text('客户', style: TextStyle(fontSize: 14)),
+                value: cfg.headClient, onChanged: (v) => setDlg(() => cfg.headClient = v),
+              ),
+              SwitchListTile(
+                dense: true, contentPadding: EdgeInsets.zero,
+                title: const Text('账期', style: TextStyle(fontSize: 14)),
+                value: cfg.headPeriod, onChanged: (v) => setDlg(() => cfg.headPeriod = v),
+              ),
+              SwitchListTile(
+                dense: true, contentPadding: EdgeInsets.zero,
+                title: const Text('出货合计', style: TextStyle(fontSize: 14)),
+                value: cfg.headSaleTotal, onChanged: (v) => setDlg(() => cfg.headSaleTotal = v),
+              ),
+              SwitchListTile(
+                dense: true, contentPadding: EdgeInsets.zero,
+                title: const Text('收款合计', style: TextStyle(fontSize: 14)),
+                value: cfg.headPayTotal, onChanged: (v) => setDlg(() => cfg.headPayTotal = v),
+              ),
+              SwitchListTile(
+                dense: true, contentPadding: EdgeInsets.zero,
+                title: const Text('期末欠款', style: TextStyle(fontSize: 14)),
+                value: cfg.headDebt, onChanged: (v) => setDlg(() => cfg.headDebt = v),
+              ),
+              const SizedBox(height: 4),
+              const Text('明细粒度',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'detail', label: Text('逐行明细')),
+                  ButtonSegment(value: 'daily', label: Text('按日汇总')),
+                  ButtonSegment(value: 'item', label: Text('按商品汇总')),
+                ],
+                selected: {cfg.mode},
+                onSelectionChanged: (s) => setDlg(() => cfg.mode = s.first),
+              ),
+              if (cfg.mode != 'daily') ...[
+                const SizedBox(height: 4),
+                const Text('出货明细列',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                SwitchListTile(
+                  dense: true, contentPadding: EdgeInsets.zero,
+                  title: const Text('日期', style: TextStyle(fontSize: 14)),
+                  value: cfg.colDate, onChanged: (v) => setDlg(() => cfg.colDate = v),
+                ),
+                SwitchListTile(
+                  dense: true, contentPadding: EdgeInsets.zero,
+                  title: const Text('商品', style: TextStyle(fontSize: 14)),
+                  value: cfg.colItem, onChanged: (v) => setDlg(() => cfg.colItem = v),
+                ),
+                SwitchListTile(
+                  dense: true, contentPadding: EdgeInsets.zero,
+                  title: const Text('数量', style: TextStyle(fontSize: 14)),
+                  value: cfg.colQty, onChanged: (v) => setDlg(() => cfg.colQty = v),
+                ),
+                SwitchListTile(
+                  dense: true, contentPadding: EdgeInsets.zero,
+                  title: const Text('单价', style: TextStyle(fontSize: 14)),
+                  value: cfg.colPrice, onChanged: (v) => setDlg(() => cfg.colPrice = v),
+                ),
+                SwitchListTile(
+                  dense: true, contentPadding: EdgeInsets.zero,
+                  title: const Text('金额', style: TextStyle(fontSize: 14)),
+                  value: cfg.colAmount, onChanged: (v) => setDlg(() => cfg.colAmount = v),
+                ),
+              ],
+            ],
           ),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, 'daily'),
-            child: const Text('按日汇总（打印版：每天销售总额）', style: TextStyle(fontSize: 15)),
-          ),
-        ],
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('导出')),
+          ],
+        ),
       ),
     );
-    if (format == null || !mounted) return;
-    final excel = format == 'daily' ? _buildDailyExcel(clientName) : _buildDetailExcel(clientName);
+    if (ok != true || !mounted) return;
+    cfg.title = titleCtrl.text.trim().isEmpty ? '对账单' : titleCtrl.text.trim();
+    _xls = cfg;
+    _saveXlsCfg(cfg);
+    final excel = _buildExcel(cfg, clientName);
     final bytes = excel.encode();
     if (bytes == null) {
       toast(context, '导出失败，请重试');
       return;
     }
     // 预览确认
-    final preview = _previewText(format == 'daily', clientName);
+    final preview = _previewText(cfg.mode, clientName);
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -239,49 +326,99 @@ class _StatementPageState extends State<StatementPage> {
       ),
     );
     if (go != true) return;
-    final name = '陶朱对账单_${clientName}_${_fromCtrl.text.trim()}_${_toCtrl.text.trim()}.xlsx';
+    // 文件名 = 店铺-开始日期-结束日期（用户指定格式；saveBytes 已保证 App 端文件名不变形）
+    final name = '$clientName-${_fromCtrl.text.trim()}-${_toCtrl.text.trim()}.xlsx';
     await saveBytes(
         Uint8List.fromList(bytes), name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '陶朱对账单');
     if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
   }
 
-  /// 完整明细版 Excel
-  Excel _buildDetailExcel(String clientName) {
+  /// 按排版配置生成 Excel：标题 + 可选表头信息行 + 明细（三种粒度）
+  Excel _buildExcel(_XlsCfg cfg, String clientName) {
     final excel = Excel.createExcel();
     final sheet = excel['对账单'];
-    sheet.setColumnWidth(0, 18);
+    sheet.setColumnWidth(0, 14);
     sheet.setColumnWidth(1, 32);
     sheet.setColumnWidth(2, 14);
     sheet.setColumnWidth(3, 14);
-    sheet.appendRow([TextCellValue('陶朱对账单')]);
-    sheet.appendRow([TextCellValue('客户'), TextCellValue(clientName)]);
-    sheet.appendRow([TextCellValue('账期'), TextCellValue('${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}')]);
-    sheet.appendRow([TextCellValue('出货合计'), TextCellValue('¥${_saleTotal.toStringAsFixed(2)}（${_sales.length} 笔）')]);
-    sheet.appendRow([TextCellValue('收款合计'), TextCellValue('¥${_payTotal.toStringAsFixed(2)}（${_payments.length} 笔）')]);
-    sheet.appendRow([TextCellValue('期末欠款'), TextCellValue('¥${_debtEnd.toStringAsFixed(2)}')]);
+    sheet.setColumnWidth(4, 14);
+    sheet.appendRow([TextCellValue(cfg.title)]);
+    if (cfg.headClient) sheet.appendRow([TextCellValue('客户'), TextCellValue(clientName)]);
+    if (cfg.headPeriod) {
+      sheet.appendRow([
+        TextCellValue('账期'),
+        TextCellValue('${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}'),
+      ]);
+    }
+    if (cfg.headSaleTotal) {
+      sheet.appendRow([
+        TextCellValue('出货合计'),
+        TextCellValue('¥${_saleTotal.toStringAsFixed(2)}（${_sales.length} 笔）'),
+      ]);
+    }
+    if (cfg.headPayTotal) {
+      sheet.appendRow([
+        TextCellValue('收款合计'),
+        TextCellValue('¥${_payTotal.toStringAsFixed(2)}（${_payments.length} 笔）'),
+      ]);
+    }
+    if (cfg.headDebt) {
+      sheet.appendRow([TextCellValue('期末欠款'), TextCellValue('¥${_debtEnd.toStringAsFixed(2)}')]);
+    }
     sheet.appendRow([TextCellValue('')]);
-    sheet.appendRow([TextCellValue('日期'), TextCellValue('出货明细'), TextCellValue('数量'), TextCellValue('金额')]);
+    switch (cfg.mode) {
+      case 'daily':
+        _sheetDaily(sheet, cfg);
+        break;
+      case 'item':
+        _sheetItems(sheet, cfg);
+        break;
+      default:
+        _sheetDetail(sheet, cfg);
+    }
+    return excel;
+  }
+
+  /// 出货明细列（按配置勾选）
+  List<String> _detailCols(_XlsCfg cfg) => [
+        if (cfg.colDate) '日期',
+        if (cfg.colItem) '商品',
+        if (cfg.colQty) '数量',
+        if (cfg.colPrice) '单价',
+        if (cfg.colAmount) '金额',
+      ];
+
+  /// 逐行明细：出货按明细行（行日期独立，缺省回退单据日期）+ 收款明细（固定列）
+  void _sheetDetail(Sheet sheet, _XlsCfg cfg) {
+    sheet.appendRow([for (final h in _detailCols(cfg)) TextCellValue(h)]);
     for (final s in _sales) {
+      final orderDate = _date(s['happened_at']);
       final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
       if (items.isEmpty) {
         sheet.appendRow([
-          TextCellValue(_date(s['happened_at'])),
-          TextCellValue('${s['note'] ?? ''}'),
-          TextCellValue(''),
-          TextCellValue('¥${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}'),
+          if (cfg.colDate) TextCellValue(orderDate),
+          if (cfg.colItem) TextCellValue('${s['note'] ?? ''}'),
+          if (cfg.colQty) TextCellValue(''),
+          if (cfg.colPrice) TextCellValue(''),
+          if (cfg.colAmount) TextCellValue('¥${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}'),
         ]);
       }
       for (final it in items) {
+        final id = '${it['happened_at'] ?? ''}';
+        final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
         sheet.appendRow([
-          TextCellValue(_date(s['happened_at'])),
-          TextCellValue('${it['item_name']}'),
-          TextCellValue('${it['quantity']}${it['unit']}'),
-          TextCellValue('¥${((it['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}'),
+          if (cfg.colDate) TextCellValue(d),
+          if (cfg.colItem) TextCellValue('${it['item_name']}'),
+          if (cfg.colQty) TextCellValue('${it['quantity']}${it['unit']}'),
+          if (cfg.colPrice) TextCellValue('¥${((it['sale_price'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}'),
+          if (cfg.colAmount) TextCellValue('¥${((it['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}'),
         ]);
       }
     }
     sheet.appendRow([TextCellValue('')]);
-    sheet.appendRow([TextCellValue('日期'), TextCellValue('收款方式'), TextCellValue('实收'), TextCellValue('平账')]);
+    sheet.appendRow([
+      TextCellValue('日期'), TextCellValue('收款方式'), TextCellValue('实收'), TextCellValue('平账'),
+    ]);
     for (final p in _payments) {
       final w = ((p['waived'] as num?)?.toDouble() ?? 0);
       sheet.appendRow([
@@ -291,45 +428,80 @@ class _StatementPageState extends State<StatementPage> {
         TextCellValue(w > 0 ? '¥${w.toStringAsFixed(2)}' : ''),
       ]);
     }
-    return excel;
   }
 
-  /// 按日汇总版 Excel（打印友好：每天销售总额，分块 1-10 / 11-20 / 21-30 / 31+，末行总额）
-  Excel _buildDailyExcel(String clientName) {
-    final excel = Excel.createExcel();
-    final sheet = excel['对账单'];
-    sheet.setColumnWidth(0, 16);
-    sheet.setColumnWidth(1, 16);
-    sheet.appendRow([TextCellValue('陶朱对账单（按日汇总）')]);
-    sheet.appendRow([TextCellValue('客户'), TextCellValue(clientName)]);
-    sheet.appendRow([TextCellValue('账期'), TextCellValue('${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}')]);
+  /// 按日汇总：每天销售总额（按明细行日期）
+  void _sheetDaily(Sheet sheet, _XlsCfg cfg) {
+    sheet.appendRow([TextCellValue('日期'), TextCellValue('金额')]);
     final byDay = _salesByDay();
     if (byDay.isEmpty) {
-      sheet.appendRow([TextCellValue('本期无出货')]);
-      return excel;
-    }
-    final days = byDay.keys.toList()..sort();
-    final first = DateTime.parse(days.first);
-    final blocks = <int, List<String>>{};
-    for (final d in days) {
-      final dt = DateTime.parse(d);
-      final dayNo = dt.difference(DateTime(first.year, first.month, first.day)).inDays + 1;
-      final b = (dayNo - 1) ~/ 10;
-      (blocks[b] ??= []).add(d);
+      sheet.appendRow([TextCellValue('本期无出货'), TextCellValue('')]);
+      return;
     }
     double total = 0;
-    final bKeys = blocks.keys.toList()..sort();
-    for (final b in bKeys) {
-      final title = b >= 3 ? '31 天及以后' : '第 ${b * 10 + 1}-${(b + 1) * 10} 天';
-      sheet.appendRow([TextCellValue(title)]);
-      for (final d in blocks[b]!) {
-        final v = byDay[d] ?? 0;
-        total += v;
-        sheet.appendRow([TextCellValue(d), TextCellValue('¥${v.toStringAsFixed(2)}')]);
-      }
+    for (final d in byDay.keys.toList()..sort()) {
+      final v = byDay[d] ?? 0;
+      total += v;
+      sheet.appendRow([TextCellValue(d), TextCellValue('¥${v.toStringAsFixed(2)}')]);
     }
     sheet.appendRow([TextCellValue('销售总额'), TextCellValue('¥${total.toStringAsFixed(2)}')]);
-    return excel;
+  }
+
+  /// 按商品汇总：每种商品的总数量与总金额
+  void _sheetItems(Sheet sheet, _XlsCfg cfg) {
+    sheet.appendRow([
+      if (cfg.colItem) TextCellValue('商品'),
+      if (cfg.colQty) TextCellValue('数量'),
+      if (cfg.colAmount) TextCellValue('金额'),
+    ]);
+    final agg = <String, ({double qty, double amount})>{};
+    for (final s in _sales) {
+      for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+        final name = '${it['item_name'] ?? ''}';
+        final prev = agg[name] ?? (qty: 0, amount: 0);
+        agg[name] = (
+          qty: prev.qty + ((it['quantity'] as num?)?.toDouble() ?? 0),
+          amount: prev.amount + ((it['amount'] as num?)?.toDouble() ?? 0),
+        );
+      }
+    }
+    if (agg.isEmpty) {
+      sheet.appendRow([TextCellValue('本期无出货'), TextCellValue(''), TextCellValue('')]);
+      return;
+    }
+    double total = 0;
+    for (final e in agg.entries) {
+      total += e.value.amount;
+      sheet.appendRow([
+        if (cfg.colItem) TextCellValue(e.key),
+        if (cfg.colQty) TextCellValue(e.value.qty.toStringAsFixed(1)),
+        if (cfg.colAmount) TextCellValue('¥${e.value.amount.toStringAsFixed(2)}'),
+      ]);
+    }
+    sheet.appendRow([
+      if (cfg.colItem) TextCellValue('合计'),
+      if (cfg.colQty) TextCellValue(''),
+      if (cfg.colAmount) TextCellValue('¥${total.toStringAsFixed(2)}'),
+    ]);
+  }
+
+  /// 读取本机保存的导出排版配置
+  Future<void> _loadXlsCfg() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final raw = p.getString('taozhu_stmt_xls_cfg');
+      if (raw != null && raw.isNotEmpty) {
+        _xls = _XlsCfg.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      }
+    } catch (_) {}
+  }
+
+  /// 保存导出排版配置到本机（下次导出沿用）
+  Future<void> _saveXlsCfg(_XlsCfg cfg) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString('taozhu_stmt_xls_cfg', jsonEncode(cfg.toJson()));
+    } catch (_) {}
   }
 
   /// 出货按日聚合（按明细行日期；行日期缺省回退单据日期）
@@ -346,12 +518,12 @@ class _StatementPageState extends State<StatementPage> {
     return byDay;
   }
 
-  /// 导出预览文本
-  String _previewText(bool daily, String clientName) {
+  /// 导出预览文本（按排版模式：逐行明细 / 按日汇总 / 按商品汇总）
+  String _previewText(String mode, String clientName) {
     final buf = StringBuffer()
       ..writeln('客户：$clientName')
       ..writeln('账期：${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}');
-    if (daily) {
+    if (mode == 'daily') {
       buf.writeln('—— 按日汇总（销售总额）——');
       final byDay = _salesByDay();
       final days = byDay.keys.toList()..sort();
@@ -361,6 +533,23 @@ class _StatementPageState extends State<StatementPage> {
       if (days.length > 12) buf.writeln('… 共 ${days.length} 天');
       final total = byDay.values.fold<double>(0, (a, b) => a + b);
       buf.writeln('销售总额 ¥${total.toStringAsFixed(2)}');
+    } else if (mode == 'item') {
+      buf.writeln('—— 按商品汇总 ——');
+      final agg = <String, double>{};
+      for (final s in _sales) {
+        for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+          final n = '${it['item_name'] ?? ''}';
+          agg[n] = (agg[n] ?? 0) + ((it['amount'] as num?)?.toDouble() ?? 0);
+        }
+      }
+      var shown = 0;
+      for (final e in agg.entries) {
+        if (shown >= 8) break;
+        buf.writeln('${e.key}  ¥${e.value.toStringAsFixed(2)}');
+        shown++;
+      }
+      final total = agg.values.fold<double>(0, (a, b) => a + b);
+      buf.writeln('共 ${agg.length} 种商品 · 总额 ¥${total.toStringAsFixed(2)}');
     } else {
       buf.writeln('—— 出货明细（${_sales.length} 笔）——');
       var shown = 0;
@@ -732,4 +921,54 @@ class _StatementPageState extends State<StatementPage> {
       ),
     );
   }
+}
+
+/// 对账单 Excel 导出排版配置（前端自定义，本机持久化）
+class _XlsCfg {
+  _XlsCfg();
+
+  String title = '陶朱对账单';
+  bool headClient = true;
+  bool headPeriod = true;
+  bool headSaleTotal = true;
+  bool headPayTotal = true;
+  bool headDebt = true;
+  String mode = 'detail'; // detail | daily | item
+  bool colDate = true;
+  bool colItem = true;
+  bool colQty = true;
+  bool colPrice = true;
+  bool colAmount = true;
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'headClient': headClient,
+        'headPeriod': headPeriod,
+        'headSaleTotal': headSaleTotal,
+        'headPayTotal': headPayTotal,
+        'headDebt': headDebt,
+        'mode': mode,
+        'colDate': colDate,
+        'colItem': colItem,
+        'colQty': colQty,
+        'colPrice': colPrice,
+        'colAmount': colAmount,
+      };
+
+  _XlsCfg.fromJson(Map<String, dynamic> j) {
+    title = '${j['title'] ?? '陶朱对账单'}';
+    headClient = j['headClient'] != false;
+    headPeriod = j['headPeriod'] != false;
+    headSaleTotal = j['headSaleTotal'] != false;
+    headPayTotal = j['headPayTotal'] != false;
+    headDebt = j['headDebt'] != false;
+    mode = '${j['mode'] ?? 'detail'}';
+    colDate = j['colDate'] != false;
+    colItem = j['colItem'] != false;
+    colQty = j['colQty'] != false;
+    colPrice = j['colPrice'] != false;
+    colAmount = j['colAmount'] != false;
+  }
+
+  _XlsCfg copy() => _XlsCfg.fromJson(toJson());
 }
