@@ -108,12 +108,17 @@ jobs:
           cat android-sign.gradle.kts >> android/app/build.gradle.kts
           # ⑤ 按 ABI 拆包构建（体积：universal ~62MB → arm64 单包 ~25MB；手机基本都是 arm64，下载减半以上）
           flutter build apk --release --split-per-abi --build-name="$VERSION" --build-number="$BUILD_NUM"
+          # ⑤b 同时保留 universal 包（flutter-app-{v}.apk）：旧版本 App（<0.17.28）下载逻辑仍是 universal 文件名，
+          #     只传拆包会让老用户"识别到更新但下载 404"；新版 App 按 ABI 下载拆包（两套命名并存，互不冲突）
+          flutter build apk --release --build-name="$VERSION" --build-number="$BUILD_NUM"
 
       - name: Package & upload to single Release (taozhu-app)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
+          # universal 包保留旧文件名（flutter-app-{v}.apk）供旧版 App 应用内更新；拆包供新版按 ABI 下载
+          cp frontend-flutter/build/app/outputs/flutter-apk/app-release.apk "/tmp/flutter-app-${VERSION}.apk"
           # 按 ABI 重命名并上传（app-arm64-v8a-release.apk / app-armeabi-v7a-release.apk / app-x86_64-release.apk）
           for APK in frontend-flutter/build/app/outputs/flutter-apk/app-*-release.apk; do
             ABI=$(basename "$APK" | sed 's/^app-//; s/-release\.apk$//')
