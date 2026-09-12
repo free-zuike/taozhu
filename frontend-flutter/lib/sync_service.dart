@@ -216,7 +216,8 @@ class SyncService {
         hasMore = d['has_more'] == true;
         if (changes.isEmpty) break;
       }
-      if (total > 0 || since == 0) await _markSynced();
+      // 空拉取也是一次成功同步：流程正常结束（未走 catch）即刷新"上次同步时间"，避免时间停在有数据变更的那次
+      await _markSynced();
       return total;
     } catch (_) {
       return 0;

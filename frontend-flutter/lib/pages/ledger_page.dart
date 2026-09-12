@@ -1033,6 +1033,8 @@ class _LedgerPageState extends State<LedgerPage> {
     final border = profit == null
         ? c.primary.withOpacity(0.2)
         : (profit >= 0 ? c.success.withOpacity(0.4) : c.danger.withOpacity(0.4));
+    // 背景折线方向：盈利=从左下角到右上角（上升），亏损=从右上角到左下角（下降）；无盈亏=平线
+    final trendUp = profit == null ? null : profit >= 0;
     // 第三行：售价 · 数量单位 · 进价
     final priceLine = StringBuffer('售价 ¥${fmtMoney(salePrice?.toDouble() ?? 0)}');
     if (qty.isNotEmpty) priceLine.write(' · ×$qty$unit');
@@ -1050,10 +1052,12 @@ class _LedgerPageState extends State<LedgerPage> {
         ),
         child: Stack(
           children: [
-            // 背景装饰折线：左下角 → 右下角（放在背景层，不占布局空间）
+            // 背景装饰折线：方向随盈亏（升=左下→右上，降=右上→左下），放在背景层不占布局空间
             Positioned.fill(
               child: IgnorePointer(
-                child: CustomPaint(painter: _CardBgLinePainter(color: c.primary)),
+                child: CustomPaint(
+                  painter: _CardBgLinePainter(color: c.primary, trendUp: trendUp),
+                ),
               ),
             ),
             Padding(
@@ -1107,26 +1111,14 @@ class _LedgerPageState extends State<LedgerPage> {
                             ],
                           ],
                         ),
-                        // ③ 售价 · 数量 · 进价
+                        // ③ 售价 · 数量 · 进价（允许换行，进价不被截断）
                         Text(priceLine.toString(),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(fontSize: 12, color: c.textSub)),
                       ],
                     ),
                   ),
                   Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                       style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
-                  // 盈亏标记：整行着色 + 方向箭头（独立于文字列，不挤压文字）
-                  if (profit != null)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 4),
-                      child: Icon(
-                        profit >= 0 ? Icons.arrow_upward : Icons.arrow_downward,
-                        size: 15,
-                        color: profit >= 0 ? c.success : c.danger,
-                      ),
-                    ),
                   _menu(
                     edit: () => _editSale(order),
                     del: () => _deleteSaleLine(l),
@@ -1202,10 +1194,11 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 }
 
-/// 卡片背景装饰折线：从左下角到右下角一条淡折线（贴底，不占布局空间）
+/// 卡片背景装饰折线：方向随盈亏 —— 盈利=从左下角到右上角（上升），亏损=从右上角到左下角（下降），无盈亏=平线
 class _CardBgLinePainter extends CustomPainter {
   final Color color;
-  _CardBgLinePainter({required this.color});
+  final bool? trendUp; // true=上升（左下→右上），false=下降（右上→左下），null=平线
+  _CardBgLinePainter({required this.color, this.trendUp});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1218,18 +1211,36 @@ class _CardBgLinePainter extends CustomPainter {
       ..strokeWidth = 1.4
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-    // 从左下角 (0,h) 起步，向右下方缓降，终点 (w, h*0.7) 附近（不遮挡文字内容）
-    final path = Path()
-      ..moveTo(0, h)
-      ..lineTo(w * 0.18, h * 0.92)
-      ..lineTo(w * 0.36, h * 0.8)
-      ..lineTo(w * 0.55, h * 0.88)
-      ..lineTo(w * 0.72, h * 0.78)
-      ..lineTo(w * 0.88, h * 0.85)
-      ..lineTo(w, h * 0.82);
+    final path = Path();
+    if (trendUp == null) {
+      // 无盈亏：贴底平线（从左到右）
+      path
+        ..moveTo(0, h * 0.92)
+        ..lineTo(w * 0.3, h * 0.86)
+        ..lineTo(w * 0.55, h * 0.9)
+        ..lineTo(w * 0.8, h * 0.85)
+        ..lineTo(w, h * 0.88);
+    } else if (trendUp!) {
+      // 上升：从左下角 (0,h) 到右上角 (w,0)
+      path
+        ..moveTo(0, h)
+        ..lineTo(w * 0.25, h * 0.72)
+        ..lineTo(w * 0.5, h * 0.62)
+        ..lineTo(w * 0.75, h * 0.35)
+        ..lineTo(w, 0);
+    } else {
+      // 下降：从右上角 (w,0) 到左下角 (0,h)
+      path
+        ..moveTo(w, 0)
+        ..lineTo(w * 0.75, h * 0.35)
+        ..lineTo(w * 0.5, h * 0.62)
+        ..lineTo(w * 0.25, h * 0.72)
+        ..lineTo(0, h);
+    }
     canvas.drawPath(path, paint);
   }
 
   @override
-  bool shouldRepaint(covariant _CardBgLinePainter old) => old.color != color;
+  bool shouldRepaint(covariant _CardBgLinePainter old) =>
+      old.color != color || old.trendUp != trendUp;
 }

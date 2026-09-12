@@ -152,7 +152,8 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       if (mounted && _items.isNotEmpty) {
         _index = _items.length - 1;
         setState(() {});
-        _pageCtrl.jumpToPage(_index);
+        // 空态（暂无附件）→ 上传后 PageView 才首次挂载，直接 jumpToPage 会抛 "Bad state: No element"
+        if (_pageCtrl.hasClients) _pageCtrl.jumpToPage(_index);
       }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -192,7 +193,7 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         final target = prev >= _items.length ? _items.length - 1 : prev;
         _index = target;
         setState(() {});
-        _pageCtrl.jumpToPage(target);
+        if (_pageCtrl.hasClients) _pageCtrl.jumpToPage(target);
       }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
