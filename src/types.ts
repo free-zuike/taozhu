@@ -7,6 +7,8 @@ export interface Env {
   BUCKET: R2Bucket;
   /** 附件存储驱动（默认 r2；未来可 webdav 等），由 createStorage 工厂读取 */
   STORAGE_DRIVER?: string;
+  /** 实时同步广播（Durable Object）：数据变更后向在线客户端推送 sync 通知 */
+  SYNC_HUB: DurableObjectNamespace;
 }
 
 /** JWT 载荷中的用户信息 */

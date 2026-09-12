@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../realtime_sync.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../pages/sale_page.dart';
@@ -30,11 +31,14 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     });
     // 启动同步：首次 full，后续增量 pull + 推送待发（静默）
     SyncService.sync();
+    // 实时同步：保持 WebSocket 连接，服务端有变更立即拉取（断线自动重连）
+    RealtimeSync.instance.start();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    RealtimeSync.instance.stop();
     super.dispose();
   }
 

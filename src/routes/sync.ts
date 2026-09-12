@@ -13,6 +13,9 @@ export const syncRouter = new Hono<{ Bindings: Env; Variables: V }>();
 
 syncRouter.use('*', authMiddleware());
 
+// 实时同步 WebSocket 路由在 index.ts 顶层注册（浏览器 WebSocket 无法带 Authorization 请求头，
+// 需绕过 syncRouter 的 authMiddleware，改用查询参数 token 校验）。
+
 /** staff 仅可推的单据类型（upsert） */
 function staffPushAllowed(entityType: string, action: string): boolean {
   return (entityType === 'sale' || entityType === 'purchase') && action === 'upsert';

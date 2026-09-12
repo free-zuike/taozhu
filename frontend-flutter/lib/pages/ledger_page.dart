@@ -709,19 +709,17 @@ class _LedgerPageState extends State<LedgerPage> {
     return '$date 周${wd[d.weekday - 1]}';
   }
 
-  /// 卡片右上 ⋯ 菜单：附件 / 编辑 / 删除
-  Widget _menu({required VoidCallback attach, required VoidCallback edit, required VoidCallback del}) {
+  /// 卡片右上 ⋯ 菜单：编辑 / 删除（附件已改为列表上的直接图标）
+  Widget _menu({required VoidCallback edit, required VoidCallback del}) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
       icon: Icon(Icons.more_vert, size: 18, color: c.textSub),
       onSelected: (v) {
-        if (v == 'attach') attach();
         if (v == 'edit') edit();
         if (v == 'del') del();
       },
       itemBuilder: (_) => [
-        const PopupMenuItem(value: 'attach', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.attachment_outlined, size: 18), title: Text('附件'))),
         const PopupMenuItem(value: 'edit', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.edit_outlined, size: 18), title: Text('编辑'))),
         PopupMenuItem(value: 'del', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.delete_outline, size: 18, color: c.danger), title: Text('删除', style: TextStyle(color: c.danger)))),
       ],
@@ -759,8 +757,14 @@ class _LedgerPageState extends State<LedgerPage> {
               ),
               Text('¥${fmtMoney(s['total'])}',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.danger)),
+              // 附件直接可见：点图标看凭证图片，无需进 ⋯ 菜单
+              IconButton(
+                tooltip: '凭证附件',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.image_outlined, size: 20, color: c.primary),
+                onPressed: () => showAttachmentPanel(context, 'sale', '${s['id']}', '出货单附件'),
+              ),
               _menu(
-                attach: () => showAttachmentPanel(context, 'sale', '${s['id']}', '出货单附件'),
                 edit: () => _editSale(s),
                 del: () => _deleteSale(s),
               ),
@@ -837,8 +841,14 @@ class _LedgerPageState extends State<LedgerPage> {
             ),
             Text('¥${fmtMoney(p['amount'])}',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.success)),
+            // 附件直接可见：点图标看凭证图片
+            IconButton(
+              tooltip: '凭证附件',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(Icons.image_outlined, size: 20, color: c.success),
+              onPressed: () => showAttachmentPanel(context, 'payment', '${p['id']}', '收款凭证'),
+            ),
             _menu(
-              attach: () => showAttachmentPanel(context, 'payment', '${p['id']}', '收款凭证'),
               edit: () => _editPayment(p),
               del: () => _deletePayment(p),
             ),

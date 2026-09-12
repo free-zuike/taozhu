@@ -1,6 +1,4 @@
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,7 +10,6 @@ import '../avatar_cache.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
-import '../utils/download.dart';
 import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
@@ -27,6 +24,7 @@ import 'cleanup_page.dart';
 import 'login_page.dart';
 import 'account_settings_page.dart';
 import 'logs_page.dart';
+import 'backup_page.dart';
 
 class MyPage extends StatefulWidget {
   const MyPage({super.key});
@@ -193,67 +191,7 @@ class _MyPageState extends State<MyPage> {
     return '${t.month}月${t.day}日 ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
   }
 
-  /// 全库备份导出：Web 直接下载文件；移动/桌面弹系统分享保存
-  Future<void> _exportBackup() async {
-    try {
-      final d = await Api.instance.get('/backup');
-      final bytes = Uint8List.fromList(
-          utf8.encode(const JsonEncoder.withIndent('  ').convert(d)));
-      final name = 'taozhu-backup-${DateTime.now().toIso8601String().split('T').first}.json';
-      await saveBytes(bytes, name, 'application/json', '陶朱数据备份');
-      if (kIsWeb) toast(context, '备份已导出');
-    } catch (e) {
-      toast(context, '备份导出失败：${e.toString().replaceFirst('Exception: ', '')}');
-    }
-  }
-
-  /// 从备份 JSON 合并导入（仅老板）：相同 ID 跳过，只新增本地没有的记录
-  Future<void> _importBackup() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('导入备份'),
-        content: const Text('将备份文件中的记录合并到当前账本：\n· 相同 ID 的记录跳过（不覆盖现有数据）\n· 只新增备份里有、本地没有的记录\n\n建议导入前先导出留底。'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('选择文件并导入')),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    try {
-      final text = await pickTextFile();
-      if (text == null || text.trim().isEmpty) {
-        if (!kIsWeb) toast(context, '当前平台暂不支持导入，请用 Web 端导入');
-        return;
-      }
-      final raw = jsonDecode(text);
-      if (raw is! Map || raw['data'] is! Map) {
-        toast(context, '不是有效的备份文件');
-        return;
-      }
-      final data = (raw['data'] as Map).cast<String, dynamic>();
-      final r = await Api.instance.post('/backup/import', {'data': data});
-      final report = (r['report'] as Map?) ?? {};
-      final total = ((r['total_inserted'] as num?) ?? 0).toInt();
-      if (!mounted) return;
-      final detail = report.entries.map((e) {
-        final v = (e.value as Map?) ?? const {};
-        return '${e.key}: 新增 ${v['inserted']} · 跳过 ${v['skipped']}';
-      }).join('\n');
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('导入完成'),
-          content: Text('共新增 $total 条记录：\n$detail'),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('好'))],
-        ),
-      );
-    } catch (e) {
-      toast(context, '导入失败：${e.toString().replaceFirst('Exception: ', '')}');
-    }
-  }
-
+  /// 备份导出/导入已迁移到「数据备份」页（BackupPage）
   Future<void> _logout() async {
     await _clearAccountData();
     if (!mounted) return;
@@ -756,9 +694,8 @@ class _MyPageState extends State<MyPage> {
               _item(Icons.people_outline, c.primary, '账号管理', '店员/老板账号（仅老板可操作）',
                   () => goPage(context, const UsersPage())),
             if (_role != 'staff')
-              _item(Icons.save_alt_outlined, c.primary, '备份导出', '导出全库 JSON 存档（仅老板）', _exportBackup),
-            if (_role != 'staff')
-              _item(Icons.restore_outlined, c.primary, '导入备份', '从备份 JSON 恢复（合并，不覆盖现有）', _importBackup),
+              _item(Icons.backup_outlined, c.primary, '数据备份', '导出全库存档 / 从备份合并恢复',
+                  () => goPage(context, const BackupPage())),
             _item(Icons.system_update_alt_outlined, c.primary, '检查更新',
                 kIsWeb ? 'Web 版随部署更新' : '对比最新版本，应用内下载安装', _checkUpdate),
             _item(Icons.cleaning_services_outlined, c.primary, '存储清理', '查看并删除安装包/临时文件，释放空间',

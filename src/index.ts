@@ -18,6 +18,11 @@ import { backupRouter } from './routes/backup';
 import { shareRouter, renderShareHtml } from './routes/share';
 import { syncRouter } from './routes/sync';
 import { ensureSchema } from './schema';
+import { verifyToken } from './lib/jwt';
+import { setHubEnv, SyncHub } from './services/sync-hub';
+
+// Durable Object 需从入口导出（wrangler 按 class_name 绑定）
+export { SyncHub };
 
 type AppEnv = { Bindings: Env; Variables: { user: import('./types').AuthUser } };
 
@@ -37,6 +42,8 @@ app.get('/healthz', (c) => c.json({ ok: true }));
 // 首次 API 请求触发幂等建表（不鉴权）
 app.use('/api/v1/*', async (c, next) => {
   await ensureSchema(c.env.DB);
+  // 记录环境绑定：recordChange 写入变更流后用于实时同步广播（单实例共享同一绑定）
+  setHubEnv(c.env);
   await next();
 });
 
@@ -55,6 +62,19 @@ app.route('/api/v1/attachments', attachmentsRouter);
 app.route('/api/v1/stocks', stocksRouter);
 app.route('/api/v1/backup', backupRouter);
 app.route('/api/v1/share', shareRouter);
+
+// 实时同步 WebSocket（token 走查询参数：浏览器 WebSocket 无法自定义请求头）。
+// 必须注册在 syncRouter 挂载之前：否则会被 syncRouter 的 authMiddleware 先拦截（无 Authorization 头 → 401）。
+// 连接后 SyncHub 在数据变更时推送 {type:'sync'}，客户端据此增量拉取。
+app.get('/api/v1/sync/ws', async (c) => {
+  const token = c.req.query('token')?.trim() ?? '';
+  const payload = await verifyToken(c.env.JWT_SECRET, token);
+  if (!payload) return c.json({ error: '未登录' }, 401);
+  if (!c.env.SYNC_HUB) return c.json({ error: '实时同步未启用' }, 503);
+  const id = c.env.SYNC_HUB.idFromName('global');
+  const stub = c.env.SYNC_HUB.get(id);
+  return stub.fetch(c.req.raw);
+});
 app.route('/api/v1/sync', syncRouter);
 
 // 对账单分享页（公开只读：token 随机且可选过期，数据为生成时快照）

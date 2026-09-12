@@ -6,6 +6,7 @@
  */
 import { stockDelta } from './stock';
 import { randomId } from './password';
+import { notifyClients } from '../services/sync-hub';
 
 export const SYNC_ENTITIES = ['client', 'item', 'category', 'sale', 'purchase', 'payment'] as const;
 export type SyncEntityType = (typeof SYNC_ENTITIES)[number];
@@ -32,6 +33,8 @@ export async function recordChange(db: D1Database, c: SyncChangeInput): Promise<
     JSON.stringify(c.payload ?? {}), updatedAt,
     c.updated_by_device_id ?? null, c.updated_by_username ?? null,
   ).run();
+  // 实时同步：变更已入流 → 通知所有在线客户端拉取（失败静默）
+  await notifyClients();
   return Number(res.meta.last_row_id ?? 0);
 }
 

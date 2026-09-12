@@ -20,3 +20,12 @@ database_id = "PLACEHOLDER_DATABASE_ID"
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "taozhu-attachments"
+
+# 实时同步广播：Durable Object 持有在线 WebSocket 连接，数据变更后推送 sync 通知
+[[durable_objects.bindings]]
+name = "SYNC_HUB"
+class_name = "SyncHub"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SyncHub"]

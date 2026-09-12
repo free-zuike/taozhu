@@ -56,6 +56,15 @@ describe('同步协议', () => {
     expect((await call(env, 'POST', '/api/v1/sync/push', undefined, { device_id: 'd1', changes: [] })).status).toBe(401);
   });
 
+  it('实时同步 ws：无 token 401；测试环境未配置 SyncHub → 503', async () => {
+    expect((await call(env, 'GET', '/api/v1/sync/ws')).status).toBe(401);
+    // 伪造 token 无效
+    expect((await call(env, 'GET', '/api/v1/sync/ws?token=aaaa.bbbb.cccc')).status).toBe(401);
+    // 有效 token，但环境无 SYNC_HUB 绑定（测试/降级环境）→ 明确提示未启用
+    const res = await call(env, 'GET', `/api/v1/sync/ws?token=${token}`);
+    expect(res.status).toBe(503);
+  });
+
   it('在线写路由产生变更流，pull 按游标增量下发', async () => {
     const create = await call(env, 'POST', '/api/v1/clients', token, { name: '老王家', month_start_day: 1 });
     expect(create.status).toBe(201);

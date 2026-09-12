@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../api.dart';
+import '../local_db.dart';
+import '../log.dart';
 import '../utils/download.dart';
 import '../utils/money.dart';
 import '../theme.dart';
@@ -21,9 +23,6 @@ class _StatementPageState extends State<StatementPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _clients = [];
   String? _clientId; // null = 全部店铺
-  List<Map<String, dynamic>> _cats = []; // 店铺分类（美食城等，按分类汇总档口）
-  String? _categoryId; // 非 null=按分类（美食城）汇总总账
-  Map<String, dynamic>? _catView; // 分类总账视图（接口返回）
   String _period = 'month'; // month | last | cycle | cycleLast | custom
 
   /// 选中店铺的每月起始日（1=自然月）
@@ -76,26 +75,22 @@ class _StatementPageState extends State<StatementPage> {
   }
 
   Future<void> _loadClients() async {
+    // 本地优先：店铺列表立即显示（离线/慢网不再只有"全部店铺"）
     try {
-      final d = await Api.instance.get('/clients');
+      final local = await LocalDb.getAllByName('clients');
+      if (local.isNotEmpty && mounted) {
+        setState(() => _clients = local);
+      }
+    } catch (_) {}
+    // 网络刷新（静默：失败仅记日志）
+    try {
+      final d = await Api.instance.get('/clients').timeout(const Duration(seconds: 6));
       if (!mounted) return;
       final list = ((d['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-      // 提取店铺分类（美食城等，用于多档口总账）
-      final seen = <String>{};
-      final cats = <Map<String, dynamic>>[];
-      for (final c in list) {
-        final cid = '${c['category_id'] ?? ''}';
-        final cn = '${c['category_name'] ?? ''}';
-        if (cid.isNotEmpty && cn.isNotEmpty && seen.add(cid)) {
-          cats.add({'id': cid, 'name': cn});
-        }
-      }
-      setState(() {
-        _clients = list;
-        _cats = cats;
-      });
+      setState(() => _clients = list);
+      LocalDb.upsertList('clients', list);
     } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      appLog('net', '对账单店铺列表刷新失败: ${e.toString().split('\n').first}', level: 'error');
     }
   }
 
@@ -129,21 +124,6 @@ class _StatementPageState extends State<StatementPage> {
     final cid = _clientId ?? '';
     setState(() => _loading = true);
     try {
-      // 分类（美食城）总账模式：调聚合接口，不逐店拉明细
-      if (_categoryId != null) {
-        final view = await Api.instance
-            .get('/stats/category-statement?category_id=$_categoryId&start=$from&end=$to');
-        if (!mounted) return;
-        setState(() {
-          _catView = view;
-          _sales = [];
-          _payments = [];
-          _debtEnd = 0;
-          _loading = false;
-          _loaded = true;
-        });
-        return;
-      }
       final results = await Future.wait([
         Api.instance.get('/sales?client_id=$cid&date_from=$from&date_to=$to&limit=1000'),
         Api.instance.get('/payments?client_id=$cid&date_from=$from&date_to=$to&limit=1000'),
@@ -594,37 +574,16 @@ class _StatementPageState extends State<StatementPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   DropdownButtonFormField<String?>(
-                    initialValue: _categoryId != null ? 'cat:$_categoryId' : _clientId,
-                    decoration: InputDecoration(
-                      labelText: '店铺 / 分类',
-                      hintText: _categoryId != null ? '按分类总账' : null,
-                    ),
+                    initialValue: _clientId,
+                    decoration: const InputDecoration(labelText: '店铺'),
                     items: [
                       const DropdownMenuItem<String?>(value: null, child: Text('全部店铺')),
-                      // 分类（美食城多档口）总账
-                      if (_cats.isNotEmpty)
-                        for (final cat in _cats)
-                          DropdownMenuItem<String?>(
-                            value: 'cat:${cat['id']}',
-                            child: Text('◈ ${cat['name']}（分类总账）'),
-                          ),
                       ..._clients
                           .map((c) => DropdownMenuItem<String?>(
                               value: '${c['id']}', child: Text('${c['name']}')))
                           .toList(),
                     ],
-                    onChanged: (v) => setState(() {
-                      if (v == null) {
-                        _clientId = null;
-                        _categoryId = null;
-                      } else if (v.startsWith('cat:')) {
-                        _categoryId = v.substring(4);
-                        _clientId = null;
-                      } else {
-                        _clientId = v;
-                        _categoryId = null;
-                      }
-                    }),
+                    onChanged: (v) => setState(() => _clientId = v),
                   ),
                   const SizedBox(height: 12),
                   SegmentedButton<String>(
@@ -664,11 +623,6 @@ class _StatementPageState extends State<StatementPage> {
             ),
           ),
           if (_loaded) ...[
-            // 分类（美食城）总账模式
-            if (_categoryId != null && _catView != null) ...[
-              const SizedBox(height: 12),
-              _catSummary(),
-            ] else ...[
             const SizedBox(height: 12),
             Row(
               children: [
@@ -734,7 +688,6 @@ class _StatementPageState extends State<StatementPage> {
               icon: const Icon(Icons.table_chart_outlined, size: 18),
               label: const Text('导出 Excel'),
             ),
-            ],
           ],
         ],
       ),
@@ -742,46 +695,6 @@ class _StatementPageState extends State<StatementPage> {
   }
 
   double _num(Object? v) => (v is num ? v.toDouble() : double.tryParse('$v') ?? 0);
-
-  /// 分类（美食城）总账视图：合计卡 + 各档口欠款
-  Widget _catSummary() {
-    final v = _catView!;
-    final clients = ((v['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-    final t = (v['total'] as Map?) ?? const {};
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      _statCard('总账 · ${v['category_name']}（${clients.length} 档口）', '${v['from']} 至 ${v['to']}',
-          _c.textSub),
-      const SizedBox(height: 12),
-      Row(children: [
-        Expanded(child: _statCard('总出货', '¥${fmtMoney(_num(t['sales_total']))}', _c.danger)),
-        const SizedBox(width: 12),
-        Expanded(child: _statCard('总收款', '¥${fmtMoney(_num(t['paid_total']))}', _c.success)),
-      ]),
-      const SizedBox(height: 12),
-      _statCard('总欠款（期末）', '¥${fmtMoney(_num(t['debt']))}', _c.warning),
-      const SizedBox(height: 16),
-      const Text('各档口（单店对账请下拉选档口）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-      const SizedBox(height: 8),
-      if (clients.isEmpty)
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Text('该分类下暂无档口', style: TextStyle(color: _c.textSub)),
-        ),
-      for (final cl in clients)
-        Card(
-          child: ListTile(
-            dense: true,
-            leading: Icon(Icons.storefront, size: 20, color: _c.primary),
-            title: Text('${cl['name']}'),
-            subtitle: Text('出货 ¥${fmtMoney(_num(cl['sales_total']))} · 收款 ¥${fmtMoney(_num(cl['paid_total']))}'),
-            trailing: Text('欠 ¥${fmtMoney(_num(cl['debt']))}',
-                style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: _num(cl['debt']) > 0 ? _c.danger : _c.success)),
-          ),
-        ),
-    ]);
-  }
 
   Widget _statCard(String label, String value, Color color) {
     return Card(
