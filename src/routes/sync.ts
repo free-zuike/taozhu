@@ -1,4 +1,4 @@
-/** 同步路由（增量式）：POST /push（批量变更 + LWW 冲突解决）、GET /pull（游标增量拉取）、GET /full（首同步全量快照）。
+/** 同步路由：POST /push（批量变更 + LWW 冲突解决）、GET /pull（游标增量拉取）、GET /full（首同步全量快照）。
  *  taozhu 为单一数据域（admin/staff 共享同一批数据），无 ledger/scope 维度；
  *  变更流 sync_changes 全量共享，按 (entity_type, entity_sync_id) 的最新一条做 LWW 决胜。
  *  权限：staff 只能推 sale/purchase 的 upsert（送货员记单场景）；主数据与删除仅 admin。

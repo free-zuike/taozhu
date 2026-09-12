@@ -20,6 +20,7 @@ class SyncService {
   static const _deviceIdKey = 'taozhu_device_id';
   static const _fullDoneKey = 'taozhu_sync_full_done';
   static const _lastSyncKey = 'taozhu_sync_last_at';
+  static const _selectedClientKey = 'taozhu_selected_client_id';
 
   /// 同步版本号：任何 full/pull/push 完成后 +1。页面监听它，版本变化后从本地库重读展示。
   static final ChangeNotifier version = ChangeNotifier();
@@ -48,12 +49,12 @@ class SyncService {
     }
   }
 
-  /// 生成简易 UUID（时间戳+随机，足够设备标识唯一性）
+  /// 生成简易 UUID（时间戳 padLeft(16) + 16 位随机，保证正好 32 字符不越界）
   static String _genUuid() {
     final r = Random();
-    final hex = DateTime.now().microsecondsSinceEpoch.toRadixString(16);
+    final hex = DateTime.now().microsecondsSinceEpoch.toRadixString(16).padLeft(16, '0');
     final rand = List.generate(16, (_) => r.nextInt(16).toRadixString(16)).join();
-    return '$hex${rand.substring(0, 16)}'.substring(0, 32);
+    return '$hex$rand';
   }
 
   /// 是否已完成首次全量同步
@@ -76,6 +77,47 @@ class SyncService {
       return p.getString(_lastSyncKey);
     } catch (_) {
       return null;
+    }
+  }
+
+  /// 当前选择的店铺 id（账本页选中后持久化；同步面板按店铺隔离同步时读取）
+  static Future<String?> selectedClientId() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getString(_selectedClientKey);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 记录当前选择的店铺（账本页切换/新建店铺时调用）
+  static Future<void> saveSelectedClientId(String id) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_selectedClientKey, id);
+    } catch (_) {}
+  }
+
+  /// 同步当前店铺：只拉该店铺最新出货/收款到本地库镜像 + 推送本地待发队列。
+  /// 与 sync()（全部实体增量拉取）互补——按店铺隔离的同步入口。
+  static Future<int> syncClient(String clientId) async {
+    if (kIsWeb || clientId.isEmpty) return 0;
+    try {
+      final results = await Future.wait([
+        Api.instance.get('/sales?client_id=$clientId'),
+        Api.instance.get('/payments?client_id=$clientId'),
+      ]);
+      final sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final pays = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+      await Future.wait([
+        LocalDb.upsertList('sales', sales),
+        LocalDb.upsertList('payments', pays),
+      ]);
+      await pushPending();
+      await _markSynced();
+      return sales.length + pays.length;
+    } catch (_) {
+      return 0;
     }
   }
 

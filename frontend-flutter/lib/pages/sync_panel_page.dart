@@ -7,7 +7,7 @@ import '../theme.dart';
 import 'router.dart';
 
 /// 同步面板：显示本机（App 本地库）与服务器（Web 数据源）的数据差异 + 同步状态 + 行为差异说明。
-/// App 本地库是 增量同步的读侧镜像；Web 直接读服务器——两者数量不一致即同步缺口。
+/// App 本地库是增量同步的读侧镜像；Web 直接读服务器——两者数量不一致即同步缺口。
 class SyncPanelPage extends StatefulWidget {
   const SyncPanelPage({super.key});
   @override
@@ -22,6 +22,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   int _pending = 0;
   String _deviceId = '';
   String _lastSync = '';
+  String _selectedClientId = '';
+  String _selectedClientName = '';
   String? _error;
 
   static const _entities = [
@@ -46,6 +48,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     var pending = 0;
     var deviceId = '';
     var lastSync = '';
+    var selectedId = '';
+    var selectedName = '';
     try {
       local = <String, int>{};
       for (final (store, _) in _entities) {
@@ -54,6 +58,16 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       pending = await SyncService.pendingCount();
       deviceId = await SyncService.deviceId();
       lastSync = (await SyncService.lastSyncAt()) ?? '';
+      // 当前选择的店铺（账本页持久化；按店铺隔离同步的入口）
+      selectedId = (await SyncService.selectedClientId()) ?? '';
+      if (selectedId.isNotEmpty) {
+        final clients = await LocalDb.getAllByName('clients');
+        selectedName = clients
+                .where((c) => '${c['id']}' == selectedId)
+                .map((c) => '${c['name']}')
+                .firstOrNull ??
+            '';
+      }
     } catch (e) {
       if (mounted) {
         _error = e.toString().replaceFirst('Exception: ', '');
@@ -65,6 +79,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
           _pending = pending;
           _deviceId = deviceId;
           _lastSync = lastSync;
+          _selectedClientId = selectedId;
+          _selectedClientName = selectedName;
           _loading = false;
         });
       }
@@ -100,6 +116,26 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     }
   }
 
+  /// 仅同步当前选择的店铺（出货/收款数据）
+  Future<void> _syncCurrentClient() async {
+    if (_syncing) return;
+    if (_selectedClientId.isEmpty) {
+      toast(context, '未选择店铺，请先到交易（账本）页选择店铺');
+      return;
+    }
+    setState(() => _syncing = true);
+    try {
+      await SyncService.syncClient(_selectedClientId).timeout(const Duration(seconds: 30));
+    } catch (_) {
+      // 同步超时/异常也结束转圈
+    } finally {
+      if (!mounted) return;
+      setState(() => _syncing = false);
+      _load();
+      toast(context, '当前店铺已同步');
+    }
+  }
+
   String _fmtTime(String iso) {
     final t = DateTime.tryParse(iso);
     if (t == null) return '从未同步';
@@ -116,7 +152,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         title: const Text('同步状态'),
         actions: [
           IconButton(
-            tooltip: '立即同步',
+            tooltip: '同步全部数据',
             icon: _syncing
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.sync),
@@ -129,6 +165,35 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
               children: [
+                // 全部同步 / 当前店铺同步 两个入口（按店铺隔离）
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _syncing ? null : _syncNow,
+                        icon: const Icon(Icons.sync, size: 18),
+                        label: const Text('全部同步'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: _syncing ? null : _syncCurrentClient,
+                        icon: const Icon(Icons.storefront, size: 18),
+                        label: Text(_selectedClientName.isEmpty
+                            ? '当前店铺同步'
+                            : '同步「$_selectedClientName」'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
                 if (_error != null)
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -142,6 +207,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                     ),
                   ),
                 _card(c, [
+                  _row(c, '当前店铺', _selectedClientName.isEmpty ? '—（未选择）' : _selectedClientName),
                   _row(c, '当前设备', _deviceId.isEmpty ? '—' : _deviceId.substring(0, 8)),
                   _row(c, '上次成功同步', _fmtTime(_lastSync)),
                   _row(c, '待推送变更', kIsWeb ? '—（Web 无本地队列）' : '$_pending 条'),
@@ -182,8 +248,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 ]),
                 const SizedBox(height: 8),
                 Center(
-                  child: Text('本地数据可能滞后（网络较差时），以服务器为准；下拉或点右上角同步刷新',
-                      style: TextStyle(fontSize: 11, color: c.textSub)),
+                  child: Text('点击「全部同步」拉取服务器全量变更；「当前店铺同步」只刷新该店铺出货/收款。'
+                      , style: TextStyle(fontSize: 11, color: c.textSub)),
                 ),
               ],
             ),

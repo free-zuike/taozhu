@@ -1,4 +1,4 @@
-/** 增量同步协议端到端测试：变更流 + LWW 冲突 + push/pull/full。 */
+/** 同步协议端到端测试：变更流 + LWW 冲突 + push/pull/full。 */
 import { beforeEach, describe, expect, it } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
@@ -46,7 +46,7 @@ async function loginStaff(env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECR
   return ((await res.json()) as { token: string }).token;
 }
 
-describe('同步（增量式）', () => {
+describe('同步协议', () => {
   let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
   let token: string;
   beforeEach(async () => { env = (await setup()).env; token = await loginAdmin(env); });

@@ -389,7 +389,7 @@ class _MyPageState extends State<MyPage> {
 
   /// Android：应用内更新走系统下载器（DownloadManager）——
   /// 后台下载、通知栏（下滑栏）实时进度、退出应用仍继续，完成后引导安装。
-  /// 多镜像源（同款镜像列表）：下载前轻量探测可用源，选最快可用交给系统下载器；
+  /// 多镜像源列表：下载前轻量探测可用源，选最快可用交给系统下载器；
   /// 下载失败自动换下一个源；**用户手动取消（CANCELED）立即停止，不换源重试**。
   Future<void> _downloadAndInstall(String ver) async {
     _downloading = true;

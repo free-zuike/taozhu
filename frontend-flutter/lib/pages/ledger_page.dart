@@ -92,7 +92,12 @@ class _LedgerPageState extends State<LedgerPage> {
     var sales = await LocalDb.getAll('sales');
     var payments = await LocalDb.getAll('payments');
     if (_clientId == null && firstLocal.isNotEmpty) {
-      _clientId = '${firstLocal.first['id']}';
+      // 恢复上次选择的店铺（而非每次默认第一个）；店铺被删则回落第一个
+      final saved = await SyncService.selectedClientId();
+      _clientId = saved != null && firstLocal.any((c) => '${c['id']}' == saved)
+          ? saved
+          : '${firstLocal.first['id']}';
+      await SyncService.saveSelectedClientId(_clientId!);
     }
     if (_clientId != null) {
       sales = _filterByClient(sales, _clientId!);
@@ -114,7 +119,12 @@ class _LedgerPageState extends State<LedgerPage> {
       if (clients.isEmpty) clients = [await Api.instance.post('/clients', {'name': '默认店铺'})];
       if (!mounted) return;
       if (_clientId == null || !clients.any((c) => '${c['id']}' == _clientId)) {
-        _clientId = '${clients.first['id']}';
+        // 已选店铺不存在（被删）→ 恢复上次选择，否则取第一个
+        final saved = await SyncService.selectedClientId();
+        _clientId = saved != null && clients.any((c) => '${c['id']}' == saved)
+            ? saved
+            : '${clients.first['id']}';
+        await SyncService.saveSelectedClientId(_clientId!);
       }
       final results = await Future.wait([
         Api.instance.get('/sales${_clientQuery()}'),
@@ -236,6 +246,7 @@ class _LedgerPageState extends State<LedgerPage> {
     );
     if (selected != null && selected != _clientId) {
       setState(() => _clientId = selected);
+      SyncService.saveSelectedClientId(selected);
       _load();
     }
   }
@@ -268,7 +279,10 @@ class _LedgerPageState extends State<LedgerPage> {
       final d = await Api.instance.post('/clients', {'name': name});
       final id = '${d['id'] ?? ''}';
       if (mounted) {
-        if (id.isNotEmpty) _clientId = id;
+        if (id.isNotEmpty) {
+          _clientId = id;
+          SyncService.saveSelectedClientId(id);
+        }
         toast(context, '已创建店铺「$name」');
         _load();
       }
@@ -497,7 +511,7 @@ class _LedgerPageState extends State<LedgerPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 账本（店铺）选择：点击弹出全部账本弹层（增量式：名称+交易笔数+欠款+管理）
+                  // 账本（店铺）选择：点击弹出全部账本弹层（名称+交易笔数+欠款+管理）
                   if (_clients.isNotEmpty)
                     Material(
                       color: Colors.transparent,

@@ -1,4 +1,4 @@
-/** 增量同步协议核心：变更流（append-only 日志，业务表即投影）+ LWW 冲突解决。
+/** 同步协议核心：变更流（append-only 日志，业务表即投影）+ LWW 冲突解决。
  *  - 变更流 sync_changes：id 自增即拉取游标；同一实体多次变更按行递增，pull 按游标增量下发。
  *  - 冲突 LWW（Last-Write-Wins）：updated_at 决胜，时间戳相同按 device_id 字典序，同设备=幂等重放。
  *  - payload 为实体完整快照（admin 视角，pull 时按角色打码敏感价）；push 时服务端应用到业务表。
