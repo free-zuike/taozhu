@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="page">
     <view class="brand">陶朱<text class="ver"> v{{ APP_VERSION }}</text></view>
 
@@ -17,7 +17,7 @@ import { ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import { request, getApiBase, setApiBase, setToken } from '../../api';
 
-const APP_VERSION = '0.1.0.0';
+const APP_VERSION = '0.1.0';
 
 const baseUrl = ref(getApiBase());
 const username = ref('');

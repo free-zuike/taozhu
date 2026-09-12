@@ -151,7 +151,7 @@ describe('记单与欠款联动（核心业务）', () => {
     const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
       sales: Array<{ total: number; items: Array<{ quantity: number; sale_price: number; cost_price: number }> }>;
     };
-    expect(list.sales[0].total).toBe(50); // 20 × 默认出价 2.5
+    expect(list.sales[0].total).toBe(50); // 20 × 默认售价 2.5
     expect(list.sales[0].items[0].cost_price).toBe(2); // 进价快照
   });
 
@@ -318,7 +318,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string };
-    expect(d.current).toBe('0.17.26.1');
+    expect(d.current).toBe('0.17.26');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
@@ -358,7 +358,7 @@ describe('商品价格组（增/改/停用）', () => {
     expect(items.items[0].prices.map((p) => p.unit)).toEqual(['斤', '袋']);
   });
 
-  it('改价：PATCH /item-prices/:id 更新进价/出价', async () => {
+  it('改价：PATCH /item-prices/:id 更新进价/售价', async () => {
     const res = await call(env, 'PATCH', `/api/v1/items/item-prices/${priceId}`, token, {
       purchase_price: 2.2, sale_price: 2.8,
     });

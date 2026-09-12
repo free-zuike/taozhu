@@ -18,7 +18,7 @@ const nowIso = () => new Date().toISOString();
 interface SaleItemInput {
   price_id: string;          // item_prices.id
   quantity: number;
-  sale_price?: number;       // 可覆盖默认出价
+  sale_price?: number;       // 可覆盖默认售价
   happened_at?: string;      // 行独立日期（缺省用单据日期）
 }
 

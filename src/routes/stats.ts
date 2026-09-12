@@ -1,4 +1,4 @@
-/** 统计：工作台概览 / 按店 / 按月 —— 毛利 = Σ(出价-进价快照)*数量 */
+/** 统计：工作台概览 / 按店 / 按月 —— 毛利 = Σ(售价-进价快照)*数量 */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import type { AuthUser, Env } from '../types';

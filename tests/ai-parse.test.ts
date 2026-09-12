@@ -53,7 +53,7 @@ describe('normalizeDrafts', () => {
 });
 
 describe('buildAiPrompt', () => {
-  it('按用途提示进价/出价', () => {
+  it('按用途提示进价/售价', () => {
     expect(buildAiPrompt('purchase')).toContain('进货单价');
     expect(buildAiPrompt('sale')).toContain('出货单价');
   });

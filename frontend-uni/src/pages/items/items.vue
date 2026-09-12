@@ -22,7 +22,7 @@
         <view v-for="(p, i) in form.prices" :key="i" class="price-row">
           <input class="ipt s" v-model="p.unit" placeholder="单位" />
           <input class="ipt s" v-model="p.purchase_price" type="digit" placeholder="进价" />
-          <input class="ipt s" v-model="p.sale_price" type="digit" placeholder="出价" />
+          <input class="ipt s" v-model="p.sale_price" type="digit" placeholder="售价" />
           <text class="del" @click="form.prices.splice(i, 1)">删</text>
         </view>
         <button class="btn-sub" @click="form.prices.push({ id: '', unit: '', purchase_price: '', sale_price: '' })">+ 加价格行（同菜多单位）</button>

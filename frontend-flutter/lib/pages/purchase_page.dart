@@ -295,7 +295,8 @@ class _PurchasePageState extends State<PurchasePage> {
       });
       final id = '${d['id'] ?? ''}';
       if (id.isEmpty) return null;
-      final pid = '${(d['prices'] as List?)?.firstOrNull?['id'] ?? ''}';
+      // 后端 POST /items 返回 prices 为价格 ID 字符串数组（如 ["pr…"]），取第一个作为新价格组合 id
+      final pid = '${(d['prices'] as List?)?.firstOrNull ?? ''}';
       _items.add({
         'id': id,
         'name': name,

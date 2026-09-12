@@ -120,7 +120,7 @@ class _ItemsPageState extends State<ItemsPage> {
       }
     } else {
       // 软删：本地删行 + 队列推送 upsert 带 deleted_at（prices 补 active:1 防服务端恢复时跳过）
-      final item = _items.where((x) => x['id'] == id).firstOrNull;
+      final item = _items.where((x) => '${x['id']}' == id).firstOrNull;
       if (item != null) {
         final delPayload = Map<String, dynamic>.from(item);
         delPayload['deleted_at'] = DateTime.now().toIso8601String();
@@ -224,7 +224,7 @@ class _ItemsPageState extends State<ItemsPage> {
                                   ),
                                   IconButton(
                                     icon: Icon(Icons.delete_outline, color: _c.danger),
-                                    onPressed: () => _delete(it['id'] as String, '${it['name']}'),
+                                    onPressed: () => _delete('${it['id']}', '${it['name']}'),
                                   ),
                                 ],
                               ],
@@ -413,7 +413,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                       child: TextField(
                         controller: _priceRows[i]['sell'],
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(labelText: '出价'),
+                        decoration: const InputDecoration(labelText: '售价'),
                       ),
                     ),
                     IconButton(

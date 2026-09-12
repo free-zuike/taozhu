@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import '../local_db.dart';
@@ -33,6 +35,10 @@ class _LedgerPageState extends State<LedgerPage> {
   bool _offline = false; // 本次加载走了本地缓存（无网络）
   /// 店铺选择弹层本地汇总（原生：笔数/欠款本地计算；Web 直接显示服务端字段）
   Map<String, ({int count, double debt})> _clientStat = {};
+  /// 出货单 id → 附件数（「有附件才显示图标」：云端 counts + 本地副本兜底）
+  Map<String, int> _saleAttachCount = {};
+  /// 收款单 id → 附件数
+  Map<String, int> _payAttachCount = {};
 
   @override
   void initState() {
@@ -122,6 +128,48 @@ class _LedgerPageState extends State<LedgerPage> {
       });
     }
     if (kIsWeb) await _loadNetwork(firstLocal);
+    // 附件计数（有附件才显示图标）：本地目录扫描 + 云端批量 counts（后台加载，不阻塞列表）
+    _loadAttachCounts();
+  }
+
+  /// 统计当前可见出货/收款单的附件数：本地副本目录优先兜底，云端批量 counts 精确覆盖
+  Future<void> _loadAttachCounts() async {
+    final saleIds = _sales.map((s) => '${s['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
+    final payIds = _payments.map((p) => '${p['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
+    final counts = <String, Map<String, int>>{'sale': {}, 'payment': {}};
+    // ① 本地副本（原生）：attachments/{entity}/{id}/ 目录里有多少文件
+    if (!kIsWeb && (saleIds.isNotEmpty || payIds.isNotEmpty)) {
+      try {
+        final root = await getApplicationDocumentsDirectory();
+        for (final e in [(saleIds, 'sale'), (payIds, 'payment')]) {
+          for (final id in e.$1) {
+            final dir = Directory('${root.path}/attachments/${e.$2}/$id');
+            if (dir.existsSync()) {
+              final n = dir.listSync().whereType<File>().length;
+              if (n > 0) counts[e.$2]![id] = n;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    // ② 云端批量 counts（一次一个实体；失败静默不打扰）
+    Future<void> fetch(String entity, List<String> ids) async {
+      if (ids.isEmpty) return;
+      try {
+        final d = await Api.instance.post('/attachments/counts', {'entity': entity, 'ids': ids});
+        final m = (d['counts'] as Map?) ?? {};
+        for (final e in m.entries) {
+          final n = (e.value as num?)?.toInt() ?? 0;
+          if (n > 0) counts[entity]!['${e.key}'] = n;
+        }
+      } catch (_) {}
+    }
+    await Future.wait([fetch('sale', saleIds), fetch('payment', payIds)]);
+    if (!mounted) return;
+    setState(() {
+      _saleAttachCount = counts['sale']!;
+      _payAttachCount = counts['payment']!;
+    });
   }
 
   /// Web 端直连服务器（无本地库）：拉店铺/出货/收款并刷新视图
@@ -397,80 +445,6 @@ class _LedgerPageState extends State<LedgerPage> {
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => SaleBatchEditPage(date: date, lines: lines)));
     _load();
-  }
-
-  /// 出货流水行「改商品分类」（仅老板）：修改商品库中该商品的分类，全局生效
-  Future<void> _changeItemCategory(Map<String, dynamic> l) async {
-    final itemId = '${l['item_id'] ?? ''}';
-    if (itemId.isEmpty) return;
-    // 商品分类目录（两级）：原生优先读本地镜像；Web/本地为空时拉网络
-    var cats = await LocalDb.getAll('categories');
-    cats = cats.where((x) => '${x['type'] ?? ''}' == 'item').toList()
-      ..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
-    if (cats.isEmpty || kIsWeb) {
-      try {
-        final d = await Api.instance.get('/categories?type=item');
-        cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
-      } catch (_) {}
-    }
-    final parents = cats.where((x) => (x['parent_id'] as String? ?? '').isEmpty).toList();
-    final childOf = (String pid) => cats.where((x) => '${x['parent_id']}' == pid).toList();
-    final selected = await showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('选择商品分类'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, ''),
-            child: const Text('无分类', style: TextStyle(fontSize: 15)),
-          ),
-          for (final p in parents) ...[
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, '${p['id']}'),
-              child: Text('${p['name']}',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-            ),
-            for (final ch in childOf('${p['id']}'))
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(ctx, '${ch['id']}'),
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 16),
-                  child: Text('${ch['name']}', style: const TextStyle(fontSize: 15)),
-                ),
-              ),
-          ],
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-    if (selected == null || !mounted) return;
-    final catName = selected.isEmpty
-        ? ''
-        : '${cats.where((x) => '${x['id']}' == selected).firstOrNull?['name'] ?? ''}';
-    try {
-      if (kIsWeb) {
-        await Api.instance.patch('/items/$itemId', {
-          'category': catName,
-          'category_id': selected.isEmpty ? null : selected,
-        });
-      } else {
-        final stored = (await LocalDb.getAllByName('items'))
-            .where((x) => '${x['id']}' == itemId).firstOrNull;
-        if (stored == null) {
-          toast(context, '本地商品库无此商品，请先完成同步');
-          return;
-        }
-        final updated = Map<String, dynamic>.from(stored)
-          ..['category'] = catName
-          ..['category_id'] = selected.isEmpty ? null : selected;
-        await LocalDb.upsertOne('items', updated);
-        await SyncService.enqueueChange(
-            entityType: 'item', entitySyncId: itemId, action: 'upsert', payload: updated);
-      }
-      toast(context, '已更新分类');
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
-    }
   }
 
   /// 删除一条出货流水明细行（该行商品）：只删这一行，同单其他商品不受影响；
@@ -893,42 +867,49 @@ class _LedgerPageState extends State<LedgerPage> {
     return '$date 周${wd[d.weekday - 1]}';
   }
 
-  /// 卡片右上 ⋯ 菜单：编辑 / 改分类(可选) / 删除（附件已改为列表上的直接图标）
-  Widget _menu({required VoidCallback edit, VoidCallback? cat, required VoidCallback del}) {
+  /// 交易时间（HH:MM:SS）：有就显示，没有默认 00:00:00
+  String _timeOf(String happenedAt) {
+    final m = RegExp(r'(\d{1,2}):(\d{2})(?::(\d{2}))?').firstMatch(happenedAt.trim());
+    if (m == null) return '00:00:00';
+    final hh = m.group(1)!.padLeft(2, '0');
+    return '$hh:${m.group(2)}:${m.group(3) ?? '00'}';
+  }
+
+  /// 卡片右上 ⋯ 菜单：编辑 / 删除（附件图标直接放行内，分类在「点击交易修改」里改）
+  Widget _menu({required VoidCallback edit, required VoidCallback del}) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
       icon: Icon(Icons.more_vert, size: 18, color: c.textSub),
       onSelected: (v) {
         if (v == 'edit') edit();
-        if (v == 'cat') cat?.call();
         if (v == 'del') del();
       },
       itemBuilder: (_) => [
         const PopupMenuItem(value: 'edit', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.edit_outlined, size: 18), title: Text('编辑'))),
-        if (cat != null)
-          const PopupMenuItem(value: 'cat', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.sell_outlined, size: 18), title: Text('改商品分类'))),
         PopupMenuItem(value: 'del', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.delete_outline, size: 18, color: c.danger), title: Text('删除', style: TextStyle(color: c.danger)))),
       ],
     );
   }
 
   /// 出货流水（商品明细铺开）：按明细行日期分组，每行一条商品
-  /// （店名 · 商品 ×数量 → 金额）；点行编辑整单，附件图标直达凭证。
+  /// （三行卡片：①商品名称+备注 ②交易时间+附件 ③售价·数量·进价）；点行编辑整单，附件图标直达凭证。
   Widget _buildSaleFlow(String emptyText) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     // 展开为明细行：行日期回退单据日期；无明细的单据显示备注/占位
     final lines = <Map<String, dynamic>>[];
     for (final s in _sales) {
       final orderDate = _date(s['happened_at']);
+      final orderNote = '${s['note'] ?? ''}'.trim();
       final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
       if (items.isEmpty) {
-        final note = (s['note'] as String? ?? '').trim();
         lines.add({
           'date': orderDate, 'order': s, 'client_name': '${s['client_name'] ?? ''}',
-          'item_name': note.isEmpty ? '（无明细）' : '备注：$note',
+          'item_name': '（无明细）',
           'quantity': '', 'unit': '', 'amount': ((s['total'] as num?)?.toDouble() ?? 0),
           'item_id': '', 'sale_price': null, 'cost_price': null, 'qty_num': 0,
+          'note': orderNote,
+          'happened_at': '${s['happened_at'] ?? orderDate}',
         });
       }
       for (final it in items) {
@@ -945,6 +926,8 @@ class _LedgerPageState extends State<LedgerPage> {
           'sale_price': (it['sale_price'] as num?)?.toDouble(),
           'cost_price': (it['cost_price'] as num?)?.toDouble(),
           'qty_num': (it['quantity'] as num?)?.toDouble() ?? 0,
+          'note': it == items.first ? orderNote : '',
+          'happened_at': id.isEmpty ? '${s['happened_at'] ?? orderDate}' : id,
         });
       }
     }
@@ -1025,7 +1008,7 @@ class _LedgerPageState extends State<LedgerPage> {
     );
   }
 
-  /// 出货流水行：店名 · 商品 ×数量 | 金额 | 盈亏（老板着色箭头）| 附件 | ⋯（编辑/改分类/删除）
+  /// 出货流水行：三行卡片 —— ①商品名称+备注 ②交易时间+附件（时间在前，有附件才显示图标）③售价×数量·进价
   Widget _saleLineTile(TaozhuColors c, Map<String, dynamic> l) {
     final order = l['order'] as Map<String, dynamic>;
     final clientName = '${l['client_name'] ?? ''}';
@@ -1033,11 +1016,13 @@ class _LedgerPageState extends State<LedgerPage> {
     final qty = '${l['quantity'] ?? ''}';
     final unit = '${l['unit'] ?? ''}';
     final showStore = _clientId == null && clientName.isNotEmpty; // 全部店铺时带店名
-    final itemId = '${l['item_id'] ?? ''}';
     final salePrice = l['sale_price'] as num?;
     final costPrice = l['cost_price'] as num?;
     final qtyNum = (l['qty_num'] as num?)?.toDouble() ?? 0;
-    // 单行盈亏 = (出价 − 进价快照) × 数量；仅老板可见（店员成本被后端打码为 0 不参与计算）
+    final note = '${l['note'] ?? ''}'.trim();
+    final time = _timeOf('${l['happened_at'] ?? ''}');
+    final attachCount = _saleAttachCount['${order['id']}'] ?? 0;
+    // 单行盈亏 = (售价 − 进价快照) × 数量；仅老板可见（店员成本被后端打码为 0 不参与计算）
     double? profit;
     if (!_isStaff && salePrice != null && costPrice != null && qtyNum > 0) {
       profit = (salePrice.toDouble() - costPrice.toDouble()) * qtyNum;
@@ -1048,8 +1033,8 @@ class _LedgerPageState extends State<LedgerPage> {
     final border = profit == null
         ? c.primary.withOpacity(0.2)
         : (profit >= 0 ? c.success.withOpacity(0.4) : c.danger.withOpacity(0.4));
-    // 价格行：出价 · 斤数；老板额外显示进价
-    final priceLine = StringBuffer('出价 ¥${fmtMoney(salePrice?.toDouble() ?? 0)}');
+    // 第三行：售价 · 数量单位 · 进价
+    final priceLine = StringBuffer('售价 ¥${fmtMoney(salePrice?.toDouble() ?? 0)}');
     if (qty.isNotEmpty) priceLine.write(' · ×$qty$unit');
     if (!_isStaff && costPrice != null) priceLine.write(' · 进价 ¥${fmtMoney(costPrice.toDouble())}');
     return InkWell(
@@ -1057,60 +1042,97 @@ class _LedgerPageState extends State<LedgerPage> {
       onTap: () => _editSale(order),
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 2),
-        padding: const EdgeInsets.fromLTRB(10, 6, 2, 6),
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: border),
         ),
-        child: Row(
+        child: Stack(
           children: [
-            CircleAvatar(
-              radius: 14,
-              backgroundColor: c.primary.withOpacity(0.12),
-              child: Icon(Icons.storefront, size: 14, color: c.primary),
+            // 背景装饰折线：左下角 → 右下角（放在背景层，不占布局空间）
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(painter: _CardBgLinePainter(color: c.primary)),
+              ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 6, 2, 6),
+              child: Row(
                 children: [
-                  Text(
-                    showStore ? '$clientName · $itemName' : itemName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.textMain),
+                  CircleAvatar(
+                    radius: 14,
+                    backgroundColor: c.primary.withOpacity(0.12),
+                    child: Icon(Icons.storefront, size: 14, color: c.primary),
                   ),
-                  if (qty.isNotEmpty || salePrice != null)
-                    Text(priceLine.toString(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 12, color: c.textSub)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // ① 商品名称 + 备注（备注在商品名称后边）
+                        Text.rich(
+                          TextSpan(children: [
+                            TextSpan(
+                              text: showStore ? '$clientName · $itemName' : itemName,
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.textMain),
+                            ),
+                            if (note.isNotEmpty)
+                              TextSpan(
+                                text: '  $note',
+                                style: TextStyle(fontSize: 11, color: c.textSub),
+                              ),
+                          ]),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        // ② 交易时间 + 附件（时间在前，附件在后；有附件才显示图标）
+                        Row(
+                          children: [
+                            Icon(Icons.schedule, size: 12, color: c.textSub),
+                            const SizedBox(width: 3),
+                            Text(time,
+                                style: TextStyle(fontSize: 11, color: c.textSub)),
+                            if (attachCount > 0) ...[
+                              const SizedBox(width: 8),
+                              InkWell(
+                                borderRadius: BorderRadius.circular(6),
+                                onTap: () =>
+                                    showAttachmentViewer(context, 'sale', '${order['id']}', '出货单附件'),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(2),
+                                  child: Icon(Icons.image_outlined, size: 15, color: c.primary),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        // ③ 售价 · 数量 · 进价
+                        Text(priceLine.toString(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12, color: c.textSub)),
+                      ],
+                    ),
+                  ),
+                  Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
+                  // 盈亏标记：整行着色 + 方向箭头（独立于文字列，不挤压文字）
+                  if (profit != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: Icon(
+                        profit >= 0 ? Icons.arrow_upward : Icons.arrow_downward,
+                        size: 15,
+                        color: profit >= 0 ? c.success : c.danger,
+                      ),
+                    ),
+                  _menu(
+                    edit: () => _editSale(order),
+                    del: () => _deleteSaleLine(l),
+                  ),
                 ],
               ),
-            ),
-            Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
-            // 盈亏标记：整行着色 + 方向箭头（独立于文字列，不挤压文字）
-            if (profit != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 4),
-                child: Icon(
-                  profit >= 0 ? Icons.arrow_upward : Icons.arrow_downward,
-                  size: 15,
-                  color: profit >= 0 ? c.success : c.danger,
-                ),
-              ),
-            IconButton(
-              tooltip: '凭证附件',
-              visualDensity: VisualDensity.compact,
-              icon: Icon(Icons.image_outlined, size: 19, color: c.primary),
-              onPressed: () => showAttachmentViewer(context, 'sale', '${order['id']}', '出货单附件'),
-            ),
-            _menu(
-              edit: () => _editSale(order),
-              cat: !_isStaff && itemId.isNotEmpty ? () => _changeItemCategory(l) : null,
-              del: () => _deleteSaleLine(l),
             ),
           ],
         ),
@@ -1161,13 +1183,14 @@ class _LedgerPageState extends State<LedgerPage> {
             ),
             Text('¥${fmtMoney(p['amount'])}',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.success)),
-            // 附件直接可见：点图标全屏查看全部凭证图片（左右滑动切换）
-            IconButton(
-              tooltip: '凭证附件',
-              visualDensity: VisualDensity.compact,
-              icon: Icon(Icons.image_outlined, size: 20, color: c.success),
-              onPressed: () => showAttachmentViewer(context, 'payment', '${p['id']}', '收款凭证'),
-            ),
+            // 附件直接可见：有附件才显示图标，点图标全屏查看全部凭证图片（左右滑动切换）
+            if ((_payAttachCount['${p['id']}'] ?? 0) > 0)
+              IconButton(
+                tooltip: '凭证附件',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.image_outlined, size: 20, color: c.success),
+                onPressed: () => showAttachmentViewer(context, 'payment', '${p['id']}', '收款凭证'),
+              ),
             _menu(
               edit: () => _editPayment(p),
               del: () => _deletePayment(p),
@@ -1177,4 +1200,36 @@ class _LedgerPageState extends State<LedgerPage> {
       ),
     );
   }
+}
+
+/// 卡片背景装饰折线：从左下角到右下角一条淡折线（贴底，不占布局空间）
+class _CardBgLinePainter extends CustomPainter {
+  final Color color;
+  _CardBgLinePainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+    final h = size.height;
+    final w = size.width;
+    final paint = Paint()
+      ..color = color.withOpacity(0.10)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    // 从左下角 (0,h) 起步，向右下方缓降，终点 (w, h*0.7) 附近（不遮挡文字内容）
+    final path = Path()
+      ..moveTo(0, h)
+      ..lineTo(w * 0.18, h * 0.92)
+      ..lineTo(w * 0.36, h * 0.8)
+      ..lineTo(w * 0.55, h * 0.88)
+      ..lineTo(w * 0.72, h * 0.78)
+      ..lineTo(w * 0.88, h * 0.85)
+      ..lineTo(w, h * 0.82);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CardBgLinePainter old) => old.color != color;
 }

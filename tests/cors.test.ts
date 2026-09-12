@@ -37,11 +37,11 @@ describe('CORS 与版本', () => {
     expect(res.headers.get('access-control-allow-headers')?.toLowerCase()).toContain('authorization');
   });
 
-  it('ping 返回应用名与四段版本号', async () => {
+  it('ping 返回应用名与三位版本号', async () => {
     const res = await app.request(`${BASE}/api/v1/auth/ping`, {}, env as never);
     const body = (await res.json()) as { app: string; version: string };
     expect(body.app).toBe('陶朱');
     expect(body.version).toBe(APP_VERSION);
-    expect(body.version.split('.')).toHaveLength(4);
+    expect(body.version.split('.')).toHaveLength(3);
   });
 });

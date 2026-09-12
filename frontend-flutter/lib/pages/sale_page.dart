@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../api.dart';
@@ -220,7 +221,7 @@ class _SalePageState extends State<SalePage> {
     });
   }
 
-  /// 选中商品：填入名称/分类，带出默认单位与出价
+  /// 选中商品：填入名称/分类，带出默认单位与售价
   void _selectItem(_Row row, _ItemOption item) {
     row.itemId = item.id;
     row.nameCtrl.text = item.name;
@@ -251,7 +252,7 @@ class _SalePageState extends State<SalePage> {
     setState(() {});
   }
 
-  /// 单位输入变化：匹配到该商品的价格组合 → 带出默认出价；否则保持手动出价
+  /// 单位输入变化：匹配到该商品的价格组合 → 带出默认售价；否则保持手动售价
   void _onUnitChanged(_Row row, String v) {
     final unit = v.trim();
     final item = _items.where((x) => x.id == row.itemId).firstOrNull;
@@ -342,7 +343,8 @@ class _SalePageState extends State<SalePage> {
       });
       final id = '${d['id'] ?? ''}';
       if (id.isEmpty) return null;
-      final pid = '${(d['prices'] as List?)?.firstOrNull?['id'] ?? ''}';
+      // 后端 POST /items 返回 prices 为价格 ID 字符串数组（如 ["pr…"]），取第一个作为新价格组合 id
+      final pid = '${(d['prices'] as List?)?.firstOrNull ?? ''}';
       _items.add(_ItemOption(id, name, category, [
         {'id': pid, 'unit': u, 'purchase_price': 0, 'sale_price': price > 0 ? price : 0, 'active': 1},
       ]));
@@ -350,6 +352,87 @@ class _SalePageState extends State<SalePage> {
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
       return null;
+    }
+  }
+
+  /// 修改该行商品的分类（点击交易修改时设置）；存入商品库全局生效（Web PATCH / 原生本地+同步）
+  Future<void> _changeCategory(_Row row) async {
+    final itemId = row.itemId;
+    if (itemId == null) return;
+    // 商品分类目录（两级）：原生优先读本地镜像；Web/本地为空时拉网络
+    var cats = await LocalDb.getAll('categories');
+    cats = cats.where((x) => '${x['type'] ?? ''}' == 'item').toList()
+      ..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
+    if (cats.isEmpty || kIsWeb) {
+      try {
+        final d = await Api.instance.get('/categories?type=item');
+        cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } catch (_) {}
+    }
+    final parents = cats.where((x) => (x['parent_id'] as String? ?? '').isEmpty).toList();
+    final childOf = (String pid) => cats.where((x) => '${x['parent_id']}' == pid).toList();
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('选择商品分类'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, ''),
+            child: const Text('无分类', style: TextStyle(fontSize: 15)),
+          ),
+          for (final p in parents) ...[
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, '${p['id']}'),
+              child: Text('${p['name']}',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            ),
+            for (final ch in childOf('${p['id']}'))
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, '${ch['id']}'),
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 16),
+                  child: Text('${ch['name']}', style: const TextStyle(fontSize: 15)),
+                ),
+              ),
+          ],
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+    if (selected == null || !mounted) return;
+    final catName = selected.isEmpty
+        ? ''
+        : '${cats.where((x) => '${x['id']}' == selected).firstOrNull?['name'] ?? ''}';
+    try {
+      if (kIsWeb) {
+        await Api.instance.patch('/items/$itemId', {
+          'category': catName,
+          'category_id': selected.isEmpty ? null : selected,
+        });
+      } else {
+        final stored = (await LocalDb.getAllByName('items'))
+            .where((x) => '${x['id']}' == itemId).firstOrNull;
+        if (stored == null) {
+          toast(context, '本地商品库无此商品，请先完成同步');
+          return;
+        }
+        final updated = Map<String, dynamic>.from(stored)
+          ..['category'] = catName
+          ..['category_id'] = selected.isEmpty ? null : selected;
+        await LocalDb.upsertOne('items', updated);
+        await SyncService.enqueueChange(
+            entityType: 'item', entitySyncId: itemId, action: 'upsert', payload: updated);
+      }
+      // 更新内存中该商品的分类，行内即时显示
+      final idx = _items.indexWhere((x) => x.id == itemId);
+      if (idx >= 0) {
+        final it = _items[idx];
+        _items[idx] = _ItemOption(it.id, it.name, catName, it.prices);
+      }
+      setState(() {});
+      toast(context, '已更新分类');
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -368,7 +451,7 @@ class _SalePageState extends State<SalePage> {
               decoration: const InputDecoration(labelText: '分类（可留空）'),
             ),
             const SizedBox(height: 8),
-            Text('单位与出价可在下方明细行直接填写', style: TextStyle(fontSize: 12, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)),
+            Text('单位与售价可在下方明细行直接填写', style: TextStyle(fontSize: 12, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)),
           ],
         ),
         actions: [
@@ -810,10 +893,31 @@ class _SalePageState extends State<SalePage> {
               ),
             ],
           ),
-          if (item != null && item.category.isNotEmpty)
+          if (item != null)
             Padding(
               padding: const EdgeInsets.only(left: 44),
-              child: Text('分类：${item.category}', style: TextStyle(fontSize: 11, color: c.textSub)),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => _changeCategory(row),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.sell_outlined, size: 13, color: Color(0xFF409EFF)),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          item.category.isEmpty ? '未分类（点此设置）' : '分类：${item.category}（点此修改）',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11, color: item.category.isEmpty ? c.warning : c.textSub),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           if (unmatched)
             Padding(
@@ -869,7 +973,7 @@ class _SalePageState extends State<SalePage> {
                   controller: row.saleCtrl,
                   style: txtStyle,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: _fieldDec(label: '出价（可直接改）'),
+                  decoration: _fieldDec(label: '售价（可直接改）'),
                   onChanged: (v) => row.salePrice = double.tryParse(v) ?? 0,
                 ),
               ),
