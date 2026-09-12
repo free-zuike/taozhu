@@ -96,8 +96,9 @@ jobs:
           # 应用内更新 = 系统下载器（DownloadManager）：重写 MainActivity，注入 MethodChannel taozhu/download
           #     后台下载 + 通知栏（下滑栏）实时进度 + 下载完成回调状态，应用退到后台/被杀仍继续下载。
           #     源码在仓库 frontend-flutter/android-patch/MainActivity.kt（不 base64 内联，便于维护）
+          #     注意：本步骤 working-directory=frontend-flutter，仓库根需用 ../ 前缀
           mkdir -p android/app/src/main/kotlin/com/taozhu/app
-          cp frontend-flutter/android-patch/MainActivity.kt android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt
+          cp ../frontend-flutter/android-patch/MainActivity.kt android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt
           grep -q "DownloadManager" android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt && echo "MainActivity 注入 OK"
           # ③ 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
           sed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml
