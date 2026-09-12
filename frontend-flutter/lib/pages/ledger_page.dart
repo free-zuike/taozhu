@@ -155,6 +155,17 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
+  /// 明细行日期与该单日期不同时的前缀标注（如 "9/12 白菜 ×2斤"）
+  String _itemDateLabel(Map<String, dynamic> order, Map<String, dynamic> it) {
+    final od = _date(order['happened_at']);
+    final id = '${it['happened_at'] ?? ''}';
+    if (id.length >= 10 && id.substring(0, 10) != od) {
+      final d = id.substring(5, 10).replaceAll('-', '/');
+      return '$d ';
+    }
+    return '';
+  }
+
   String _date(Object? v) {
     final s = '$v';
     return s.length >= 10 ? s.substring(0, 10) : s;
@@ -795,13 +806,13 @@ class _LedgerPageState extends State<LedgerPage> {
                 del: () => _deleteSale(s),
               ),
             ]),
-            // 商品明细直接展开（全部显示，点卡片才进编辑）
+            // 商品明细直接展开（全部显示，点卡片才进编辑）；行日期与该单不同时标注
             for (final it in items)
               Padding(
                 padding: const EdgeInsets.only(left: 40, top: 2),
                 child: Row(children: [
                   Expanded(
-                    child: Text('${it['item_name']} ×${it['quantity']}${it['unit']}',
+                    child: Text('${_itemDateLabel(s, it)}${it['item_name']} ×${it['quantity']}${it['unit']}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontSize: 13, color: c.textSub)),

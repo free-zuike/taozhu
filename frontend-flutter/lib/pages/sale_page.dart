@@ -32,6 +32,7 @@ class _Row {
   String? priceId;
   double quantity = 0;
   double salePrice = 0;
+  String happenedAt = ''; // 该行商品的独立日期（空=用单据日期）
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
   final nameCtrl = TextEditingController();
   final unitCtrl = TextEditingController();
@@ -206,6 +207,7 @@ class _SalePageState extends State<SalePage> {
           ..priceId = price['id'] as String?
           ..quantity = qty
           ..salePrice = sp
+          ..happenedAt = '${it['happened_at'] ?? hd}'
           ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -386,6 +388,20 @@ class _SalePageState extends State<SalePage> {
     return true;
   }
 
+  /// 修改某一行商品的独立日期（不影响其他行）
+  Future<void> _pickRowDate(_Row row) async {
+    final cur = DateTime.tryParse(row.happenedAt.trim().isEmpty ? _dateCtrl.text.trim() : row.happenedAt.trim());
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: cur ?? DateTime.now(),
+      firstDate: DateTime(DateTime.now().year - 5),
+      lastDate: DateTime(DateTime.now().year + 5, 12, 31),
+    );
+    if (picked == null) return;
+    setState(() => row.happenedAt =
+        '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}');
+  }
+
   double get _total => _rows.fold(0, (s, r) => s + r.quantity * r.salePrice);
 
   /// AI 拍照识别：拍照 → 后端解析 → 匹配已有商品填行
@@ -421,7 +437,7 @@ class _SalePageState extends State<SalePage> {
         setState(() {
           final row = (_rows.length == 1 && _rows.first.itemId == null)
               ? _rows.first
-              : (_rows..add(_Row())).last;
+              : (_rows..add(_Row()..happenedAt = _dateCtrl.text.trim())).last;
           row.itemId = match.id;
           row.priceId = pr!['id'] as String?;
           row.quantity = qty;
@@ -494,6 +510,10 @@ class _SalePageState extends State<SalePage> {
     // 写本地优先：构建完整 payload → 落本地库（立即可见）→ 入待推送队列 → debounce push
     final saleId = _saleId;
     final clientName = _clients.where((c) => c['id'] == _clientId).firstOrNull?['name'] as String? ?? '';
+    // 单据日期 = 明细行最大日期（行独立日期，分组/对账以最新行为准）
+    final orderDate = valid
+        .map((r) => r.happenedAt.trim().isEmpty ? _dateCtrl.text.trim() : r.happenedAt.trim())
+        .reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
     final itemsPayload = <Map<String, dynamic>>[];
     var totalCalc = 0.0;
     for (final r in valid) {
@@ -511,13 +531,14 @@ class _SalePageState extends State<SalePage> {
         'sale_price': r.salePrice,
         'cost_price': price?['purchase_price'] ?? 0,
         'amount': amount,
+        'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
       });
     }
     final payload = {
       'id': saleId,
       'client_id': _clientId,
       'client_name': clientName,
-      'happened_at': _dateCtrl.text.trim(),
+      'happened_at': orderDate,
       'note': _noteCtrl.text.trim(),
       'total': (totalCalc * 100).round() / 100,
       'items': itemsPayload,
@@ -569,6 +590,7 @@ class _SalePageState extends State<SalePage> {
             ..priceId = price['id'] as String?
             ..quantity = qty
             ..salePrice = sp
+            ..happenedAt = '${it['happened_at'] ?? ''}'
             ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
             ..unitCtrl.text = unit
             ..qtyCtrl.text = qty.toString()
@@ -618,7 +640,8 @@ class _SalePageState extends State<SalePage> {
           const SizedBox(height: 10),
           // 添加商品（提交栏固定在底部悬浮）
           OutlinedButton.icon(
-            onPressed: () => setState(() => _rows.add(_Row())),
+            onPressed: () => setState(
+                () => _rows.add(_Row()..happenedAt = _dateCtrl.text.trim())),
             icon: const Icon(Icons.add, size: 18),
             label: const Text('添加商品'),
             style: OutlinedButton.styleFrom(
@@ -718,13 +741,13 @@ class _SalePageState extends State<SalePage> {
           DateField(
             controller: _dateCtrl,
             icon: Icons.calendar_today_outlined,
-            label: '日期',
+            label: _editing ? '日期（新加商品默认）' : '日期',
             hint: '点击选择日期（可补录历史）',
           ),
           if (_editing)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text('一张出货单只有一个出货日期（整单共用，新加商品也归入此日期）；不同日期的出货请另记一笔。',
+              child: Text('每行商品可有自己的日期：点行内日期可单独修改，改某一行的日期不影响其他行。',
                   style: TextStyle(fontSize: 11, color: Theme.of(context).extension<TaozhuColors>()!.textSub, height: 1.4)),
             ),
           const SizedBox(height: 10),
@@ -811,7 +834,24 @@ class _SalePageState extends State<SalePage> {
             decoration: _fieldDec(label: '单位（可手动填写）'),
             onChanged: (v) => _onUnitChanged(row, v),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 4),
+          // 行独立日期：点此修改，只影响本行
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => _pickRowDate(row),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(children: [
+                Icon(Icons.event_outlined, size: 16, color: c.textSub),
+                const SizedBox(width: 6),
+                Text('该行日期：${row.happenedAt.trim().isEmpty ? _dateCtrl.text.trim() : row.happenedAt.trim()}',
+                    style: TextStyle(fontSize: 13, color: c.primary, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                Text('点此修改（不影响其他行）', style: TextStyle(fontSize: 11, color: c.textSub)),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 6),
           Row(
             children: [
               Expanded(

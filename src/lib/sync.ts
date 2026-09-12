@@ -159,9 +159,10 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
     if (qty <= 0) continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.sale_price) || 0) * 100) / 100;
     batch.push(db.prepare(
-      'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(it.id ?? randomId(), id, it.item_id ?? '', it.unit ?? '', qty,
-      Number(it.sale_price) || 0, Number(it.cost_price) || 0, Math.round(amount * 100) / 100));
+      Number(it.sale_price) || 0, Number(it.cost_price) || 0, Math.round(amount * 100) / 100,
+      it.happened_at || p.happened_at || null));
     batch.push(stockDelta(db, it.item_id ?? '', it.unit ?? '', -qty));
   }
   await db.batch(batch);
@@ -181,9 +182,10 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
     if (qty <= 0) continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.purchase_price) || 0) * 100) / 100;
     batch.push(db.prepare(
-      'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(it.id ?? randomId(), id, it.item_id ?? '', it.unit ?? '', qty,
-      Number(it.purchase_price) || 0, Math.round(amount * 100) / 100));
+      Number(it.purchase_price) || 0, Math.round(amount * 100) / 100,
+      it.happened_at || p.happened_at || null));
     batch.push(stockDelta(db, it.item_id ?? '', it.unit ?? '', qty));
   }
   await db.batch(batch);

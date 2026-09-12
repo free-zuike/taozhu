@@ -18,6 +18,7 @@ interface PurchaseItemInput {
   price_id: string;
   quantity: number;
   purchase_price?: number;   // 可覆盖默认进价
+  happened_at?: string;      // 行独立日期（缺省用单据日期）
 }
 
 // POST /purchases
@@ -70,8 +71,9 @@ purchasesRouter.post('/', async (c) => {
     total += amount;
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).bind(randomId(), purchaseId, price.item_id, price.unit, qty, effective, amount),
+        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ).bind(randomId(), purchaseId, price.item_id, price.unit, qty, effective, amount,
+        item.happened_at?.trim() || happenedAt),
     );
     // 进货增加库存
     batch.push(stockDelta(c.env.DB, price.item_id, price.unit, qty));

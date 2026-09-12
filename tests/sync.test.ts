@@ -65,6 +65,39 @@ describe('同步协议', () => {
     expect(res.status).toBe(503);
   });
 
+  it('逐行日期：push 出货单两条明细不同日期，统计按明细日期、单据日期取最大', async () => {
+    const cl = (await (await call(env, 'POST', '/api/v1/clients', token, { name: '店B' })).json()) as { id: string };
+    const it = (await (await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', category: '蔬菜',
+      prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    })).json()) as { id: string };
+    const ts = new Date().toISOString();
+    const res = await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'phone-a',
+      changes: [{
+        entity_type: 'sale', entity_sync_id: 's-line-dates', action: 'upsert',
+        payload: {
+          id: 's-line-dates', client_id: cl.id, client_name: '店B', happened_at: '2026-09-02', note: '', total: 150,
+          items: [
+            { id: 'si-1', sale_id: 's-line-dates', item_id: it.id, item_name: '白菜', unit: '斤', quantity: 40, sale_price: 2.5, cost_price: 2, amount: 100, happened_at: '2026-09-01' },
+            { id: 'si-2', sale_id: 's-line-dates', item_id: it.id, item_name: '白菜', unit: '斤', quantity: 20, sale_price: 2.5, cost_price: 2, amount: 50, happened_at: '2026-09-02' },
+          ],
+        },
+        updated_at: ts,
+      }],
+    });
+    expect(((await res.json()) as { accepted: number }).accepted).toBe(1);
+
+    // 明细行独立日期生效：9-01 记 100，9-02 记 50（而非整单都落在单据日期）
+    const daily = (await (await call(env, 'GET', '/api/v1/stats/daily?start=2026-09-01&end=2026-09-02', token)).json()) as {
+      days: Array<{ day: string; sales_total: number }>;
+    };
+    const d1 = daily.days.find((d) => d.day === '2026-09-01');
+    const d2 = daily.days.find((d) => d.day === '2026-09-02');
+    expect(d1?.sales_total).toBe(100);
+    expect(d2?.sales_total).toBe(50);
+  });
+
   it('在线写路由产生变更流，pull 按游标增量下发', async () => {
     const create = await call(env, 'POST', '/api/v1/clients', token, { name: '老王家', month_start_day: 1 });
     expect(create.status).toBe(201);

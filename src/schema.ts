@@ -62,6 +62,7 @@ const DDL: string[] = [
     quantity REAL NOT NULL CHECK (quantity > 0),
     purchase_price REAL NOT NULL DEFAULT 0,
     amount REAL NOT NULL DEFAULT 0,
+    happened_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id)`,
@@ -86,6 +87,7 @@ const DDL: string[] = [
     sale_price REAL NOT NULL DEFAULT 0,
     cost_price REAL NOT NULL DEFAULT 0,
     amount REAL NOT NULL DEFAULT 0,
+    happened_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id)`,
@@ -211,6 +213,13 @@ export async function ensureSchema(db: D1Database): Promise<void> {
           ELSE username END
         WHERE display_name IS NULL OR display_name = ''`,
       ).run();
+    }
+    // v0.17.24.0：单据明细行独立日期 happened_at（每行商品可有自己的日期；历史行回退用单据日期）
+    for (const t of ['sale_items', 'purchase_items'] as const) {
+      const iCols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
+      if (!iCols.results.some((x) => x.name === 'happened_at')) {
+        await db.prepare(`ALTER TABLE ${t} ADD COLUMN happened_at TEXT`).run();
+      }
     }
     for (const t of ['clients', 'items'] as const) {
       const cols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();

@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   quantity REAL NOT NULL CHECK (quantity > 0),
   purchase_price REAL NOT NULL DEFAULT 0,
   amount REAL NOT NULL DEFAULT 0,
+  happened_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id);
@@ -99,6 +100,7 @@ CREATE TABLE IF NOT EXISTS sale_items (
   sale_price REAL NOT NULL DEFAULT 0,
   cost_price REAL NOT NULL DEFAULT 0,
   amount REAL NOT NULL DEFAULT 0,
+  happened_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id);

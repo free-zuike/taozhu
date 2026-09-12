@@ -143,7 +143,24 @@ class _StatementPageState extends State<StatementPage> {
     }
   }
 
-  double get _saleTotal => _sales.fold(0, (s, x) => s + ((x['total'] as num?)?.toDouble() ?? 0));
+  double get _saleTotal {
+    // 按明细行独立日期统计（行日期缺省回退单据日期）
+    final from = _fromCtrl.text.trim();
+    final to = _toCtrl.text.trim();
+    var t = 0.0;
+    for (final s in _sales) {
+      final orderDate = _date(s['happened_at']);
+      for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+        final id = '${it['happened_at'] ?? ''}';
+        final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
+        if (d.compareTo(from) >= 0 && d.compareTo(to) <= 0) {
+          t += ((it['amount'] as num?)?.toDouble() ?? 0);
+        }
+      }
+    }
+    return t;
+  }
+
   double get _payTotal => _payments.fold(0, (s, x) => s + ((x['amount'] as num?)?.toDouble() ?? 0));
   double get _waivedTotal => _payments.fold(0, (s, x) => s + (((x['waived'] as num?)?.toDouble()) ?? 0));
 
@@ -315,12 +332,16 @@ class _StatementPageState extends State<StatementPage> {
     return excel;
   }
 
-  /// 出货按日聚合（日期 → 当日销售总额）
+  /// 出货按日聚合（按明细行日期；行日期缺省回退单据日期）
   Map<String, double> _salesByDay() {
     final byDay = <String, double>{};
     for (final s in _sales) {
-      final d = _date(s['happened_at']);
-      byDay[d] = (byDay[d] ?? 0) + ((s['total'] as num?)?.toDouble() ?? 0);
+      final orderDate = _date(s['happened_at']);
+      for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+        final id = '${it['happened_at'] ?? ''}';
+        final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
+        byDay[d] = (byDay[d] ?? 0) + ((it['amount'] as num?)?.toDouble() ?? 0);
+      }
     }
     return byDay;
   }

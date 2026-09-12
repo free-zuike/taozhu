@@ -18,6 +18,7 @@ interface SaleItemInput {
   price_id: string;          // item_prices.id
   quantity: number;
   sale_price?: number;       // 可覆盖默认出价
+  happened_at?: string;      // 行独立日期（缺省用单据日期）
 }
 
 // POST /sales — 记一张出货单（原子事务）
@@ -82,8 +83,9 @@ salesRouter.post('/', async (c) => {
     saleItemIds.push(siId);
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      ).bind(siId, saleId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount),
+        'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).bind(siId, saleId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
+        item.happened_at?.trim() || happenedAt),
     );
     // 出货扣减库存
     batch.push(stockDelta(c.env.DB, price.item_id, price.unit, -qty));
