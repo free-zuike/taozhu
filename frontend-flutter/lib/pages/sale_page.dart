@@ -8,7 +8,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/date_field.dart';
-import 'attachment_panel.dart';
+import 'attachment_viewer.dart';
 import 'router.dart';
 
 class SalePage extends StatefulWidget {
@@ -595,7 +595,7 @@ class _SalePageState extends State<SalePage> {
             icon: const Icon(Icons.image_outlined),
             onPressed: _busy
                 ? null
-                : () => showAttachmentPanel(context, 'sale', _saleId, '出货单凭证附件'),
+                : () => showAttachmentViewer(context, 'sale', _saleId, '出货单凭证附件'),
           ),
           IconButton(
             tooltip: '复制上一单',
@@ -721,6 +721,12 @@ class _SalePageState extends State<SalePage> {
             label: '日期',
             hint: '点击选择日期（可补录历史）',
           ),
+          if (_editing)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('一张出货单只有一个出货日期（整单共用，新加商品也归入此日期）；不同日期的出货请另记一笔。',
+                  style: TextStyle(fontSize: 11, color: Theme.of(context).extension<TaozhuColors>()!.textSub, height: 1.4)),
+            ),
           const SizedBox(height: 10),
           TextField(
             controller: _noteCtrl,

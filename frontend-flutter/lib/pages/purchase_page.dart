@@ -8,6 +8,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/date_field.dart';
+import 'attachment_viewer.dart';
 import 'router.dart';
 
 class PurchasePage extends StatefulWidget {
@@ -24,6 +25,8 @@ class _PRow {
   double quantity = 0;
   double purchasePrice = 0;
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
+  final nameCtrl = TextEditingController();
+  final unitCtrl = TextEditingController();
   final qtyCtrl = TextEditingController();
   final priceCtrl = TextEditingController();
 }
@@ -31,14 +34,17 @@ class _PRow {
 class _PurchasePageState extends State<PurchasePage> {
   List<Map<String, dynamic>> _items = [];
   bool _isStaff = false; // 店员不可见进价（进货价手填）
-  // 商品下拉菜单项缓存：行组件不再每次 build 重建 items（目录大时明显降卡顿）
-  List<DropdownMenuItem<String>> _itemMenus = [];
   final List<_PRow> _rows = [_PRow()];
   Map<String, double> _lastQty = {}; // price_id → 上次数量（选单位自动带出）
   final _dateCtrl = TextEditingController(text: _today());
+  final _noteCtrl = TextEditingController();
   bool _busy = false;
 
   bool get _editing => widget.editId != null;
+
+  /// 单据 id：编辑模式用原单 id；新建模式提前生成（附件/提交都挂在这个 id 上）
+  late final String _purchaseId =
+      _editing ? widget.editId! : 'p${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
 
   /// 今日日期（YYYY-MM-DD），表单默认值；可改=补录历史日期
   static String _today() {
@@ -49,7 +55,10 @@ class _PurchasePageState extends State<PurchasePage> {
   @override
   void dispose() {
     _dateCtrl.dispose();
+    _noteCtrl.dispose();
     for (final r in _rows) {
+      r.nameCtrl.dispose();
+      r.unitCtrl.dispose();
       r.qtyCtrl.dispose();
       r.priceCtrl.dispose();
     }
@@ -74,10 +83,6 @@ class _PurchasePageState extends State<PurchasePage> {
         ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
       setState(() {
         _items = list;
-        _itemMenus = list
-            .map((it) => DropdownMenuItem(
-                value: it['id'] as String, child: Text(it['name'] as String)))
-            .toList();
       });
     }
     // ② 并行网络刷新 + 更新缓存
@@ -93,10 +98,6 @@ class _PurchasePageState extends State<PurchasePage> {
       setState(() {
         _items = list;
         _lastQty = lastQty;
-        _itemMenus = list
-            .map((it) => DropdownMenuItem(
-                value: it['id'] as String, child: Text(it['name'] as String)))
-            .toList();
       });
       // 编辑模式：商品目录就绪后预填原单据明细
       if (_editing) await _loadEdit();
@@ -115,45 +116,232 @@ class _PurchasePageState extends State<PurchasePage> {
     return max;
   }
 
-  /// 编辑模式预填：GET /purchases/:id → 按 item_id+unit 匹配现有价格，回填行
+  /// 编辑模式预填：优先本地库回显（离线也能填原单），无本地副本再走网络
   Future<void> _loadEdit() async {
+    Map<String, dynamic>? d;
     try {
-      final d = await Api.instance.get('/purchases/${widget.editId}');
-      if (!mounted) return;
-      setState(() {
-        final hd = '${d['happened_at'] ?? ''}';
-        _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
-        final items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _rows.clear();
-        var skipped = 0;
-        for (final it in items) {
-          final itemId = '${it['item_id']}';
-          final unit = '${it['unit'] ?? ''}';
-          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-          final pp = (it['purchase_price'] as num?)?.toDouble() ?? 0;
-          final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
-          final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
-          final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
-          if (match == null || price == null) {
-            skipped++;
-            continue;
-          }
-          _rows.add(_PRow()
-            ..itemId = itemId
-            ..priceId = price['id'] as String?
-            ..quantity = qty
-            ..purchasePrice = pp
-            ..qtyCtrl.text = qty.toString()
-            ..priceCtrl.text = pp.toStringAsFixed(2));
+      final list = await LocalDb.getAll('purchases');
+      d = list.where((s) => '${s['id']}' == widget.editId).firstOrNull;
+    } catch (_) {}
+    if (d == null) {
+      try {
+        d = await Api.instance.get('/purchases/${widget.editId}');
+      } catch (_) {
+        // 无网络且本地无缓存：错误已记日志，表单留空由用户重新填写
+        return;
+      }
+    }
+    if (!mounted || d == null) return;
+    final data = d;
+    setState(() {
+      final hd = '${data['happened_at'] ?? ''}';
+      _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
+      _noteCtrl.text = '${data['note'] ?? ''}';
+      final items = ((data['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      _rows.clear();
+      var skipped = 0;
+      for (final it in items) {
+        final itemId = '${it['item_id']}';
+        final unit = '${it['unit'] ?? ''}';
+        final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+        final pp = (it['purchase_price'] as num?)?.toDouble() ?? 0;
+        final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
+        final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+        final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+        if (match == null || price == null) {
+          skipped++;
+          continue;
         }
-        if (_rows.isEmpty) _rows.add(_PRow());
-        if (skipped > 0) {
-          toast(context, '原单 $skipped 条商品已删除或价格停用，保存后将移除');
-        }
+        _rows.add(_PRow()
+          ..itemId = itemId
+          ..priceId = price['id'] as String?
+          ..quantity = qty
+          ..purchasePrice = pp
+          ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
+          ..unitCtrl.text = unit
+          ..qtyCtrl.text = qty.toString()
+          ..priceCtrl.text = pp.toStringAsFixed(2));
+      }
+      if (_rows.isEmpty) _rows.add(_PRow());
+      if (skipped > 0) {
+        toast(context, '原单 $skipped 条商品已删除或价格停用，保存后将移除');
+      }
+    });
+  }
+
+  /// 选中商品：填入名称/分类，带出默认单位与进价
+  void _selectItem(_PRow row, Map<String, dynamic> item) {
+    row.itemId = '${item['id']}';
+    row.nameCtrl.text = '${item['name'] ?? ''}';
+    final prices = ((item['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+    final price = prices.where((p) => (p['active'] as num?) != 0).firstOrNull ?? prices.firstOrNull;
+    if (price != null) {
+      row.priceId = price['id'] as String?;
+      row.unitCtrl.text = '${price['unit'] ?? ''}';
+      row.purchasePrice = (price['purchase_price'] as num?)?.toDouble() ?? 0;
+      row.priceCtrl.text = row.purchasePrice > 0 ? row.purchasePrice.toStringAsFixed(2) : '';
+    }
+  }
+
+  /// 名称输入变化：精确匹配到已有商品 → 选中；否则视为新商品名（可点「新增」入库）
+  void _onNameChanged(_PRow row, String v) {
+    final name = v.trim();
+    final match = _items.where((x) => '${x['name']}' == name).firstOrNull;
+    if (match != null) {
+      if (row.itemId != '${match['id']}') {
+        _selectItem(row, match);
+        setState(() {});
+      }
+      return;
+    }
+    if (row.itemId != null) {
+      row.itemId = null;
+      row.priceId = null;
+    }
+    setState(() {});
+  }
+
+  /// 单位输入变化：匹配到该商品的价格组合 → 带出默认进价；否则保持手动进价
+  void _onUnitChanged(_PRow row, String v) {
+    final unit = v.trim();
+    final item = _items.where((x) => x['id'] == row.itemId).firstOrNull;
+    final prices = ((item?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+    final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+    row.unitCtrl.text = unit; // 保持用户输入（含非预设单位）
+    if (price != null) {
+      row.priceId = price['id'] as String?;
+      row.purchasePrice = (price['purchase_price'] as num?)?.toDouble() ?? 0;
+      row.priceCtrl.text = row.purchasePrice > 0 ? row.purchasePrice.toStringAsFixed(2) : '';
+    } else {
+      row.priceId = null; // 自定义单位：进价手动填
+    }
+    setState(() {});
+  }
+
+  /// 商品选择弹层：搜索 + 列表选择（也可直接输入新名称走「新增商品」）
+  Future<void> _pickItem(_PRow row) async {
+    final searchCtrl = TextEditingController();
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          final q = searchCtrl.text.trim().toLowerCase();
+          final list = q.isEmpty
+              ? _items
+              : _items.where((x) => '${x['name']}'.toLowerCase().contains(q)).toList();
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.6,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                    child: TextField(
+                      controller: searchCtrl,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search, size: 20),
+                        hintText: '搜索商品名称',
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setSheet(() {}),
+                    ),
+                  ),
+                  Expanded(
+                    child: list.isEmpty
+                        ? Center(child: Text('没有匹配商品，可直接在上方输入新名称', style: TextStyle(color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)))
+                        : ListView(
+                            children: [
+                              for (final it in list)
+                                ListTile(
+                                  dense: true,
+                                  leading: const Icon(Icons.sell_outlined, size: 18, color: Color(0xFF67C23A)),
+                                  title: Text('${it['name']}'),
+                                  subtitle: '${it['category'] ?? ''}'.isNotEmpty
+                                      ? Text('${it['category']}', style: const TextStyle(fontSize: 11))
+                                      : null,
+                                  onTap: () => Navigator.pop(ctx, '${it['id']}'),
+                                ),
+                            ],
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    if (picked == null) return;
+    final item = _items.where((x) => '${x['id']}' == picked).firstOrNull;
+    if (item != null) _selectItem(row, item);
+    setState(() {});
+  }
+
+  /// 创建商品（在线；老板可建，店员被后端 403）：成功加入本地目录并返回 id
+  Future<String?> _createItem(String name, {String unit = '', double price = 0, String category = ''}) async {
+    final u = unit.isEmpty ? '件' : unit;
+    try {
+      final d = await Api.instance.post('/items', {
+        'name': name,
+        'category': category,
+        'prices': [
+          {'unit': u, 'purchase_price': price > 0 ? price : 0, 'sale_price': 0},
+        ],
       });
+      final id = '${d['id'] ?? ''}';
+      if (id.isEmpty) return null;
+      final pid = '${(d['prices'] as List?)?.firstOrNull?['id'] ?? ''}';
+      _items.add({
+        'id': id,
+        'name': name,
+        'category': category,
+        'prices': [
+          {'id': pid, 'unit': u, 'purchase_price': price > 0 ? price : 0, 'sale_price': 0, 'active': 1},
+        ],
+      });
+      return id;
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
+      return null;
     }
+  }
+
+  /// 新增商品入库：在线创建（仅老板；店员提示找老板添加）→ 加入本地目录并选中
+  Future<bool> _quickAddItem(_PRow row, String name) async {
+    final categoryCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('新增商品「$name」'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: categoryCtrl,
+              decoration: const InputDecoration(labelText: '分类（可留空）'),
+            ),
+            const SizedBox(height: 8),
+            Text('单位与进价可在下方明细行直接填写', style: TextStyle(fontSize: 12, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('添加商品')),
+        ],
+      ),
+    );
+    if (ok != true) return false;
+    final id = await _createItem(name,
+        unit: row.unitCtrl.text.trim(), price: row.purchasePrice, category: categoryCtrl.text.trim());
+    if (id == null) return false;
+    final opt = _items.where((x) => '${x['id']}' == id).firstOrNull;
+    if (opt != null) _selectItem(row, opt);
+    setState(() {});
+    toast(context, '已添加商品「$name」');
+    return true;
   }
 
   double get _total => _rows.fold(0, (s, r) => s + r.quantity * r.purchasePrice);
@@ -211,16 +399,43 @@ class _PurchasePageState extends State<PurchasePage> {
   }
 
   Future<void> _submit() async {
-    final valid = _rows.where((r) => r.itemId != null && r.priceId != null && r.quantity > 0).toList();
+    // 名称手动输入但未入库的新商品：老板自动入库（静默），店员提示找老板添加
+    for (final r in _rows) {
+      final name = r.nameCtrl.text.trim();
+      if (name.isNotEmpty && r.itemId == null) {
+        if (_isStaff) {
+          toast(context, '「$name」不在商品库，请让老板先添加');
+          return;
+        }
+        final id = await _createItem(name,
+            unit: r.unitCtrl.text.trim(), price: r.purchasePrice, category: '');
+        if (id == null) return;
+        final opt = _items.where((x) => '${x['id']}' == id).firstOrNull;
+        if (opt != null) _selectItem(r, opt);
+      }
+    }
+    // 校验：有名称、有数量、有单位（默认件）即可提交；进价可直接手填
+    for (final r in _rows) {
+      final name = r.nameCtrl.text.trim();
+      if (name.isEmpty && r.itemId == null) continue; // 空行忽略
+      if (r.itemId == null) {
+        toast(context, '「$name」尚未添加到商品库，提交失败');
+        return;
+      }
+      if (r.quantity <= 0) {
+        toast(context, '请填写「${name.isNotEmpty ? name : '商品'}」的数量');
+        return;
+      }
+      if (r.unitCtrl.text.trim().isEmpty) r.unitCtrl.text = '件';
+    }
+    final valid = _rows.where((r) => r.itemId != null && r.quantity > 0).toList();
     if (valid.isEmpty) {
       toast(context, '请填写完整的商品明细');
       return;
     }
     setState(() => _busy = true);
     // 写本地优先：构建完整 payload → 落本地库 → 入队列 → debounce push
-    final purchaseId = _editing
-        ? widget.editId!
-        : 'p${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+    final purchaseId = _purchaseId;
     final itemsPayload = <Map<String, dynamic>>[];
     var totalCalc = 0.0;
     for (final r in valid) {
@@ -233,8 +448,8 @@ class _PurchasePageState extends State<PurchasePage> {
         'id': 'pi${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}',
         'purchase_id': purchaseId,
         'item_id': r.itemId,
-        'item_name': opt?['name'] ?? '',
-        'unit': price?['unit'] ?? '',
+        'item_name': opt?['name'] ?? r.nameCtrl.text.trim(),
+        'unit': r.unitCtrl.text.trim(),
         'quantity': r.quantity,
         'purchase_price': r.purchasePrice,
         'amount': amount,
@@ -243,7 +458,7 @@ class _PurchasePageState extends State<PurchasePage> {
     final payload = {
       'id': purchaseId,
       'happened_at': _dateCtrl.text.trim(),
-      'note': '',
+      'note': _noteCtrl.text.trim(),
       'total': (totalCalc * 100).round() / 100,
       'items': itemsPayload,
     };
@@ -290,6 +505,8 @@ class _PurchasePageState extends State<PurchasePage> {
             ..priceId = price['id'] as String?
             ..quantity = qty
             ..purchasePrice = pp
+            ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
+            ..unitCtrl.text = unit
             ..qtyCtrl.text = qty.toString()
             ..priceCtrl.text = pp.toStringAsFixed(2);
           _rows.add(row);
@@ -309,6 +526,13 @@ class _PurchasePageState extends State<PurchasePage> {
       appBar: AppBar(
         title: Text(_editing ? '编辑进货单' : '进货记单'),
         actions: [
+          IconButton(
+            tooltip: '凭证附件',
+            icon: const Icon(Icons.image_outlined),
+            onPressed: _busy
+                ? null
+                : () => showAttachmentViewer(context, 'purchase', _purchaseId, '进货单凭证附件'),
+          ),
           IconButton(
             tooltip: '复制上一单',
             icon: const Icon(Icons.copy_all_outlined),
@@ -415,12 +639,29 @@ class _PurchasePageState extends State<PurchasePage> {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return _card(Padding(
       padding: const EdgeInsets.all(14),
-      child: DateField(
-        controller: _dateCtrl,
-        icon: Icons.calendar_today_outlined,
-        label: '进货日期',
-        hint: '点击选择日期（可补录历史）',
-        focusColor: c.success,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DateField(
+            controller: _dateCtrl,
+            icon: Icons.calendar_today_outlined,
+            label: '进货日期',
+            hint: '点击选择日期（可补录历史）',
+            focusColor: c.success,
+          ),
+          if (_editing)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('一张进货单只有一个进货日期（整单共用，新加商品也归入此日期）；不同日期的进货请另记一笔。',
+                  style: TextStyle(fontSize: 11, color: c.textSub, height: 1.4)),
+            ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _noteCtrl,
+            style: TextStyle(color: c.textMain),
+            decoration: _fieldDec(icon: Icons.notes_outlined, label: '备注（可留空）'),
+          ),
+        ],
       ),
     ));
   }
@@ -429,10 +670,11 @@ class _PurchasePageState extends State<PurchasePage> {
     final row = _rows[i];
     final c = Theme.of(context).extension<TaozhuColors>()!;
     final txtStyle = TextStyle(color: c.textMain);
-    final prices = row.itemId == null
-        ? <Map<String, dynamic>>[]
-        : ((_items.firstWhere((x) => x['id'] == row.itemId)['prices'] as List?) ?? [])
-            .cast<Map<String, dynamic>>();
+    final item = row.itemId == null
+        ? null
+        : _items.where((x) => '${x['id']}' == row.itemId).firstOrNull;
+    final name = row.nameCtrl.text.trim();
+    final unmatched = name.isNotEmpty && item == null;
     return _card(Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
       child: Column(
@@ -454,16 +696,18 @@ class _PurchasePageState extends State<PurchasePage> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: DropdownButtonFormField<String>(
-                  initialValue: row.itemId,
+                child: TextField(
+                  controller: row.nameCtrl,
                   style: txtStyle,
-                  decoration: _fieldDec(label: '商品'),
-                  items: _itemMenus,
-                  onChanged: (v) => setState(() {
-                    row.itemId = v;
-                    row.priceId = null;
-                  }),
+                  decoration: _fieldDec(label: '商品名称（可输入或选择）'),
+                  onChanged: (v) => _onNameChanged(row, v),
                 ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: '选择商品',
+                icon: const Icon(Icons.search, size: 22, color: Color(0xFF67C23A)),
+                onPressed: () => _pickItem(row),
               ),
               const SizedBox(width: 4),
               IconButton(
@@ -473,31 +717,29 @@ class _PurchasePageState extends State<PurchasePage> {
               ),
             ],
           ),
+          if (item != null && '${item['category'] ?? ''}'.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 44),
+              child: Text('分类：${item['category']}', style: TextStyle(fontSize: 11, color: c.textSub)),
+            ),
+          if (unmatched)
+            Padding(
+              padding: const EdgeInsets.only(left: 44, top: 2),
+              child: Row(children: [
+                Text('未在商品库：', style: TextStyle(fontSize: 12, color: c.warning)),
+                InkWell(
+                  onTap: () => _quickAddItem(row, name),
+                  child: Text('新增商品「$name」',
+                      style: TextStyle(fontSize: 12, color: c.primary, fontWeight: FontWeight.w600)),
+                ),
+              ]),
+            ),
           const SizedBox(height: 6),
-          DropdownButtonFormField<String>(
-            initialValue: row.priceId,
+          TextField(
+            controller: row.unitCtrl,
             style: txtStyle,
-            decoration: _fieldDec(label: '单位（进价 · 库存）'),
-            items: prices
-                .map((p) => DropdownMenuItem(
-                      value: p['id'] as String,
-                      child: Text(_isStaff
-                          ? '${p['unit']}（库存 ${p['stock'] ?? 0}）'
-                          : '${p['unit']}（进 ¥${p['purchase_price']} · 库存 ${p['stock'] ?? 0}）'),
-                    ))
-                .toList(),
-            onChanged: (v) => setState(() {
-              row.priceId = v;
-              final pp = (prices.firstWhere((p) => p['id'] == v)['purchase_price'] as num).toDouble();
-              row.purchasePrice = pp;
-              row.priceCtrl.text = pp.toStringAsFixed(2);
-              // 上次数量记忆：自动带出该单位上回进的数量
-              final last = _lastQty[v] ?? 0;
-              if (last > 0) {
-                row.quantity = last;
-                row.qtyCtrl.text = last.toString();
-              }
-            }),
+            decoration: _fieldDec(label: '单位（可手动填写）'),
+            onChanged: (v) => _onUnitChanged(row, v),
           ),
           const SizedBox(height: 10),
           Row(

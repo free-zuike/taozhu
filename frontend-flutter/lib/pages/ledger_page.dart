@@ -11,7 +11,7 @@ import 'router.dart';
 import 'clients_page.dart';
 import 'sale_page.dart';
 import 'payments_page.dart';
-import 'attachment_panel.dart';
+import 'attachment_viewer.dart';
 
 /// 交易（账本=店铺）：出货 / 收款流水，按店铺+时间范围，支持编辑删除与附件（按日期分组列表）
 class LedgerPage extends StatefulWidget {
@@ -191,31 +191,20 @@ class _LedgerPageState extends State<LedgerPage> {
               child: ListView(
                 shrinkWrap: true,
                 children: [
-                  for (final c in _clients)
-                    ListTile(
-                      leading: CircleAvatar(
-                        radius: 18,
-                        backgroundColor: const Color(0xFF409EFF).withOpacity(0.12),
-                        child: const Icon(Icons.storefront, size: 18, color: Color(0xFF409EFF)),
-                      ),
-                      title: Text('${c['name']}',
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                      subtitle: _isStaff
-                          ? null // 店员不显示交易笔数/欠款（经营数据）
-                          : Text(
-                              '交易 ${(((c['sale_count'] as num?) ?? 0) + ((c['payment_count'] as num?) ?? 0))} 笔 · 欠 ¥${((c['debt'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
+                  // 按店铺分类分组（食堂/档口等）：分类标题 + 组内店铺
+                  ..._clientGroups().entries.map((g) => [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+                          child: Text(g.key,
                               style: TextStyle(
                                 fontSize: 12,
-                                color: Theme.of(context).brightness == Brightness.dark
-                                    ? const Color(0xFF9CA3AF)
-                                    : const Color(0x8A000000),
-                              ),
-                            ),
-                      trailing: '${c['id']}' == _clientId
-                          ? const Icon(Icons.check_circle, color: Color(0xFF409EFF), size: 20)
-                          : null,
-                      onTap: () => Navigator.pop(ctx, '${c['id']}'),
-                    ),
+                                fontWeight: FontWeight.w700,
+                                color: Theme.of(context).extension<TaozhuColors>()!.textSub,
+                              )),
+                        ),
+                        for (final c in g.value)
+                          _storeTile(ctx, c),
+                      ]).expand((x) => x),
                 ],
               ),
             ),
@@ -248,6 +237,43 @@ class _LedgerPageState extends State<LedgerPage> {
       SyncService.saveSelectedClientId(selected);
       _load();
     }
+  }
+
+  /// 店铺按分类分组（食堂/档口等；未分类归入"未分类"）
+  Map<String, List<Map<String, dynamic>>> _clientGroups() {
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final c in _clients) {
+      final cn = '${c['category_name'] ?? ''}'.trim();
+      (grouped[cn.isEmpty ? '未分类' : cn] ??= []).add(c);
+    }
+    return grouped;
+  }
+
+  Widget _storeTile(BuildContext ctx, Map<String, dynamic> c) {
+    return ListTile(
+      leading: CircleAvatar(
+        radius: 18,
+        backgroundColor: const Color(0xFF409EFF).withOpacity(0.12),
+        child: const Icon(Icons.storefront, size: 18, color: Color(0xFF409EFF)),
+      ),
+      title: Text('${c['name']}',
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+      subtitle: _isStaff
+          ? null // 店员不显示交易笔数/欠款（经营数据）
+          : Text(
+              '交易 ${(((c['sale_count'] as num?) ?? 0) + ((c['payment_count'] as num?) ?? 0))} 笔 · 欠 ¥${((c['debt'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? const Color(0xFF9CA3AF)
+                    : const Color(0x8A000000),
+              ),
+            ),
+      trailing: '${c['id']}' == _clientId
+          ? const Icon(Icons.check_circle, color: Color(0xFF409EFF), size: 20)
+          : null,
+      onTap: () => Navigator.pop(ctx, '${c['id']}'),
+    );
   }
 
   /// 记单场景快速新增店铺（对话框，创建后自动选中）
@@ -757,12 +783,12 @@ class _LedgerPageState extends State<LedgerPage> {
               ),
               Text('¥${fmtMoney(s['total'])}',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.danger)),
-              // 附件直接可见：点图标看凭证图片，无需进 ⋯ 菜单
+              // 附件直接可见：点图标全屏查看全部凭证图片（左右滑动切换）
               IconButton(
                 tooltip: '凭证附件',
                 visualDensity: VisualDensity.compact,
                 icon: Icon(Icons.image_outlined, size: 20, color: c.primary),
-                onPressed: () => showAttachmentPanel(context, 'sale', '${s['id']}', '出货单附件'),
+                onPressed: () => showAttachmentViewer(context, 'sale', '${s['id']}', '出货单附件'),
               ),
               _menu(
                 edit: () => _editSale(s),
@@ -841,12 +867,12 @@ class _LedgerPageState extends State<LedgerPage> {
             ),
             Text('¥${fmtMoney(p['amount'])}',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.success)),
-            // 附件直接可见：点图标看凭证图片
+            // 附件直接可见：点图标全屏查看全部凭证图片（左右滑动切换）
             IconButton(
               tooltip: '凭证附件',
               visualDensity: VisualDensity.compact,
               icon: Icon(Icons.image_outlined, size: 20, color: c.success),
-              onPressed: () => showAttachmentPanel(context, 'payment', '${p['id']}', '收款凭证'),
+              onPressed: () => showAttachmentViewer(context, 'payment', '${p['id']}', '收款凭证'),
             ),
             _menu(
               edit: () => _editPayment(p),

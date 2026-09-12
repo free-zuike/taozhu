@@ -6,7 +6,7 @@ import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
 import 'purchase_page.dart';
-import 'attachment_panel.dart';
+import 'attachment_viewer.dart';
 
 /// 进货记录：按日期分组的进货流水（不分店），卡片明细直接展开，可编辑/删除/附件
 class PurchaseHistoryPage extends StatefulWidget {
@@ -145,7 +145,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       padding: EdgeInsets.zero,
       icon: Icon(Icons.more_vert, size: 18, color: c.textSub),
       onSelected: (v) {
-        if (v == 'attach') showAttachmentPanel(context, 'purchase', '${p['id']}', '进货单附件');
+        if (v == 'attach') showAttachmentViewer(context, 'purchase', '${p['id']}', '进货单附件');
         if (v == 'edit') _editPurchase(p);
         if (v == 'del') _deletePurchase(p);
       },
