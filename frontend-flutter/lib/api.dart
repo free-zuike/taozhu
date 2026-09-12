@@ -156,7 +156,7 @@ class Api {
       res = await retry();
     } catch (e) {
       // 网络/DNS/连接异常：记日志，页面只给友好提示
-      appLog('net', '$method $path → ${e.toString().split('\n').first}');
+      appLog('net', '$method $path → ${e.toString().split('\n').first}', level: 'error');
       throw Exception('无法连接服务器，请检查网络或服务器地址');
     }
 
@@ -173,7 +173,7 @@ class Api {
       final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (d['error'] is String) msg = d['error'] as String;
     } catch (_) {}
-    appLog('http', '$method $path → ${res.statusCode}: $msg');
+    appLog('http', '$method $path → ${res.statusCode}: $msg', level: 'error');
     throw Exception(msg);
   }
 
@@ -199,7 +199,7 @@ class Api {
       final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (d['error'] is String) msg = d['error'] as String;
     } catch (_) {}
-    appLog('http', 'GET $path → ${res.statusCode}: $msg');
+    appLog('http', 'GET $path → ${res.statusCode}: $msg', level: 'error');
     throw Exception(msg);
   }
   Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) =>
@@ -290,7 +290,7 @@ class Api {
       final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (d['error'] is String) msg = d['error'] as String;
     } catch (_) {}
-    appLog('http', 'POST $path → ${res.statusCode}: $msg');
+    appLog('http', 'POST $path → ${res.statusCode}: $msg', level: 'error');
     throw Exception(msg);
   }
 

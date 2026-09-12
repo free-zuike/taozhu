@@ -9,7 +9,6 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
 import '../local_db.dart';
-import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/download.dart';
@@ -26,6 +25,7 @@ import 'stocks_page.dart';
 import 'cleanup_page.dart';
 import 'login_page.dart';
 import 'account_settings_page.dart';
+import 'logs_page.dart';
 
 class MyPage extends StatefulWidget {
   const MyPage({super.key});
@@ -59,7 +59,9 @@ class _MyPageState extends State<MyPage> {
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _role = r);
     });
-    // 进入应用即监听同步状态：同步开始/结束实时刷新「同步状态」子标题，无需进面板才看到
+    // 进入应用即监听同步状态：同步开始/结束实时刷新「同步状态」子标题，无需进面板才看到。
+    // 启动同步由 BottomShell 发起，可能已在进行中 → 先读当前状态，避免错过"同步中"通知
+    _syncing = SyncService.syncStatus == 'syncing';
     SyncService.version.addListener(_onSyncChanged);
     SyncService.status.addListener(_onSyncStatus);
     _loadProfile();
@@ -677,44 +679,6 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
-  /// 清理更新下载缓存：删除下载目录/临时目录中的旧安装包（APK/zip），释放空间
-  /// 查看错误日志（弹层：最近记录 + 清空）
-  Future<void> _showLogs() async {
-    final logs = await readLogs();
-    if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('错误日志'),
-        content: SizedBox(
-          width: double.maxFinite,
-          height: 320,
-          child: logs.isEmpty
-              ? const Center(child: Text('暂无日志', style: TextStyle(color: Color(0xFF909399))))
-              : ListView(
-                  children: [
-                    for (final l in logs.reversed)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Text(l, style: const TextStyle(fontSize: 12, height: 1.4)),
-                      ),
-                  ],
-                ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await clearLogs();
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('清空'),
-          ),
-          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
-        ],
-      ),
-    );
-  }
-
   /// 在系统文件管理器中显示该文件（Windows explorer / macOS 访达 / Linux xdg-open）
   Future<void> _revealFile(File f) async {
     try {
@@ -788,7 +752,9 @@ class _MyPageState extends State<MyPage> {
                 kIsWeb ? 'Web 版随部署更新' : '对比最新版本，应用内下载安装', _checkUpdate),
             _item(Icons.cleaning_services_outlined, c.primary, '存储清理', '查看并删除安装包/临时文件，释放空间',
                 () => goPage(context, const CleanupPage())),
-            _item(Icons.receipt_long_outlined, c.primary, '错误日志', '查看最近的操作错误记录（不再弹到页面）', _showLogs),
+            _item(Icons.receipt_long_outlined, c.primary, '日志',
+                '操作记录与错误（全部 / 错误 / 正常 / Debug）',
+                () => goPage(context, const LogsPage())),
           ]),
           const SizedBox(height: 18),
           _card([
@@ -876,6 +842,10 @@ class _MyPageState extends State<MyPage> {
                     _avatarUrl,
                     fit: BoxFit.cover,
                     headers: _avatarToken.isEmpty ? null : {'Authorization': 'Bearer $_avatarToken'},
+                    // 加载中保留占位图标，避免头像"短暂消失"
+                    loadingBuilder: (_, child, progress) => progress == null
+                        ? child
+                        : Icon(Icons.person_outline, size: 30, color: c.primary),
                     errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: 30, color: c.primary),
                   )
                 : Icon(Icons.person_outline, size: 30, color: c.primary),

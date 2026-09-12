@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../log.dart';
 import '../theme.dart';
 import '../version.dart';
 import '../widgets/bottom_shell.dart';
@@ -79,6 +80,7 @@ class _LoginPageState extends State<LoginPage> {
         }
       } catch (_) {}
       if (!mounted) return;
+      appLog('auth', '登录成功', level: 'info');
       Navigator.of(context)
           .pushReplacement(MaterialPageRoute(builder: (_) => const BottomShell()));
     } catch (e) {

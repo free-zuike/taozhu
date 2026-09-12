@@ -79,7 +79,7 @@ class _StatsPageState extends State<StatsPage> {
       if (_years.isNotEmpty && !_years.contains(_year)) _year = _years.last;
     } catch (e) {
       // 无网络：本地已有数据时不打扰，仅记日志（错误日志页可查）
-      appLog('net', '统计店铺/年份刷新失败: ${e.toString().split('\n').first}');
+      appLog('net', '统计店铺/年份刷新失败: ${e.toString().split('\n').first}', level: 'error');
     }
   }
 

@@ -68,7 +68,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       });
     } catch (e) {
       // 无网络/服务异常：本地数据已展示，仅记日志（用户可在错误日志页查看）
-      appLog('net', '账号资料后台刷新失败: ${e.toString().split('\n').first}');
+      appLog('net', '账号资料后台刷新失败: ${e.toString().split('\n').first}', level: 'error');
     }
   }
 
@@ -399,6 +399,10 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
               _avatarUrl,
               fit: BoxFit.cover,
               headers: _avatarToken.isEmpty ? null : {'Authorization': 'Bearer $_avatarToken'},
+              // 加载中保留占位图标，避免头像"短暂消失"
+              loadingBuilder: (_, child, progress) => progress == null
+                  ? child
+                  : Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
               errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
             )
           : Icon(Icons.person_outline, size: size * 0.55, color: c.primary),

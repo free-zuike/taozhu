@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'local_db.dart';
+import 'log.dart';
 
 /// 同步服务（增量式）：本地库增量 upsert/delete + 变更队列批量推送。
 ///
@@ -290,14 +291,17 @@ class SyncService {
   static Future<void> sync() async {
     if (kIsWeb) return;
     _setStatus('syncing');
+    var pulled = 0;
+    var pushed = 0;
     try {
       final done = await isFullDone();
       if (!done) {
-        await fullSync();
+        pulled = await fullSync();
       } else {
-        await pullChanges();
+        pulled = await pullChanges();
       }
-      await pushPending();
+      pushed = await pushPending();
+      appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条', level: 'info');
     } catch (_) {
       // 任一异常都不外抛（bottom_shell 无 await 调用，抛了就成 unhandled error）
     } finally {
