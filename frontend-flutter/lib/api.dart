@@ -13,6 +13,7 @@ class Api {
   static const _baseKey = 'taozhu_api_base';
   static const _roleKey = 'taozhu_role';
   static const _usernameKey = 'taozhu_username';
+  static const _accountKey = 'taozhu_account';
   static const _avatarKey = 'taozhu_avatar';
   static const _cachePrefix = 'taozhu_cache_';
   // 无内置默认地址：个人部署模式，登录页必须显式填写自己的服务器地址
@@ -54,12 +55,13 @@ class Api {
   Future<bool> hasToken() async => (await _token())?.isNotEmpty ?? false;
 
   /// 清除当前账号的本地数据（切换账号/退出时调用，防数据串号）：
-  /// token、角色、用户名、头像状态、接口缓存（taozhu_cache_*）、离线待同步队列
+  /// token、角色、用户名、登录账号、头像状态、接口缓存（taozhu_cache_*）、离线待同步队列
   Future<void> clearLocalData() async {
     final p = await SharedPreferences.getInstance();
     p.remove(_tokenKey);
     p.remove(_roleKey);
     p.remove(_usernameKey);
+    p.remove(_accountKey);
     p.remove(_avatarKey);
     p.remove(_pendingKey);
     final keys = p.getKeys().where((k) => k.startsWith(_cachePrefix)).toList();
@@ -84,6 +86,14 @@ class Api {
   Future<String> getUsername() async =>
       (await SharedPreferences.getInstance()).getString(_usernameKey) ?? '';
 
+  /// 登录账号（邮箱，不可改；离线时账号设置页也显示缓存值）
+  Future<void> setAccount(String u) async {
+    (await SharedPreferences.getInstance()).setString(_accountKey, u);
+  }
+
+  Future<String> getAccount() async =>
+      (await SharedPreferences.getInstance()).getString(_accountKey) ?? '';
+
   /// 是否已设置头像（/auth/me 刷新）
   Future<void> setAvatar(bool has) async {
     (await SharedPreferences.getInstance()).setBool(_avatarKey, has);
@@ -94,6 +104,24 @@ class Api {
 
   /// 头像图片 URL（需 Authorization 头读取）
   Future<String> avatarUrl() async => '${await _base()}/api/v1/auth/avatar';
+
+  /// 拉取当前头像图片字节；未设置（404）返回 null；网络异常抛错（供本地缓存用）
+  Future<List<int>?> getAvatarBytes() async {
+    final base = await _base();
+    if (base.isEmpty) throw Exception('未配置服务器地址');
+    final url = '$base/api/v1/auth/avatar';
+    final headers = <String, String>{};
+    final t = await _token();
+    if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
+    final res = await http.get(Uri.parse(url), headers: headers);
+    if (res.statusCode == 404) return null;
+    if (res.statusCode == 401) {
+      await clearToken();
+      throw Exception('登录已过期，请重新登录');
+    }
+    if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
+    throw Exception('获取头像失败(${res.statusCode})');
+  }
 
   Future<void> setBase(String u) async {
     (await SharedPreferences.getInstance()).setString(_baseKey, _norm(u));
@@ -137,7 +165,8 @@ class Api {
       }
     }
 
-    // 网络异常自动重试（最多 2 次，代理切换/VPN 抖动等偶发失败）：成功返回，重试耗尽抛出
+    // 网络异常自动重试（最多 3 次，递增退避：500ms/1s）：
+    // TLS 握手瞬时中断（弱网/切网/代理抖动）等偶发失败，重试后多数能恢复
     Future<http.Response> retry() async {
       var attempts = 0;
       while (true) {
@@ -145,8 +174,8 @@ class Api {
           return await doReq();
         } catch (_) {
           attempts++;
-          if (attempts >= 2) rethrow;
-          await Future.delayed(Duration(milliseconds: 300));
+          if (attempts >= 3) rethrow;
+          await Future.delayed(Duration(milliseconds: attempts == 1 ? 500 : 1000));
         }
       }
     }

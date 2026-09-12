@@ -75,10 +75,10 @@ class _ItemsPageState extends State<ItemsPage> {
         _items = visible;
         _loading = false;
       });
-    } catch (e) {
+    } catch (_) {
+      // 离线：本地缓存已展示，错误已记日志，不再弹提示
       if (!mounted || searching) return;
       setState(() => _loading = false);
-      if (_items.isEmpty) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 

@@ -8,6 +8,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/date_field.dart';
+import 'attachment_panel.dart';
 import 'router.dart';
 
 class SalePage extends StatefulWidget {
@@ -47,6 +48,10 @@ class _SalePageState extends State<SalePage> {
   Map<String, double> _lastQty = {}; // price_id → 上次数量（选单位自动带出）
 
   bool get _editing => widget.editId != null;
+
+  /// 单据 id：编辑模式用原单 id；新建模式提前生成（附件/提交都挂在这个 id 上）
+  late final String _saleId =
+      _editing ? widget.editId! : 's${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
 
   /// 今日日期（YYYY-MM-DD），表单默认值；可改=补录历史日期
   static String _today() {
@@ -152,12 +157,23 @@ class _SalePageState extends State<SalePage> {
     return max;
   }
 
-  /// 编辑模式预填：GET /sales/:id → 按 item_id+unit 匹配现有价格，回填行
+  /// 编辑模式预填：优先本地库回显（离线也能填原单），无本地副本再走网络
   Future<void> _loadEdit() async {
+    Map<String, dynamic>? d;
     try {
-      final d = await Api.instance.get('/sales/${widget.editId}');
-      if (!mounted) return;
-      setState(() {
+      final sales = await LocalDb.getAll('sales');
+      d = sales.where((s) => '${s['id']}' == widget.editId).firstOrNull;
+    } catch (_) {}
+    if (d == null) {
+      try {
+        d = await Api.instance.get('/sales/${widget.editId}');
+      } catch (_) {
+        // 无网络且本地无缓存：错误已记日志，表单留空由用户重新填写
+        return;
+      }
+    }
+    if (!mounted || d == null) return;
+    setState(() {
         _clientId = d['client_id'] as String?;
         final hd = '${d['happened_at'] ?? ''}';
         _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
@@ -269,9 +285,7 @@ class _SalePageState extends State<SalePage> {
     }
     setState(() => _busy = true);
     // 写本地优先：构建完整 payload → 落本地库（立即可见）→ 入待推送队列 → debounce push
-    final saleId = _editing
-        ? widget.editId!
-        : 's${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+    final saleId = _saleId;
     final clientName = _clients.where((c) => c['id'] == _clientId).firstOrNull?['name'] as String? ?? '';
     final itemsPayload = <Map<String, dynamic>>[];
     var totalCalc = 0.0;
@@ -367,6 +381,13 @@ class _SalePageState extends State<SalePage> {
       appBar: AppBar(
         title: Text(_editing ? '编辑出货单' : '出货记单'),
         actions: [
+          IconButton(
+            tooltip: '凭证附件',
+            icon: const Icon(Icons.image_outlined),
+            onPressed: _busy
+                ? null
+                : () => showAttachmentPanel(context, 'sale', _saleId, '出货单凭证附件'),
+          ),
           IconButton(
             tooltip: '复制上一单',
             icon: const Icon(Icons.copy_all_outlined),

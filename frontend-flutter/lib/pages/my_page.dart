@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
+import '../avatar_cache.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
@@ -40,9 +41,10 @@ class _MyPageState extends State<MyPage> {
   static bool _downloading = false;
   String _base = '';
   String _role = ''; // admin=老板 / staff=店员（登录/启动时读取）
-  String _username = ''; // 当前账号登录名（/auth/me 刷新）
+  String _username = ''; // 当前账号显示名（/auth/me 刷新）
   String _avatarUrl = '';
   String _avatarToken = '';
+  String _avatarLocalPath = ''; // 本地头像副本（离线也显示）
   bool _avatar = false; // 是否已设置头像
   bool _syncing = false; // SyncService 同步进行中（进入应用自动同步时实时显示）
   String _webSyncState = ''; // Web 端服务器连通检查：''=检查中 / ok / error
@@ -117,10 +119,11 @@ class _MyPageState extends State<MyPage> {
     return '尚未同步（进入应用会自动同步）';
   }
 
-  /// 以 /auth/me 刷新用户名/头像状态（登录后、改资料后调用）
+  /// 以 /auth/me 刷新显示名/头像（登录后、改资料后调用；离线保留本地缓存）
   Future<void> _loadProfile() async {
     _username = await Api.instance.getUsername();
     _avatar = await Api.instance.hasAvatar();
+    _avatarLocalPath = (await avatarLocalFile())?.path ?? '';
     // 时间戳缓存破坏：改头像后 Image.network 立即显示新图
     _avatarUrl = '${await Api.instance.avatarUrl()}?t=${DateTime.now().millisecondsSinceEpoch}';
     _avatarToken = await Api.instance.getTokenValue() ?? '';
@@ -131,11 +134,19 @@ class _MyPageState extends State<MyPage> {
       // 显示名（默认取登录账号 @ 前部分）；登录账号本身不可改
       final name = '${u['display_name'] ?? u['username'] ?? ''}';
       await Api.instance.setUsername(name);
+      await Api.instance.setAccount('${u['username'] ?? ''}');
       await Api.instance.setAvatar(u['avatar'] != null);
+      // 头像缓存后台校验：服务器有→下载覆盖本地；无→清本地；离线→保留旧缓存
+      final avatarSync = await syncAvatarCache();
+      if (avatarSync != null) {
+        await Api.instance.setAvatar(avatarSync);
+      }
+      final localPath = (await avatarLocalFile())?.path ?? '';
       if (!mounted) return;
       setState(() {
         _username = name;
-        _avatar = u['avatar'] != null;
+        _avatar = avatarSync ?? (u['avatar'] != null);
+        _avatarLocalPath = localPath;
       });
     } catch (_) {
       if (mounted) setState(() {});
@@ -837,18 +848,24 @@ class _MyPageState extends State<MyPage> {
               shape: BoxShape.circle,
             ),
             clipBehavior: Clip.antiAlias,
-            child: _avatar && _avatarUrl.isNotEmpty
-                ? Image.network(
-                    _avatarUrl,
+            child: _avatarLocalPath.isNotEmpty
+                ? Image.file(
+                    File(_avatarLocalPath),
                     fit: BoxFit.cover,
-                    headers: _avatarToken.isEmpty ? null : {'Authorization': 'Bearer $_avatarToken'},
-                    // 加载中保留占位图标，避免头像"短暂消失"
-                    loadingBuilder: (_, child, progress) => progress == null
-                        ? child
-                        : Icon(Icons.person_outline, size: 30, color: c.primary),
                     errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: 30, color: c.primary),
                   )
-                : Icon(Icons.person_outline, size: 30, color: c.primary),
+                : _avatar && _avatarUrl.isNotEmpty
+                    ? Image.network(
+                        _avatarUrl,
+                        fit: BoxFit.cover,
+                        headers: _avatarToken.isEmpty ? null : {'Authorization': 'Bearer $_avatarToken'},
+                        // 加载中保留占位图标，避免头像"短暂消失"
+                        loadingBuilder: (_, child, progress) => progress == null
+                            ? child
+                            : Icon(Icons.person_outline, size: 30, color: c.primary),
+                        errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: 30, color: c.primary),
+                      )
+                    : Icon(Icons.person_outline, size: 30, color: c.primary),
           ),
           const SizedBox(width: 14),
           Expanded(

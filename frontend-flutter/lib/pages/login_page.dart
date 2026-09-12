@@ -70,12 +70,15 @@ class _LoginPageState extends State<LoginPage> {
       }
       await Api.instance.setToken(d['token'] as String);
       await Api.instance.setRole('${(d['user'] as Map?)?['role'] ?? ''}');
+      // 登录账号本地缓存（离线时账号设置页也显示）
+      await Api.instance.setAccount('${(d['user'] as Map?)?['username'] ?? ''}');
       // 登录名/头像状态以 /auth/me 为准（登录响应不含头像）
       try {
         final me = await Api.instance.get('/auth/me');
         final mu = me['user'] as Map?;
         if (mu != null) {
           await Api.instance.setUsername('${mu['display_name'] ?? mu['username'] ?? ''}');
+          await Api.instance.setAccount('${mu['username'] ?? ''}');
           await Api.instance.setAvatar(mu['avatar'] != null);
         }
       } catch (_) {}

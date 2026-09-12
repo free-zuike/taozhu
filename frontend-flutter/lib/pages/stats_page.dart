@@ -4,7 +4,6 @@ import '../api.dart';
 import '../log.dart';
 import '../theme.dart';
 import '../utils/money.dart';
-import 'router.dart';
 
 /// 统计：店铺胶囊选择 + 周期胶囊（今日/本月/上月/滚动月/自定义） + 日/月/年视图
 /// 总览卡（含日均） + 折线图 + 商品排行 + 按店结账
@@ -180,11 +179,11 @@ class _StatsPageState extends State<StatsPage> {
       }
       if (!mounted) return;
       _applyStats(isYear, results);
-    } catch (e) {
+    } catch (_) {
+      // 离线：有缓存已展示缓存，无缓存显示空态；错误已记日志，不再弹提示
       if (!mounted) return;
       if (!cached.any((x) => x != null)) {
         setState(() => _loading = false);
-        toast(context, e.toString().replaceFirst('Exception: ', ''));
       }
     }
   }

@@ -1,9 +1,11 @@
+import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../api.dart';
+import '../avatar_cache.dart';
 import '../log.dart';
 import '../theme.dart';
 import 'router.dart';
@@ -23,6 +25,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   String _base = '';
   String _avatarUrl = '';
   String _avatarToken = '';
+  String _avatarLocalPath = ''; // 本地头像副本（离线也显示）
   bool _avatar = false;
   bool _totpOn = false;
   bool _loading = true;
@@ -36,9 +39,11 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   Future<void> _init() async {
     // 本地数据先渲染（秒开，不依赖网络）
     _username = await Api.instance.getUsername();
+    _account = await Api.instance.getAccount();
     _role = await Api.instance.getRole();
     _base = await Api.instance.getBase();
     _avatar = await Api.instance.hasAvatar();
+    _avatarLocalPath = (await avatarLocalFile())?.path ?? '';
     // 时间戳缓存破坏：改头像后 Image.network 立即显示新图
     _avatarUrl = '${await Api.instance.avatarUrl()}?t=${DateTime.now().millisecondsSinceEpoch}';
     _avatarToken = await Api.instance.getTokenValue() ?? '';
@@ -57,13 +62,21 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       final hasAvatar = u['avatar'] != null;
       final totpOn = (u['totp_enabled'] as num? ?? 0) == 1;
       await Api.instance.setUsername(name);
+      await Api.instance.setAccount('${u['username'] ?? ''}');
       await Api.instance.setAvatar(hasAvatar);
+      // 头像缓存后台校验：服务器有→下载覆盖本地；无→清本地；离线→保留旧缓存
+      final avatarSync = await syncAvatarCache();
+      if (avatarSync != null) {
+        await Api.instance.setAvatar(avatarSync);
+      }
+      final localPath = (await avatarLocalFile())?.path ?? '';
       if (!mounted) return;
       setState(() {
         _username = name;
         _account = '${u['username'] ?? ''}';
         _role = '${u['role'] ?? _role}';
-        _avatar = hasAvatar;
+        _avatar = avatarSync ?? hasAvatar;
+        _avatarLocalPath = localPath;
         _totpOn = totpOn;
       });
     } catch (e) {
@@ -101,8 +114,15 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     toast(context, '上传中…');
     try {
       await Api.instance.uploadPhoto('/auth/avatar', bytes, 'avatar.jpg');
+      // 本地副本：离线也能显示
+      await saveAvatarLocal(bytes);
       await Api.instance.setAvatar(true);
-      if (mounted) setState(() => _avatar = true);
+      if (mounted) {
+        setState(() {
+          _avatar = true;
+          _avatarLocalPath = (await avatarLocalFile())?.path ?? '';
+        });
+      }
       toast(context, '头像已更新');
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -386,6 +406,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   }
 
   Widget _avatarWidget(TaozhuColors c, double size) {
+    final local = _avatarLocalPath.isEmpty ? null : File(_avatarLocalPath);
     return Container(
       width: size,
       height: size,
@@ -394,18 +415,25 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
         shape: BoxShape.circle,
       ),
       clipBehavior: Clip.antiAlias,
-      child: _avatar && _avatarUrl.isNotEmpty
-          ? Image.network(
-              _avatarUrl,
+      child: local != null
+          ? Image.file(
+              local,
               fit: BoxFit.cover,
-              headers: _avatarToken.isEmpty ? null : {'Authorization': 'Bearer $_avatarToken'},
-              // 加载中保留占位图标，避免头像"短暂消失"
-              loadingBuilder: (_, child, progress) => progress == null
-                  ? child
-                  : Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
+              // 本地副本异常时回退占位，避免空白
               errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
             )
-          : Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
+          : _avatar && _avatarUrl.isNotEmpty
+              ? Image.network(
+                  _avatarUrl,
+                  fit: BoxFit.cover,
+                  headers: _avatarToken.isEmpty ? null : {'Authorization': 'Bearer $_avatarToken'},
+                  // 加载中保留占位图标，避免头像"短暂消失"
+                  loadingBuilder: (_, child, progress) => progress == null
+                      ? child
+                      : Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
+                  errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
+                )
+              : Icon(Icons.person_outline, size: size * 0.55, color: c.primary),
     );
   }
 

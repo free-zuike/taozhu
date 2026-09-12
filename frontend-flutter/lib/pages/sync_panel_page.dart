@@ -65,8 +65,9 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   }
 
   Future<void> _load() async {
-    // 本地数据立即可得，先渲染（不再被服务器请求阻塞转圈）
-    // 任何一步异常都必须释放 _loading（finally），否则页面永久转圈
+    // 一次性拉齐本地 + 服务器全部数据后再渲染（并行请求，各自容错）：
+    // 避免逐块 setState 导致"未同步图标一条条变已同步"的过程，进页直接看到结果。
+    if (mounted) setState(() => _loading = true);
     var local = <String, int>{};
     var pending = 0;
     var deviceId = '';
@@ -76,8 +77,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     var clientLocalSales = 0;
     var clientLocalPayments = 0;
     var localSynced = false;
+    String? localError;
     try {
-      local = <String, int>{};
       for (final (store, _) in _entities) {
         local[store] = (await LocalDb.getAll(store)).length;
       }
@@ -92,7 +93,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         // Web 无本地库（或 App 首次同步前）：从服务器拉店铺列表解析名称；
         // 从未选过店铺 → 默认第一个并保存（与账本页行为一致），修复 Web「永远未选择店铺」
         try {
-          final d = await Api.instance.get('/clients');
+          final d = await Api.instance.get('/clients').timeout(const Duration(seconds: 6));
           final netClients = ((d['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
           if (netClients.isNotEmpty) {
             clients = netClients;
@@ -116,86 +117,91 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         clientLocalPayments = payments.where((p) => '${p['client_id']}' == selectedId).length;
       }
     } catch (e) {
-      if (mounted) {
-        _error = e.toString().replaceFirst('Exception: ', '');
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _localCounts = local;
-          _pending = pending;
-          _deviceId = deviceId;
-          _lastSync = lastSync;
-          _selectedClientId = selectedId;
-          _selectedClientName = selectedName;
-          _clientLocalSales = clientLocalSales;
-          _clientLocalPayments = clientLocalPayments;
-          _localSynced = localSynced;
-          _loading = false;
-        });
-      }
+      localError = e.toString().replaceFirst('Exception: ', '');
     }
-    // 服务器统计异步到达后更新（慢/失败不影响已展示的本地数据）
+    // 服务器数据：并行拉取，各自容错（失败置 null，页面显示 —）
+    Map<String, dynamic>? serverStats;
+    Map<String, dynamic>? clientStats;
+    Map<String, dynamic>? saleCounts;
+    Map<String, dynamic>? payCounts;
+    Map<String, dynamic>? attachTotal;
+    await Future.wait([
+      _safe(() async {
+        serverStats = await Api.instance.get('/sync/stats').timeout(const Duration(seconds: 6));
+      }),
+      if (selectedId.isNotEmpty) ...[
+        _safe(() async {
+          clientStats = await Api.instance
+              .get('/sync/stats?client_id=$selectedId')
+              .timeout(const Duration(seconds: 6));
+        }),
+        _safe(() async {
+          saleCounts = await Api.instance
+              .post('/attachments/counts', {'entity': 'sale', 'client_id': selectedId})
+              .timeout(const Duration(seconds: 6));
+        }),
+        _safe(() async {
+          payCounts = await Api.instance
+              .post('/attachments/counts', {'entity': 'payment', 'client_id': selectedId})
+              .timeout(const Duration(seconds: 6));
+        }),
+      ],
+      _safe(() async {
+        attachTotal = await Api.instance.get('/attachments/total').timeout(const Duration(seconds: 6));
+      }),
+    ]);
+    // 附件本地副本计数（依赖服务器返回的单据 id）
+    var clientLocalAttach = 0;
+    var clientServerAttach = 0;
+    var localAttachTotal = 0;
+    var serverAttachTotal = 0;
+    if (saleCounts != null && payCounts != null) {
+      final saleIds = ((saleCounts['ids'] as List?) ?? []).cast<String>();
+      final payIds = ((payCounts['ids'] as List?) ?? []).cast<String>();
+      clientServerAttach =
+          ((saleCounts['total'] as num?) ?? 0).toInt() + ((payCounts['total'] as num?) ?? 0).toInt();
+      clientLocalAttach =
+          await _localAttachCount('sale', saleIds) + await _localAttachCount('payment', payIds);
+    }
+    if (attachTotal != null) {
+      serverAttachTotal = (attachTotal['total'] as num?)?.toInt() ?? 0;
+      localAttachTotal = await _localAllAttachCount();
+    }
+    if (!mounted) return;
+    // 一次性渲染完整结果（不再逐块刷新）
+    setState(() {
+      _localCounts = local;
+      _pending = pending;
+      _deviceId = deviceId;
+      _lastSync = lastSync;
+      _selectedClientId = selectedId;
+      _selectedClientName = selectedName;
+      _clientLocalSales = clientLocalSales;
+      _clientLocalPayments = clientLocalPayments;
+      _clientLocalAttach = clientLocalAttach;
+      _clientServerAttach = clientServerAttach;
+      _localAttachTotal = localAttachTotal;
+      _serverAttachTotal = serverAttachTotal;
+      _localSynced = localSynced;
+      _serverStats = serverStats ?? _serverStats;
+      _serverStatsLoaded = serverStats != null;
+      _clientServerLoaded = clientStats != null;
+      _clientAttachLoaded = saleCounts != null && payCounts != null;
+      _attachTotalLoaded = attachTotal != null;
+      if (clientStats != null) {
+        _clientServerSales = (clientStats['sales'] as num?)?.toInt() ?? 0;
+        _clientServerPayments = (clientStats['payments'] as num?)?.toInt() ?? 0;
+      }
+      _error = localError ?? (serverStats == null ? '无法获取服务器数据' : null);
+      _loading = false;
+    });
+  }
+
+  /// 容错包装：任何异常吞掉（调用方用可空变量判断成败）
+  Future<void> _safe(Future<void> Function() fn) async {
     try {
-      final d = await Api.instance.get('/sync/stats');
-      if (!mounted) return;
-      setState(() {
-        _serverStats = d;
-        _serverStatsLoaded = true;
-        _error = null;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
-      });
-    }
-    // 当前店铺的服务器计数（与本地差异行同款）+ 附件数（出货/收款凭证图片）
-    if (selectedId.isNotEmpty) {
-      try {
-        final d = await Api.instance.get('/sync/stats?client_id=$selectedId');
-        if (!mounted) return;
-        setState(() {
-          _clientServerSales = (d['sales'] as num?)?.toInt() ?? 0;
-          _clientServerPayments = (d['payments'] as num?)?.toInt() ?? 0;
-          _clientServerLoaded = true;
-        });
-      } catch (_) {
-        // 店铺维度统计失败不影响整页（差异行显示 0）
-      }
-      try {
-        // 服务器按店铺汇总附件数（R2），并返回该店全部单据 id 供本地副本对账
-        final saleRes = await Api.instance.post('/attachments/counts', {'entity': 'sale', 'client_id': selectedId});
-        final payRes = await Api.instance.post('/attachments/counts', {'entity': 'payment', 'client_id': selectedId});
-        final saleIds = ((saleRes['ids'] as List?) ?? []).cast<String>();
-        final payIds = ((payRes['ids'] as List?) ?? []).cast<String>();
-        final serverAttach = ((saleRes['total'] as num?) ?? 0).toInt() + ((payRes['total'] as num?) ?? 0).toInt();
-        final localAttach =
-            await _localAttachCount('sale', saleIds) + await _localAttachCount('payment', payIds);
-        if (!mounted) return;
-        setState(() {
-          _clientServerAttach = serverAttach;
-          _clientLocalAttach = localAttach;
-          _clientAttachLoaded = true;
-        });
-      } catch (_) {
-        // 附件统计失败不影响整页（差异行显示 0）
-      }
-    }
-    // 全部数据：附件总数（本地副本 vs 服务器 R2，分页统计）
-    try {
-      final d = await Api.instance.get('/attachments/total');
-      final serverAttachTotal = (d['total'] as num?)?.toInt() ?? 0;
-      final localAttachTotal = await _localAllAttachCount();
-      if (!mounted) return;
-      setState(() {
-        _serverAttachTotal = serverAttachTotal;
-        _localAttachTotal = localAttachTotal;
-        _attachTotalLoaded = true;
-      });
-    } catch (_) {
-      // 附件总数统计失败不影响整页
-    }
+      await fn();
+    } catch (_) {}
   }
 
   /// 全部本地附件副本计数（App 文档目录 attachments/ 递归；Web 无本地副本返回 0）
@@ -332,9 +338,9 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                   ])
                 else
                   _card(c, [
-                    _row(c, '出货单', '服务器 $_clientServerSales 条'),
-                    _row(c, '收款单', '服务器 $_clientServerPayments 条'),
-                    _row(c, '附件', '服务器 $_clientServerAttach 张'),
+                    _row(c, '出货单', _clientServerLoaded ? '服务器 $_clientServerSales 条' : '服务器 —'),
+                    _row(c, '收款单', _clientServerLoaded ? '服务器 $_clientServerPayments 条' : '服务器 —'),
+                    _row(c, '附件', _clientAttachLoaded ? '服务器 $_clientServerAttach 张' : '服务器 —'),
                   ]),
                 const SizedBox(height: 14),
                 Row(
@@ -358,8 +364,11 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 else
                   _card(c, [
                     for (final (store, label) in _entities)
-                      _row(c, label, '服务器 ${(_serverStats[store] as num?)?.toInt() ?? 0} 条'),
-                    _row(c, '附件', '服务器 $_serverAttachTotal 张'),
+                      _row(c, label,
+                          _serverStatsLoaded
+                              ? '服务器 ${(_serverStats[store] as num?)?.toInt() ?? 0} 条'
+                              : '服务器 —'),
+                    _row(c, '附件', _attachTotalLoaded ? '服务器 $_serverAttachTotal 张' : '服务器 —'),
                   ]),
                 if (!kIsWeb && !_localSynced)
                   Padding(

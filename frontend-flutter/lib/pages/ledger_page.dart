@@ -147,11 +147,10 @@ class _LedgerPageState extends State<LedgerPage> {
         _loading = false;
         _offline = false;
       });
-    } catch (e) {
-      // 网络失败不打扰（本地数据已展示）；本地无数据时才提示
+    } catch (_) {
+      // 网络失败不打扰（本地数据已展示）；本地无数据时标记离线态（不弹提示，错误已记日志）
       if (mounted && firstLocal.isEmpty) {
         setState(() => _offline = true);
-        toast(context, e.toString().replaceFirst('Exception: ', ''));
       }
     }
   }

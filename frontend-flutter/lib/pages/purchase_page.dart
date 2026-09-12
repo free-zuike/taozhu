@@ -100,8 +100,8 @@ class _PurchasePageState extends State<PurchasePage> {
       });
       // 编辑模式：商品目录就绪后预填原单据明细
       if (_editing) await _loadEdit();
-    } catch (e) {
-      if (cached == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
+    } catch (_) {
+      // 离线：本地缓存已展示，错误已记日志，不再弹提示
     }
   }
 

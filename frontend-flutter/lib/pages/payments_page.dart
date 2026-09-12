@@ -85,12 +85,10 @@ class _PaymentsPageState extends State<PaymentsPage> {
         _payments = localPays;
         _loading = false;
       });
-    } catch (e) {
+    } catch (_) {
+      // 离线：本地缓存已展示，错误已记日志，不再弹提示
       if (!mounted) return;
       setState(() => _loading = false);
-      if (localClients.isEmpty && localPays.isEmpty) {
-        toast(context, e.toString().replaceFirst('Exception: ', ''));
-      }
     }
   }
 
