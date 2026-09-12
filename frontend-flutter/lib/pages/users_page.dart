@@ -158,8 +158,8 @@ class _UsersPageState extends State<UsersPage> {
                               ? c.danger
                               : c.primary,
                         ),
-                        title: Text('${u['username']}'),
-                        subtitle: Text('${u['role']}' == 'admin' ? '老板' : '店员'),
+                        title: Text('${u['display_name'] ?? u['username']}'),
+                        subtitle: Text('${'${u['role']}' == 'admin' ? '老板' : '店员'} · 登录 ${u['username']}'),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [

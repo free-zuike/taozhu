@@ -37,6 +37,10 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   int _clientServerPayments = 0;
   int _clientServerAttach = 0;
 
+  // 全部数据附件（本地副本总数 vs 服务器 R2 总数）
+  int _localAttachTotal = 0;
+  int _serverAttachTotal = 0;
+
   static const _entities = [
     ('clients', '店铺'),
     ('items', '商品'),
@@ -165,6 +169,40 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         // 附件统计失败不影响整页（差异行显示 0）
       }
     }
+    // 全部数据：附件总数（本地副本 vs 服务器 R2，分页统计）
+    try {
+      final d = await Api.instance.get('/attachments/total');
+      final serverAttachTotal = (d['total'] as num?)?.toInt() ?? 0;
+      final localAttachTotal = await _localAllAttachCount();
+      if (!mounted) return;
+      setState(() {
+        _serverAttachTotal = serverAttachTotal;
+        _localAttachTotal = localAttachTotal;
+      });
+    } catch (_) {
+      // 附件总数统计失败不影响整页
+    }
+  }
+
+  /// 全部本地附件副本计数（App 文档目录 attachments/ 递归；Web 无本地副本返回 0）
+  Future<int> _localAllAttachCount() async {
+    if (kIsWeb) return 0;
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final dir = Directory('${root.path}/attachments');
+      if (!dir.existsSync()) return 0;
+      var n = 0;
+      for (final e in dir.listSync()) {
+        if (e is Directory) {
+          for (final f in e.listSync()) {
+            if (f is Directory) n += f.listSync().whereType<File>().length;
+          }
+        }
+      }
+      return n;
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// 本地附件副本计数（App 文档目录 attachments/{entity}/{id}/；Web 无本地副本返回 0）
@@ -291,11 +329,13 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                   _card(c, [
                     for (final (store, label) in _entities)
                       _diffRow(c, label, _localCounts[store] ?? 0, (_serverStats[store] as num?)?.toInt() ?? 0),
+                    _diffRow(c, '附件', _localAttachTotal, _serverAttachTotal),
                   ])
                 else
                   _card(c, [
                     for (final (store, label) in _entities)
                       _row(c, label, '服务器 ${(_serverStats[store] as num?)?.toInt() ?? 0} 条'),
+                    _row(c, '附件', '服务器 $_serverAttachTotal 张'),
                   ]),
                 const SizedBox(height: 14),
                 Text('Web 与 App 行为差异', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: c.textMain)),

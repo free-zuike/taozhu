@@ -59,12 +59,17 @@ class _StatsPageState extends State<StatsPage> {
     if (cachedClients != null) {
       _clients = ((cachedClients['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
     }
+    final cachedYears = await Api.instance.getCachedRaw('/stats/years');
+    if (cachedYears != null) {
+      _years = ((cachedYears['years'] as List?) ?? []).map((e) => '$e').toList();
+    }
     try {
       final results = await Future.wait([
         Api.instance.get('/clients'),
         Api.instance.get('/stats/years'),
       ]);
       await Api.instance.setCache('/clients', results[0]);
+      await Api.instance.setCache('/stats/years', results[1]);
       if (!mounted) return;
       _clients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
       _years = ((results[1]['years'] as List?) ?? []).map((e) => '$e').toList();
@@ -144,44 +149,66 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    final (start, end) = _viewRange;
+    final cq = _clientId != null ? '&client_id=$_clientId' : '';
+    final isYear = _mode == 'year';
+    final paths = isYear
+        ? ['/stats/monthly?year=$_year']
+        : [
+            '/stats/summary?start=$start&end=$end$cq',
+            '/stats/daily?start=$start&end=$end$cq',
+            '/stats/items?start=$start&end=$end$cq',
+            '/stats/categories?start=$start&end=$end$cq',
+            if (_clientId == null) '/stats/clients?start=$start&end=$end',
+          ];
+    // 本地优先：有缓存先渲染（秒开不转圈），再静默网络刷新写缓存；
+    // 无缓存时才转圈（统计由服务端聚合，首次打开无本地数据可等网络）
+    final cached = await Future.wait(paths.map((p) => Api.instance.getCachedRaw(p)));
+    if (cached.any((x) => x != null)) {
+      if (!mounted) return;
+      _applyStats(isYear, cached);
+    } else {
+      setState(() => _loading = true);
+    }
     try {
-      final (start, end) = _viewRange;
-      if (_mode == 'year') {
-        final results = await Future.wait([
-          Api.instance.get('/stats/monthly?year=$_year'),
-        ]);
-        setState(() {
-          _months = (results[0]['months'] as List?) ?? [];
-          _days = [];
-          _itemsStats = [];
-          _cats = [];
-          _canSeeProfit = (results[0]['can_see_profit'] as bool?) ?? true;
-          _loading = false;
-        });
-        return;
+      final results = await Future.wait(paths.map((p) => Api.instance.get(p)));
+      for (var i = 0; i < paths.length; i++) {
+        if (results[i].isNotEmpty) await Api.instance.setCache(paths[i], results[i]);
       }
-      final cq = _clientId != null ? '&client_id=$_clientId' : '';
-      final results = await Future.wait([
-        Api.instance.get('/stats/summary?start=$start&end=$end$cq'),
-        Api.instance.get('/stats/daily?start=$start&end=$end$cq'),
-        Api.instance.get('/stats/items?start=$start&end=$end$cq'),
-        Api.instance.get('/stats/categories?start=$start&end=$end$cq'),
-        if (_clientId == null) Api.instance.get('/stats/clients?start=$start&end=$end'),
-      ]);
+      if (!mounted) return;
+      _applyStats(isYear, results);
+    } catch (e) {
+      if (!mounted) return;
+      if (!cached.any((x) => x != null)) {
+        setState(() => _loading = false);
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      }
+    }
+  }
+
+  /// 把一批统计响应应用到页面状态（缓存与网络结果共用）
+  void _applyStats(bool isYear, List<Map<String, dynamic>?> results) {
+    if (isYear) {
+      final r = results.firstOrNull;
       setState(() {
-        _summary = results[0];
-        _days = (results[1]['days'] as List?) ?? [];
-        _itemsStats = ((results[2]['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _cats = ((results[3]['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _clientsStats = results.length > 4 ? ((results[4]['clients'] as List?) ?? []) : [];
-        _canSeeProfit = (results[0]['can_see_profit'] as bool?) ?? true;
+        _months = ((r?['months'] as List?) ?? []);
+        _days = [];
+        _itemsStats = [];
+        _cats = [];
+        _canSeeProfit = (r?['can_see_profit'] as bool?) ?? true;
         _loading = false;
       });
-    } catch (e) {
-      setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      return;
     }
+    setState(() {
+      _summary = results[0] ?? _summary;
+      _days = ((results[1]?['days'] as List?) ?? []);
+      _itemsStats = ((results[2]?['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      _cats = ((results[3]?['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+      _clientsStats = results.length > 4 ? ((results[4]?['clients'] as List?) ?? []) : [];
+      _canSeeProfit = (results[0]?['can_see_profit'] as bool?) ?? true;
+      _loading = false;
+    });
   }
 
   double _num(Object? v) => (v is num ? v.toDouble() : double.tryParse('$v') ?? 0);

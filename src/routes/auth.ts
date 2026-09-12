@@ -26,10 +26,12 @@ authRouter.post('/bootstrap', async (c) => {
 
   const id = randomId();
   const passwordHash = await hashPassword(password);
-  await db.prepare('INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)')
-    .bind(id, username, passwordHash, 'admin').run();
+  // 显示名默认取登录账号 @ 前部分（无 @ 取全名）
+  const displayName = username.includes('@') ? username.split('@')[0] : username;
+  await db.prepare('INSERT INTO users (id, username, display_name, password_hash, role) VALUES (?, ?, ?, ?, ?)')
+    .bind(id, username, displayName, passwordHash, 'admin').run();
   const token = await signToken(c.env.JWT_SECRET, { sub: id, username, role: 'admin' });
-  return c.json({ token, user: { id, username, role: 'admin' } }, 201);
+  return c.json({ token, user: { id, username, display_name: displayName, role: 'admin' } }, 201);
 });
 
 // POST /auth/login
@@ -54,29 +56,32 @@ authRouter.post('/login', async (c) => {
   return c.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
 
-// GET /auth/me — 当前用户（含头像/两步验证状态；实时查库，改名校验后也拿到新用户名）
+// GET /auth/me — 当前用户（登录账号/显示名/头像/两步验证；实时查库）
 authRouter.get('/me', authMiddleware(), async (c) => {
   const u = c.get('user');
-  const row = await c.env.DB.prepare('SELECT id, username, role, avatar, totp_enabled FROM users WHERE id = ?')
-    .bind(u.id).first<{ id: string; username: string; role: string; avatar: string | null; totp_enabled: number }>();
+  const row = await c.env.DB.prepare(
+    'SELECT id, username, display_name, role, avatar, totp_enabled FROM users WHERE id = ?',
+  ).bind(u.id).first<{
+    id: string; username: string; display_name: string | null; role: string; avatar: string | null; totp_enabled: number;
+  }>();
   if (!row) return c.json({ error: '账号不存在' }, 404);
   return c.json({ user: row });
 });
 
-// PATCH /auth/profile — 自助修改用户名/密码（本人；改密码需旧密码；用户名变更后重新签发 token）
+// PATCH /auth/profile — 自助修改显示名/密码（本人）。
+// 登录账号（username）不可更改；改密码需旧密码。
 authRouter.patch('/profile', authMiddleware(), async (c) => {
   const me = c.get('user');
   const body = await c.req.json().catch(() => null) as
-    { username?: string; old_password?: string; password?: string } | null;
+    { display_name?: string; old_password?: string; password?: string } | null;
   const row = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(me.id).first<UserRow>();
   if (!row) return c.json({ error: '账号不存在' }, 404);
 
-  const username = body?.username?.trim();
-  if (username && username !== row.username) {
-    if (username.length < 2) return c.json({ error: '登录名至少 2 个字符' }, 400);
-    const dup = await c.env.DB.prepare('SELECT id FROM users WHERE username = ? AND id != ?')
-      .bind(username, me.id).first();
-    if (dup) return c.json({ error: '登录名已存在' }, 409);
+  let displayName = row.display_name || row.username;
+  if (body?.display_name !== undefined) {
+    const dn = body.display_name.trim();
+    if (dn.length < 1 || dn.length > 30) return c.json({ error: '用户名长度需在 1-30 个字符' }, 400);
+    displayName = dn;
   }
   let passwordHash = row.password_hash;
   if (body?.password) {
@@ -86,14 +91,9 @@ authRouter.patch('/profile', authMiddleware(), async (c) => {
     if (body.password.length < 6) return c.json({ error: '密码至少 6 位' }, 400);
     passwordHash = await hashPassword(body.password);
   }
-  const finalName = username || row.username;
-  await c.env.DB.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?')
-    .bind(finalName, passwordHash, me.id).run();
-  // 用户名变更：旧 token 里用户名过期 → 重新签发，前端换存
-  const token = username && username !== row.username
-    ? await signToken(c.env.JWT_SECRET, { sub: me.id, username: finalName, role: row.role })
-    : undefined;
-  return c.json({ user: { id: me.id, username: finalName, role: row.role }, token });
+  await c.env.DB.prepare('UPDATE users SET display_name = ?, password_hash = ? WHERE id = ?')
+    .bind(displayName, passwordHash, me.id).run();
+  return c.json({ user: { id: me.id, username: row.username, display_name: displayName, role: row.role } });
 });
 
 // GET /auth/totp/setup — 获取两步验证密钥（未开启时；已生成过则复用，便于确认前重看）

@@ -28,7 +28,7 @@ attachmentsRouter.get('/', async (c) => {
   const prefixes = [prefixOf(entity, id), ...legacyPrefixesOf(entity, id)];
   const groups = await Promise.all(prefixes.map((p) => store.list(p)));
   const byKey = new Map<string, { key: string; size: number; uploaded?: Date }>();
-  for (const group of groups) for (const o of group) byKey.set(o.key, o);
+  for (const group of groups) for (const o of group.objects) byKey.set(o.key, o);
   const attachments = [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
   return c.json({
     attachments: attachments.map((o) => ({ key: o.key, size: o.size, uploaded: o.uploaded?.toISOString() ?? '' })),
@@ -71,7 +71,7 @@ attachmentsRouter.post('/counts', async (c) => {
     const rows = await c.env.DB.prepare(`SELECT id FROM ${entity}s WHERE client_id = ?`).bind(clientId).all<{ id: string }>();
     ids = rows.results.map((r) => r.id);
   } else {
-    ids = ((body?.ids ?? []) as unknown[]).filter((x) => typeof x === 'string' && x.length > 0).slice(0, 500);
+    ids = (body?.ids ?? []).filter((x) => x.trim().length > 0).slice(0, 500);
   }
   if (ids.length === 0) return c.json({ counts: {}, total: 0, ids: [] });
   const counts: Record<string, number> = {};
@@ -79,11 +79,34 @@ attachmentsRouter.post('/counts', async (c) => {
     const prefixes = [prefixOf(entity, id), ...legacyPrefixesOf(entity, id)];
     const groups = await Promise.all(prefixes.map((p) => store.list(p)));
     const byKey = new Map<string, unknown>();
-    for (const group of groups) for (const o of group) byKey.set(o.key, o);
+    for (const group of groups) for (const o of group.objects) byKey.set(o.key, o);
     counts[id] = byKey.size;
   }));
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return c.json({ counts, total, ids });
+});
+
+// GET /attachments/total — 全部附件总数（同步面板「全部数据」附件差异行；含新旧前缀，分页统计）
+attachmentsRouter.get('/total', async (c) => {
+  const store = createStorage(c.env);
+  // 规范前缀 + 历史前缀家族（taozhu/attachments/ 与根级 sale|purchase|payment/），互不重叠
+  const prefixes = [
+    'taozhu/images/attachments/',
+    'taozhu/attachments/',
+    'sale/',
+    'purchase/',
+    'payment/',
+  ];
+  let total = 0;
+  await Promise.all(prefixes.map(async (p) => {
+    let cursor: string | undefined;
+    do {
+      const r = await store.list(p, cursor);
+      total += r.objects.length;
+      cursor = r.truncated ? r.cursor : undefined;
+    } while (cursor);
+  }));
+  return c.json({ total });
 });
 
 // GET /attachments/:key{.+} — 代理读取图片内容（key 含斜杠如 sale/s1/123.jpg，{.+} 捕获多段）

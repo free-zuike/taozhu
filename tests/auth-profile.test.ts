@@ -93,21 +93,34 @@ describe('账号自助修改（/auth/profile）', () => {
     token = await loginAdmin(env);
   });
 
-  it('修改用户名：返回新 token，新 token 可用且 /me 读到新用户名', async () => {
-    const res = await call(env, 'PATCH', '/api/v1/auth/profile', token, { username: '新老板' });
+  it('修改显示名：登录账号不变，/me 返回新显示名', async () => {
+    const res = await call(env, 'PATCH', '/api/v1/auth/profile', token, { display_name: '老板小张' });
     expect(res.status).toBe(200);
-    const d = (await res.json()) as { user: { username: string }; token?: string };
-    expect(d.user.username).toBe('新老板');
-    expect(typeof d.token).toBe('string');
+    const d = (await res.json()) as { user: { username: string; display_name: string } };
+    expect(d.user.username).toBe('boss'); // 登录账号不可改
+    expect(d.user.display_name).toBe('老板小张');
 
-    const me = await (await call(env, 'GET', '/api/v1/auth/me', d.token)).json() as { user: { username: string } };
-    expect(me.user.username).toBe('新老板');
+    const me = await (await call(env, 'GET', '/api/v1/auth/me', token)).json() as { user: { username: string; display_name: string } };
+    expect(me.user.display_name).toBe('老板小张');
+    expect(me.user.username).toBe('boss');
   });
 
-  it('用户名重复 → 409', async () => {
-    await call(env, 'POST', '/api/v1/users', token, { username: 'staff1', password: 'staff123', role: 'staff' });
-    const res = await call(env, 'PATCH', '/api/v1/auth/profile', token, { username: 'staff1' });
-    expect(res.status).toBe(409);
+  it('登录账号不可通过 profile 修改（username 字段被忽略）', async () => {
+    const res = await call(env, 'PATCH', '/api/v1/auth/profile', token, { username: 'hacked' });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { user: { username: string } };
+    expect(d.user.username).toBe('boss');
+    // 登录仍用原账号
+    expect((await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'boss', password: 'admin1234' })).status).toBe(200);
+  });
+
+  it('bootstrap 显示名默认取登录账号 @ 前部分', async () => {
+    env = await setup();
+    const res = await call(env, 'POST', '/api/v1/auth/bootstrap', undefined, { username: 'boss@mail.com', password: 'admin1234' });
+    expect(res.status).toBe(201);
+    const d = (await res.json()) as { user: { username: string; display_name: string } };
+    expect(d.user.display_name).toBe('boss');
+    expect(d.user.username).toBe('boss@mail.com');
   });
 
   it('改密码：需旧密码，且旧密码错误被拒', async () => {
@@ -123,6 +136,13 @@ describe('账号自助修改（/auth/profile）', () => {
   it('新密码至少 6 位', async () => {
     const res = await call(env, 'PATCH', '/api/v1/auth/profile', token, { old_password: 'admin1234', password: '123' });
     expect(res.status).toBe(400);
+  });
+
+  it('老板建账号显示名默认取 @ 前部分', async () => {
+    const res = await call(env, 'POST', '/api/v1/users', token, { username: 'staff@shop.com', password: 'staff123', role: 'staff' });
+    expect(res.status).toBe(201);
+    const d = (await res.json()) as { display_name?: string };
+    expect(d.display_name).toBe('staff');
   });
 
   it('头像：上传后 /auth/avatar 可读到，/me 返回 avatar', async () => {
@@ -219,6 +239,14 @@ describe('附件按店铺统计（/attachments/counts）', () => {
     };
     expect(res.total).toBe(1);
     expect(res.counts['s1']).toBe(1);
+  });
+
+  it('总数统计 /attachments/total 含新旧前缀', async () => {
+    await call(env, 'POST', '/api/v1/attachments?entity=sale&id=s1', token, photoForm(), true);
+    await env.BUCKET.put('taozhu/attachments/sale/s1/old.jpg', new Uint8Array([1, 2, 3]));
+    await env.BUCKET.put('sale/s1/bare.jpg', new Uint8Array([1, 2, 3]));
+    const d = await (await call(env, 'GET', '/api/v1/attachments/total', token)).json() as { total: number };
+    expect(d.total).toBe(3);
   });
 
   it('参数校验：非法 entity → 400', async () => {

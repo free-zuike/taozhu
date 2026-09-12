@@ -6,6 +6,10 @@ const DDL: string[] = [
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'staff' CHECK (role IN ('admin','staff')),
+    display_name TEXT,
+    avatar TEXT,
+    totp_secret TEXT,
+    totp_enabled INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE TABLE IF NOT EXISTS clients (
@@ -197,6 +201,16 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     if (!uCols.results.some((x) => x.name === 'totp_enabled')) {
       await db.prepare('ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0').run();
+    }
+    // v0.17.18.0：users 显示名 display_name（登录账号不可改，用户名=显示名可改；默认取登录账号 @ 前部分）
+    if (!uCols.results.some((x) => x.name === 'display_name')) {
+      await db.prepare('ALTER TABLE users ADD COLUMN display_name TEXT').run();
+      await db.prepare(
+        `UPDATE users SET display_name = CASE
+          WHEN instr(username, '@') > 0 THEN substr(username, 1, instr(username, '@') - 1)
+          ELSE username END
+        WHERE display_name IS NULL OR display_name = ''`,
+      ).run();
     }
     for (const t of ['clients', 'items'] as const) {
       const cols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../api.dart';
 import '../theme.dart';
 import 'router.dart';
@@ -15,7 +16,8 @@ class AccountSettingsPage extends StatefulWidget {
 }
 
 class _AccountSettingsPageState extends State<AccountSettingsPage> {
-  String _username = '';
+  String _username = ''; // 显示名（可改）
+  String _account = ''; // 登录账号（不可改）
   String _role = '';
   String _base = '';
   String _avatarUrl = '';
@@ -47,11 +49,13 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       final d = await Api.instance.get('/auth/me');
       final u = d['user'] as Map?;
       if (u == null) return;
-      await Api.instance.setUsername('${u['username'] ?? ''}');
+      final name = '${u['display_name'] ?? u['username'] ?? ''}';
+      await Api.instance.setUsername(name);
       await Api.instance.setAvatar(u['avatar'] != null);
       if (!mounted) return;
       setState(() {
-        _username = '${u['username'] ?? ''}';
+        _username = name;
+        _account = '${u['username'] ?? ''}';
         _role = '${u['role'] ?? _role}';
         _avatar = u['avatar'] != null;
         _totpOn = (u['totp_enabled'] as num? ?? 0) == 1;
@@ -111,7 +115,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(labelText: '登录名（至少 2 个字符）'),
+          decoration: const InputDecoration(labelText: '用户名（显示用，1-30 字）'),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
@@ -121,15 +125,12 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     );
     if (ok != true) return;
     final name = ctrl.text.trim();
-    if (name.length < 2) {
-      toast(context, '登录名至少 2 个字符');
+    if (name.isEmpty || name.length > 30) {
+      toast(context, '用户名长度需在 1-30 个字符');
       return;
     }
     try {
-      final d = await Api.instance.patch('/auth/profile', {'username': name});
-      // 用户名变更后服务端重新签发 token（旧 token 里用户名过期）
-      final t = d['token'];
-      if (t is String && t.isNotEmpty) await Api.instance.setToken(t);
+      await Api.instance.patch('/auth/profile', {'display_name': name});
       await Api.instance.setUsername(name);
       if (mounted) setState(() => _username = name);
       toast(context, '用户名已修改');
@@ -205,9 +206,21 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('用验证器 App（如 Google Authenticator / 微软验证器）扫描以下链接，或手动输入密钥：',
-                    style: TextStyle(fontSize: 13)),
+                // 二维码：验证器 App 扫码添加；下方链接/密钥可手动输入
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: QrImageView(data: uri, size: 180),
+                  ),
+                ),
                 const SizedBox(height: 10),
+                const Text('用验证器 App（如 Google Authenticator / 微软验证器）扫码，或手动输入密钥：',
+                    style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 8),
                 SelectableText(uri, style: const TextStyle(fontSize: 12, color: Color(0xFF409EFF))),
                 const SizedBox(height: 6),
                 SelectableText('密钥：$secret', style: const TextStyle(fontSize: 12)),
@@ -316,6 +329,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                 const SizedBox(height: 18),
                 _groupTitle(c, '账号'),
                 _card(c, [
+                  _tile(c, Icons.alternate_email_outlined, '登录账号', _account.isEmpty ? '—' : _account, null),
                   _tile(c, Icons.badge_outlined, '用户名', _username.isEmpty ? '—' : _username, _changeUsername),
                   _tile(c, Icons.lock_reset_outlined, '修改密码', '需验证当前密码', _changePassword),
                   _tile(c,
@@ -409,7 +423,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     );
   }
 
-  Widget _tile(TaozhuColors c, IconData icon, String title, String subtitle, VoidCallback onTap,
+  Widget _tile(TaozhuColors c, IconData icon, String title, String subtitle, VoidCallback? onTap,
       {bool warn = false}) {
     return ListTile(
       leading: Container(
@@ -420,7 +434,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       ),
       title: Text(title, style: TextStyle(fontSize: 15, color: c.textMain)),
       subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: warn ? c.success : c.textSub)),
-      trailing: const Icon(Icons.chevron_right, color: Color(0xFF909399)),
+      trailing: onTap == null ? null : const Icon(Icons.chevron_right, color: Color(0xFF909399)),
       onTap: onTap,
     );
   }

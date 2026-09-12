@@ -3,12 +3,13 @@
 -- 与 src/schema.ts 的 DDL 保持一致；部署时由 CI 执行（wrangler d1 execute --remote --file），
 -- 请求路径的 ensureSchema 仅作已有库缺列/缺表的兜底（对完整库只读检查）。
 
--- 用户（老板 admin / 店员 staff；avatar 头像 R2 key、totp 两步验证）
+-- 用户（老板 admin / 店员 staff；display_name 显示名、avatar 头像 R2 key、totp 两步验证）
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'staff' CHECK (role IN ('admin','staff')),
+  display_name TEXT,
   avatar TEXT,
   totp_secret TEXT,
   totp_enabled INTEGER NOT NULL DEFAULT 0,

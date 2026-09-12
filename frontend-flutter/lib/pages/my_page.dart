@@ -74,11 +74,13 @@ class _MyPageState extends State<MyPage> {
       final d = await Api.instance.get('/auth/me');
       final u = d['user'] as Map?;
       if (u == null) return;
-      await Api.instance.setUsername('${u['username'] ?? ''}');
+      // 显示名（默认取登录账号 @ 前部分）；登录账号本身不可改
+      final name = '${u['display_name'] ?? u['username'] ?? ''}';
+      await Api.instance.setUsername(name);
       await Api.instance.setAvatar(u['avatar'] != null);
       if (!mounted) return;
       setState(() {
-        _username = '${u['username'] ?? ''}';
+        _username = name;
         _avatar = u['avatar'] != null;
       });
     } catch (_) {
@@ -712,8 +714,6 @@ class _MyPageState extends State<MyPage> {
                   '$_pending 条单据等待上传${_lastSync.isEmpty ? '' : '（上次：$_lastSync）'}',
                   _syncPending,
                   warn: true),
-            if (_pending == 0 && !kIsWeb && _lastSync.isNotEmpty)
-              _item(Icons.cloud_done_outlined, c.primary, '已同步', '上次同步：$_lastSync', () {}),
             _item(Icons.manage_accounts_outlined, c.primary, '账号设置',
                 '头像、用户名、密码、两步验证、服务器地址',
                 () => Navigator.of(context)

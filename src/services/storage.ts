@@ -8,6 +8,13 @@ export interface AttachmentObject {
   uploaded?: Date;
 }
 
+/** 分页列结果（R2 list 单次上限 1000，truncated=true 时用 cursor 继续取） */
+export interface AttachmentListResult {
+  objects: AttachmentObject[];
+  truncated: boolean;
+  cursor?: string;
+}
+
 export type StorageValue = string | ArrayBuffer | ArrayBufferView | ReadableStream | Blob;
 
 export interface AttachmentStorage {
@@ -15,8 +22,8 @@ export interface AttachmentStorage {
   put(key: string, value: StorageValue, contentType?: string): Promise<void>;
   /** 读取对象；不存在返回 null */
   get(key: string): Promise<{ body: ReadableStream; contentType?: string } | null>;
-  /** 按前缀列出对象 */
-  list(prefix: string): Promise<AttachmentObject[]>;
+  /** 按前缀列出对象（可分页） */
+  list(prefix: string, cursor?: string): Promise<AttachmentListResult>;
   /** 删除对象 */
   delete(key: string): Promise<void>;
 }
@@ -39,13 +46,17 @@ export class R2Storage implements AttachmentStorage {
     return { body: obj.body, contentType: headers.get('content-type') ?? undefined };
   }
 
-  async list(prefix: string): Promise<AttachmentObject[]> {
-    const r = await this.bucket.list({ prefix });
-    return r.objects.map((o) => ({
-      key: o.key,
-      size: o.size,
-      uploaded: o.uploaded ? new Date(o.uploaded) : undefined,
-    }));
+  async list(prefix: string, cursor?: string): Promise<AttachmentListResult> {
+    const r = await this.bucket.list({ prefix, cursor: cursor as string | undefined });
+    return {
+      objects: r.objects.map((o) => ({
+        key: o.key,
+        size: o.size,
+        uploaded: o.uploaded ? new Date(o.uploaded) : undefined,
+      })),
+      truncated: r.truncated,
+      cursor: r.truncated ? (r.cursor ?? undefined) : undefined,
+    };
   }
 
   async delete(key: string): Promise<void> {

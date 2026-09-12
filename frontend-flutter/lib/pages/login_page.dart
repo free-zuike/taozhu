@@ -45,7 +45,7 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
     if (_userCtrl.text.trim().isEmpty || _passCtrl.text.isEmpty) {
-      _toast('请输入登录名和密码');
+      _toast('请输入邮箱 / 账号和密码');
       return;
     }
     setState(() => _busy = true);
@@ -74,7 +74,7 @@ class _LoginPageState extends State<LoginPage> {
         final me = await Api.instance.get('/auth/me');
         final mu = me['user'] as Map?;
         if (mu != null) {
-          await Api.instance.setUsername('${mu['username'] ?? ''}');
+          await Api.instance.setUsername('${mu['display_name'] ?? mu['username'] ?? ''}');
           await Api.instance.setAvatar(mu['avatar'] != null);
         }
       } catch (_) {}
@@ -148,7 +148,7 @@ class _LoginPageState extends State<LoginPage> {
                     _field(_baseCtrl, Icons.dns_outlined, '服务器地址', '您的服务器地址，如 https://xxx.com'),
                     const SizedBox(height: 14),
                   ],
-                  _field(_userCtrl, Icons.person_outline, '登录名', null),
+                  _field(_userCtrl, Icons.person_outline, '邮箱 / 账号', null),
                   const SizedBox(height: 14),
                   TextField(
                     controller: _passCtrl,
