@@ -84,9 +84,16 @@ class _ItemsPageState extends State<ItemsPage> {
     }
     // 原生：列表页刷新只读本地库（同步只由「我的」页/进应用自动同步驱动）；搜索也搜本地镜像
     final local = await LocalDb.getAllByName('items');
+    // 本地已删除但尚未推送落地的商品：过滤掉，防止"删了又出现"（与 Web 分支口径一致）
+    final hideIds = await SyncService.pendingDeletedIds('item');
+    final visible = hideIds.isEmpty
+        ? local
+        : local.where((x) => !hideIds.contains('${x['id']}')).toList();
     if (mounted) {
       setState(() {
-        _items = searching ? local.where((x) => '${x['name'] ?? ''}'.contains(q)).toList() : local;
+        _items = searching
+            ? visible.where((x) => '${x['name'] ?? ''}'.contains(q)).toList()
+            : visible;
         _loading = false;
       });
     }
@@ -121,17 +128,23 @@ class _ItemsPageState extends State<ItemsPage> {
     } else {
       // 软删：本地删行 + 队列推送 upsert 带 deleted_at（prices 补 active:1 防服务端恢复时跳过）
       final item = _items.where((x) => '${x['id']}' == id).firstOrNull;
-      if (item != null) {
-        final delPayload = Map<String, dynamic>.from(item);
-        delPayload['deleted_at'] = DateTime.now().toIso8601String();
-        final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
-        for (final p in prices) { p['active'] = 1; }
-        delPayload['prices'] = prices;
-        await LocalDb.deleteOne('items', id);
+      if (item == null) {
+        // 本地镜像找不到（可能已被删/未同步）→ 直接推删除 payload，不假成功
+        final delPayload = {'id': id, 'name': name, 'deleted_at': DateTime.now().toIso8601String()};
         await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
+        toast(context, '已删除，正在同步');
+        _load();
+        return;
       }
-      toast(context, '已删除，正在同步');
+      final delPayload = Map<String, dynamic>.from(item);
+      delPayload['deleted_at'] = DateTime.now().toIso8601String();
+      final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+      for (final p in prices) { p['active'] = 1; }
+      delPayload['prices'] = prices;
+      await LocalDb.deleteOne('items', id);
+      await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
     }
+    toast(context, '已删除，正在同步');
     _load();
   }
 
@@ -202,8 +215,8 @@ class _ItemsPageState extends State<ItemsPage> {
                                       padding: const EdgeInsets.symmetric(vertical: 2),
                                       child: Text(
                                           _isStaff
-                                              ? '${p['unit']}：出 ¥${p['sale_price']}'
-                                              : '${p['unit']}：进 ¥${p['purchase_price']} → 出 ¥${p['sale_price']}',
+                                              ? '${p['unit']}：售价 ¥${p['sale_price']}'
+                                              : '${p['unit']}：进价 ¥${p['purchase_price']} → 售价 ¥${p['sale_price']}',
                                           style: TextStyle(color: _c.textSub, fontSize: 13)),
                                     ),
                                 ],

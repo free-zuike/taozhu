@@ -76,35 +76,40 @@ class _PurchasePageState extends State<PurchasePage> {
   }
 
   Future<void> _load() async {
-    // ① 本地缓存秒开
-    final cached = await Api.instance.getCached('/items/summary');
-    if (cached != null) {
-      final freq = await Freq.load();
-      final list = ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>()
-        ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
-      setState(() {
-        _items = list;
-      });
+    // Web（无本地库）：直连网络刷新；原生：只读本地库镜像（同步由「我的」页/进应用驱动，页面不访问网络）
+    if (kIsWeb) {
+      try {
+        final i = await Api.instance.get('/items/summary');
+        await Api.instance.setCache('/items/summary', i);
+        if (!mounted) return;
+        final freq = await Freq.load();
+        final lastQty = await Freq.loadLastQty();
+        final list = ((i['items'] as List?) ?? []).cast<Map<String, dynamic>>()
+          ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
+        if (!mounted) return;
+        setState(() {
+          _items = list;
+          _lastQty = lastQty;
+        });
+        // 编辑模式：商品目录就绪后预填原单据明细
+        if (_editing) await _loadEdit();
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      }
+      return;
     }
-    // ② 并行网络刷新 + 更新缓存
-    try {
-      final i = await Api.instance.get('/items/summary');
-      await Api.instance.setCache('/items/summary', i);
-      if (!mounted) return;
-      final freq = await Freq.load();
-      final lastQty = await Freq.loadLastQty();
-      final list = ((i['items'] as List?) ?? []).cast<Map<String, dynamic>>()
-        ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
-      if (!mounted) return;
-      setState(() {
-        _items = list;
-        _lastQty = lastQty;
-      });
-      // 编辑模式：商品目录就绪后预填原单据明细
-      if (_editing) await _loadEdit();
-    } catch (_) {
-      // 离线：本地缓存已展示，错误已记日志，不再弹提示
-    }
+    // 原生：本地库镜像秒开（离线可回显商品），同步完成后会再触发刷新
+    final freq = await Freq.load();
+    final lastQty = await Freq.loadLastQty();
+    final list = await LocalDb.getAllByName('items')
+      ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
+    if (!mounted) return;
+    setState(() {
+      _items = list;
+      _lastQty = lastQty;
+    });
+    // 编辑模式：商品目录就绪后预填原单据明细（本地库优先，离线也能回显）
+    if (_editing) await _loadEdit();
   }
 
   /// 商品在本地频率表中的最大使用次数（按价格组合取峰值，0=无记录）

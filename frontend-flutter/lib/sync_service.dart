@@ -183,6 +183,10 @@ class SyncService {
       final did = await deviceId();
       var total = 0;
       var hasMore = true;
+      // 本地待推送删除的实体（删除尚未落地前，pull 不得把它们恢复，否则"删了又出现"）
+      final pendingDelete = <String, Set<String>>{};
+      Future<Set<String>> pendingOf(String t) async =>
+          pendingDelete.putIfAbsent(t, () => pendingDeletedIds(t));
       while (hasMore) {
         final d = await Api.instance.get('/sync/pull?since=$since&limit=500&device_id=$did');
         if (d == null) break;
@@ -203,6 +207,8 @@ class SyncService {
             if (deletedAt != null && '$deletedAt'.isNotEmpty) {
               await LocalDb.deleteOne(store, id);
             } else {
+              // 本地已软删但推送尚未落地：跳过 upsert，保留本地删除状态
+              if (await (await pendingOf(entityType)).contains(id)) continue;
               await LocalDb.upsertOne(store, payload);
             }
           }

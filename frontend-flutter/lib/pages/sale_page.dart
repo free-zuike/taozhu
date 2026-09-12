@@ -85,45 +85,18 @@ class _SalePageState extends State<SalePage> {
   }
 
   Future<void> _load() async {
-    // ① 本地缓存秒开（下拉立即有数据，不卡网络）
-    final cachedC = await Api.instance.getCached('/clients');
-    final cachedI = await Api.instance.getCached('/items/summary');
-    if (cachedC != null || cachedI != null) {
-      final freq = await Freq.load();
-      final clientFreq = await Freq.loadClients();
-      setState(() {
-        if (cachedC != null) {
-          _clients = (cachedC['clients'] as List?)?.cast<Map<String, dynamic>>() ?? []
-            ..sort((a, b) =>
-                (clientFreq['${b['id']}'] ?? 0) - (clientFreq['${a['id']}'] ?? 0));
-        }
-        if (cachedI != null) {
-          _items = ((cachedI['items'] as List?) ?? [])
-              .map((e) => _ItemOption(
-                    e['id'] as String,
-                    e['name'] as String,
-                    '${e['category'] ?? ''}',
-                    ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
-                  ))
-              .toList()
-            ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
-          _itemMenus = _items
-              .map((it) => DropdownMenuItem(value: it.id, child: Text(it.name)))
-              .toList();
-        }
-      });
-    }
-    // ② 并行网络刷新 + 更新缓存
-    try {
-      final results = await Future.wait([
-        Api.instance.get('/clients'),
-        Api.instance.get('/items/summary'),
-      ]);
-      await Future.wait([
-        Api.instance.setCache('/clients', results[0]),
-        Api.instance.setCache('/items/summary', results[1]),
-      ]);
-      if (mounted) {
+    // Web（无本地库）：直连网络刷新；原生：只读本地库镜像（同步由「我的」页/进应用驱动，页面不访问网络）
+    if (kIsWeb) {
+      try {
+        final results = await Future.wait([
+          Api.instance.get('/clients'),
+          Api.instance.get('/items/summary'),
+        ]);
+        await Future.wait([
+          Api.instance.setCache('/clients', results[0]),
+          Api.instance.setCache('/items/summary', results[1]),
+        ]);
+        if (!mounted) return;
         final freq = await Freq.load();
         final clientFreq = await Freq.loadClients();
         final lastQty = await Freq.loadLastQty();
@@ -150,12 +123,37 @@ class _SalePageState extends State<SalePage> {
         });
         // 编辑模式：商品目录就绪后预填原单据明细
         if (_editing) await _loadEdit();
-      }
-    } catch (e) {
-      if (cachedC == null && cachedI == null) {
+      } catch (e) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       }
+      return;
     }
+    // 原生：本地库镜像秒开（离线可回显商品与店铺），同步完成后会再触发刷新
+    final freq = await Freq.load();
+    final clientFreq = await Freq.loadClients();
+    final lastQty = await Freq.loadLastQty();
+    final items = (await LocalDb.getAllByName('items'))
+        .map((e) => _ItemOption(
+              '${e['id']}',
+              '${e['name'] ?? ''}',
+              '${e['category'] ?? ''}',
+              ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
+            ))
+        .toList()
+      ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
+    final clients = await LocalDb.getAllByName('clients')
+      ..sort((a, b) => (clientFreq['${b['id']}'] ?? 0) - (clientFreq['${a['id']}'] ?? 0));
+    if (!mounted) return;
+    setState(() {
+      _clients = clients;
+      _items = items;
+      _lastQty = lastQty;
+      _itemMenus = items
+          .map((it) => DropdownMenuItem(value: it.id, child: Text(it.name)))
+          .toList();
+    });
+    // 编辑模式：商品目录就绪后预填原单据明细（本地库优先，离线也能回显）
+    if (_editing) await _loadEdit();
   }
 
   /// 商品在本地频率表中的最大使用次数（按价格组合取峰值，0=无记录）
@@ -187,6 +185,7 @@ class _SalePageState extends State<SalePage> {
     final data = d;
     setState(() {
       _clientId = data['client_id'] as String?;
+      _noteCtrl.text = '${data['note'] ?? ''}';
       final hd = '${data['happened_at'] ?? ''}';
       _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
       final items = ((data['items'] as List?) ?? []).cast<Map<String, dynamic>>();

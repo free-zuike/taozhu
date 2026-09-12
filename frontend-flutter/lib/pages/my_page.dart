@@ -394,10 +394,10 @@ class _MyPageState extends State<MyPage> {
     try {
       final abi = await _dlChannel.invokeMethod<String>('abi');
       apkName = (abi == null || abi.isEmpty)
-          ? 'flutter-app-$ver.apk'
-          : 'flutter-app-$ver-$abi.apk';
+          ? 'taozhu-app-$ver.apk'
+          : 'taozhu-app-$ver-$abi.apk';
     } catch (_) {
-      apkName = 'flutter-app-$ver.apk';
+      apkName = 'taozhu-app-$ver.apk';
     }
     final base = 'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/$apkName';
     final urls = [for (final p in prefixes) '$p$base'];
