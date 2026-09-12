@@ -322,6 +322,8 @@ class _LedgerPageState extends State<LedgerPage> {
     }
     try {
       await Api.instance.delete('/sales/${s['id']}');
+      // 同步删本地库镜像行（否则残留 → 下次打开"删不掉"，本地与 Web 不一致）
+      await LocalDb.deleteOne('sales', '${s['id']}');
       toast(context, '已删除');
       _load();
     } catch (e) {
@@ -405,6 +407,8 @@ class _LedgerPageState extends State<LedgerPage> {
     }
     try {
       await Api.instance.delete('/payments/${p['id']}');
+      // 同步删本地库镜像行（否则残留 → 下次打开"删不掉"，本地与 Web 不一致）
+      await LocalDb.deleteOne('payments', '${p['id']}');
       toast(context, '已撤销');
       _load();
     } catch (e) {

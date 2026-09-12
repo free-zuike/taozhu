@@ -123,6 +123,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     if (ok != true) return;
     try {
       await Api.instance.delete('/purchases/${p['id']}');
+      // 同步删本地库镜像行（否则残留 → 下次打开"删不掉"，本地与 Web 不一致）
+      await LocalDb.deleteOne('purchases', '${p['id']}');
       toast(context, '已删除，库存已回滚');
       _load();
     } catch (e) {

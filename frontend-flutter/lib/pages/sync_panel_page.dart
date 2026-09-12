@@ -26,6 +26,12 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   String _selectedClientName = '';
   String? _error;
 
+  // 当前店铺同步状况（本地 vs 服务器，仅出货/收款）
+  int _clientLocalSales = 0;
+  int _clientLocalPayments = 0;
+  int _clientServerSales = 0;
+  int _clientServerPayments = 0;
+
   static const _entities = [
     ('clients', '店铺'),
     ('items', '商品'),
@@ -39,6 +45,22 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   void initState() {
     super.initState();
     _load();
+    // 进入页面即自动同步（静默；完成后差异自动刷新），无需手动点按钮
+    _autoSync();
+  }
+
+  Future<void> _autoSync() async {
+    if (_syncing) return;
+    setState(() => _syncing = true);
+    try {
+      await SyncService.sync().timeout(const Duration(seconds: 30));
+    } catch (_) {
+      // 同步超时/异常也结束转圈（服务端卡死不阻塞 UI）
+    } finally {
+      if (!mounted) return;
+      setState(() => _syncing = false);
+      _load();
+    }
   }
 
   Future<void> _load() async {
@@ -50,6 +72,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     var lastSync = '';
     var selectedId = '';
     var selectedName = '';
+    var clientLocalSales = 0;
+    var clientLocalPayments = 0;
     try {
       local = <String, int>{};
       for (final (store, _) in _entities) {
@@ -67,6 +91,11 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 .map((c) => '${c['name']}')
                 .firstOrNull ??
             '';
+        // 当前店铺本地出货/收款计数（按 client_id 过滤本地镜像）
+        final sales = await LocalDb.getAll('sales');
+        final payments = await LocalDb.getAll('payments');
+        clientLocalSales = sales.where((s) => '${s['client_id']}' == selectedId).length;
+        clientLocalPayments = payments.where((p) => '${p['client_id']}' == selectedId).length;
       }
     } catch (e) {
       if (mounted) {
@@ -81,6 +110,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
           _lastSync = lastSync;
           _selectedClientId = selectedId;
           _selectedClientName = selectedName;
+          _clientLocalSales = clientLocalSales;
+          _clientLocalPayments = clientLocalPayments;
           _loading = false;
         });
       }
@@ -99,6 +130,19 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         _error = e.toString().replaceFirst('Exception: ', '');
       });
     }
+    // 当前店铺的服务器计数（与本地差异行同款）
+    if (selectedId.isNotEmpty) {
+      try {
+        final d = await Api.instance.get('/sync/stats?client_id=$selectedId');
+        if (!mounted) return;
+        setState(() {
+          _clientServerSales = (d['sales'] as num?)?.toInt() ?? 0;
+          _clientServerPayments = (d['payments'] as num?)?.toInt() ?? 0;
+        });
+      } catch (_) {
+        // 店铺维度统计失败不影响整页（差异行显示 0）
+      }
+    }
   }
 
   Future<void> _syncNow() async {
@@ -113,26 +157,6 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       setState(() => _syncing = false);
       _load();
       toast(context, '已触发同步');
-    }
-  }
-
-  /// 仅同步当前选择的店铺（出货/收款数据）
-  Future<void> _syncCurrentClient() async {
-    if (_syncing) return;
-    if (_selectedClientId.isEmpty) {
-      toast(context, '未选择店铺，请先到交易（账本）页选择店铺');
-      return;
-    }
-    setState(() => _syncing = true);
-    try {
-      await SyncService.syncClient(_selectedClientId).timeout(const Duration(seconds: 30));
-    } catch (_) {
-      // 同步超时/异常也结束转圈
-    } finally {
-      if (!mounted) return;
-      setState(() => _syncing = false);
-      _load();
-      toast(context, '当前店铺已同步');
     }
   }
 
@@ -165,35 +189,6 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
               children: [
-                // 全部同步 / 当前店铺同步 两个入口（按店铺隔离）
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _syncing ? null : _syncNow,
-                        icon: const Icon(Icons.sync, size: 18),
-                        label: const Text('全部同步'),
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: FilledButton.tonalIcon(
-                        onPressed: _syncing ? null : _syncCurrentClient,
-                        icon: const Icon(Icons.storefront, size: 18),
-                        label: Text(_selectedClientName.isEmpty
-                            ? '当前店铺同步'
-                            : '同步「$_selectedClientName」'),
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
                 if (_error != null)
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -207,7 +202,6 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                     ),
                   ),
                 _card(c, [
-                  _row(c, '当前店铺', _selectedClientName.isEmpty ? '—（未选择）' : _selectedClientName),
                   _row(c, '当前设备', _deviceId.isEmpty ? '—' : _deviceId.substring(0, 8)),
                   _row(c, '上次成功同步', _fmtTime(_lastSync)),
                   _row(c, '待推送变更', kIsWeb ? '—（Web 无本地队列）' : '$_pending 条'),
@@ -215,9 +209,37 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                       kIsWeb ? 'Web：直连服务器（无本地缓存）' : 'App：本地库优先 + 后台同步，与服务器差异见下表'),
                 ]),
                 const SizedBox(height: 14),
+                // 当前选择的店铺同步状况（本地 vs 服务器，同款差异行）
                 Row(
                   children: [
-                    Text('数据差异（本地 vs 服务器）', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: c.textMain)),
+                    Text('当前店铺同步状况', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: c.textMain)),
+                    const Spacer(),
+                    Text(_selectedClientName.isEmpty ? '未选择店铺' : _selectedClientName,
+                        style: TextStyle(fontSize: 12, color: c.primary)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (_selectedClientId.isEmpty)
+                  _card(c, [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      child: Text('尚未选择店铺：请先到「交易（账本）」页选择店铺后再查看', style: TextStyle(fontSize: 13, color: c.textSub)),
+                    ),
+                  ])
+                else if (!kIsWeb)
+                  _card(c, [
+                    _diffRow(c, '出货单', _clientLocalSales, _clientServerSales),
+                    _diffRow(c, '收款单', _clientLocalPayments, _clientServerPayments),
+                  ])
+                else
+                  _card(c, [
+                    _row(c, '出货单', '服务器 $_clientServerSales 条'),
+                    _row(c, '收款单', '服务器 $_clientServerPayments 条'),
+                  ]),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Text('全部数据差异（本地 vs 服务器）', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: c.textMain)),
                     const Spacer(),
                     if (kIsWeb) Text('Web 无本地数据', style: TextStyle(fontSize: 12, color: c.textSub)),
                   ],
@@ -248,8 +270,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 ]),
                 const SizedBox(height: 8),
                 Center(
-                  child: Text('点击「全部同步」拉取服务器全量变更；「当前店铺同步」只刷新该店铺出货/收款。'
-                      , style: TextStyle(fontSize: 11, color: c.textSub)),
+                  child: Text('进入本页已自动同步；右上角按钮可随时手动同步',
+                      style: TextStyle(fontSize: 11, color: c.textSub)),
                 ),
               ],
             ),

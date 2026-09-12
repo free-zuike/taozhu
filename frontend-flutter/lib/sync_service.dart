@@ -98,29 +98,6 @@ class SyncService {
     } catch (_) {}
   }
 
-  /// 同步当前店铺：只拉该店铺最新出货/收款到本地库镜像 + 推送本地待发队列。
-  /// 与 sync()（全部实体增量拉取）互补——按店铺隔离的同步入口。
-  static Future<int> syncClient(String clientId) async {
-    if (kIsWeb || clientId.isEmpty) return 0;
-    try {
-      final results = await Future.wait([
-        Api.instance.get('/sales?client_id=$clientId'),
-        Api.instance.get('/payments?client_id=$clientId'),
-      ]);
-      final sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
-      final pays = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
-      await Future.wait([
-        LocalDb.upsertList('sales', sales),
-        LocalDb.upsertList('payments', pays),
-      ]);
-      await pushPending();
-      await _markSynced();
-      return sales.length + pays.length;
-    } catch (_) {
-      return 0;
-    }
-  }
-
   /// 本地待推送变更数（local_changes 队列）
   static Future<int> pendingCount() async {
     if (kIsWeb) return 0;

@@ -233,15 +233,21 @@ syncRouter.get('/full', async (c) => {
 });
 
 // GET /sync/stats — 服务器端各实体计数 + 变更流游标（同步状态面板/差异诊断用）
+// 支持可选 ?client_id=X：传入时 sales/payments 只统计该店铺（同步面板"当前店铺"差异行）
 syncRouter.get('/stats', async (c) => {
   const db = c.env.DB;
+  const clientId = c.req.query('client_id')?.trim() ?? '';
   const [clients, items, categories, sales, purchases, payments] = await Promise.all([
     db.prepare('SELECT COUNT(*) AS n FROM clients WHERE deleted_at IS NULL').first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM items WHERE deleted_at IS NULL').first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM categories').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM sales').first<{ n: number }>(),
+    clientId
+      ? db.prepare('SELECT COUNT(*) AS n FROM sales WHERE client_id = ?').bind(clientId).first<{ n: number }>()
+      : db.prepare('SELECT COUNT(*) AS n FROM sales').first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM purchases').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM payments').first<{ n: number }>(),
+    clientId
+      ? db.prepare('SELECT COUNT(*) AS n FROM payments WHERE client_id = ?').bind(clientId).first<{ n: number }>()
+      : db.prepare('SELECT COUNT(*) AS n FROM payments').first<{ n: number }>(),
   ]);
   return c.json({
     clients: clients?.n ?? 0,

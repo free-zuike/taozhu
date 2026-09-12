@@ -297,6 +297,35 @@ describe('同步协议', () => {
     expect(d.server_cursor).toBeGreaterThanOrEqual(2);
   });
 
+  it('stats 支持 ?client_id 只统计该店铺（同步面板当前店铺差异行）', async () => {
+    // 商品 + 价格（出货单明细需要 price_id）
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2.0, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const priceId = items.items[0].prices[0].id;
+    const a = await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const idA = (await a.json()) as { id: string };
+    const b = await call(env, 'POST', '/api/v1/clients', token, { name: '店B' });
+    const idB = (await b.json()) as { id: string };
+    // 店A 记一笔出货
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: idA.id, happened_at: '2026-01-02',
+      items: [{ price_id: priceId, quantity: 1 }],
+    });
+    expect(sale.status).toBe(201);
+    const res = await call(env, 'GET', `/api/v1/sync/stats?client_id=${idA.id}`, token);
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as Record<string, number>;
+    expect(d.sales).toBe(1);
+    expect(d.payments).toBe(0);
+    const resB = await call(env, 'GET', `/api/v1/sync/stats?client_id=${idB.id}`, token);
+    const dB = (await resB.json()) as Record<string, number>;
+    expect(dB.sales).toBe(0);
+  });
+
   it('staff full/拉取：item 进价与单据进价快照打码为 0', async () => {
     const staffToken = await loginStaff(env);
     await call(env, 'POST', '/api/v1/items', token, {
