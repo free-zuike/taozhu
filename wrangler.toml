@@ -22,10 +22,11 @@ binding = "BUCKET"
 bucket_name = "taozhu-attachments"
 
 # 实时同步广播：Durable Object 持有在线 WebSocket 连接，数据变更后推送 sync 通知
+# 免费套餐要求 DO 命名空间用 new_sqlite_classes 迁移（否则部署报 code: 10097）
 [[durable_objects.bindings]]
 name = "SYNC_HUB"
 class_name = "SyncHub"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["SyncHub"]
+new_sqlite_classes = ["SyncHub"]
