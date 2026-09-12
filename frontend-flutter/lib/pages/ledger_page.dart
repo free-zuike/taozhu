@@ -155,17 +155,6 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
-  /// 明细行日期与该单日期不同时的前缀标注（如 "9/12 白菜 ×2斤"）
-  String _itemDateLabel(Map<String, dynamic> order, Map<String, dynamic> it) {
-    final od = _date(order['happened_at']);
-    final id = '${it['happened_at'] ?? ''}';
-    if (id.length >= 10 && id.substring(0, 10) != od) {
-      final d = id.substring(5, 10).replaceAll('-', '/');
-      return '$d ';
-    }
-    return '';
-  }
-
   String _date(Object? v) {
     final s = '$v';
     return s.length >= 10 ? s.substring(0, 10) : s;
@@ -628,20 +617,10 @@ class _LedgerPageState extends State<LedgerPage> {
                   ? const Center(child: CircularProgressIndicator())
                   : TabBarView(children: _isStaff
                       ? [
-                          _buildList('今日暂无出货记录', _sales, _saleCard,
-                              (s) => ((s['total'] as num?)?.toDouble() ?? 0),
-                              emptyActionLabel: '＋ 记一笔出货',
-                              onEmptyAction: () => Navigator.of(context)
-                                  .push(MaterialPageRoute(builder: (_) => const SalePage()))
-                                  .then((_) => _load())),
+                          _buildSaleFlow('今日暂无出货记录'),
                         ]
                       : [
-                          _buildList('暂无偿付记录', _sales, _saleCard,
-                              (s) => ((s['total'] as num?)?.toDouble() ?? 0),
-                              emptyActionLabel: '＋ 记一笔出货',
-                              onEmptyAction: () => Navigator.of(context)
-                                  .push(MaterialPageRoute(builder: (_) => const SalePage()))
-                                  .then((_) => _load())),
+                          _buildSaleFlow('暂无偿付记录'),
                           _buildList('暂无收款记录', _payments, _paymentCard,
                               (p) => ((p['amount'] as num?)?.toDouble() ?? 0),
                               emptyActionLabel: '＋ 去收款',
@@ -763,73 +742,159 @@ class _LedgerPageState extends State<LedgerPage> {
     );
   }
 
-  Widget _saleCard(Map<String, dynamic> s) {
-    final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
-    final note = (s['note'] as String? ?? '').trim();
+  /// 出货流水（商品明细铺开）：按明细行日期分组，每行一条商品
+  /// （店名 · 商品 ×数量 → 金额）；点行编辑整单，附件图标直达凭证。
+  Widget _buildSaleFlow(String emptyText) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 3),
-      elevation: 0,
-      color: c.card,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: c.primary.withOpacity(0.3)),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => _editSale(s),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              CircleAvatar(
-                radius: 16,
-                backgroundColor: c.primary.withOpacity(0.12),
-                child: Icon(Icons.storefront, size: 16, color: c.primary),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text('${s['client_name']}',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: c.textMain)),
-              ),
-              Text('¥${fmtMoney(s['total'])}',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.danger)),
-              // 附件直接可见：点图标全屏查看全部凭证图片（左右滑动切换）
-              IconButton(
-                tooltip: '凭证附件',
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.image_outlined, size: 20, color: c.primary),
-                onPressed: () => showAttachmentViewer(context, 'sale', '${s['id']}', '出货单附件'),
-              ),
-              _menu(
-                edit: () => _editSale(s),
-                del: () => _deleteSale(s),
-              ),
-            ]),
-            // 商品明细直接展开（全部显示，点卡片才进编辑）；行日期与该单不同时标注
-            for (final it in items)
-              Padding(
-                padding: const EdgeInsets.only(left: 40, top: 2),
-                child: Row(children: [
-                  Expanded(
-                    child: Text('${_itemDateLabel(s, it)}${it['item_name']} ×${it['quantity']}${it['unit']}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 13, color: c.textSub)),
+    // 展开为明细行：行日期回退单据日期；无明细的单据显示备注/占位
+    final lines = <Map<String, dynamic>>[];
+    for (final s in _sales) {
+      final orderDate = _date(s['happened_at']);
+      final items = (s['items'] as List? ?? []).cast<Map<String, dynamic>>();
+      if (items.isEmpty) {
+        final note = (s['note'] as String? ?? '').trim();
+        lines.add({
+          'date': orderDate, 'order': s, 'client_name': '${s['client_name'] ?? ''}',
+          'item_name': note.isEmpty ? '（无明细）' : '备注：$note',
+          'quantity': '', 'unit': '', 'amount': ((s['total'] as num?)?.toDouble() ?? 0),
+        });
+      }
+      for (final it in items) {
+        final id = '${it['happened_at'] ?? ''}';
+        lines.add({
+          'date': id.length >= 10 ? id.substring(0, 10) : orderDate,
+          'order': s,
+          'client_name': '${s['client_name'] ?? ''}',
+          'item_name': '${it['item_name'] ?? ''}',
+          'quantity': '${it['quantity'] ?? ''}',
+          'unit': '${it['unit'] ?? ''}',
+          'amount': ((it['amount'] as num?)?.toDouble() ?? 0),
+        });
+      }
+    }
+    if (lines.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(48),
+              child: Column(
+                children: [
+                  const Icon(Icons.receipt_long_outlined, size: 40, color: Color(0xFFD0D5DD)),
+                  const SizedBox(height: 12),
+                  Text(emptyText, style: TextStyle(color: c.textSub)),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: c.primary,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () => Navigator.of(context)
+                        .push(MaterialPageRoute(builder: (_) => const SalePage()))
+                        .then((_) => _load()),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('＋ 记一笔出货'),
                   ),
-                  Text('¥${fmtMoney(it['amount'])}',
-                      style: TextStyle(fontSize: 13, color: c.textSub.withOpacity(0.7))),
-                ]),
+                ],
               ),
-            if (note.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(left: 40, top: 2),
-                child: Text('备注：$note',
+            ),
+          ],
+        ),
+      );
+    }
+    // 按行日期分组（日期相同按店名排序）
+    lines.sort((a, b) {
+      final x = '${a['date']}'.compareTo('${b['date']}');
+      return x != 0 ? x : '${a['client_name']}'.compareTo('${b['client_name']}');
+    });
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final l in lines) {
+      (grouped['${l['date']}'] ??= []).add(l);
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+        children: [
+          for (final e in grouped.entries) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
+              child: Row(
+                children: [
+                  Text(_weekday(e.key),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.textMain)),
+                  const Spacer(),
+                  Text(
+                    '${e.value.length} 件 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + ((l['amount'] as num?)?.toDouble() ?? 0)))}',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSub),
+                  ),
+                ],
+              ),
+            ),
+            for (final l in e.value) _saleLineTile(c, l),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// 出货流水行：店名 · 商品 ×数量 | 金额 | 附件 | ⋯（编辑/删除）
+  Widget _saleLineTile(TaozhuColors c, Map<String, dynamic> l) {
+    final order = l['order'] as Map<String, dynamic>;
+    final clientName = '${l['client_name'] ?? ''}';
+    final itemName = '${l['item_name'] ?? ''}';
+    final qty = '${l['quantity'] ?? ''}';
+    final unit = '${l['unit'] ?? ''}';
+    final showStore = _clientId == null && clientName.isNotEmpty; // 全部店铺时带店名
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: () => _editSale(order),
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 2),
+        padding: const EdgeInsets.fromLTRB(10, 6, 2, 6),
+        decoration: BoxDecoration(
+          color: c.card,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: c.primary.withOpacity(0.2)),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 14,
+              backgroundColor: c.primary.withOpacity(0.12),
+              child: Icon(Icons.storefront, size: 14, color: c.primary),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    showStore ? '$clientName · $itemName' : itemName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: c.textSub)),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.textMain),
+                  ),
+                  if (qty.isNotEmpty)
+                    Text('×$qty$unit', style: TextStyle(fontSize: 12, color: c.textSub)),
+                ],
               ),
-          ]),
+            ),
+            Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
+            IconButton(
+              tooltip: '凭证附件',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(Icons.image_outlined, size: 19, color: c.primary),
+              onPressed: () => showAttachmentViewer(context, 'sale', '${order['id']}', '出货单附件'),
+            ),
+            _menu(
+              edit: () => _editSale(order),
+              del: () => _deleteSale(order),
+            ),
+          ],
         ),
       ),
     );
