@@ -3,6 +3,7 @@ package com.taozhu.app
 import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import java.io.File
 import io.flutter.embedding.android.FlutterActivity
@@ -27,6 +28,7 @@ class MainActivity : FlutterActivity() {
                             if (id == null) result.error("no_id", "missing id", null)
                             else result.success(queryStatus(id))
                         }
+                        "abi" -> result.success(primaryAbi())
                         "listCache" -> result.success(listCache())
                         "deleteFiles" -> {
                             val names = call.argument<List<String>>("names") ?: emptyList()
@@ -38,6 +40,14 @@ class MainActivity : FlutterActivity() {
                     result.error("dl_error", e.message, null)
                 }
             }
+    }
+
+    /** 设备主 ABI（对应拆包下载：arm64-v8a / armeabi-v7a / x86_64），兼容模拟器（x86_64 优先） */
+    private fun primaryAbi(): String {
+        val abis = Build.SUPPORTED_ABIS
+        if (abis.isEmpty()) return "arm64-v8a"
+        // 模拟器（x86/x86_64）优先返回，真机取第一个
+        return abis.firstOrNull { it.startsWith("x86") } ?: abis[0]
     }
 
     private fun enqueue(url: String, fileName: String): Long {

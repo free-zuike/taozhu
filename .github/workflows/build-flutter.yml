@@ -72,10 +72,10 @@ jobs:
           ANDROID_KEYSTORE_KEY_PASS: ${{ secrets.ANDROID_KEYSTORE_KEY_PASS }}
           ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
         run: |
-          # ① Android 版本与应用版本号同步：versionName=四段版本号；versionCode=四段加权拼成正整数（单调递增，覆盖升级稳定）。
+          # ① Android 版本与应用版本号同步：versionName=三位版本号；versionCode=三位加权拼成正整数（单调递增，覆盖升级稳定）。
           #    不用改写 pubspec version：pub 的 version 格式只支持 x.y.z[+build]，四段 0.8.1.0 会判非法导致构建失败。
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" lib/version.dart || exit 1)
-          BUILD_NUM=$(echo "$VERSION" | awk -F. '{print ($1*1000000)+($2*10000)+($3*100)+($4+0)}')
+          BUILD_NUM=$(echo "$VERSION" | awk -F. '{print ($1*1000000)+($2*10000)+($3*100)}')
           # ② 包名统一 com.taozhu.app（与「陶朱」一致：避免两个应用并存、可覆盖升级）
           sed -i 's|namespace = ".*"|namespace = "com.taozhu.app"|; s|applicationId = ".*"|applicationId = "com.taozhu.app"|' android/app/build.gradle.kts
           # ②b MainActivity 类包与 applicationId 对齐——只改 namespace 不改类路径会 ClassNotFoundException 启动即崩
@@ -106,20 +106,25 @@ jobs:
           # ④ 正式签名（复用与「陶朱」相同的 keystore）+ 关 R8（规避 release 闪退）
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/taozhu-release.keystore
           cat android-sign.gradle.kts >> android/app/build.gradle.kts
-          flutter build apk --release --build-name="$VERSION" --build-number="$BUILD_NUM"
+          # ⑤ 按 ABI 拆包构建（体积：universal ~62MB → arm64 单包 ~25MB；手机基本都是 arm64，下载减半以上）
+          flutter build apk --release --split-per-abi --build-name="$VERSION" --build-number="$BUILD_NUM"
 
       - name: Package & upload to single Release (taozhu-app)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
-          cp frontend-flutter/build/app/outputs/flutter-apk/app-release.apk "/tmp/flutter-app-${VERSION}.apk"
+          # 按 ABI 重命名并上传（app-arm64-v8a-release.apk / app-armeabi-v7a-release.apk / app-x86_64-release.apk）
+          for APK in frontend-flutter/build/app/outputs/flutter-apk/app-*-release.apk; do
+            ABI=$(basename "$APK" | sed 's/^app-//; s/-release\.apk$//')
+            cp "$APK" "/tmp/flutter-app-${VERSION}-${ABI}.apk"
+          done
           # 更新说明：上个版本 tag 以来的提交摘要
           git fetch --tags --quiet || true
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
           if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
-          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK（按 ABI 拆包）/ Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
           # 等待 release 创建（deploy 或并发先到者创建，最多 5 分钟）
           for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
@@ -130,5 +135,7 @@ jobs:
               --published-at "$(git log -1 --format=%cI)" || true
           fi
           gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
-          gh release upload "$REL" "/tmp/flutter-app-${VERSION}.apk" --repo "$GITHUB_REPOSITORY" --clobber
-          echo "uploaded flutter-app ${VERSION}"
+          for APK in /tmp/flutter-app-${VERSION}-*.apk; do
+            gh release upload "$REL" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+          echo "uploaded flutter-app split ABIs ${VERSION}"

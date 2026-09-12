@@ -224,7 +224,9 @@ authRouter.get('/latest-version', async (c) => {
       // 语义：有安装文件才提示新版本。APK 资产存在 → 可更新；不存在 → 该版本不参与提示（返回 null，
       // 由后续源决定，前端最多提示"暂无可用更新"，绝不再报"构建中"）
       const assets = d.assets ?? [];
-      if (!assets.some((a) => a.name === `flutter-app-${v}.apk`)) {
+      // 拆包产物（flutter-app-{v}-{abi}.apk）任一存在即视为有安装文件；兼容旧版 universal 命名
+      if (!assets.some((a) => String(a.name ?? '').startsWith(`flutter-app-${v}-`) && String(a.name ?? '').endsWith('.apk'))
+          && !assets.some((a) => a.name === `flutter-app-${v}.apk`)) {
         return null;
       }
       return { v, ready: true, building: false, source: 'github', notes: d.body ?? '' };

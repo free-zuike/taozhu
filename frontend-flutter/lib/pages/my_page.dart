@@ -389,7 +389,17 @@ class _MyPageState extends State<MyPage> {
       'https://gh-proxy.com/',
       'https://ghfast.top/',
     ];
-    final base = 'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/flutter-app-$ver.apk';
+    // 拆包下载：按设备 ABI 选对应 APK（arm64-v8a / armeabi-v7a / x86_64）；查不到 ABI 时回退 universal 命名
+    String apkName;
+    try {
+      final abi = await _dlChannel.invokeMethod<String>('abi');
+      apkName = (abi == null || abi.isEmpty)
+          ? 'flutter-app-$ver.apk'
+          : 'flutter-app-$ver-$abi.apk';
+    } catch (_) {
+      apkName = 'flutter-app-$ver.apk';
+    }
+    final base = 'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/$apkName';
     final urls = [for (final p in prefixes) '$p$base'];
     try {
       // 下载前并行轻量探测（HEAD Range 0-0），过滤不可达源，避免直接失败
