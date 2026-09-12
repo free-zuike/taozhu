@@ -16,8 +16,10 @@ class _LoginPageState extends State<LoginPage> {
   final _baseCtrl = TextEditingController();
   final _userCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _codeCtrl = TextEditingController();
   bool _initialized = true;
   bool _busy = false;
+  bool _needTotp = false; // 该账号已开启两步验证，等待输入验证码
 
   @override
   void initState() {
@@ -53,13 +55,29 @@ class _LoginPageState extends State<LoginPage> {
           ? await Api.instance.post('/auth/login', {
               'username': _userCtrl.text.trim(),
               'password': _passCtrl.text,
+              if (_needTotp) 'code': _codeCtrl.text.trim(),
             })
           : await Api.instance.post('/auth/bootstrap', {
               'username': _userCtrl.text.trim(),
               'password': _passCtrl.text,
             });
+      // 两步验证：密码正确但缺验证码 → 显示验证码输入框，再次提交
+      if (d['need_totp'] == true) {
+        if (mounted) setState(() => _needTotp = true);
+        _toast('该账号已开启两步验证，请输入验证码');
+        return;
+      }
       await Api.instance.setToken(d['token'] as String);
       await Api.instance.setRole('${(d['user'] as Map?)?['role'] ?? ''}');
+      // 登录名/头像状态以 /auth/me 为准（登录响应不含头像）
+      try {
+        final me = await Api.instance.get('/auth/me');
+        final mu = me['user'] as Map?;
+        if (mu != null) {
+          await Api.instance.setUsername('${mu['username'] ?? ''}');
+          await Api.instance.setAvatar(mu['avatar'] != null);
+        }
+      } catch (_) {}
       if (!mounted) return;
       Navigator.of(context)
           .pushReplacement(MaterialPageRoute(builder: (_) => const BottomShell()));
@@ -139,6 +157,17 @@ class _LoginPageState extends State<LoginPage> {
                     decoration: _dec(Icons.lock_outline, '密码', null),
                     onSubmitted: (_) => _submit(),
                   ),
+                  if (_needTotp) ...[
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: _codeCtrl,
+                      keyboardType: TextInputType.number,
+                      maxLength: 6,
+                      style: TextStyle(color: c.textMain),
+                      decoration: _dec(Icons.security_outlined, '两步验证码', '验证器 App 里的 6 位数字'),
+                      onSubmitted: (_) => _submit(),
+                    ),
+                  ],
                   const SizedBox(height: 26),
                   FilledButton(
                     style: FilledButton.styleFrom(
@@ -148,7 +177,11 @@ class _LoginPageState extends State<LoginPage> {
                       textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
                     onPressed: _busy ? null : _submit,
-                    child: Text(_busy ? '登录中…' : (_initialized ? '登录' : '创建账号并登录')),
+                    child: Text(_busy
+                        ? '登录中…'
+                        : _needTotp
+                            ? '验证并登录'
+                            : (_initialized ? '登录' : '创建账号并登录')),
                   ),
                   if (!_initialized) ...[
                     const SizedBox(height: 12),

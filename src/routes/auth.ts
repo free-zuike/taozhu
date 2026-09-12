@@ -1,8 +1,10 @@
-/** 认证端点：登录 / 当前用户 / 首次管理员引导 */
+/** 认证端点：登录 / 当前用户 / 首次管理员引导 / 个人资料（改名/改密/头像）/ 两步验证（TOTP） */
 import { Hono } from 'hono';
 import { signToken } from '../lib/jwt';
 import { hashPassword, randomId, verifyPassword } from '../lib/password';
+import { randomSecret, verifyTotp } from '../lib/totp';
 import { authMiddleware } from '../middleware/auth';
+import { createStorage } from '../services/storage';
 import { APP_NAME, APP_VERSION } from '../version';
 import type { Env, UserRow } from '../types';
 
@@ -32,7 +34,7 @@ authRouter.post('/bootstrap', async (c) => {
 
 // POST /auth/login
 authRouter.post('/login', async (c) => {
-  const body = await c.req.json().catch(() => null) as { username?: string; password?: string } | null;
+  const body = await c.req.json().catch(() => null) as { username?: string; password?: string; code?: string } | null;
   const username = body?.username?.trim() ?? '';
   const password = body?.password ?? '';
   if (!username || !password) return c.json({ error: '请输入登录名和密码' }, 400);
@@ -41,14 +43,137 @@ authRouter.post('/login', async (c) => {
   if (!user || !(await verifyPassword(password, user.password_hash))) {
     return c.json({ error: '用户名或密码错误' }, 401);
   }
+  // 两步验证：已开启且未带验证码 → 返回 need_totp 让前端补输入（密码已校验，不额外暴露信息）
+  if (user.totp_enabled) {
+    if (!body?.code) return c.json({ need_totp: true });
+    if (!(await verifyTotp(user.totp_secret ?? '', body.code))) {
+      return c.json({ error: '两步验证码错误' }, 401);
+    }
+  }
   const token = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role });
   return c.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
 
-// GET /auth/me
+// GET /auth/me — 当前用户（含头像/两步验证状态；实时查库，改名校验后也拿到新用户名）
 authRouter.get('/me', authMiddleware(), async (c) => {
   const u = c.get('user');
-  return c.json({ user: u });
+  const row = await c.env.DB.prepare('SELECT id, username, role, avatar, totp_enabled FROM users WHERE id = ?')
+    .bind(u.id).first<{ id: string; username: string; role: string; avatar: string | null; totp_enabled: number }>();
+  if (!row) return c.json({ error: '账号不存在' }, 404);
+  return c.json({ user: row });
+});
+
+// PATCH /auth/profile — 自助修改用户名/密码（本人；改密码需旧密码；用户名变更后重新签发 token）
+authRouter.patch('/profile', authMiddleware(), async (c) => {
+  const me = c.get('user');
+  const body = await c.req.json().catch(() => null) as
+    { username?: string; old_password?: string; password?: string } | null;
+  const row = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(me.id).first<UserRow>();
+  if (!row) return c.json({ error: '账号不存在' }, 404);
+
+  const username = body?.username?.trim();
+  if (username && username !== row.username) {
+    if (username.length < 2) return c.json({ error: '登录名至少 2 个字符' }, 400);
+    const dup = await c.env.DB.prepare('SELECT id FROM users WHERE username = ? AND id != ?')
+      .bind(username, me.id).first();
+    if (dup) return c.json({ error: '登录名已存在' }, 409);
+  }
+  let passwordHash = row.password_hash;
+  if (body?.password) {
+    if (!body.old_password || !(await verifyPassword(body.old_password, row.password_hash))) {
+      return c.json({ error: '旧密码不正确' }, 400);
+    }
+    if (body.password.length < 6) return c.json({ error: '密码至少 6 位' }, 400);
+    passwordHash = await hashPassword(body.password);
+  }
+  const finalName = username || row.username;
+  await c.env.DB.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?')
+    .bind(finalName, passwordHash, me.id).run();
+  // 用户名变更：旧 token 里用户名过期 → 重新签发，前端换存
+  const token = username && username !== row.username
+    ? await signToken(c.env.JWT_SECRET, { sub: me.id, username: finalName, role: row.role })
+    : undefined;
+  return c.json({ user: { id: me.id, username: finalName, role: row.role }, token });
+});
+
+// GET /auth/totp/setup — 获取两步验证密钥（未开启时；已生成过则复用，便于确认前重看）
+authRouter.get('/totp/setup', authMiddleware(), async (c) => {
+  const me = c.get('user');
+  const row = await c.env.DB.prepare('SELECT username, totp_secret, totp_enabled FROM users WHERE id = ?')
+    .bind(me.id).first<{ username: string; totp_secret: string | null; totp_enabled: number }>();
+  if (!row) return c.json({ error: '账号不存在' }, 404);
+  if (row.totp_enabled) return c.json({ error: '两步验证已开启' }, 409);
+  let secret = row.totp_secret;
+  if (!secret) {
+    secret = randomSecret();
+    await c.env.DB.prepare('UPDATE users SET totp_secret = ? WHERE id = ?').bind(secret, me.id).run();
+  }
+  const uri = `otpauth://totp/taozhu:${encodeURIComponent(row.username)}?secret=${secret}&issuer=taozhu&period=30&digits=6&algorithm=SHA1`;
+  return c.json({ secret, otpauth: uri });
+});
+
+// POST /auth/totp/confirm — 输入验证码开启两步验证
+authRouter.post('/totp/confirm', authMiddleware(), async (c) => {
+  const me = c.get('user');
+  const body = await c.req.json().catch(() => null) as { code?: string } | null;
+  const row = await c.env.DB.prepare('SELECT totp_secret, totp_enabled FROM users WHERE id = ?')
+    .bind(me.id).first<{ totp_secret: string | null; totp_enabled: number }>();
+  if (!row) return c.json({ error: '账号不存在' }, 404);
+  if (row.totp_enabled) return c.json({ error: '两步验证已开启' }, 409);
+  if (!row.totp_secret) return c.json({ error: '请先获取验证密钥（重新打开两步验证开关）' }, 400);
+  if (!(await verifyTotp(row.totp_secret, body?.code ?? ''))) {
+    return c.json({ error: '验证码错误或已过期' }, 400);
+  }
+  await c.env.DB.prepare('UPDATE users SET totp_enabled = 1 WHERE id = ?').bind(me.id).run();
+  return c.json({ ok: true });
+});
+
+// POST /auth/totp/disable — 输入验证码关闭两步验证
+authRouter.post('/totp/disable', authMiddleware(), async (c) => {
+  const me = c.get('user');
+  const body = await c.req.json().catch(() => null) as { code?: string } | null;
+  const row = await c.env.DB.prepare('SELECT totp_secret, totp_enabled FROM users WHERE id = ?')
+    .bind(me.id).first<{ totp_secret: string | null; totp_enabled: number }>();
+  if (!row) return c.json({ error: '账号不存在' }, 404);
+  if (!row.totp_enabled) return c.json({ error: '两步验证未开启' }, 400);
+  if (!(await verifyTotp(row.totp_secret ?? '', body?.code ?? ''))) {
+    return c.json({ error: '验证码错误或已过期' }, 400);
+  }
+  await c.env.DB.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?').bind(me.id).run();
+  return c.json({ ok: true });
+});
+
+// POST /auth/avatar — 上传头像（multipart photo，存 R2；key 固定为 taozhu/images/avatars/{userId}.jpg）
+authRouter.post('/avatar', authMiddleware(), async (c) => {
+  const me = c.get('user');
+  let file: File | null = null;
+  try {
+    const form = await c.req.formData();
+    const f = form.get('photo');
+    if (f && typeof f === 'object') file = f as unknown as File;
+  } catch {
+    return c.json({ error: '请以 multipart 上传 photo 字段（图片）' }, 400);
+  }
+  if (!file) return c.json({ error: '请选择图片上传' }, 400);
+  if (file.size === 0 || file.size > 10 * 1024 * 1024) return c.json({ error: '图片过大（上限 10MB）' }, 400);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const key = `taozhu/images/avatars/${me.id}.jpg`;
+  await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
+  await c.env.DB.prepare('UPDATE users SET avatar = ? WHERE id = ?').bind(key, me.id).run();
+  return c.json({ ok: true });
+});
+
+// GET /auth/avatar — 读取当前用户头像（带鉴权；前端 Image.network 加 Authorization 头）
+authRouter.get('/avatar', authMiddleware(), async (c) => {
+  const me = c.get('user');
+  const row = await c.env.DB.prepare('SELECT avatar FROM users WHERE id = ?').bind(me.id).first<{ avatar: string | null }>();
+  if (!row?.avatar) return c.json({ error: '未设置头像' }, 404);
+  const obj = await createStorage(c.env).get(row.avatar);
+  if (!obj) return c.json({ error: '头像不存在' }, 404);
+  const headers = new Headers();
+  headers.set('content-type', obj.contentType ?? 'image/jpeg');
+  headers.set('Cache-Control', 'no-store');
+  return new Response(obj.body, { headers });
 });
 
 // GET /auth/ping — 部署探活（无需认证）

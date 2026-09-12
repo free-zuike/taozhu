@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
@@ -8,6 +10,7 @@ import 'router.dart';
 
 /// 同步面板：显示本机（App 本地库）与服务器（Web 数据源）的数据差异 + 同步状态 + 行为差异说明。
 /// App 本地库是增量同步的读侧镜像；Web 直接读服务器——两者数量不一致即同步缺口。
+/// 进入系统（BottomShell）已自动同步；本页只展示差异，右上角按钮手动同步。
 class SyncPanelPage extends StatefulWidget {
   const SyncPanelPage({super.key});
   @override
@@ -26,11 +29,13 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   String _selectedClientName = '';
   String? _error;
 
-  // 当前店铺同步状况（本地 vs 服务器，仅出货/收款）
+  // 当前店铺同步状况（本地 vs 服务器，出货/收款/附件）
   int _clientLocalSales = 0;
   int _clientLocalPayments = 0;
+  int _clientLocalAttach = 0;
   int _clientServerSales = 0;
   int _clientServerPayments = 0;
+  int _clientServerAttach = 0;
 
   static const _entities = [
     ('clients', '店铺'),
@@ -44,23 +49,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   @override
   void initState() {
     super.initState();
+    // 进入本页只加载差异展示，不自动同步（进入系统时已自动同步；右上角可手动）
     _load();
-    // 进入页面即自动同步（静默；完成后差异自动刷新），无需手动点按钮
-    _autoSync();
-  }
-
-  Future<void> _autoSync() async {
-    if (_syncing) return;
-    setState(() => _syncing = true);
-    try {
-      await SyncService.sync().timeout(const Duration(seconds: 30));
-    } catch (_) {
-      // 同步超时/异常也结束转圈（服务端卡死不阻塞 UI）
-    } finally {
-      if (!mounted) return;
-      setState(() => _syncing = false);
-      _load();
-    }
   }
 
   Future<void> _load() async {
@@ -84,8 +74,23 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       lastSync = (await SyncService.lastSyncAt()) ?? '';
       // 当前选择的店铺（账本页持久化；按店铺隔离同步的入口）
       selectedId = (await SyncService.selectedClientId()) ?? '';
+      var clients = await LocalDb.getAllByName('clients');
+      if (kIsWeb || clients.isEmpty) {
+        // Web 无本地库（或 App 首次同步前）：从服务器拉店铺列表解析名称；
+        // 从未选过店铺 → 默认第一个并保存（与账本页行为一致），修复 Web「永远未选择店铺」
+        try {
+          final d = await Api.instance.get('/clients');
+          final netClients = ((d['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+          if (netClients.isNotEmpty) {
+            clients = netClients;
+            if (selectedId.isEmpty) {
+              selectedId = '${netClients.first['id']}';
+              await SyncService.saveSelectedClientId(selectedId);
+            }
+          }
+        } catch (_) {}
+      }
       if (selectedId.isNotEmpty) {
-        final clients = await LocalDb.getAllByName('clients');
         selectedName = clients
                 .where((c) => '${c['id']}' == selectedId)
                 .map((c) => '${c['name']}')
@@ -130,7 +135,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         _error = e.toString().replaceFirst('Exception: ', '');
       });
     }
-    // 当前店铺的服务器计数（与本地差异行同款）
+    // 当前店铺的服务器计数（与本地差异行同款）+ 附件数（出货/收款凭证图片）
     if (selectedId.isNotEmpty) {
       try {
         final d = await Api.instance.get('/sync/stats?client_id=$selectedId');
@@ -142,6 +147,41 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       } catch (_) {
         // 店铺维度统计失败不影响整页（差异行显示 0）
       }
+      try {
+        // 服务器按店铺汇总附件数（R2），并返回该店全部单据 id 供本地副本对账
+        final saleRes = await Api.instance.post('/attachments/counts', {'entity': 'sale', 'client_id': selectedId});
+        final payRes = await Api.instance.post('/attachments/counts', {'entity': 'payment', 'client_id': selectedId});
+        final saleIds = ((saleRes['ids'] as List?) ?? []).cast<String>();
+        final payIds = ((payRes['ids'] as List?) ?? []).cast<String>();
+        final serverAttach = ((saleRes['total'] as num?) ?? 0).toInt() + ((payRes['total'] as num?) ?? 0).toInt();
+        final localAttach =
+            await _localAttachCount('sale', saleIds) + await _localAttachCount('payment', payIds);
+        if (!mounted) return;
+        setState(() {
+          _clientServerAttach = serverAttach;
+          _clientLocalAttach = localAttach;
+        });
+      } catch (_) {
+        // 附件统计失败不影响整页（差异行显示 0）
+      }
+    }
+  }
+
+  /// 本地附件副本计数（App 文档目录 attachments/{entity}/{id}/；Web 无本地副本返回 0）
+  Future<int> _localAttachCount(String entity, List<String> ids) async {
+    if (kIsWeb || ids.isEmpty) return 0;
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      var n = 0;
+      for (final id in ids) {
+        final dir = Directory('${root.path}/attachments/$entity/$id');
+        if (dir.existsSync()) {
+          n += dir.listSync().whereType<File>().length;
+        }
+      }
+      return n;
+    } catch (_) {
+      return 0;
     }
   }
 
@@ -230,11 +270,13 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                   _card(c, [
                     _diffRow(c, '出货单', _clientLocalSales, _clientServerSales),
                     _diffRow(c, '收款单', _clientLocalPayments, _clientServerPayments),
+                    _diffRow(c, '附件', _clientLocalAttach, _clientServerAttach),
                   ])
                 else
                   _card(c, [
                     _row(c, '出货单', '服务器 $_clientServerSales 条'),
                     _row(c, '收款单', '服务器 $_clientServerPayments 条'),
+                    _row(c, '附件', '服务器 $_clientServerAttach 张'),
                   ]),
                 const SizedBox(height: 14),
                 Row(
@@ -270,7 +312,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 ]),
                 const SizedBox(height: 8),
                 Center(
-                  child: Text('进入本页已自动同步；右上角按钮可随时手动同步',
+                  child: Text('进入系统时已自动同步；右上角按钮可随时手动同步',
                       style: TextStyle(fontSize: 11, color: c.textSub)),
                 ),
               ],

@@ -12,6 +12,8 @@ class Api {
   static const _tokenKey = 'taozhu_token';
   static const _baseKey = 'taozhu_api_base';
   static const _roleKey = 'taozhu_role';
+  static const _usernameKey = 'taozhu_username';
+  static const _avatarKey = 'taozhu_avatar';
   static const _cachePrefix = 'taozhu_cache_';
   // 无内置默认地址：个人部署模式，登录页必须显式填写自己的服务器地址
   // （Web 生产构建通过 --dart-define=API_BASE 注入默认值，留空即连；App 不注入 → 必填）
@@ -52,11 +54,13 @@ class Api {
   Future<bool> hasToken() async => (await _token())?.isNotEmpty ?? false;
 
   /// 清除当前账号的本地数据（切换账号/退出时调用，防数据串号）：
-  /// token、角色、接口缓存（taozhu_cache_*）、离线待同步队列
+  /// token、角色、用户名、头像状态、接口缓存（taozhu_cache_*）、离线待同步队列
   Future<void> clearLocalData() async {
     final p = await SharedPreferences.getInstance();
     p.remove(_tokenKey);
     p.remove(_roleKey);
+    p.remove(_usernameKey);
+    p.remove(_avatarKey);
     p.remove(_pendingKey);
     final keys = p.getKeys().where((k) => k.startsWith(_cachePrefix)).toList();
     for (final k in keys) {
@@ -71,6 +75,25 @@ class Api {
 
   Future<String> getRole() async =>
       (await SharedPreferences.getInstance()).getString(_roleKey) ?? '';
+
+  /// 当前账号登录名（登录/改用户名时缓存；我的页面显示）
+  Future<void> setUsername(String u) async {
+    (await SharedPreferences.getInstance()).setString(_usernameKey, u);
+  }
+
+  Future<String> getUsername() async =>
+      (await SharedPreferences.getInstance()).getString(_usernameKey) ?? '';
+
+  /// 是否已设置头像（/auth/me 刷新）
+  Future<void> setAvatar(bool has) async {
+    (await SharedPreferences.getInstance()).setBool(_avatarKey, has);
+  }
+
+  Future<bool> hasAvatar() async =>
+      (await SharedPreferences.getInstance()).getBool(_avatarKey) ?? false;
+
+  /// 头像图片 URL（需 Authorization 头读取）
+  Future<String> avatarUrl() async => '${await _base()}/api/v1/auth/avatar';
 
   Future<void> setBase(String u) async {
     (await SharedPreferences.getInstance()).setString(_baseKey, _norm(u));

@@ -22,6 +22,9 @@ export interface UserRow {
   username: string;
   password_hash: string;
   role: 'admin' | 'staff';
+  avatar?: string | null;
+  totp_secret?: string | null;
+  totp_enabled?: number;
 }
 
 export interface ClientRow {

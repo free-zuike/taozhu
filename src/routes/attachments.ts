@@ -58,6 +58,34 @@ attachmentsRouter.post('/', async (c) => {
   return c.json({ key }, 201);
 });
 
+// POST /attachments/counts — 统计一批单据的附件数（同步面板「当前店铺附件差异」用）。
+// body: { entity, ids?: string[] } 或 { entity, client_id }（按店铺直接汇总，返回该店全部单据 id 便于前端对账本地副本）
+attachmentsRouter.post('/counts', async (c) => {
+  const body = await c.req.json().catch(() => null) as { entity?: string; ids?: string[]; client_id?: string } | null;
+  const entity = body?.entity;
+  if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment' }, 400);
+  const store = createStorage(c.env);
+  let ids: string[] = [];
+  const clientId = body?.client_id?.trim();
+  if (clientId) {
+    const rows = await c.env.DB.prepare(`SELECT id FROM ${entity}s WHERE client_id = ?`).bind(clientId).all<{ id: string }>();
+    ids = rows.results.map((r) => r.id);
+  } else {
+    ids = ((body?.ids ?? []) as unknown[]).filter((x) => typeof x === 'string' && x.length > 0).slice(0, 500);
+  }
+  if (ids.length === 0) return c.json({ counts: {}, total: 0, ids: [] });
+  const counts: Record<string, number> = {};
+  await Promise.all(ids.map(async (id) => {
+    const prefixes = [prefixOf(entity, id), ...legacyPrefixesOf(entity, id)];
+    const groups = await Promise.all(prefixes.map((p) => store.list(p)));
+    const byKey = new Map<string, unknown>();
+    for (const group of groups) for (const o of group) byKey.set(o.key, o);
+    counts[id] = byKey.size;
+  }));
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  return c.json({ counts, total, ids });
+});
+
 // GET /attachments/:key{.+} — 代理读取图片内容（key 含斜杠如 sale/s1/123.jpg，{.+} 捕获多段）
 attachmentsRouter.get('/:key{.+}', async (c) => {
   const key = c.req.param('key');

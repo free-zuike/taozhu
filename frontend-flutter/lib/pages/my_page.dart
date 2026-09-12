@@ -25,6 +25,7 @@ import 'users_page.dart';
 import 'stocks_page.dart';
 import 'cleanup_page.dart';
 import 'login_page.dart';
+import 'account_settings_page.dart';
 
 class MyPage extends StatefulWidget {
   const MyPage({super.key});
@@ -39,6 +40,10 @@ class _MyPageState extends State<MyPage> {
   static bool _downloading = false;
   String _base = '';
   String _role = ''; // admin=老板 / staff=店员（登录/启动时读取）
+  String _username = ''; // 当前账号登录名（/auth/me 刷新）
+  String _avatarUrl = '';
+  String _avatarToken = '';
+  bool _avatar = false; // 是否已设置头像
   int _lowStocks = -1; // 低库存数量（-1=未加载）
   int _pending = 0; // 待同步单据数（合并旧 Api 队列 + 新 SyncService 队列）
   String _lastSync = ''; // 上次同步时间（人类可读）
@@ -52,9 +57,33 @@ class _MyPageState extends State<MyPage> {
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _role = r);
     });
+    _loadProfile();
     _loadLowStocks();
     _loadPending();
     _autoSync();
+  }
+
+  /// 以 /auth/me 刷新用户名/头像状态（登录后、改资料后调用）
+  Future<void> _loadProfile() async {
+    _username = await Api.instance.getUsername();
+    _avatar = await Api.instance.hasAvatar();
+    // 时间戳缓存破坏：改头像后 Image.network 立即显示新图
+    _avatarUrl = '${await Api.instance.avatarUrl()}?t=${DateTime.now().millisecondsSinceEpoch}';
+    _avatarToken = await Api.instance.getTokenValue() ?? '';
+    try {
+      final d = await Api.instance.get('/auth/me');
+      final u = d['user'] as Map?;
+      if (u == null) return;
+      await Api.instance.setUsername('${u['username'] ?? ''}');
+      await Api.instance.setAvatar(u['avatar'] != null);
+      if (!mounted) return;
+      setState(() {
+        _username = '${u['username'] ?? ''}';
+        _avatar = u['avatar'] != null;
+      });
+    } catch (_) {
+      if (mounted) setState(() {});
+    }
   }
 
   /// 自动同步离线待同步单据（静默：成功不打扰，失败留队列下次再试）
@@ -202,38 +231,6 @@ class _MyPageState extends State<MyPage> {
   Future<void> _clearAccountData() async {
     await Api.instance.clearLocalData();
     await LocalDb.clearAll();
-  }
-
-  /// 修改服务器地址（App/桌面端入口；Web 自动用访问域名）
-  Future<void> _editBase() async {
-    final ctrl = TextEditingController(text: _base);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('服务器地址'),
-        content: TextField(
-          controller: ctrl,
-          keyboardType: TextInputType.url,
-          decoration: const InputDecoration(hintText: '如 https://您的域名'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    final v = ctrl.text.trim();
-    if (v.isEmpty) {
-      toast(context, '地址不能为空');
-      return;
-    }
-    await Api.instance.setBase(v);
-    setState(() => _base = v);
-    toast(context, '已保存，重启应用后生效');
   }
 
   /// 版本号比较：a < b ?（四段 x.y.z.w）
@@ -440,8 +437,9 @@ class _MyPageState extends State<MyPage> {
             await _installFromDownloads(fileName);
             return;
           }
-          if (status == 12) {
-            // DownloadManager.STATUS_CANCELED：用户手动取消 → 停止，不换源
+          if (status == -1 || status == 12) {
+            // -1 = 下载记录已消失（通知栏取消，DownloadManager 移除记录）｜
+            // 12 = DownloadManager.STATUS_CANCELED。用户手动取消 → 立即停止，不换源
             toast(context, '已取消下载');
             return;
           }
@@ -466,9 +464,11 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
-  /// 并行轻量探测下载源可用性（HEAD + Range，接受 200/206 且 Content-Length>0），返回可用列表
+  /// 并行轻量探测下载源可用性（HEAD + Range，接受 200/206 且 Content-Length>0），
+  /// 按响应耗时升序返回（最快源优先，避免固定顺序导致"第一次不是最快的"）。
   Future<List<String>> _probeSources(List<String> urls) async {
     final results = await Future.wait(urls.map((u) async {
+      final t0 = DateTime.now();
       try {
         final client = http.Client();
         try {
@@ -478,7 +478,9 @@ class _MyPageState extends State<MyPage> {
           final res = await client.send(req).timeout(const Duration(seconds: 8));
           final len = res.contentLength ?? -1;
           if (res.statusCode == 200 || res.statusCode == 206) {
-            return len > 0 || res.statusCode == 200 ? u : null;
+            if (len > 0 || res.statusCode == 200) {
+              return (u, DateTime.now().difference(t0).inMilliseconds);
+            }
           }
           return null;
         } finally {
@@ -488,7 +490,12 @@ class _MyPageState extends State<MyPage> {
         return null;
       }
     }));
-    return results.whereType<String>().toList();
+    final usable = <(String, int)>[];
+    for (final r in results) {
+      if (r != null) usable.add(r);
+    }
+    usable.sort((a, b) => a.$2.compareTo(b.$2));
+    return [for (final r in usable) r.$1];
   }
 
   /// 下载完成后引导安装（文件在应用下载目录，由系统 DownloadManager 写入）
@@ -695,6 +702,25 @@ class _MyPageState extends State<MyPage> {
         children: [
           _userCard(),
           const SizedBox(height: 18),
+          // 账号与同步（账号卡下方、经营上方）：同步状态 + 待同步 + 账号设置
+          _card([
+            _item(Icons.sync_alt, c.primary, '同步状态',
+                '本地与服务器数据差异、上次同步时间（右上角可手动同步）',
+                () => goPage(context, const SyncPanelPage())),
+            if (_pending > 0)
+              _item(Icons.cloud_upload_outlined, c.danger, '待同步',
+                  '$_pending 条单据等待上传${_lastSync.isEmpty ? '' : '（上次：$_lastSync）'}',
+                  _syncPending,
+                  warn: true),
+            if (_pending == 0 && !kIsWeb && _lastSync.isNotEmpty)
+              _item(Icons.cloud_done_outlined, c.primary, '已同步', '上次同步：$_lastSync', () {}),
+            _item(Icons.manage_accounts_outlined, c.primary, '账号设置',
+                '头像、用户名、密码、两步验证、服务器地址',
+                () => Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const AccountSettingsPage()))
+                    .then((_) => _loadProfile())),
+          ]),
+          const SizedBox(height: 18),
           // 店员账号：仅送货视角，隐藏经营类功能（收款/对账/店铺管理）
           if (_role != 'staff') ...[
             _groupTitle('经营'),
@@ -721,17 +747,6 @@ class _MyPageState extends State<MyPage> {
           const SizedBox(height: 18),
           _groupTitle('系统'),
           _card([
-            if (_role != 'staff')
-              _item(Icons.dns_outlined, c.primary, '服务器地址',
-                  kIsWeb ? '当前：${_base.isEmpty ? Uri.base.origin : _base}' : '修改连接服务器地址', _editBase),
-            if (_pending > 0)
-              _item(Icons.cloud_upload_outlined, c.danger, '待同步',
-                  '$_pending 条单据等待上传${_lastSync.isEmpty ? '' : '（上次：$_lastSync）'}',
-                  _syncPending,
-                  warn: true),
-            if (_pending == 0 && !kIsWeb && _lastSync.isNotEmpty)
-              _item(Icons.cloud_done_outlined, c.primary, '已同步', '上次同步：$_lastSync', () {}),
-            _item(Icons.sync_alt, c.primary, '同步状态', '本地与服务器数据差异、上次同步时间', () => goPage(context, const SyncPanelPage())),
             if (_role != 'staff')
               _item(Icons.people_outline, c.primary, '账号管理', '店员/老板账号（仅老板可操作）',
                   () => goPage(context, const UsersPage())),
@@ -807,7 +822,7 @@ class _MyPageState extends State<MyPage> {
     );
   }
 
-  /// 顶部用户卡：头像 + 角色 + 服务器地址
+  /// 顶部用户卡：头像 + 用户名/角色 + 服务器地址
   Widget _userCard() {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Container(
@@ -823,20 +838,32 @@ class _MyPageState extends State<MyPage> {
             height: 52,
             decoration: BoxDecoration(
               color: c.primary.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(16),
+              shape: BoxShape.circle,
             ),
-            child: Icon(Icons.person_outline, size: 30, color: c.primary),
+            clipBehavior: Clip.antiAlias,
+            child: _avatar && _avatarUrl.isNotEmpty
+                ? Image.network(
+                    _avatarUrl,
+                    fit: BoxFit.cover,
+                    headers: _avatarToken.isEmpty ? null : {'Authorization': 'Bearer $_avatarToken'},
+                    errorBuilder: (_, __, ___) => Icon(Icons.person_outline, size: 30, color: c.primary),
+                  )
+                : Icon(Icons.person_outline, size: 30, color: c.primary),
           ),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_role == 'staff' ? '店员账号' : '老板账号',
-                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: c.textMain)),
+                Text(
+                  _username.isEmpty
+                      ? (_role == 'staff' ? '店员账号' : '老板账号')
+                      : _username,
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: c.textMain),
+                ),
                 const SizedBox(height: 3),
                 Text(
-                  _base.isEmpty ? '未设置服务器地址' : _base,
+                  '${_role == 'staff' ? '店员' : '老板'} · ${_base.isEmpty ? '未设置服务器地址' : _base}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 12, color: c.textSub),

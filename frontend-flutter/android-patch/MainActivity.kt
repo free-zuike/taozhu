@@ -64,7 +64,9 @@ class MainActivity : FlutterActivity() {
                 return mapOf("downloaded" to downloaded, "total" to total, "status" to status)
             }
         }
-        return mapOf("downloaded" to 0L, "total" to 0L, "status" to DownloadManager.STATUS_FAILED)
+        // 查询不到记录 = 下载已被移除（用户在通知栏取消）。与 STATUS_FAILED(16) 区分开，
+        // 前端据此判定"用户取消"→ 停止下载，而不是误判失败换下一个源继续下载。
+        return mapOf("downloaded" to 0L, "total" to 0L, "status" to -1)
     }
 
     /** 列出更新缓存文件（taozhu-*）：系统下载记录 + 应用下载目录，返回 [{name,size}] */

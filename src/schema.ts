@@ -187,6 +187,17 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS sync_changes'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
     }
+    // v0.17.17.0：users 账号列（头像 / 两步验证 TOTP）
+    const uCols = await db.prepare('PRAGMA table_info(users)').all<{ name: string }>();
+    if (!uCols.results.some((x) => x.name === 'avatar')) {
+      await db.prepare('ALTER TABLE users ADD COLUMN avatar TEXT').run();
+    }
+    if (!uCols.results.some((x) => x.name === 'totp_secret')) {
+      await db.prepare('ALTER TABLE users ADD COLUMN totp_secret TEXT').run();
+    }
+    if (!uCols.results.some((x) => x.name === 'totp_enabled')) {
+      await db.prepare('ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0').run();
+    }
     for (const t of ['clients', 'items'] as const) {
       const cols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
       if (!cols.results.some((x) => x.name === 'category_id')) {
