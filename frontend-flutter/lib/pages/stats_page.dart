@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../log.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
@@ -63,6 +64,8 @@ class _StatsPageState extends State<StatsPage> {
     if (cachedYears != null) {
       _years = ((cachedYears['years'] as List?) ?? []).map((e) => '$e').toList();
     }
+    // 统计本地优先加载（有缓存秒开）；店铺/年份网络刷新放后台，失败仅记日志不打扰
+    await _load();
     try {
       final results = await Future.wait([
         Api.instance.get('/clients'),
@@ -75,9 +78,9 @@ class _StatsPageState extends State<StatsPage> {
       _years = ((results[1]['years'] as List?) ?? []).map((e) => '$e').toList();
       if (_years.isNotEmpty && !_years.contains(_year)) _year = _years.last;
     } catch (e) {
-      if (cachedClients == null) toast(context, e.toString().replaceFirst('Exception: ', ''));
+      // 无网络：本地已有数据时不打扰，仅记日志（错误日志页可查）
+      appLog('net', '统计店铺/年份刷新失败: ${e.toString().split('\n').first}');
     }
-    await _load();
   }
 
   String _fmtDate(DateTime d) =>

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../api.dart';
+import '../log.dart';
 import '../theme.dart';
 import 'router.dart';
 
@@ -33,39 +34,41 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   }
 
   Future<void> _init() async {
+    // 本地数据先渲染（秒开，不依赖网络）
     _username = await Api.instance.getUsername();
     _role = await Api.instance.getRole();
     _base = await Api.instance.getBase();
-    await _refresh();
+    _avatar = await Api.instance.hasAvatar();
     // 时间戳缓存破坏：改头像后 Image.network 立即显示新图
     _avatarUrl = '${await Api.instance.avatarUrl()}?t=${DateTime.now().millisecondsSinceEpoch}';
     _avatarToken = await Api.instance.getTokenValue() ?? '';
-    if (mounted) setState(() {});
+    if (mounted) setState(() => _loading = false);
+    // 后台验证更新：有更新直接应用，没变化跳过；无网络只记日志不打扰
+    await _refresh();
   }
 
-  /// 以 /auth/me 为准刷新（改资料后调用）
+  /// 后台验证：以 /auth/me 为准刷新（有更新直接应用；失败保留本地缓存，仅记日志）
   Future<void> _refresh() async {
     try {
       final d = await Api.instance.get('/auth/me');
       final u = d['user'] as Map?;
       if (u == null) return;
       final name = '${u['display_name'] ?? u['username'] ?? ''}';
+      final hasAvatar = u['avatar'] != null;
+      final totpOn = (u['totp_enabled'] as num? ?? 0) == 1;
       await Api.instance.setUsername(name);
-      await Api.instance.setAvatar(u['avatar'] != null);
+      await Api.instance.setAvatar(hasAvatar);
       if (!mounted) return;
       setState(() {
         _username = name;
         _account = '${u['username'] ?? ''}';
         _role = '${u['role'] ?? _role}';
-        _avatar = u['avatar'] != null;
-        _totpOn = (u['totp_enabled'] as num? ?? 0) == 1;
-        _loading = false;
+        _avatar = hasAvatar;
+        _totpOn = totpOn;
       });
     } catch (e) {
-      if (mounted) {
-        setState(() => _loading = false);
-        toast(context, e.toString().replaceFirst('Exception: ', ''));
-      }
+      // 无网络/服务异常：本地数据已展示，仅记日志（用户可在错误日志页查看）
+      appLog('net', '账号资料后台刷新失败: ${e.toString().split('\n').first}');
     }
   }
 

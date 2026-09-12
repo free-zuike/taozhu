@@ -25,6 +25,16 @@ class SyncService {
   /// 同步版本号：任何 full/pull/push 完成后 +1。页面监听它，版本变化后从本地库重读展示。
   static final ChangeNotifier version = ChangeNotifier();
 
+  /// 同步状态通知器（idle=空闲 / syncing=同步中）：「我的」页进入应用时实时显示同步进度
+  static final ChangeNotifier status = ChangeNotifier();
+  static String _status = 'idle';
+  static String get syncStatus => _status;
+  static void _setStatus(String s) {
+    if (_status == s) return;
+    _status = s;
+    status.notifyListeners();
+  }
+
   static String? _deviceId;
   static bool _syncing = false;
   static Timer? _debounce;
@@ -275,9 +285,11 @@ class SyncService {
     });
   }
 
-  /// 启动/回前台同步：首次 full，后续增量 pull + 推送待发（静默）
+  /// 启动/回前台同步：首次 full，后续增量 pull + 推送待发（静默）。
+  /// 同步中会通知 status 监听者（「我的」页实时显示 同步中/已同步）。
   static Future<void> sync() async {
     if (kIsWeb) return;
+    _setStatus('syncing');
     try {
       final done = await isFullDone();
       if (!done) {
@@ -288,6 +300,8 @@ class SyncService {
       await pushPending();
     } catch (_) {
       // 任一异常都不外抛（bottom_shell 无 await 调用，抛了就成 unhandled error）
+    } finally {
+      _setStatus('idle');
     }
   }
 

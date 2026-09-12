@@ -44,6 +44,8 @@ class _MyPageState extends State<MyPage> {
   String _avatarUrl = '';
   String _avatarToken = '';
   bool _avatar = false; // 是否已设置头像
+  bool _syncing = false; // SyncService 同步进行中（进入应用自动同步时实时显示）
+  String _webSyncState = ''; // Web 端服务器连通检查：''=检查中 / ok / error
   int _lowStocks = -1; // 低库存数量（-1=未加载）
   int _pending = 0; // 待同步单据数（合并旧 Api 队列 + 新 SyncService 队列）
   String _lastSync = ''; // 上次同步时间（人类可读）
@@ -57,10 +59,60 @@ class _MyPageState extends State<MyPage> {
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _role = r);
     });
+    // 进入应用即监听同步状态：同步开始/结束实时刷新「同步状态」子标题，无需进面板才看到
+    SyncService.version.addListener(_onSyncChanged);
+    SyncService.status.addListener(_onSyncStatus);
     _loadProfile();
     _loadLowStocks();
     _loadPending();
     _autoSync();
+    if (kIsWeb) _checkWebSync();
+  }
+
+  @override
+  void dispose() {
+    SyncService.version.removeListener(_onSyncChanged);
+    SyncService.status.removeListener(_onSyncStatus);
+    super.dispose();
+  }
+
+  void _onSyncStatus() {
+    if (!mounted) return;
+    setState(() => _syncing = SyncService.syncStatus == 'syncing');
+  }
+
+  /// 同步完成（版本号变化）后刷新待同步数/上次同步时间/低库存
+  void _onSyncChanged() {
+    _loadPending();
+    _loadLowStocks();
+  }
+
+  /// Web 端进入即检查服务器连通（Web 无本地库，同步=直连服务器实时读取）
+  Future<void> _checkWebSync() async {
+    try {
+      await Api.instance.get('/sync/stats');
+      if (mounted) setState(() => _webSyncState = 'ok');
+    } catch (_) {
+      if (mounted) setState(() => _webSyncState = 'error');
+    }
+  }
+
+  /// 同步状态子标题：进应用时实时显示（同步中 / 待同步 / 已同步），不再等进面板刷新
+  String _syncSubtitle() {
+    if (kIsWeb) {
+      switch (_webSyncState) {
+        case 'ok':
+          return '已同步 · Web 直连服务器实时读取';
+        case 'error':
+          return '无法连接服务器（详见错误日志）';
+        default:
+          return '正在检查服务器…';
+      }
+    }
+    if (_syncing) return '正在同步…';
+    if (_pending > 0) return '$_pending 条待同步${_lastSync.isEmpty ? '' : ' · 上次 $_lastSync'}';
+    if (_lastSync.isNotEmpty) return '已同步 · 上次 $_lastSync';
+    return '尚未同步（进入应用会自动同步）';
   }
 
   /// 以 /auth/me 刷新用户名/头像状态（登录后、改资料后调用）
@@ -126,22 +178,6 @@ class _MyPageState extends State<MyPage> {
     final t = DateTime.tryParse(iso)?.toLocal();
     if (t == null) return iso;
     return '${t.month}月${t.day}日 ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-  }
-
-  /// 重放离线待同步单据（两个队列依次推）
-  Future<void> _syncPending() async {
-    var ok = 0;
-    try {
-      ok += await Api.instance.syncPending();
-    } catch (_) {}
-    try {
-      ok += await SyncService.pushPending();
-    } catch (_) {}
-    if (!mounted) return;
-    setState(() => _lastSync = '刚刚');
-    toast(context, ok > 0 ? '已同步 $ok 条待同步单据' : '没有可同步的待办');
-    _loadPending();
-    _loadLowStocks();
   }
 
   /// 全库备份导出：Web 直接下载文件；移动/桌面弹系统分享保存
@@ -704,16 +740,10 @@ class _MyPageState extends State<MyPage> {
         children: [
           _userCard(),
           const SizedBox(height: 18),
-          // 账号与同步（账号卡下方、经营上方）：同步状态 + 待同步 + 账号设置
+          // 账号与同步（账号卡下方、经营上方）：同步状态 + 账号设置
           _card([
-            _item(Icons.sync_alt, c.primary, '同步状态',
-                '本地与服务器数据差异、上次同步时间（右上角可手动同步）',
+            _item(Icons.sync_alt, c.primary, '同步状态', _syncSubtitle(),
                 () => goPage(context, const SyncPanelPage())),
-            if (_pending > 0)
-              _item(Icons.cloud_upload_outlined, c.danger, '待同步',
-                  '$_pending 条单据等待上传${_lastSync.isEmpty ? '' : '（上次：$_lastSync）'}',
-                  _syncPending,
-                  warn: true),
             _item(Icons.manage_accounts_outlined, c.primary, '账号设置',
                 '头像、用户名、密码、两步验证、服务器地址',
                 () => Navigator.of(context)

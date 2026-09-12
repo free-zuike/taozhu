@@ -41,6 +41,13 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   int _localAttachTotal = 0;
   int _serverAttachTotal = 0;
 
+  // 验证状态：未验证（本地未同步 / 服务器未拉取成功）时差异行显示 —，避免"0=0 假正常"
+  bool _localSynced = false; // App 本地库是否已完成首次全量同步
+  bool _serverStatsLoaded = false; // 服务器总统计是否成功拉取
+  bool _clientServerLoaded = false; // 当前店铺服务器计数是否成功拉取
+  bool _clientAttachLoaded = false; // 当前店铺附件数是否成功拉取
+  bool _attachTotalLoaded = false; // 全部附件总数是否成功拉取
+
   static const _entities = [
     ('clients', '店铺'),
     ('items', '商品'),
@@ -68,6 +75,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     var selectedName = '';
     var clientLocalSales = 0;
     var clientLocalPayments = 0;
+    var localSynced = false;
     try {
       local = <String, int>{};
       for (final (store, _) in _entities) {
@@ -76,6 +84,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       pending = await SyncService.pendingCount();
       deviceId = await SyncService.deviceId();
       lastSync = (await SyncService.lastSyncAt()) ?? '';
+      localSynced = await SyncService.isFullDone(); // App 本地库是否已有首次全量数据（Web 恒 false）
       // 当前选择的店铺（账本页持久化；按店铺隔离同步的入口）
       selectedId = (await SyncService.selectedClientId()) ?? '';
       var clients = await LocalDb.getAllByName('clients');
@@ -121,6 +130,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
           _selectedClientName = selectedName;
           _clientLocalSales = clientLocalSales;
           _clientLocalPayments = clientLocalPayments;
+          _localSynced = localSynced;
           _loading = false;
         });
       }
@@ -131,6 +141,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       if (!mounted) return;
       setState(() {
         _serverStats = d;
+        _serverStatsLoaded = true;
         _error = null;
       });
     } catch (e) {
@@ -147,6 +158,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         setState(() {
           _clientServerSales = (d['sales'] as num?)?.toInt() ?? 0;
           _clientServerPayments = (d['payments'] as num?)?.toInt() ?? 0;
+          _clientServerLoaded = true;
         });
       } catch (_) {
         // 店铺维度统计失败不影响整页（差异行显示 0）
@@ -164,6 +176,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         setState(() {
           _clientServerAttach = serverAttach;
           _clientLocalAttach = localAttach;
+          _clientAttachLoaded = true;
         });
       } catch (_) {
         // 附件统计失败不影响整页（差异行显示 0）
@@ -178,6 +191,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       setState(() {
         _serverAttachTotal = serverAttachTotal;
         _localAttachTotal = localAttachTotal;
+        _attachTotalLoaded = true;
       });
     } catch (_) {
       // 附件总数统计失败不影响整页
@@ -306,9 +320,15 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                   ])
                 else if (!kIsWeb)
                   _card(c, [
-                    _diffRow(c, '出货单', _clientLocalSales, _clientServerSales),
-                    _diffRow(c, '收款单', _clientLocalPayments, _clientServerPayments),
-                    _diffRow(c, '附件', _clientLocalAttach, _clientServerAttach),
+                    _diffRow(c, '出货单',
+                        _localSynced ? _clientLocalSales : null,
+                        _clientServerLoaded ? _clientServerSales : null),
+                    _diffRow(c, '收款单',
+                        _localSynced ? _clientLocalPayments : null,
+                        _clientServerLoaded ? _clientServerPayments : null),
+                    _diffRow(c, '附件',
+                        _localSynced ? _clientLocalAttach : null,
+                        _clientAttachLoaded ? _clientServerAttach : null),
                   ])
                 else
                   _card(c, [
@@ -328,8 +348,12 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 if (!kIsWeb)
                   _card(c, [
                     for (final (store, label) in _entities)
-                      _diffRow(c, label, _localCounts[store] ?? 0, (_serverStats[store] as num?)?.toInt() ?? 0),
-                    _diffRow(c, '附件', _localAttachTotal, _serverAttachTotal),
+                      _diffRow(c, label,
+                          _localSynced ? (_localCounts[store] ?? 0) : null,
+                          _serverStatsLoaded ? ((_serverStats[store] as num?)?.toInt() ?? 0) : null),
+                    _diffRow(c, '附件',
+                        _localSynced ? _localAttachTotal : null,
+                        _attachTotalLoaded ? _serverAttachTotal : null),
                   ])
                 else
                   _card(c, [
@@ -337,6 +361,12 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                       _row(c, label, '服务器 ${(_serverStats[store] as num?)?.toInt() ?? 0} 条'),
                     _row(c, '附件', '服务器 $_serverAttachTotal 张'),
                   ]),
+                if (!kIsWeb && !_localSynced)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text('本地库尚未完成首次同步，本地列显示 —（进入应用会自动同步）',
+                        style: TextStyle(fontSize: 11, color: c.warning)),
+                  ),
                 const SizedBox(height: 14),
                 Text('Web 与 App 行为差异', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: c.textMain)),
                 const SizedBox(height: 8),
@@ -380,7 +410,23 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     );
   }
 
-  Widget _diffRow(TaozhuColors c, String label, int local, int server) {
+  Widget _diffRow(TaozhuColors c, String label, int? local, int? server) {
+    // 未验证（本地未同步 / 服务器未拉取成功）→ 显示 —，不把 0=0 显示成"正常"
+    if (local == null || server == null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            SizedBox(width: 90, child: Text(label, style: const TextStyle(fontSize: 13))),
+            Text(local == null ? '本地 —' : '本地 $local', style: TextStyle(fontSize: 13, color: c.textSub)),
+            const SizedBox(width: 8),
+            Text(server == null ? '服务器 —' : '服务器 $server', style: TextStyle(fontSize: 13, color: c.textSub)),
+            const Spacer(),
+            Icon(Icons.remove_circle_outline, size: 18, color: c.textSub),
+          ],
+        ),
+      );
+    }
     final same = local == server;
     final color = same ? c.success : c.warning;
     return Padding(
