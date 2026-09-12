@@ -41,21 +41,34 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
 
   Future<void> _load() async {
     // 本地数据立即可得，先渲染（不再被服务器请求阻塞转圈）
-    final local = <String, int>{};
-    for (final (store, _) in _entities) {
-      local[store] = (await LocalDb.getAll(store)).length;
+    // 任何一步异常都必须释放 _loading（finally），否则页面永久转圈
+    var local = <String, int>{};
+    var pending = 0;
+    var deviceId = '';
+    var lastSync = '';
+    try {
+      local = <String, int>{};
+      for (final (store, _) in _entities) {
+        local[store] = (await LocalDb.getAll(store)).length;
+      }
+      pending = await SyncService.pendingCount();
+      deviceId = await SyncService.deviceId();
+      lastSync = (await SyncService.lastSyncAt()) ?? '';
+    } catch (e) {
+      if (mounted) {
+        _error = e.toString().replaceFirst('Exception: ', '');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _localCounts = local;
+          _pending = pending;
+          _deviceId = deviceId;
+          _lastSync = lastSync;
+          _loading = false;
+        });
+      }
     }
-    final pending = await SyncService.pendingCount();
-    final deviceId = await SyncService.deviceId();
-    final lastSync = await SyncService.lastSyncAt();
-    if (!mounted) return;
-    setState(() {
-      _localCounts = local;
-      _pending = pending;
-      _deviceId = deviceId;
-      _lastSync = lastSync ?? '';
-      _loading = false;
-    });
     // 服务器统计异步到达后更新（慢/失败不影响已展示的本地数据）
     try {
       final d = await Api.instance.get('/sync/stats');
@@ -73,12 +86,18 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   }
 
   Future<void> _syncNow() async {
+    if (_syncing) return;
     setState(() => _syncing = true);
-    await SyncService.sync();
-    if (!mounted) return;
-    setState(() => _syncing = false);
-    _load();
-    toast(context, '已触发同步');
+    try {
+      await SyncService.sync().timeout(const Duration(seconds: 30));
+    } catch (_) {
+      // 同步超时/异常也结束转圈（服务端卡死不阻塞 UI）
+    } finally {
+      if (!mounted) return;
+      setState(() => _syncing = false);
+      _load();
+      toast(context, '已触发同步');
+    }
   }
 
   String _fmtTime(String iso) {

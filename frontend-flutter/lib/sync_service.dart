@@ -31,14 +31,21 @@ class SyncService {
   /// 设备 ID（首次生成随机 UUID，持久化；pull/push 用）
   static Future<String> deviceId() async {
     if (_deviceId != null) return _deviceId!;
-    final p = await SharedPreferences.getInstance();
-    var id = p.getString(_deviceIdKey);
-    if (id == null || id.isEmpty) {
-      id = _genUuid();
-      await p.setString(_deviceIdKey, id);
+    try {
+      final p = await SharedPreferences.getInstance();
+      var id = p.getString(_deviceIdKey);
+      if (id == null || id.isEmpty) {
+        id = _genUuid();
+        await p.setString(_deviceIdKey, id);
+      }
+      _deviceId = id;
+      return id;
+    } catch (_) {
+      // 本地存储异常也不能让同步流程抛（转圈永不释放的根因之一）
+      final fallback = _genUuid();
+      _deviceId = fallback;
+      return fallback;
     }
-    _deviceId = id;
-    return id;
   }
 
   /// 生成简易 UUID（时间戳+随机，足够设备标识唯一性）
@@ -64,8 +71,12 @@ class SyncService {
 
   /// 上次成功同步时间（null=从未同步过）
   static Future<String?> lastSyncAt() async {
-    final p = await SharedPreferences.getInstance();
-    return p.getString(_lastSyncKey);
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getString(_lastSyncKey);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 本地待推送变更数（local_changes 队列）
@@ -245,16 +256,20 @@ class SyncService {
     });
   }
 
-  /// 启动/回前台同步：首次 full，后续增量 pull + 推送待发
+  /// 启动/回前台同步：首次 full，后续增量 pull + 推送待发（静默）
   static Future<void> sync() async {
     if (kIsWeb) return;
-    final done = await isFullDone();
-    if (!done) {
-      await fullSync();
-    } else {
-      await pullChanges();
+    try {
+      final done = await isFullDone();
+      if (!done) {
+        await fullSync();
+      } else {
+        await pullChanges();
+      }
+      await pushPending();
+    } catch (_) {
+      // 任一异常都不外抛（bottom_shell 无 await 调用，抛了就成 unhandled error）
     }
-    await pushPending();
   }
 
   /// 实体类型 → 本地 store 名映射
