@@ -173,40 +173,38 @@ class _SalePageState extends State<SalePage> {
       }
     }
     if (!mounted || d == null) return;
+    final data = d;
     setState(() {
-        _clientId = d['client_id'] as String?;
-        final hd = '${d['happened_at'] ?? ''}';
-        _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
-        final items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _rows.clear();
-        var skipped = 0;
-        for (final it in items) {
-          final itemId = '${it['item_id']}';
-          final unit = '${it['unit'] ?? ''}';
-          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-          final sp = (it['sale_price'] as num?)?.toDouble() ?? 0;
-          final opt = _items.where((x) => x.id == itemId).firstOrNull;
-          final price = opt?.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
-          if (opt == null || price == null) {
-            skipped++;
-            continue;
-          }
-          _rows.add(_Row()
-            ..itemId = itemId
-            ..priceId = price['id'] as String?
-            ..quantity = qty
-            ..salePrice = sp
-            ..qtyCtrl.text = qty.toString()
-            ..saleCtrl.text = sp.toString());
+      _clientId = data['client_id'] as String?;
+      final hd = '${data['happened_at'] ?? ''}';
+      _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
+      final items = ((data['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      _rows.clear();
+      var skipped = 0;
+      for (final it in items) {
+        final itemId = '${it['item_id']}';
+        final unit = '${it['unit'] ?? ''}';
+        final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+        final sp = (it['sale_price'] as num?)?.toDouble() ?? 0;
+        final opt = _items.where((x) => x.id == itemId).firstOrNull;
+        final price = opt?.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+        if (opt == null || price == null) {
+          skipped++;
+          continue;
         }
-        if (_rows.isEmpty) _rows.add(_Row());
-        if (skipped > 0) {
-          toast(context, '原单 $skipped 条商品已删除或价格停用，保存后将移除');
-        }
-      });
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
-    }
+        _rows.add(_Row()
+          ..itemId = itemId
+          ..priceId = price['id'] as String?
+          ..quantity = qty
+          ..salePrice = sp
+          ..qtyCtrl.text = qty.toString()
+          ..saleCtrl.text = sp.toString());
+      }
+      if (_rows.isEmpty) _rows.add(_Row());
+      if (skipped > 0) {
+        toast(context, '原单 $skipped 条商品已删除或价格停用，保存后将移除');
+      }
+    });
   }
 
   double get _total => _rows.fold(0, (s, r) => s + r.quantity * r.salePrice);

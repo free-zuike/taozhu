@@ -117,10 +117,11 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       // 本地副本：离线也能显示
       await saveAvatarLocal(bytes);
       await Api.instance.setAvatar(true);
+      final localPath = (await avatarLocalFile())?.path ?? '';
       if (mounted) {
         setState(() {
           _avatar = true;
-          _avatarLocalPath = (await avatarLocalFile())?.path ?? '';
+          _avatarLocalPath = localPath;
         });
       }
       toast(context, '头像已更新');

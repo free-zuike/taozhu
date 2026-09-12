@@ -155,18 +155,34 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     var clientServerAttach = 0;
     var localAttachTotal = 0;
     var serverAttachTotal = 0;
-    if (saleCounts != null && payCounts != null) {
-      final saleIds = ((saleCounts['ids'] as List?) ?? []).cast<String>();
-      final payIds = ((payCounts['ids'] as List?) ?? []).cast<String>();
+    var clientServerSales = 0;
+    var clientServerPayments = 0;
+    // 闭包捕获的可空变量无法提升类型 → 复制为 final 局部变量再判空
+    final sCounts = saleCounts;
+    final pCounts = payCounts;
+    final tTotal = attachTotal;
+    final cStats = clientStats;
+    if (sCounts != null && pCounts != null) {
+      final saleIds = ((sCounts['ids'] as List?) ?? []).cast<String>();
+      final payIds = ((pCounts['ids'] as List?) ?? []).cast<String>();
       clientServerAttach =
-          ((saleCounts['total'] as num?) ?? 0).toInt() + ((payCounts['total'] as num?) ?? 0).toInt();
+          ((sCounts['total'] as num?) ?? 0).toInt() + ((pCounts['total'] as num?) ?? 0).toInt();
       clientLocalAttach =
           await _localAttachCount('sale', saleIds) + await _localAttachCount('payment', payIds);
     }
-    if (attachTotal != null) {
-      serverAttachTotal = (attachTotal['total'] as num?)?.toInt() ?? 0;
+    if (tTotal != null) {
+      serverAttachTotal = (tTotal['total'] as num?)?.toInt() ?? 0;
       localAttachTotal = await _localAllAttachCount();
     }
+    if (cStats != null) {
+      clientServerSales = (cStats['sales'] as num?)?.toInt() ?? 0;
+      clientServerPayments = (cStats['payments'] as num?)?.toInt() ?? 0;
+    }
+    final statsLoaded = serverStats != null;
+    final clientStatsLoaded = cStats != null;
+    final clientAttachLoaded = sCounts != null && pCounts != null;
+    final attachTotalLoaded = tTotal != null;
+    final errMsg = localError ?? (serverStats == null ? '无法获取服务器数据' : null);
     if (!mounted) return;
     // 一次性渲染完整结果（不再逐块刷新）
     setState(() {
@@ -180,19 +196,17 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       _clientLocalPayments = clientLocalPayments;
       _clientLocalAttach = clientLocalAttach;
       _clientServerAttach = clientServerAttach;
+      _clientServerSales = clientServerSales;
+      _clientServerPayments = clientServerPayments;
       _localAttachTotal = localAttachTotal;
       _serverAttachTotal = serverAttachTotal;
       _localSynced = localSynced;
       _serverStats = serverStats ?? _serverStats;
-      _serverStatsLoaded = serverStats != null;
-      _clientServerLoaded = clientStats != null;
-      _clientAttachLoaded = saleCounts != null && payCounts != null;
-      _attachTotalLoaded = attachTotal != null;
-      if (clientStats != null) {
-        _clientServerSales = (clientStats['sales'] as num?)?.toInt() ?? 0;
-        _clientServerPayments = (clientStats['payments'] as num?)?.toInt() ?? 0;
-      }
-      _error = localError ?? (serverStats == null ? '无法获取服务器数据' : null);
+      _serverStatsLoaded = statsLoaded;
+      _clientServerLoaded = clientStatsLoaded;
+      _clientAttachLoaded = clientAttachLoaded;
+      _attachTotalLoaded = attachTotalLoaded;
+      _error = errMsg;
       _loading = false;
     });
   }

@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 import 'api.dart';
@@ -19,7 +18,7 @@ Future<File?> avatarLocalFile() async {
   }
 }
 
-Future<void> saveAvatarLocal(Uint8List bytes) async {
+Future<void> saveAvatarLocal(List<int> bytes) async {
   if (kIsWeb) return;
   try {
     final root = await getApplicationDocumentsDirectory();
