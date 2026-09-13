@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sembast/sembast.dart';
 import 'db_factory_io.dart' if (dart.library.html) 'db_factory_web.dart' as factory_impl;
+import 'log.dart';
 
 /// 本地数据库（sembast，SQLite 文件）——**仅移动/桌面端启用**。
 /// Web 端禁用（无网络即无法加载页面，离线无意义）：kIsWeb 时各方法直接空操作，不初始化不报错。
@@ -39,7 +40,9 @@ class LocalDb {
         if (id.isEmpty) continue;
         await store.record(id).put(db, r);
       }
-    } catch (_) {}
+    } catch (e) {
+      appLog('db', 'putAll($storeName) 失败: ${e.toString().split('\n').first}', level: 'error');
+    }
   }
 
   /// 增量 upsert 多行（按 id 覆盖，不删整表；在线刷新合并用，保留本地未推送的单）
@@ -53,7 +56,9 @@ class LocalDb {
         if (id.isEmpty) continue;
         await store.record(id).put(db, r);
       }
-    } catch (_) {}
+    } catch (e) {
+      appLog('db', 'upsertList($storeName) 失败: ${e.toString().split('\n').first}', level: 'error');
+    }
   }
 
   /// 增量 upsert 单行（按 id 覆盖；不删整表，增量 pull 合并用）
@@ -65,7 +70,9 @@ class LocalDb {
       if (id.isEmpty) return;
       final store = stringMapStoreFactory.store(storeName);
       await store.record(id).put(db, row);
-    } catch (_) {}
+    } catch (e) {
+      appLog('db', 'upsertOne($storeName) 失败: ${e.toString().split('\n').first}', level: 'error');
+    }
   }
 
   /// 删单行（delete action 合并用；不存在静默跳过）
@@ -75,7 +82,9 @@ class LocalDb {
     try {
       final store = stringMapStoreFactory.store(storeName);
       await store.record(id).delete(db);
-    } catch (_) {}
+    } catch (e) {
+      appLog('db', 'deleteOne($storeName,$id) 失败: ${e.toString().split('\n').first}', level: 'error');
+    }
   }
 
   /// 读取某集合镜像（按 happened_at 降序；未初始化/Web/空返回 []）

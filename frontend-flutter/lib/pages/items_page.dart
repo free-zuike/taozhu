@@ -145,6 +145,8 @@ class _ItemsPageState extends State<ItemsPage> {
       for (final p in prices) { p['active'] = 1; }
       delPayload['prices'] = prices;
       await LocalDb.deleteOne('items', id);
+      // 立即从内存移除（本地库写入失败时 UI 也先消失，不依赖读库刷新）
+      if (mounted) setState(() => _items.removeWhere((x) => '${x['id']}' == id));
       await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
     }
     toast(context, '已删除，正在同步');
@@ -318,15 +320,21 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   }
 
   Future<void> _loadCats() async {
+    var cats = <Map<String, dynamic>>[];
     try {
       final d = await Api.instance.get('/categories?type=item');
-      setState(() {
-        _cats = ((d['categories'] as List?) ?? [])
-            .cast<Map<String, dynamic>>()
-            .where((c) => c['parent_id'] == null || '${c['parent_id']}' == '')
-            .toList();
-      });
-    } catch (_) {}
+      cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+    } catch (_) {
+      // 离线/网络失败：本地分类镜像兜底（Web 直连正常；App 弱网也有分类可选）
+      final local = await LocalDb.getAll('categories');
+      cats = [for (final c in local) if ('${c['type'] ?? ''}' == 'item') c];
+    }
+    if (!mounted) return;
+    setState(() {
+      _cats = cats
+          .where((c) => c['parent_id'] == null || '${c['parent_id']}' == '')
+          .toList();
+    });
   }
 
   @override
