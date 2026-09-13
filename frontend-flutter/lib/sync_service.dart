@@ -268,9 +268,10 @@ class SyncService {
       final pending = await LocalDb.getPendingChanges();
       // 本地库只读/队列写不进时，删除标记已存 SharedPreferences：合并为待推送变更（绕只读队列）
       final extra = <Map<String, dynamic>>[];
+      var delIds = <String>[];
       try {
         final p = await SharedPreferences.getInstance();
-        final delIds = p.getStringList(kDeletedItemsKey) ?? [];
+        delIds = p.getStringList(kDeletedItemsKey) ?? [];
         final nowIso = DateTime.now().toUtc().toIso8601String();
         for (final did in delIds) {
           extra.add({
@@ -292,11 +293,22 @@ class SyncService {
       final d = await Api.instance.post('/sync/push', {'device_id': did, 'changes': changes});
       if (d == null) return 0;
       final accepted = d['accepted'] as int? ?? 0;
-      // 持久删除集合：本次全部接受后移除（避免重复推送/同步风暴）；部分拒绝则保留下次重推
+      // 持久删除集合：仅清除"本地库已确实删掉/软删落库"的 id；
+      // 本地库只读导致 tombstone 未写入、行仍活跃的 id 必须保留——
+      // 否则重启后 _load 失去过滤依据，已删商品复活（服务端已删也不影响：集合仅本地过滤用）
       if (extra.isNotEmpty && accepted >= changes.length) {
         try {
+          final stillLocal = <String>[];
+          for (final did2 in delIds) {
+            final local = await LocalDb.getOne('items', did2);
+            if (local != null && '${local['deleted_at'] ?? ''}'.isEmpty) stillLocal.add(did2);
+          }
           final p = await SharedPreferences.getInstance();
-          await p.remove(kDeletedItemsKey);
+          if (stillLocal.isEmpty) {
+            await p.remove(kDeletedItemsKey);
+          } else if (stillLocal.length != delIds.length) {
+            await p.setStringList(kDeletedItemsKey, stillLocal);
+          }
         } catch (_) {}
       }
       // 服务端时间校准：设备时钟偏慢会让 LWW 拒绝本设备写入（删除/改分类在服务端不生效，

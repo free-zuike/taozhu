@@ -374,13 +374,21 @@ class _ItemEditPageState extends State<_ItemEditPage> {
 
   Future<void> _loadCats() async {
     var cats = <Map<String, dynamic>>[];
-    try {
-      final d = await Api.instance.get('/categories?type=item');
-      cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
-    } catch (_) {
-      // 离线/网络失败：本地分类镜像兜底（Web 直连正常；App 弱网也有分类可选）
-      final local = await LocalDb.getAll('categories');
-      cats = [for (final c in local) if ('${c['type'] ?? ''}' == 'item') c];
+    // 页面加载零网络（项目铁律）：原生只读本地分类镜像，绝不访问网络；
+    // 仅 Web（无本地库）直连服务器
+    if (kIsWeb) {
+      try {
+        final d = await Api.instance.get('/categories?type=item');
+        final net = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+        if (net.isNotEmpty) {
+          cats = net;
+          await LocalDb.upsertList('categories', net);
+        }
+      } catch (_) {
+        // Web 网络失败：分类留空，编辑页不阻塞
+      }
+    } else {
+      cats = [for (final c in await LocalDb.getAll('categories')) if ('${c['type'] ?? ''}' == 'item') c];
     }
     if (!mounted) return;
     setState(() {

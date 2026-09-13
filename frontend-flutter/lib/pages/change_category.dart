@@ -11,11 +11,12 @@ import 'router.dart';
 /// 账本/进货单笔弹窗共用。
 Future<String?> changeCategory(BuildContext context, String itemId,
     {String itemName = ''}) async {
-  // 商品分类目录（两级）：原生优先读本地镜像；Web/本地为空时拉网络
+  // 商品分类目录（两级）：页面零网络铁律——原生只读本地镜像、绝不访问网络；
+  // 仅 Web（无本地库）直连服务器
   var cats = await LocalDb.getAll('categories');
   cats = cats.where((x) => '${x['type'] ?? ''}' == 'item').toList()
     ..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
-  if (cats.isEmpty || kIsWeb) {
+  if (kIsWeb) {
     try {
       final d = await Api.instance.get('/categories?type=item');
       cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();

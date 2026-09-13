@@ -46,7 +46,8 @@ class LocalDb {
     return _db;
   }
 
-  /// 整体替换某集合镜像（key = 行 id），rows 为空则清空；Web/失败时静默跳过
+  /// 整体替换某集合镜像（key = 行 id），rows 为空则清空；Web/失败时静默跳过。
+  /// 写失败走统一自愈（连续 3 次或 read only 重建库文件），保证全量同步能真正写进本地。
   static Future<void> putAll(String storeName, List<Map<String, dynamic>> rows) {
     return _serial(() async {
       final db = await _open();
@@ -61,11 +62,13 @@ class LocalDb {
         }
       } catch (e) {
         appLog('db', 'putAll($storeName) 失败: ${e.toString().split('\n').first}', level: 'error');
+        await _onWriteFailure(e);
       }
     });
   }
 
-  /// 增量 upsert 多行（按 id 覆盖，不删整表；在线刷新合并用，保留本地未推送的单）
+  /// 增量 upsert 多行（按 id 覆盖，不删整表；在线刷新合并用，保留本地未推送的单）。
+  /// 写失败走统一自愈（同 putAll）。
   static Future<void> upsertList(String storeName, List<Map<String, dynamic>> rows) {
     return _serial(() async {
       final db = await _open();
@@ -79,6 +82,7 @@ class LocalDb {
         }
       } catch (e) {
         appLog('db', 'upsertList($storeName) 失败: ${e.toString().split('\n').first}', level: 'error');
+        await _onWriteFailure(e);
       }
     });
   }
