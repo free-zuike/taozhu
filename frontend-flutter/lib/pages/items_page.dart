@@ -173,10 +173,14 @@ class _ItemsPageState extends State<ItemsPage> {
       // ① 本地写（tombstone 先行保证重启不复活；失败仅记日志，绝不阻断后续推送）
       try {
         if (item != null) {
+          // 深拷贝价格行（sembast 反序列化的嵌套 map 可能不可修改/共享引用：
+          // 直接 p['active']=1 可能抛只读异常或污染内存中原始商品对象）
           final delPayload = Map<String, dynamic>.from(item);
           delPayload['deleted_at'] = DateTime.now().toIso8601String();
-          final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
-          for (final p in prices) { p['active'] = 1; }
+          final prices = [
+            for (final p in ((item['prices'] as List?) ?? const []))
+              Map<String, dynamic>.from(p as Map)..['active'] = 1,
+          ];
           delPayload['prices'] = prices;
           await LocalDb.upsertOne('items', delPayload);
           try {
