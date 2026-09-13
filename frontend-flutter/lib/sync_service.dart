@@ -40,6 +40,10 @@ class SyncService {
   static bool _syncing = false;
   static Timer? _debounce;
 
+  /// 最近一次同步是否失败（full/pull/push 任一异常置 true；sync() 开始时清除，结束后供 UI 如实显示）
+  static bool _lastSyncFailed = false;
+  static bool get lastSyncFailed => _lastSyncFailed;
+
   /// 设备 ID（首次生成随机 UUID，持久化；pull/push 用）
   static Future<String> deviceId() async {
     if (_deviceId != null) return _deviceId!;
@@ -168,6 +172,7 @@ class SyncService {
       await _markSynced();
       return clients.length + items.length + sales.length + purchases.length + payments.length;
     } catch (_) {
+      _lastSyncFailed = true;
       return 0;
     }
   }
@@ -227,6 +232,7 @@ class SyncService {
       await _markSynced();
       return total;
     } catch (_) {
+      _lastSyncFailed = true;
       return 0;
     } finally {
       _syncing = false;
@@ -262,6 +268,7 @@ class SyncService {
       await pullChanges();
       return accepted;
     } catch (_) {
+      _lastSyncFailed = true;
       return 0;
     }
   }
@@ -295,9 +302,10 @@ class SyncService {
   }
 
   /// 启动/回前台同步：首次 full，后续增量 pull + 推送待发（静默）。
-  /// 同步中会通知 status 监听者（「我的」页实时显示 同步中/已同步）。
+  /// 同步中会通知 status 监听者（「我的」页实时显示 同步中/已同步/同步失败）。
   static Future<void> sync() async {
     if (kIsWeb) return;
+    _lastSyncFailed = false;
     _setStatus('syncing');
     var pulled = 0;
     var pushed = 0;
@@ -310,10 +318,12 @@ class SyncService {
       }
       pushed = await pushPending();
       appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条', level: 'info');
-    } catch (_) {
+    } catch (e) {
+      _lastSyncFailed = true;
+      appLog('sync', '同步失败: ${e.toString().split('\n').first}', level: 'error');
       // 任一异常都不外抛（bottom_shell 无 await 调用，抛了就成 unhandled error）
     } finally {
-      _setStatus('idle');
+      _setStatus(_lastSyncFailed ? 'error' : 'idle');
     }
   }
 

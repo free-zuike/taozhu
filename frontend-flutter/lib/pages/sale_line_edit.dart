@@ -95,7 +95,8 @@ Future<Map<String, dynamic>?> editSaleLine(
                   ),
                   TextButton(
                     onPressed: () async {
-                      final cat = await _changeCategory(context, itemId);
+                      final cat = await _changeCategory(context, itemId,
+                          itemName: '${line['item_name'] ?? ''}');
                       if (cat != null && ctx.mounted) setDlg(() => category = cat);
                     },
                     child: const Text('修改分类'),
@@ -192,8 +193,10 @@ Future<Map<String, dynamic>?> editSaleLine(
 }
 
 /// 修改商品分类（分类为商品级、全局生效）：两级目录选择 → Web PATCH /items / 原生本地+同步队列。
+/// 本地库找不到该商品时按名称从服务器拉取写库后再改（消除"本地商品库无此商品"）。
 /// 成功返回新的分类名（'' = 未分类），取消返回 null。
-Future<String?> _changeCategory(BuildContext context, String itemId) async {
+Future<String?> _changeCategory(BuildContext context, String itemId,
+    {String itemName = ''}) async {
   // 商品分类目录（两级）：原生优先读本地镜像；Web/本地为空时拉网络
   var cats = await LocalDb.getAll('categories');
   cats = cats.where((x) => '${x['type'] ?? ''}' == 'item').toList()
@@ -245,11 +248,22 @@ Future<String?> _changeCategory(BuildContext context, String itemId) async {
         'category_id': selected.isEmpty ? null : selected,
       });
     } else {
-      final stored = (await LocalDb.getAllByName('items'))
+      var stored = (await LocalDb.getAllByName('items'))
           .where((x) => '${x['id']}' == itemId).firstOrNull;
       if (stored == null) {
-        toast(context, '本地商品库无此商品，请先完成同步');
-        return null;
+        // 本地库没有（新建商品可能未同步到本地）：按名称从服务器拉取该商品写库，再改分类
+        if (itemName.isNotEmpty) {
+          try {
+            final dd = await Api.instance.get('/items?q=${Uri.encodeQueryComponent(itemName)}');
+            stored = ((dd['items'] as List?) ?? []).cast<Map<String, dynamic>>()
+                .where((x) => '${x['id']}' == itemId).firstOrNull;
+            if (stored != null) await LocalDb.upsertOne('items', Map<String, dynamic>.from(stored));
+          } catch (_) {}
+        }
+        if (stored == null) {
+          toast(context, '本地商品库无此商品，请先完成同步');
+          return null;
+        }
       }
       final updated = Map<String, dynamic>.from(stored)
         ..['category'] = catName

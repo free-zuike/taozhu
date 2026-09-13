@@ -358,6 +358,19 @@ class _SalePageState extends State<SalePage> {
       _items.add(_ItemOption(id, name, category, [
         {'id': pid, 'unit': u, 'purchase_price': 0, 'sale_price': price > 0 ? price : 0, 'active': 1},
       ]));
+      // 原生：同步写本地库镜像（等不到 pull 时记单/改分类也能立即用，消除"本地商品库无此商品"）
+      if (!kIsWeb) {
+        await LocalDb.upsertOne('items', {
+          'id': id,
+          'name': name,
+          'category': category,
+          'category_id': null,
+          'deleted_at': null,
+          'prices': [
+            {'id': pid, 'unit': u, 'purchase_price': 0, 'sale_price': price > 0 ? price : 0, 'active': 1},
+          ],
+        });
+      }
       return id;
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -420,11 +433,23 @@ class _SalePageState extends State<SalePage> {
           'category_id': selected.isEmpty ? null : selected,
         });
       } else {
-        final stored = (await LocalDb.getAllByName('items'))
+        var stored = (await LocalDb.getAllByName('items'))
             .where((x) => '${x['id']}' == itemId).firstOrNull;
         if (stored == null) {
-          toast(context, '本地商品库无此商品，请先完成同步');
-          return;
+          // 本地库没有（新建商品可能未同步到本地）：按名称从服务器拉取该商品写库，再改分类
+          final name = row.nameCtrl.text.trim();
+          if (name.isNotEmpty) {
+            try {
+              final dd = await Api.instance.get('/items?q=${Uri.encodeQueryComponent(name)}');
+              stored = ((dd['items'] as List?) ?? []).cast<Map<String, dynamic>>()
+                  .where((x) => '${x['id']}' == itemId).firstOrNull;
+              if (stored != null) await LocalDb.upsertOne('items', Map<String, dynamic>.from(stored));
+            } catch (_) {}
+          }
+          if (stored == null) {
+            toast(context, '本地商品库无此商品，请先完成同步');
+            return;
+          }
         }
         final updated = Map<String, dynamic>.from(stored)
           ..['category'] = catName

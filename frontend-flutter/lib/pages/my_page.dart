@@ -47,6 +47,7 @@ class _MyPageState extends State<MyPage> {
   String _avatarLocalPath = ''; // 本地头像副本（离线也显示）
   bool _avatar = false; // 是否已设置头像
   bool _syncing = false; // SyncService 同步进行中（进入应用自动同步时实时显示）
+  bool _syncError = false; // 最近一次同步失败（网络/服务器异常；不再静默谎报"已同步"）
   String _webSyncState = ''; // Web 端服务器连通检查：''=检查中 / ok / error
   int _lowStocks = -1; // 低库存数量（-1=未加载）
   int _pending = 0; // 待同步单据数（合并旧 Api 队列 + 新 SyncService 队列）
@@ -82,7 +83,10 @@ class _MyPageState extends State<MyPage> {
 
   void _onSyncStatus() {
     if (!mounted) return;
-    setState(() => _syncing = SyncService.syncStatus == 'syncing');
+    setState(() {
+      _syncing = SyncService.syncStatus == 'syncing';
+      _syncError = SyncService.syncStatus == 'error';
+    });
   }
 
   /// 同步完成（版本号变化）后刷新待同步数/上次同步时间/低库存
@@ -114,6 +118,7 @@ class _MyPageState extends State<MyPage> {
       }
     }
     if (_syncing) return '正在同步…';
+    if (_syncError) return '同步失败，请检查网络或服务器（详见日志）';
     if (_pending > 0) return '$_pending 条待同步${_lastSync.isEmpty ? '' : ' · 上次 $_lastSync'}';
     if (_lastSync.isNotEmpty) return '已同步 · 上次 $_lastSync';
     return '尚未同步（进入应用会自动同步）';
