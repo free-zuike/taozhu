@@ -916,7 +916,7 @@ class _LedgerPageState extends State<LedgerPage> {
           'date': orderDate, 'order': s, 'client_name': '${s['client_name'] ?? ''}',
           'item_name': '（无明细）',
           'quantity': '', 'unit': '', 'amount': ((s['total'] as num?)?.toDouble() ?? 0),
-          'item_id': '', 'sale_price': null, 'cost_price': null, 'qty_num': 0,
+          'item_id': '', 'goods_id': '', 'sale_price': null, 'cost_price': null, 'qty_num': 0,
           'note': orderNote,
           'happened_at': '${s['happened_at'] ?? orderDate}',
         });
@@ -924,18 +924,19 @@ class _LedgerPageState extends State<LedgerPage> {
       for (final it in items) {
         final id = '${it['happened_at'] ?? ''}';
         // 分类优先用明细行自带分类（后端列表/详情/同步已 join items.category），
-        // 本地商品目录缺失时仍能正确显示；目录映射兜底
+        // 本地商品目录缺失时仍能正确显示；目录映射兜底（key=商品 id）
         final catInline = '${it['item_category'] ?? it['category'] ?? ''}'.trim();
         lines.add({
           'date': id.length >= 10 ? id.substring(0, 10) : orderDate,
           'order': s,
           'client_name': '${s['client_name'] ?? ''}',
           'item_name': '${it['item_name'] ?? ''}',
-          'category': catInline.isNotEmpty ? catInline : (_itemCategory['${it['id'] ?? ''}'] ?? ''),
+          'category': catInline.isNotEmpty ? catInline : (_itemCategory['${it['item_id'] ?? ''}'] ?? ''),
           'quantity': '${it['quantity'] ?? ''}',
           'unit': '${it['unit'] ?? ''}',
           'amount': ((it['amount'] as num?)?.toDouble() ?? 0),
-          'item_id': '${it['id'] ?? ''}',
+          'item_id': '${it['id'] ?? ''}',          // 明细行 id（行级编辑/删除端点用）
+          'goods_id': '${it['item_id'] ?? ''}',    // 真实商品 id（改分类等商品级操作用）
           'sale_price': (it['sale_price'] as num?)?.toDouble(),
           'cost_price': (it['cost_price'] as num?)?.toDouble(),
           'qty_num': (it['quantity'] as num?)?.toDouble() ?? 0,

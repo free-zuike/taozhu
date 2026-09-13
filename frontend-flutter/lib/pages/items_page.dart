@@ -135,32 +135,38 @@ class _ItemsPageState extends State<ItemsPage> {
         return;
       }
     } else {
-      // 软删：本地删行 + 队列推送 upsert 带 deleted_at（prices 补 active:1 防服务端恢复时跳过）
-      final item = _items.where((x) => '${x['id']}' == id).firstOrNull;
-      // 内存级标记（任何 _load 都会过滤）：保证离线/本地库异常时删除的 UI 也立即消失
+      // 本地优先删除：UI 立即反馈（内存隐藏 + 提示），本地写与队列后台尽力执行——
+      // 即使本地库写入异常/挂起也不阻塞界面（异常记日志可查，联网后由队列推送服务端）
+      final item = _items.where((x) => '${x['id']}' == id).firstOrNull; // 先取，随后内存移除
       _deletedIds.add(id);
       if (mounted) setState(() => _items.removeWhere((x) => '${x['id']}' == id));
-      if (item == null) {
-        // 本地镜像找不到（可能已被删/未同步）→ 直接推删除 payload，不假成功
-        final delPayload = {'id': id, 'name': name, 'deleted_at': DateTime.now().toIso8601String()};
-        await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
-        toast(context, '已删除，正在同步');
-        _load();
-        return;
+      toast(context, '已删除，正在同步');
+      try {
+        if (item != null) {
+          final delPayload = Map<String, dynamic>.from(item);
+          delPayload['deleted_at'] = DateTime.now().toIso8601String();
+          final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+          for (final p in prices) { p['active'] = 1; }
+          delPayload['prices'] = prices;
+          // 软删 tombstone 先写（保证重启不复活，不依赖物理删除完成）→ 物理删除后尽力 →
+          // 入队推送服务端（本地优先、离线可用，全程不访问网络）
+          await LocalDb.upsertOne('items', delPayload);
+          try {
+            await LocalDb.deleteOne('items', id);
+          } catch (e) {
+            appLog('delete', '物理删除失败 item=$id（tombstone 已写入，不影响删除）: ${e.toString().split('\n').first}', level: 'error');
+          }
+          await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
+        } else {
+          // 本地镜像找不到（可能已被删/未同步）→ 直接推删除 payload
+          await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: {
+            'id': id, 'name': name, 'deleted_at': DateTime.now().toIso8601String(),
+          });
+        }
+      } catch (e) {
+        appLog('delete', '删除商品本地写入异常 item=$id: ${e.toString().split('\n').first}', level: 'error');
       }
-      final delPayload = Map<String, dynamic>.from(item);
-      delPayload['deleted_at'] = DateTime.now().toIso8601String();
-      final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
-      for (final p in prices) { p['active'] = 1; }
-      delPayload['prices'] = prices;
-      // 双保险：物理删除 + 软删 tombstone。
-      // 物理删除在个别环境会静默失败（本地行残留）→ 重启后 _load 又读回它；
-      // 软删标记配合 _load 的 alive 过滤（deleted_at 非空剔除）保证本地不显示、不复活
-      await LocalDb.deleteOne('items', id);
-      await LocalDb.upsertOne('items', delPayload);
-      await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
     }
-    toast(context, '已删除，正在同步');
     _load();
   }
 

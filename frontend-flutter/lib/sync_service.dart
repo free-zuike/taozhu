@@ -229,6 +229,10 @@ class SyncService {
             } else {
               // 本地已软删但推送尚未落地：跳过 upsert，保留本地删除状态
               if (await (await pendingOf(entityType)).contains(id)) continue;
+              // 本地删除兜底：本地已有该实体且已软删（tombstone），服务端活跃记录不得覆盖——
+              // 本地删除是权威，即使服务端删除未生效（推送被拒/后端旧版），重启也不复活
+              final local = await LocalDb.getOne(store, id);
+              if (local != null && '${local['deleted_at'] ?? ''}'.isNotEmpty) continue;
               await LocalDb.upsertOne(store, payload);
             }
           }

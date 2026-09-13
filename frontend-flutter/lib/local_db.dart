@@ -87,6 +87,19 @@ class LocalDb {
     }
   }
 
+  /// 读单行（增量 pull 判"本地已软删"用；不存在/异常返回 null）
+  static Future<Map<String, dynamic>?> getOne(String storeName, String id) async {
+    final db = await _open();
+    if (db == null) return null;
+    try {
+      final store = stringMapStoreFactory.store(storeName);
+      final snap = await store.record(id).get(db);
+      return snap == null ? null : Map<String, dynamic>.from(snap.value);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 读取某集合镜像（按 happened_at 降序；未初始化/Web/空返回 []）
   static Future<List<Map<String, dynamic>>> getAll(String storeName) async {
     final db = await _open();

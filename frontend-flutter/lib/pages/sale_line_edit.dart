@@ -96,7 +96,10 @@ Future<Map<String, dynamic>?> editSaleLine(
                   ),
                   TextButton(
                     onPressed: () async {
-                      final cat = await _changeCategory(context, itemId,
+                      // 改分类用真实商品 id（goods_id，即 sale_items.item_id）；itemId 是明细行 id 用于行编辑端点
+                      final goodsId = '${line['goods_id'] ?? line['item_id'] ?? ''}';
+                      if (goodsId.isEmpty) return;
+                      final cat = await _changeCategory(context, goodsId,
                           itemName: '${line['item_name'] ?? ''}');
                       if (cat != null && ctx.mounted) setDlg(() => category = cat);
                     },

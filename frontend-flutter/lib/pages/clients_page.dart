@@ -18,6 +18,7 @@ class _ClientsPageState extends State<ClientsPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _clients = [];
   List<Map<String, dynamic>> _cats = [];
+  Map<String, String> _catNameById = {}; // 本地分类 id → 名称（列表行显示分类用）
   bool _loading = true;
   Timer? _searchTimer;
 
@@ -58,7 +59,13 @@ class _ClientsPageState extends State<ClientsPage> {
           .where((x) => '${x['type'] ?? ''}' == 'client')
           .toList();
     }
-    if (mounted) setState(() => _cats = rows);
+    if (mounted) setState(() {
+      _cats = rows;
+      // 本地分类 id → 名称映射（列表行显示分类用；本地镜像无 category_name 字段，需反查）
+      _catNameById = {
+        for (final x in rows) '${x['id']}': '${x['name'] ?? ''}',
+      };
+    });
   }
 
   List<Map<String, dynamic>> get _topCats =>
@@ -317,7 +324,9 @@ class _ClientsPageState extends State<ClientsPage> {
                       child: ListTile(
                         title: Text('${c['name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text([
-                          if ('${c['category_name'] ?? ''}'.isNotEmpty) '${c['category_name']}',
+                          if ('${c['category_name'] ?? ''}'.isNotEmpty) '${c['category_name']}'
+                          else if ('${_catNameById['${c['category_id'] ?? ''}'] ?? ''}'.isNotEmpty)
+                            '${_catNameById['${c['category_id'] ?? ''}']}',
                           if (((c['month_start_day'] as num?) ?? 1) > 1) '每月 ${c['month_start_day']} 日起算',
                           if ('${c['first_book_date'] ?? ''}'.isNotEmpty)
                             '记账 ${_bookDays('${c['first_book_date']}')} 天（自 ${c['first_book_date']}）',
