@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
@@ -23,16 +25,23 @@ class _StocksPageState extends State<StocksPage> {
   @override
   void initState() {
     super.initState();
+    // 本地优先：页面加载只读缓存不访问网络；同步完成后（version 通知）再刷新库存
+    SyncService.version.addListener(_onSync);
     _load();
   }
 
   @override
   void dispose() {
+    SyncService.version.removeListener(_onSync);
     _searchTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _load({String q = '', bool below = false}) async {
+  void _onSync() {
+    if (mounted) _load(network: true);
+  }
+
+  Future<void> _load({bool network = false, String q = '', bool below = false}) async {
     // ① 缓存兜底秒开（离线/慢网先展示上次数据，不再无限转圈）
     if (!below && q.isEmpty) {
       final cached = await Api.instance.getCachedRaw('/stocks');
@@ -44,7 +53,8 @@ class _StocksPageState extends State<StocksPage> {
         });
       }
     }
-    // ② 网络刷新 + 写缓存
+    // ② 网络刷新 + 写缓存：仅同步完成/下拉/Web 直连时执行，页面加载不发请求（本地优先）
+    if (!network && !kIsWeb) return;
     try {
       final params = <String>[];
       if (q.isNotEmpty) params.add('q=${Uri.encodeQueryComponent(q)}');
@@ -64,7 +74,7 @@ class _StocksPageState extends State<StocksPage> {
     }
   }
 
-  Future<void> _refresh() => _load(q: '', below: _belowOnly);
+  Future<void> _refresh() => _load(network: true, q: '', below: _belowOnly);
 
   /// 单行编辑：数量 / 预警阈值
   Future<void> _edit(Map<String, dynamic> s) async {

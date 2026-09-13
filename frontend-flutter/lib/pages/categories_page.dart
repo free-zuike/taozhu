@@ -36,11 +36,11 @@ class _CategoriesPageState extends State<CategoriesPage> {
   }
 
   void _onSync() {
-    if (mounted) _load();
+    if (mounted) _load(network: true);
   }
 
-  Future<void> _load() async {
-    // ① 本地库秒开（含空态；不再等网络转圈）
+  Future<void> _load({bool network = false}) async {
+    // ① 本地库秒开（含空态；不再等网络转圈，页面加载零网络请求）
     final local = await LocalDb.getAll('categories');
     if (mounted) {
       setState(() {
@@ -49,7 +49,8 @@ class _CategoriesPageState extends State<CategoriesPage> {
         _loading = false;
       });
     }
-    // ② 网络刷新 + 写本地库（静默）
+    // ② 网络刷新 + 写本地库（静默）：仅同步完成/下拉/Web 直连时执行
+    if (!network && !kIsWeb) return;
     try {
       final d = await Api.instance.get('/categories?type=$_type');
       final rows = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -88,7 +89,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
     try {
       await Api.instance.post('/categories', {'type': _type, 'name': name, 'parent_id': parentId});
       toast(context, '已添加');
-      _load();
+      _load(network: true);
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -113,7 +114,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
     try {
       await Api.instance.patch('/categories/${c['id']}', {'name': name});
       toast(context, '已保存');
-      _load();
+      _load(network: true);
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -139,7 +140,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
     try {
       await Api.instance.delete('/categories/${c['id']}');
       toast(context, '已删除');
-      _load();
+      _load(network: true);
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -178,7 +179,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : RefreshIndicator(
-                    onRefresh: _load,
+                    onRefresh: () => _load(network: true),
                     child: ListView(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                       children: [

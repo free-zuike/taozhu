@@ -37,7 +37,10 @@ class _ClientsPageState extends State<ClientsPage> {
   }
 
   void _onSync() {
-    if (mounted) _load();
+    if (mounted) {
+      _load();
+      _loadCats(); // 同步完成后刷新分类（本地库补全后，无网时店铺分类也不空白）
+    }
   }
 
   Future<void> _loadCats() async {

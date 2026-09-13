@@ -132,7 +132,7 @@ salesRouter.get('/', async (c) => {
   const saleIds = rows.results.map((r) => (r as { id: string }).id);
   const placeholders = saleIds.map(() => '?').join(',');
   const detailRows = await c.env.DB.prepare(
-    `SELECT si.*, i.name AS item_name FROM sale_items si JOIN items i ON i.id = si.item_id
+    `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id
      WHERE si.sale_id IN (${placeholders}) ORDER BY si.created_at`,
   ).bind(...saleIds).all();
 
@@ -199,7 +199,7 @@ salesRouter.get('/:id', async (c) => {
      FROM sales s JOIN clients c ON c.id = s.client_id WHERE s.id = ?`).bind(id).first();
   if (!row) return c.json({ error: '出货单不存在' }, 404);
   const detail = await c.env.DB.prepare(
-    `SELECT si.*, i.name AS item_name FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`).bind(id).all();
+    `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`).bind(id).all();
   return c.json({
     id: (row as { id: string }).id, client_id: (row as { client_id: string }).client_id,
     client_name: (row as { client_name: string }).client_name,

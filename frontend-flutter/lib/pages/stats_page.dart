@@ -1,7 +1,9 @@
 import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../log.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 
@@ -49,7 +51,19 @@ class _StatsPageState extends State<StatsPage> {
   @override
   void initState() {
     super.initState();
+    // 本地优先：页面加载不访问网络；同步完成后（version 通知）再刷新统计数据
+    SyncService.version.addListener(_onSync);
     _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    SyncService.version.removeListener(_onSync);
+    super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) _load(network: true);
   }
 
   Future<void> _bootstrap() async {
@@ -63,23 +77,25 @@ class _StatsPageState extends State<StatsPage> {
     if (cachedYears != null) {
       _years = ((cachedYears['years'] as List?) ?? []).map((e) => '$e').toList();
     }
-    // 统计本地优先加载（有缓存秒开）；店铺/年份网络刷新放后台，失败仅记日志不打扰
-    await _load();
-    try {
-      final results = await Future.wait([
-        Api.instance.get('/clients'),
-        Api.instance.get('/stats/years'),
-      ]);
-      await Api.instance.setCache('/clients', results[0]);
-      await Api.instance.setCache('/stats/years', results[1]);
-      if (!mounted) return;
-      _clients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
-      _years = ((results[1]['years'] as List?) ?? []).map((e) => '$e').toList();
-      if (_years.isNotEmpty && !_years.contains(_year)) _year = _years.last;
-    } catch (e) {
-      // 无网络：本地已有数据时不打扰，仅记日志（错误日志页可查）
-      appLog('net', '统计店铺/年份刷新失败: ${e.toString().split('\n').first}', level: 'error');
+    // 统计本地优先加载（有缓存秒开）；网络刷新只由同步完成/下拉触发，页面加载不发请求
+    if (kIsWeb) {
+      // Web 无本地缓存语义，直连服务器刷新
+      try {
+        final results = await Future.wait([
+          Api.instance.get('/clients'),
+          Api.instance.get('/stats/years'),
+        ]);
+        await Api.instance.setCache('/clients', results[0]);
+        await Api.instance.setCache('/stats/years', results[1]);
+        if (!mounted) return;
+        _clients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _years = ((results[1]['years'] as List?) ?? []).map((e) => '$e').toList();
+        if (_years.isNotEmpty && !_years.contains(_year)) _year = _years.last;
+      } catch (e) {
+        appLog('net', '统计店铺/年份刷新失败: ${e.toString().split('\n').first}', level: 'error');
+      }
     }
+    await _load(network: kIsWeb);
   }
 
   String _fmtDate(DateTime d) =>
@@ -150,7 +166,7 @@ class _StatsPageState extends State<StatsPage> {
     return max(1, b.difference(a).inDays + 1);
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool network = false}) async {
     final (start, end) = _viewRange;
     final cq = _clientId != null ? '&client_id=$_clientId' : '';
     final isYear = _mode == 'year';
@@ -163,8 +179,8 @@ class _StatsPageState extends State<StatsPage> {
             '/stats/categories?start=$start&end=$end$cq',
             if (_clientId == null) '/stats/clients?start=$start&end=$end',
           ];
-    // 本地优先：有缓存先渲染（秒开不转圈），再静默网络刷新写缓存；
-    // 无缓存时才转圈（统计由服务端聚合，首次打开无本地数据可等网络）
+    // 本地优先：有缓存先渲染（秒开不转圈）；网络刷新仅同步完成/下拉/Web 直连时执行，
+    // 页面加载不发请求（本地优先铁律：只有同步才访问网络获取数据）
     final cached = await Future.wait(paths.map((p) => Api.instance.getCachedRaw(p)));
     if (cached.any((x) => x != null)) {
       if (!mounted) return;
@@ -172,6 +188,7 @@ class _StatsPageState extends State<StatsPage> {
     } else {
       setState(() => _loading = true);
     }
+    if (!network && !kIsWeb) return;
     try {
       final results = await Future.wait(paths.map((p) => Api.instance.get(p)));
       for (var i = 0; i < paths.length; i++) {

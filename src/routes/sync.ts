@@ -174,7 +174,7 @@ syncRouter.get('/full', async (c) => {
   const saleIds = saleRows.results.map((r) => (r as { id: string }).id);
   const saleItems = saleIds.length > 0
     ? await db.prepare(
-        `SELECT si.*, i.name AS item_name FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id IN (${saleIds.map(() => '?').join(',')}) ORDER BY si.created_at`,
+        `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id IN (${saleIds.map(() => '?').join(',')}) ORDER BY si.created_at`,
       ).bind(...saleIds).all()
     : { results: [] as unknown[] };
   const bySale = new Map<string, unknown[]>();

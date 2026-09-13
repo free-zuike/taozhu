@@ -20,6 +20,11 @@ class Api {
   // （Web 生产构建通过 --dart-define=API_BASE 注入默认值，留空即连；App 不注入 → 必填）
   static const _envBase = String.fromEnvironment('API_BASE');
 
+  /// 网络层离线标记：最近一次请求因网络异常失败 → true。
+  /// 页面加载据此跳过无意义的网络刷新（本地优先：无网络时只用本地缓存/本地库，不发请求）
+  static bool _offlineMarked = false;
+  static bool get isOffline => _offlineMarked;
+
   /// 规范化服务器地址：去空格/尾斜杠，缺协议头自动补 https://
   static String _norm(String raw) {
     var b = raw.trim().replaceAll(RegExp(r'/+$'), '');
@@ -184,10 +189,12 @@ class Api {
     try {
       res = await retry();
     } catch (e) {
-      // 网络/DNS/连接异常：记日志，页面只给友好提示
+      // 网络/DNS/连接异常：记离线标志（供下载源探测等兜底判断），记日志，页面只给友好提示
+      _offlineMarked = true;
       appLog('net', '$method $path → ${e.toString().split('\n').first}', level: 'error');
       throw Exception('无法连接服务器，请检查网络或服务器地址');
     }
+    if (_offlineMarked) _offlineMarked = false;
 
     if (res.statusCode == 401) {
       await clearToken();

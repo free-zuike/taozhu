@@ -72,6 +72,19 @@ itemsRouter.get('/summary', async (c) => {
   return c.json({ items });
 });
 
+// GET /items/:id — 单商品详情（分类兜底/编辑预填用；已软删返回 404）
+itemsRouter.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const canSeeCost = c.get('user').role === 'admin';
+  const row = await c.env.DB.prepare(
+    'SELECT i.*, cat.name AS category_name FROM items i LEFT JOIN categories cat ON cat.id = i.category_id WHERE i.id = ? AND i.deleted_at IS NULL',
+  ).bind(id).first<Record<string, unknown>>();
+  if (!row) return c.json({ error: '商品不存在' }, 404);
+  const prices = await c.env.DB.prepare(
+    'SELECT * FROM item_prices WHERE item_id = ? AND active = 1 ORDER BY unit').bind(id).all();
+  return c.json({ item: serialize(row as never, prices.results, canSeeCost) });
+});
+
 // POST /items — 新建商品（body: {name, category?, category_id?, prices:[{unit,purchase_price,sale_price}]}）
 itemsRouter.post('/', adminOnly(), async (c) => {
   const body = await c.req.json().catch(() => null) as {

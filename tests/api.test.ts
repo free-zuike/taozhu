@@ -56,22 +56,27 @@ describe('用户级下载源与服务器探测（/me）', () => {
     expect((await call(env, 'PUT', '/api/v1/me/download-sources', undefined, { sources: [] })).status).toBe(401);
   });
 
-  it('未设置返回 null；PUT 后回读一致；清空回读 []', async () => {
-    const none = (await (await call(env, 'GET', '/api/v1/me/download-sources', token)).json()) as { sources: unknown };
-    expect(none.sources).toBeNull();
+  it('未设置返回服务器默认镜像；PUT 后回读一致（含 specified）；清空回读 []', async () => {
+    const none = (await (await call(env, 'GET', '/api/v1/me/download-sources', token)).json()) as { sources: unknown; specified: string };
+    expect(none.sources).not.toBeNull();
+    expect((none.sources as Array<{ url: string }>).length).toBeGreaterThan(0); // 服务器下发默认镜像
+    expect(none.specified).toBe('');
     const put = await call(env, 'PUT', '/api/v1/me/download-sources', token, {
       sources: [
         { url: 'https://ghfast.top/', enabled: true },
         { url: 'https://ghproxy.com/', enabled: false },
       ],
+      specified: 'https://ghfast.top/',
     });
     expect(put.status).toBe(200);
     const got = (await (await call(env, 'GET', '/api/v1/me/download-sources', token)).json()) as {
       sources: Array<{ url: string; enabled: boolean }>;
+      specified: string;
     };
     expect(got.sources).toHaveLength(2);
     expect(got.sources[0]).toEqual({ url: 'https://ghfast.top/', enabled: true });
     expect(got.sources[1]).toEqual({ url: 'https://ghproxy.com/', enabled: false });
+    expect(got.specified).toBe('https://ghfast.top/');
     // 非法条目剔除、超长截断、条目上限 20
     const dirty = await call(env, 'PUT', '/api/v1/me/download-sources', token, {
       sources: [
@@ -85,9 +90,10 @@ describe('用户级下载源与服务器探测（/me）', () => {
     expect(dd.sources).toHaveLength(2); // 非字符串 url 被剔除
     expect(dd.sources[0].url.length).toBeLessThanOrEqual(500);
     // 清空后读回 []
-    await call(env, 'PUT', '/api/v1/me/download-sources', token, { sources: [] });
-    const empty = (await (await call(env, 'GET', '/api/v1/me/download-sources', token)).json()) as { sources: unknown };
+    await call(env, 'PUT', '/api/v1/me/download-sources', token, { sources: [], specified: '' });
+    const empty = (await (await call(env, 'GET', '/api/v1/me/download-sources', token)).json()) as { sources: unknown; specified: string };
     expect(empty.sources).toEqual([]);
+    expect(empty.specified).toBe('');
   });
 
   it('probe-source：非法前缀 400；合法前缀返回结构化结果', async () => {
@@ -410,7 +416,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string };
-    expect(d.current).toBe('0.17.43');
+    expect(d.current).toBe('0.17.44');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');

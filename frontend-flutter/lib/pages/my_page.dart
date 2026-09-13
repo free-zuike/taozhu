@@ -375,10 +375,12 @@ class _MyPageState extends State<MyPage> {
   /// 列出可达性与耗时，点选后只用该源下载（failed 时不轮换其他源）。
   Future<void> _pickSource(String ver) async {
     final custom = await loadUpdateSources();
+    final specified = specifiedSource;
     final prefixes = [
+      if (specified.isNotEmpty) specified, // 指定的镜像优先（官方直连在国内网络多数不可达）
       '',
       for (final s in custom)
-        if (s['enabled'] == true) '${s['url'] ?? ''}',
+        if (s['enabled'] == true && '${s['url'] ?? ''}' != specified) '${s['url'] ?? ''}',
     ];
     final results = await Future.wait(prefixes.map((p) async {
       final ms = await probeDownloadSource(p);
@@ -449,12 +451,14 @@ class _MyPageState extends State<MyPage> {
     _downloading = true;
     final fileName = 'taozhu-update-$ver.apk';
     final custom = await loadUpdateSources();
+    final specified = specifiedSource;
     final prefixes = forcedPrefix != null
         ? [forcedPrefix]
         : [
-            '', // 官方 GitHub 直连始终第一优先
+            if (specified.isNotEmpty) specified, // 指定的镜像优先（官方直连差）
+            '', // 官方 GitHub 直连
             for (final s in custom)
-              if (s['enabled'] == true) '${s['url'] ?? ''}',
+              if (s['enabled'] == true && '${s['url'] ?? ''}' != specified) '${s['url'] ?? ''}',
           ];
     // 拆包下载：按设备 ABI 选对应 APK（arm64-v8a / armeabi-v7a / x86_64）；查不到 ABI 时回退 universal 命名
     String apkName;

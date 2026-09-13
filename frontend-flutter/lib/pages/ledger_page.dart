@@ -62,7 +62,11 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   void _onSync() {
-    if (mounted) _load();
+    if (!mounted) return;
+    _load();
+    // 同步完成后后台刷新一次云端附件数（其他设备/Web 上传的附件），
+    // 不在页面加载时访问网络（本地优先：离线进账本页零网络请求）
+    if (!kIsWeb) _loadAttachCounts(withCloud: true);
   }
 
   static String _fmtDate(DateTime d) =>
@@ -150,12 +154,12 @@ class _LedgerPageState extends State<LedgerPage> {
       });
     }
     if (kIsWeb) await _loadNetwork(firstLocal);
-    // 附件计数（有附件才显示图标）：本地目录扫描 + 云端批量 counts（后台加载，不阻塞列表）
-    _loadAttachCounts();
+    // 附件计数（有附件才显示图标）：本地目录扫描零网络；云端 counts 仅同步完成/Web 直连时刷新
+    _loadAttachCounts(withCloud: kIsWeb);
   }
 
-  /// 统计当前可见出货/收款单的附件数：本地副本目录优先兜底，云端批量 counts 精确覆盖
-  Future<void> _loadAttachCounts() async {
+  /// 统计当前可见出货/收款单的附件数：本地副本目录优先（原生，零网络），云端批量 counts 精确覆盖
+  Future<void> _loadAttachCounts({bool withCloud = false}) async {
     final saleIds = _sales.map((s) => '${s['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
     final payIds = _payments.map((p) => '${p['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
     final counts = <String, Map<String, int>>{'sale': {}, 'payment': {}};
@@ -174,19 +178,21 @@ class _LedgerPageState extends State<LedgerPage> {
         }
       } catch (_) {}
     }
-    // ② 云端批量 counts（一次一个实体；失败静默不打扰）
-    Future<void> fetch(String entity, List<String> ids) async {
-      if (ids.isEmpty) return;
-      try {
-        final d = await Api.instance.post('/attachments/counts', {'entity': entity, 'ids': ids});
-        final m = (d['counts'] as Map?) ?? {};
-        for (final e in m.entries) {
-          final n = (e.value as num?)?.toInt() ?? 0;
-          if (n > 0) counts[entity]!['${e.key}'] = n;
-        }
-      } catch (_) {}
+    // ② 云端批量 counts（一次一个实体；仅同步完成后台刷新或 Web 直连时执行，页面加载不发请求）
+    if (withCloud || kIsWeb) {
+      Future<void> fetch(String entity, List<String> ids) async {
+        if (ids.isEmpty) return;
+        try {
+          final d = await Api.instance.post('/attachments/counts', {'entity': entity, 'ids': ids});
+          final m = (d['counts'] as Map?) ?? {};
+          for (final e in m.entries) {
+            final n = (e.value as num?)?.toInt() ?? 0;
+            if (n > 0) counts[entity]!['${e.key}'] = n;
+          }
+        } catch (_) {}
+      }
+      await Future.wait([fetch('sale', saleIds), fetch('payment', payIds)]);
     }
-    await Future.wait([fetch('sale', saleIds), fetch('payment', payIds)]);
     if (!mounted) return;
     setState(() {
       _saleAttachCount = counts['sale']!;
@@ -911,12 +917,15 @@ class _LedgerPageState extends State<LedgerPage> {
       }
       for (final it in items) {
         final id = '${it['happened_at'] ?? ''}';
+        // 分类优先用明细行自带分类（后端列表/详情/同步已 join items.category），
+        // 本地商品目录缺失时仍能正确显示；目录映射兜底
+        final catInline = '${it['item_category'] ?? it['category'] ?? ''}'.trim();
         lines.add({
           'date': id.length >= 10 ? id.substring(0, 10) : orderDate,
           'order': s,
           'client_name': '${s['client_name'] ?? ''}',
           'item_name': '${it['item_name'] ?? ''}',
-          'category': _itemCategory['${it['id'] ?? ''}'] ?? '',
+          'category': catInline.isNotEmpty ? catInline : (_itemCategory['${it['id'] ?? ''}'] ?? ''),
           'quantity': '${it['quantity'] ?? ''}',
           'unit': '${it['unit'] ?? ''}',
           'amount': ((it['amount'] as num?)?.toDouble() ?? 0),

@@ -437,20 +437,31 @@ class _SalePageState extends State<SalePage> {
         var stored = (await LocalDb.getAllByName('items'))
             .where((x) => '${x['id']}' == itemId).firstOrNull;
         if (stored == null) {
-          // 本地库没有（新建商品可能未同步到本地）：按名称从服务器拉取该商品写库，再改分类
+          // 本地库没有：优先按 itemId 从服务器单查拉取该商品写库（根治"本地商品库无此商品"）
+          try {
+            final dd = await Api.instance.get('/items/$itemId');
+            final it = dd['item'];
+            if (it is Map<String, dynamic>) {
+              stored = Map<String, dynamic>.from(it);
+              await LocalDb.upsertOne('items', stored);
+            }
+          } catch (e) {
+            appLog('sync', '分类兜底按 id 拉取失败 item=$itemId: ${e.toString().split('\n').first}', level: 'error');
+          }
+          // 次选：按名称搜索（id 查询失败时）
           final name = row.nameCtrl.text.trim();
-          if (name.isNotEmpty) {
+          if (stored == null && name.isNotEmpty) {
             try {
               final dd = await Api.instance.get('/items?q=${Uri.encodeQueryComponent(name)}');
               stored = ((dd['items'] as List?) ?? []).cast<Map<String, dynamic>>()
                   .where((x) => '${x['id']}' == itemId).firstOrNull;
               if (stored != null) await LocalDb.upsertOne('items', Map<String, dynamic>.from(stored));
             } catch (e) {
-              appLog('sync', '分类兜底拉取商品失败 item=$itemId ($name): ${e.toString().split('\n').first}', level: 'error');
+              appLog('sync', '分类兜底按名称拉取失败 item=$itemId ($name): ${e.toString().split('\n').first}', level: 'error');
             }
           }
           if (stored == null) {
-            toast(context, '本地商品库无此商品，请先完成同步');
+            toast(context, '本地商品库无此商品，请先在 Web 端确认该商品存在');
             return;
           }
         }

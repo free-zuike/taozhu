@@ -15,6 +15,7 @@ class UpdateSourcesPage extends StatefulWidget {
 
 class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
   List<Map<String, dynamic>> _sources = [];
+  String _specified = ''; // 指定为主要使用的镜像前缀（''=未指定，官方优先）
   /// url → 最近一次测试结果（不存在=未测试）
   final Map<String, ({bool ok, int ms})> _testResult = {};
   final Set<String> _testing = {};
@@ -39,12 +40,22 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
 
   Future<void> _load() async {
     final list = await loadUpdateSources();
-    if (mounted) setState(() => _sources = list);
+    if (mounted) setState(() {
+      _sources = list;
+      _specified = specifiedSource;
+    });
   }
 
   Future<void> _persist() async {
-    await saveUpdateSources(_sources);
+    await saveUpdateSources(_sources, specified: _specified);
     if (mounted) setState(() {});
+  }
+
+  /// 把某源设为指定（主要下载通道；官方直连在国内网络多数不可达，指定镜像优先使用）
+  Future<void> _setSpecified(String url) async {
+    _specified = url;
+    await _persist();
+    toast(context, url.isEmpty ? '已取消指定，恢复官方优先' : '已设为指定下载源');
   }
 
   /// 探测一个前缀源（Web 走服务器、原生本地直连；失败也记录结果，让用户看到「不可达」）
@@ -149,7 +160,10 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
               children: [
                 Text('GitHub 官方源',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textMain)),
-                Text('始终启用 · 自动更新默认直连', style: TextStyle(fontSize: 11, color: c.textSub)),
+                Text(
+                  _specified.isEmpty ? '始终启用 · 当前使用：官方直连' : '始终启用 · 当前指定：「$_specified」',
+                  style: TextStyle(fontSize: 11, color: c.textSub),
+                ),
               ],
             ),
           ),
@@ -206,6 +220,13 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
             child: const Text('测试'),
           ),
           IconButton(
+            tooltip: _specified == url ? '取消指定（恢复官方优先）' : '设为指定下载源（优先使用）',
+            visualDensity: VisualDensity.compact,
+            icon: Icon(_specified == url ? Icons.push_pin : Icons.push_pin_outlined, size: 18,
+                color: _specified == url ? c.primary : c.textSub),
+            onPressed: () => _setSpecified(_specified == url ? '' : url),
+          ),
+          IconButton(
             tooltip: '修改',
             visualDensity: VisualDensity.compact,
             icon: Icon(Icons.edit_outlined, size: 18, color: c.textSub),
@@ -237,7 +258,7 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 6, 4, 10),
             child: Text(
-              '自动更新默认直连 GitHub 官方源；第三方镜像默认停用，请先「测试」确认可达（安装包 ≥ 1MB 才算可用，防止代理拦截页被当成安装包）后再启用。官方源失败时才会轮换到已启用的镜像。',
+              '官方直连在国内网络多数不可达：可把某个镜像「指定」为主要下载通道（优先使用）——点行尾图钉 ⃠ 设为指定。镜像默认停用，先「测试」确认可达（安装包 ≥ 1MB 才算可用，防止拦截页被当成安装包）再启用或指定。配置存服务器，Web/App 同步共享、修改实时生效。',
               style: TextStyle(fontSize: 12, color: c.textSub, height: 1.5),
             ),
           ),

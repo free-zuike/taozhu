@@ -7,6 +7,10 @@ import '../version.dart';
 
 const _sourcesKey = 'taozhu.update_sources';
 
+/// 当前指定的主要下载源前缀（'' = 未指定，官方直连优先使用）
+String _specified = '';
+String get specifiedSource => _specified;
+
 /// 安装包最小可信大小：小于该值视为被代理/中间层拦截（返回 HTML 拦截页而非安装包）。
 /// APK 最小 ABI 包约 22MB，镜像/代理返回的拦截页通常只有几 KB。
 const int minTrustedBytes = 1048576; // 1MB
@@ -15,38 +19,44 @@ const int minTrustedBytes = 1048576; // 1MB
 String officialAssetUrl(String ver) =>
     'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/taozhu-app-$ver.apk';
 
-/// 第三方/自定义下载源列表 [{url, enabled}]；官方 GitHub 源内置固定，不存这里。
-/// 服务器为权威（跨端同步：Web 设置 App 可读），本地缓存兜底（离线秒开/可用）。
+/// 解析存储结构：兼容 {sources:[...], specified} 与旧版纯数组
+List<Map<String, dynamic>> _parseSources(dynamic d) {
+  if (d is List) {
+    return [
+      for (final e in d)
+        if (e is Map) {'url': '${e['url'] ?? ''}', 'enabled': e['enabled'] == true},
+    ];
+  }
+  if (d is Map && d['sources'] is List) return _parseSources(d['sources']);
+  return [];
+}
+
+/// 第三方/自定义下载源列表 [{url, enabled}]（含服务器下发的默认镜像，可删改）；
+/// 官方 GitHub 源内置固定，不存这里。服务器为权威（跨端同步），本地缓存兜底。
 Future<List<Map<String, dynamic>>> loadUpdateSources() async {
   var local = <Map<String, dynamic>>[];
+  var localSpecified = '';
   try {
     final p = await SharedPreferences.getInstance();
     final raw = p.getString(_sourcesKey);
     if (raw != null && raw.isNotEmpty) {
-      final d = jsonDecode(raw) as List? ?? [];
-      local = [
-        for (final e in d)
-          if (e is Map) {'url': '${e['url'] ?? ''}', 'enabled': e['enabled'] == true},
-      ];
+      final d = jsonDecode(raw);
+      local = _parseSources(d);
+      if (d is Map && d['specified'] is String) localSpecified = d['specified'] as String;
     }
   } catch (_) {}
+  _specified = localSpecified;
   try {
     final d = await Api.instance.get('/me/download-sources');
-    // sources != null 表示服务器有记录（含已清空 []）：以服务器为准并同步本地缓存
+    // sources != null 表示服务器有记录：以服务器为准并同步本地缓存
     if (d['sources'] != null) {
-      final server = [
-        for (final e in ((d['sources'] as List?) ?? []))
-          if (e is Map) {'url': '${e['url'] ?? ''}', 'enabled': e['enabled'] == true},
-      ];
+      final server = _parseSources(d['sources']);
+      final serverSpecified = '${d['specified'] ?? ''}';
       try {
         final p = await SharedPreferences.getInstance();
-        final raw = jsonEncode(server);
-        if (raw == '[]') {
-          await p.remove(_sourcesKey); // 服务器已清空：本地同步清掉
-        } else {
-          await p.setString(_sourcesKey, raw);
-        }
+        await p.setString(_sourcesKey, jsonEncode({'sources': server, 'specified': serverSpecified}));
       } catch (_) {}
+      _specified = serverSpecified;
       return server;
     }
   } catch (_) {
@@ -55,16 +65,17 @@ Future<List<Map<String, dynamic>>> loadUpdateSources() async {
   return local;
 }
 
-Future<void> saveUpdateSources(List<Map<String, dynamic>> list) async {
+Future<void> saveUpdateSources(List<Map<String, dynamic>> list, {String specified = ''}) async {
   final clean = [
     for (final s in list) {'url': '${s['url'] ?? ''}', 'enabled': s['enabled'] == true},
   ];
+  _specified = specified;
   try {
     final p = await SharedPreferences.getInstance();
-    await p.setString(_sourcesKey, jsonEncode(clean));
+    await p.setString(_sourcesKey, jsonEncode({'sources': clean, 'specified': specified}));
   } catch (_) {}
   try {
-    await Api.instance.put('/me/download-sources', {'sources': clean});
+    await Api.instance.put('/me/download-sources', {'sources': clean, 'specified': specified});
   } catch (_) {
     // 离线：仅本地缓存，下次在线加载时以服务器覆盖（简化同步，不做推送队列）
   }
