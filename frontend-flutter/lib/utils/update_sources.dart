@@ -71,8 +71,9 @@ Future<void> saveUpdateSources(List<Map<String, dynamic>> list) async {
 }
 
 /// 单源探测：传入下载前缀（'' = 官方直连），可达返回耗时毫秒，不可达/异常返回 null。
-/// Web 端浏览器不能跨域 HEAD GitHub，借服务器探测（/me/probe-source）；
-/// 原生端本地 HEAD 直连（无 CORS 限制）。两端统一要求响应 ≥ 1MB 才算可达（识别代理拦截页）。
+/// Web 端浏览器不能跨域直连 GitHub，借服务器探测（/me/probe-source）；
+/// 原生端本地 GET + Range 前 1KB 直连（镜像普遍拒绝 HEAD 或 HEAD 不带 Content-Length，
+/// GET 与真实下载同一路径才不误判；用 Content-Range 的总大小 ≥ 1MB 判定，拦截页仍会被识别）。
 Future<int?> probeDownloadSource(String prefix) async {
   if (kIsWeb) {
     try {
@@ -83,19 +84,30 @@ Future<int?> probeDownloadSource(String prefix) async {
     }
   }
   final t0 = DateTime.now();
+  http.StreamedResponse? res;
   try {
     final client = http.Client();
     try {
-      final req = http.Request('HEAD', Uri.parse('$prefix${officialAssetUrl(APP_VERSION)}'));
-      req.headers['Range'] = 'bytes=0-0';
+      final req = http.Request('GET', Uri.parse('$prefix${officialAssetUrl(APP_VERSION)}'));
+      req.headers['Range'] = 'bytes=0-1023';
       req.headers['User-Agent'] = 'Mozilla/5.0';
-      final res = await client.send(req).timeout(const Duration(seconds: 8));
-      final len = res.contentLength ?? -1;
-      if ((res.statusCode == 200 || res.statusCode == 206) && len >= minTrustedBytes) {
-        return DateTime.now().difference(t0).inMilliseconds;
+      res = await client.send(req).timeout(const Duration(seconds: 10));
+      // Content-Range: bytes 0-1023/6566030 → 总大小 = 斜杠后数字（206 时 Content-Length 只是 Range 段长）
+      var total = -1;
+      final cr = res.headers['content-range'];
+      if (cr != null) {
+        final slash = cr.lastIndexOf('/');
+        if (slash >= 0) total = int.tryParse(cr.substring(slash + 1).trim()) ?? -1;
       }
-      return null;
+      final len = res.contentLength ?? -1;
+      final size = total >= 0 ? total : (res.statusCode == 200 ? len : -1);
+      final ok = (res.statusCode == 200 || res.statusCode == 206) && size >= minTrustedBytes;
+      return ok ? DateTime.now().difference(t0).inMilliseconds : null;
     } finally {
+      // 释放连接：读完响应体（Range 仅 1KB）
+      try {
+        await res?.stream.drain();
+      } catch (_) {}
       client.close();
     }
   } catch (_) {
