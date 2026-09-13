@@ -290,8 +290,10 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   final _nameCtrl = TextEditingController();
   late final List<Map<String, TextEditingController>> _priceRows;
   late final List<String?> _priceIds; // 与 _priceRows 平行：null=新增行（编辑模式下用于区分增/改/删）
-  List<Map<String, dynamic>> _cats = [];
-  String? _categoryId;
+  List<Map<String, dynamic>> _cats = []; // 一级+二级全量（type=item）
+  String? _topId; // 一级分类
+  String? _subId; // 二级分类（依赖一级，可选）
+  String? _pendingCid; // 编辑回显：_loadCats 完成后按 parent_id 反推一级/二级
   bool _busy = false;
 
   bool get _editing => widget.item != null;
@@ -310,7 +312,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
     if (item != null) {
       _nameCtrl.text = '${item['name'] ?? ''}';
       final cid = '${item['category_id'] ?? ''}';
-      _categoryId = cid.isEmpty ? null : cid;
+      _pendingCid = cid.isEmpty ? null : cid;
       final prices = ((item['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
       if (prices.isEmpty) {
         _priceRows = [_newRow()];
@@ -342,9 +344,20 @@ class _ItemEditPageState extends State<_ItemEditPage> {
     }
     if (!mounted) return;
     setState(() {
-      _cats = cats
-          .where((c) => c['parent_id'] == null || '${c['parent_id']}' == '')
-          .toList();
+      _cats = cats; // 一级+二级全量
+      // 编辑回显：按 category_id 反推一级/二级
+      if (_pendingCid != null) {
+        final c = cats.where((x) => '${x['id']}' == _pendingCid).firstOrNull;
+        final pid = '${c?['parent_id'] ?? ''}';
+        if (pid.isNotEmpty) {
+          _topId = pid;
+          _subId = _pendingCid;
+        } else if (c != null) {
+          _topId = _pendingCid;
+          _subId = null;
+        }
+        _pendingCid = null;
+      }
     });
   }
 
@@ -380,7 +393,10 @@ class _ItemEditPageState extends State<_ItemEditPage> {
     }
     setState(() => _busy = true);
     // 写本地优先：构建完整 item payload（含 prices）→ 落本地库 → 入队列 → debounce push
-    final catName = _cats.where((c) => '${c['id']}' == _categoryId).map((c) => '${c['name']}').firstOrNull;
+    final selId = _subId ?? _topId;
+    final catName = selId == null
+        ? ''
+        : _cats.where((c) => '${c['id']}' == selId).map((c) => '${c['name']}').firstOrNull ?? '';
     final itemId = _editing ? '${widget.item!['id']}' : 'i${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
     final pricesPayload = <Map<String, dynamic>>[];
     for (final r in rows) {
@@ -391,8 +407,8 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       });
     }
     final payload = {
-      'id': itemId, 'name': name, 'category': catName ?? '',
-      'category_id': _categoryId ?? '', 'deleted_at': null,
+      'id': itemId, 'name': name, 'category': catName,
+      'category_id': selId ?? '', 'deleted_at': null,
       'prices': pricesPayload,
     };
     await LocalDb.upsertOne('items', payload);
@@ -412,13 +428,30 @@ class _ItemEditPageState extends State<_ItemEditPage> {
           TextField(controller: _nameCtrl, decoration: const InputDecoration(labelText: '商品名称 *')),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
-            initialValue: _categoryId,
-            decoration: const InputDecoration(labelText: '分类（可选）'),
-            hint: const Text('选择分类'),
+            key: ValueKey('top-$_topId'),
+            initialValue: _topId,
+            decoration: const InputDecoration(labelText: '分类（一级，可选）'),
+            hint: const Text('选择一级分类'),
             items: _cats
+                .where((c) => '${c['parent_id'] ?? ''}'.isEmpty)
                 .map((c) => DropdownMenuItem(value: '${c['id']}', child: Text('${c['name']}')))
                 .toList(),
-            onChanged: (v) => setState(() => _categoryId = v),
+            onChanged: (v) => setState(() {
+              _topId = v;
+              _subId = null; // 切换一级后二级重置
+            }),
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            key: ValueKey('sub-$_topId-$_subId'),
+            initialValue: _subId,
+            decoration: const InputDecoration(labelText: '分类（二级，可选）'),
+            hint: Text(_topId == null ? '先选一级分类' : '选择二级分类（可选）'),
+            items: _cats
+                .where((c) => '${c['parent_id']}' == _topId)
+                .map((c) => DropdownMenuItem(value: '${c['id']}', child: Text('${c['name']}')))
+                .toList(),
+            onChanged: _topId == null ? null : (v) => setState(() => _subId = v),
           ),
           const SizedBox(height: 16),
           const Text('单位价格（可多组，如 斤/包/箱）', style: TextStyle(fontWeight: FontWeight.w600)),

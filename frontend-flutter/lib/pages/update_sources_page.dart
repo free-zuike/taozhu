@@ -142,6 +142,7 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
 
   Widget _officialTile(TaozhuColors c) {
     const prefix = '';
+    final result = _testResult[prefix];
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 2),
       padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
@@ -164,6 +165,13 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
                   _specified.isEmpty ? '始终启用 · 当前使用：官方直连' : '始终启用 · 当前指定：「$_specified」',
                   style: TextStyle(fontSize: 11, color: c.textSub),
                 ),
+                if (_testing.contains(prefix))
+                  Text('测试中…', style: TextStyle(fontSize: 11, color: c.textSub))
+                else if (result != null)
+                  Text(
+                    result.ok ? '可达 · ${result.ms}ms' : '不可达（网络受限或镜像失效）',
+                    style: TextStyle(fontSize: 11, color: result.ok ? c.success : c.danger),
+                  ),
               ],
             ),
           ),
