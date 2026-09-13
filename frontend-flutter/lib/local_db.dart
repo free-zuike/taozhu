@@ -146,7 +146,24 @@ class LocalDb {
     try {
       final store = intMapStoreFactory.store(pendingStore);
       await store.record(id).delete(db);
-    } catch (_) {}
+    } catch (e) {
+      appLog('db', 'removePendingChange($id) 失败: ${e.toString().split('\n').first}', level: 'error');
+    }
+  }
+
+  /// 更新待推送变更的 updated_at（服务端时间校准：设备时钟偏慢导致 LWW 拒绝时，
+  /// 用服务器时间重刷被拒条目的时间戳，保证下次推送能胜出）
+  static Future<void> retimePendingChange(int id, String updatedAt) async {
+    final db = await _open();
+    if (db == null) return;
+    try {
+      final store = intMapStoreFactory.store(pendingStore);
+      final snap = await store.record(id).get(db);
+      if (snap == null) return;
+      await store.record(id).put(db, {...snap, 'updated_at': updatedAt});
+    } catch (e) {
+      appLog('db', 'retimePendingChange($id) 失败: ${e.toString().split('\n').first}', level: 'error');
+    }
   }
 
   /// 清空待推送队列（切账号/全量重置时）

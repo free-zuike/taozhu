@@ -268,14 +268,28 @@ class SyncService {
       final d = await Api.instance.post('/sync/push', {'device_id': did, 'changes': changes});
       if (d == null) return 0;
       final accepted = d['accepted'] as int? ?? 0;
-      // 接受的按入队顺序移除（服务端 LWW 拒绝的留队列下次重试或由用户新写覆盖）
+      // 服务端时间校准：设备时钟偏慢会让 LWW 拒绝本设备写入（删除/改分类在服务端不生效，
+      // pull 又拉回旧值）。用服务器时间给未推送成功的条目重刷 updated_at，下次推送必能胜出。
+      final serverTime = DateTime.tryParse('${d['server_time'] ?? ''}')?.toUtc();
+      final offset = serverTime?.difference(DateTime.now().toUtc());
       var removed = 0;
+      final removedIds = <int>{};
       for (final x in pending) {
         if (removed >= accepted) break;
         final id = x['id'];
         if (id is int) {
           await LocalDb.removePendingChange(id);
           removed++;
+          removedIds.add(id);
+        }
+      }
+      if (offset != null) {
+        for (final x in pending) {
+          final id = x['id'];
+          if (id is! int || removedIds.contains(id)) continue;
+          final ts = DateTime.tryParse('${x['updated_at'] ?? ''}');
+          if (ts == null) continue;
+          await LocalDb.retimePendingChange(id, ts.toUtc().add(offset).toIso8601String());
         }
       }
       // 推送成功后顺便拉取一次（其他设备的变更）
@@ -325,7 +339,10 @@ class SyncService {
     var pushed = 0;
     try {
       final done = await isFullDone();
-      if (!done) {
+      // 自动判定全量/增量：未全量过、或本地库全空（数据被清但游标残留）→ 强制全量拉齐，
+      // 无需用户手动干预
+      final localEmpty = done ? (await LocalDb.getAllByName('items')).isEmpty : false;
+      if (!done || localEmpty) {
         pulled = await fullSync();
       } else {
         pulled = await pullChanges();

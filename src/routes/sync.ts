@@ -89,7 +89,7 @@ syncRouter.post('/push', async (c) => {
     result.accepted += 1;
   }
 
-  return c.json({ ...result, server_cursor: await maxCursor(c.env.DB) });
+  return c.json({ ...result, server_cursor: await maxCursor(c.env.DB), server_time: new Date().toISOString() });
 });
 
 // GET /sync/pull?since=&limit=&device_id= — 增量拉取（id 游标；排除自己设备的回声）
