@@ -130,8 +130,14 @@ class _LedgerPageState extends State<LedgerPage> {
     _clientStat = _localStats(allSales, allPays);
     var sales = allSales;
     var payments = allPays;
-    if (_clientId == null && firstLocal.isNotEmpty) {
-      // 恢复上次选择的店铺（而非每次默认第一个）；店铺被删则回落第一个
+    // 选中店铺校验：当前 id 已被删除/不存在 → 回退第一个存档店铺（否则按已删店铺过滤出现"交易不显示"）
+    if (firstLocal.isEmpty) {
+      _clientId = null; // 无店铺：显示全部（空态提示建店）
+    } else if (_clientId != null && !firstLocal.any((c) => '${c['id']}' == _clientId)) {
+      _clientId = '${firstLocal.first['id']}';
+      await SyncService.saveSelectedClientId(_clientId!);
+    } else if (_clientId == null) {
+      // 恢复上次选择的店铺（而非每次默认第一个）
       final saved = await SyncService.selectedClientId();
       _clientId = saved != null && firstLocal.any((c) => '${c['id']}' == saved)
           ? saved
