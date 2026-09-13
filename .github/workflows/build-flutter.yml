@@ -1,4 +1,4 @@
-name: Build Flutter App
+﻿name: Build Flutter App
 
 on:
   workflow_dispatch:
@@ -138,7 +138,6 @@ jobs:
               --title "陶朱 v${VERSION}" --notes "$NOTES" \
               --published-at "$(git log -1 --format=%cI)" || true
           fi
-          gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
           for APK in /tmp/taozhu-app-${VERSION}*.apk; do
             # upload 重试（GitHub 端瞬时 500/竞态；重试 5 次后再进入完整性校验）
             for _c in 1 2 3 4 5; do

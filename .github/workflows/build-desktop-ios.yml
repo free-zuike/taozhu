@@ -1,4 +1,4 @@
-name: Build Windows & iOS
+﻿name: Build Windows & iOS
 
 on:
   workflow_dispatch:
@@ -76,7 +76,6 @@ jobs:
             # 发布时间固定为该版本 commit 时间（并发创建时保证列表按版本顺序）
             gh release create $REL --title "陶朱 v$VERSION" --notes $notes --published-at "$(git log -1 --format=%cI)" 2>$null
           }
-          gh release edit $REL --title "陶朱 v$VERSION" --notes $notes | Out-Null
           for ($_c = 1; $_c -le 5; $_c++) { gh release upload $REL "$env:TEMP/taozhu-windows-${VERSION}.zip" --clobber; if ($?) { break }; Write-Output "upload 重试 $_c/5 (taozhu-windows-${VERSION}.zip)"; Start-Sleep -Seconds 5 }
           echo "uploaded taozhu-windows-${VERSION}.zip"
 
@@ -148,7 +147,6 @@ jobs:
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" \
               --published-at "$(git log -1 --format=%cI)" || true
           fi
-          gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
           for _c in 1 2 3 4 5; do
             gh release upload "$REL" "/tmp/taozhu-macos-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
             echo "upload 重试 $_c/5 (taozhu-macos-${VERSION}.zip)"
@@ -227,7 +225,6 @@ jobs:
             gh release create "$REL" --title "陶朱 v${VERSION}" --notes "$NOTES" \
               --published-at "$(git log -1 --format=%cI)" || true
           fi
-          gh release edit "$REL" --title "陶朱 v${VERSION}" --notes "$NOTES"
           for _c in 1 2 3 4 5; do
             gh release upload "$REL" "/tmp/taozhu-ios-${VERSION}-unsigned.zip" --clobber && break
             echo "upload 重试 $_c/5 (taozhu-ios-${VERSION}-unsigned.zip)"

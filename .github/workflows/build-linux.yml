@@ -1,4 +1,4 @@
-name: Build Linux Desktop
+﻿name: Build Linux Desktop
 
 on:
   workflow_dispatch:
@@ -77,7 +77,6 @@ jobs:
             gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" \
               --published-at "$(git log -1 --format=%cI)" || true
           fi
-          gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
           for _c in 1 2 3 4 5; do
             gh release upload "$REL" "/tmp/taozhu-linux-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
             echo "upload 重试 $_c/5 (taozhu-linux-${VERSION}.zip)"
