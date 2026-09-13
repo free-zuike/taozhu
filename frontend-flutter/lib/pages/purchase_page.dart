@@ -13,9 +13,11 @@ import 'attachment_viewer.dart';
 import 'router.dart';
 
 class PurchasePage extends StatefulWidget {
-  const PurchasePage({super.key, this.editId});
+  const PurchasePage({super.key, this.editId, this.initDate});
   /// 非空 = 编辑已有进货单（从账本进入），提交走 PATCH
   final String? editId;
+  /// 新建模式预填日期（如从进货记录日期栏补录当天进货）；编辑模式忽略
+  final String? initDate;
   @override
   State<PurchasePage> createState() => _PurchasePageState();
 }
@@ -38,11 +40,20 @@ class _PurchasePageState extends State<PurchasePage> {
   bool _isStaff = false; // 店员不可见进价（进货价手填）
   final List<_PRow> _rows = [_PRow()];
   Map<String, double> _lastQty = {}; // price_id → 上次数量（选单位自动带出）
-  final _dateCtrl = TextEditingController(text: _today());
+  late final _dateCtrl = TextEditingController(text: _initDate());
   final _noteCtrl = TextEditingController();
   bool _busy = false;
 
   bool get _editing => widget.editId != null;
+
+  /// 新建模式表单默认日期：优先 initDate（如进货记录日期栏补录当天），否则今天；编辑模式忽略
+  String _initDate() {
+    if (!_editing) {
+      final d = widget.initDate ?? '';
+      if (d.length >= 10) return d.substring(0, 10);
+    }
+    return _today();
+  }
 
   /// 单据 id：编辑模式用原单 id；新建模式提前生成（附件/提交都挂在这个 id 上）
   late final String _purchaseId =

@@ -148,7 +148,9 @@ class _LedgerPageState extends State<LedgerPage> {
       sales = _filterByClient(sales, _clientId!);
       payments = _filterByClient(payments, _clientId!);
     }
-    if (mounted) {
+    // Web 无本地库（本地渲染恒空）：跳过"先渲染空列表"，直接网络加载并保留旧列表——
+    // 否则每次 WS 通知重载都会"空白→填充"跳动；原生保持本地优先渲染
+    if (!kIsWeb && mounted) {
       setState(() {
         _clients = firstLocal;
         _sales = sales;

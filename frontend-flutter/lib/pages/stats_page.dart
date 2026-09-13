@@ -36,6 +36,7 @@ class _StatsPageState extends State<StatsPage> {
   List<dynamic> _itemsStats = [];
   List<dynamic> _cats = [];
   bool _loading = true;
+  bool _loadedOnce = false; // 已渲染过一次统计（此后 WS 通知/下拉刷新静默更新，不再空白闪烁）
   bool _canSeeProfit = true; // 店员看不到毛利（后端 can_see_profit=false 时隐藏）
 
   // 主题语义色（Theme.of(context).extension<TaozhuColors>()）
@@ -185,7 +186,9 @@ class _StatsPageState extends State<StatsPage> {
     if (cached.any((x) => x != null)) {
       if (!mounted) return;
       _applyStats(isYear, cached);
-    } else {
+      _loadedOnce = true;
+    } else if (!_loadedOnce) {
+      // 仅首次（从未渲染过）显示 loading；已有数据时静默刷新，避免页面空白跳动
       setState(() => _loading = true);
     }
     if (!network && !kIsWeb) return;
@@ -196,6 +199,7 @@ class _StatsPageState extends State<StatsPage> {
       }
       if (!mounted) return;
       _applyStats(isYear, results);
+      _loadedOnce = true;
     } catch (_) {
       // 离线：有缓存已展示缓存，无缓存显示空态；错误已记日志，不再弹提示
       if (!mounted) return;

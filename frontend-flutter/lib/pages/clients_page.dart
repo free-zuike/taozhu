@@ -79,7 +79,8 @@ class _ClientsPageState extends State<ClientsPage> {
       // Web（无本地库）：普通加载本地秒开 + 网络刷新；搜索直连服务器
       if (!searching) {
         final local = await LocalDb.getAllByName('clients');
-        if (mounted) {
+        // Web 端 LocalDb 恒空：跳过空渲染，避免 WS 通知时列表"空白→填充"跳动；仅本地有数据才先渲染
+        if (local.isNotEmpty && mounted) {
           setState(() {
             _clients = local;
             _loading = false;

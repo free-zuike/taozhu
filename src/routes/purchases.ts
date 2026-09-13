@@ -139,6 +139,80 @@ purchasesRouter.get('/:id', async (c) => {
   return c.json({ ...(row as object), items: detail.results });
 });
 
+// POST /purchases/items/date — 批量改明细行日期（进货记录「日期栏批量编辑」用；不改库存/金额）
+purchasesRouter.post('/items/date', async (c) => {
+  const body = await c.req.json().catch(() => null) as { updates?: Array<{ item_id?: string; happened_at?: string }> } | null;
+  const updates = (body?.updates ?? []).filter((u) => u && u.item_id && u.happened_at).slice(0, 500);
+  if (updates.length === 0) return c.json({ error: '请提供明细行 id 与目标日期' }, 400);
+  for (const u of updates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(u.happened_at!)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
+  }
+  const ids = updates.map((u) => u.item_id!);
+  const rows = await c.env.DB.prepare(
+    `SELECT id, purchase_id FROM purchase_items WHERE id IN (${ids.map(() => '?').join(',')})`,
+  ).bind(...ids).all<{ id: string; purchase_id: string }>();
+  if (rows.results.length === 0) return c.json({ error: '明细行不存在' }, 404);
+  const byId = new Map(rows.results.map((r) => [r.id, r.purchase_id]));
+  const batch: D1PreparedStatement[] = [];
+  for (const u of updates) {
+    const purchaseId = byId.get(u.item_id!);
+    if (purchaseId) batch.push(c.env.DB.prepare('UPDATE purchase_items SET happened_at = ? WHERE id = ?').bind(u.happened_at, u.item_id));
+  }
+  await c.env.DB.batch(batch);
+  // 单据日期自动取明细最大日期（与记单页 orderDate=最大行日期口径一致）
+  const purchaseIds = [...new Set(rows.results.map((r) => r.purchase_id))];
+  const dateBatch: D1PreparedStatement[] = purchaseIds.map((pid) =>
+    c.env.DB.prepare(
+      `UPDATE purchases SET happened_at = (
+         SELECT MAX(COALESCE(happened_at, '')) FROM purchase_items WHERE purchase_id = ?
+       ) WHERE id = ? AND EXISTS (SELECT 1 FROM purchase_items WHERE purchase_id = ?)`,
+    ).bind(pid, pid, pid));
+  await c.env.DB.batch(dateBatch);
+  for (const pid of purchaseIds) {
+    await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: pid, payload: await buildPayload(c.env.DB, 'purchase', pid), updated_by_username: c.get('user').username });
+  }
+  return c.json({ updated: batch.length });
+});
+
+// PATCH /purchases/items/:id — 编辑单条进货明细行（数量/单位/进价/日期；回滚旧库存再按新值增加，重算金额与单据日期）
+purchasesRouter.patch('/items/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => null) as {
+    quantity?: number; unit?: string; purchase_price?: number; happened_at?: string;
+  } | null;
+  const row = await c.env.DB.prepare(
+    'SELECT id, purchase_id, item_id, unit, quantity, purchase_price, happened_at FROM purchase_items WHERE id = ?',
+  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number; purchase_price: number; happened_at: string | null }>();
+  if (!row) return c.json({ error: '明细行不存在' }, 404);
+
+  const qty = body?.quantity !== undefined ? Number(body.quantity) : row.quantity;
+  if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
+  const unit = body?.unit?.trim() || row.unit;
+  const pp = body?.purchase_price !== undefined ? Number(body.purchase_price) : row.purchase_price;
+  const purchasePrice = Number.isFinite(pp) && pp > 0 ? pp : row.purchase_price;
+  const happenedAt = body?.happened_at?.trim() || row.happened_at || '';
+  if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
+
+  const amount = Math.round(qty * purchasePrice * 100) / 100;
+  const batch: D1PreparedStatement[] = [
+    stockDelta(c.env.DB, row.item_id, row.unit, -row.quantity), // 进货增加恢复（旧值）
+    stockDelta(c.env.DB, row.item_id, unit, qty),               // 按新值重新增加（不变时净零）
+    c.env.DB.prepare(
+      'UPDATE purchase_items SET quantity = ?, unit = ?, purchase_price = ?, amount = ?, happened_at = ? WHERE id = ?',
+    ).bind(qty, unit, purchasePrice, amount, happenedAt || null, id),
+  ];
+  await c.env.DB.batch(batch);
+  // 单据日期自动取明细最大日期（与记单页 orderDate=最大行日期口径一致）
+  const purchaseId = row.purchase_id;
+  await c.env.DB.prepare(
+    `UPDATE purchases SET happened_at = (
+       SELECT MAX(COALESCE(happened_at, '')) FROM purchase_items WHERE purchase_id = ?
+     ) WHERE id = ? AND EXISTS (SELECT 1 FROM purchase_items WHERE purchase_id = ?)`,
+  ).bind(purchaseId, purchaseId, purchaseId).run();
+  await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: purchaseId, payload: await buildPayload(c.env.DB, 'purchase', purchaseId), updated_by_username: c.get('user').username });
+  return c.json({ id, purchase_id: purchaseId, item_id: row.item_id, unit, quantity: qty, purchase_price: purchasePrice, amount, happened_at: happenedAt || null });
+});
+
 // PATCH /purchases/:id — 编辑进货单（改日期/备注；传 items 则整体替换明细，原子事务）
 purchasesRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
@@ -208,6 +282,29 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'purchase', id), updated_by_username: c.get('user').username });
   return c.json({ id, happened_at: happenedAt, note, total: Math.round(total * 100) / 100 });
+});
+
+// DELETE /purchases/items/:id — 删除单条进货明细行（进货记录行级删除；回滚该行库存，重算单据日期）
+purchasesRouter.delete('/items/:id', async (c) => {
+  const id = c.req.param('id');
+  const row = await c.env.DB.prepare(
+    'SELECT id, purchase_id, item_id, unit, quantity FROM purchase_items WHERE id = ?',
+  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number }>();
+  if (!row) return c.json({ error: '明细行不存在' }, 404);
+  const purchaseId = row.purchase_id;
+  const batch: D1PreparedStatement[] = [
+    stockDelta(c.env.DB, row.item_id, row.unit, -row.quantity), // 进货增加恢复
+    c.env.DB.prepare('DELETE FROM purchase_items WHERE id = ?').bind(id),
+  ];
+  await c.env.DB.batch(batch);
+  // 单据日期自动取剩余明细最大日期（空明细则保持原样）
+  await c.env.DB.prepare(
+    `UPDATE purchases SET happened_at = (
+       SELECT MAX(COALESCE(happened_at, '')) FROM purchase_items WHERE purchase_id = ?
+     ) WHERE id = ? AND EXISTS (SELECT 1 FROM purchase_items WHERE purchase_id = ?)`,
+  ).bind(purchaseId, purchaseId, purchaseId).run();
+  await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: purchaseId, payload: await buildPayload(c.env.DB, 'purchase', purchaseId), updated_by_username: c.get('user').username });
+  return c.json({ ok: true });
 });
 
 // DELETE /purchases/:id — 删除进货单（回滚库存 + 级联删明细，仅老板）

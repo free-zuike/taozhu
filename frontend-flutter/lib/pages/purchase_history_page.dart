@@ -7,6 +7,8 @@ import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
 import 'purchase_page.dart';
+import 'purchase_line_edit.dart';
+import 'purchase_batch_edit_page.dart';
 import 'attachment_viewer.dart';
 
 /// 进货记录：按日期分组的进货流水（不分店），卡片明细直接展开，可编辑/删除/附件
@@ -108,6 +110,19 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     _load();
   }
 
+  /// 点明细行 → 只编辑当前商品（数量/进价/单位/日期，弹窗即时保存）
+  Future<void> _editPurchaseLine(Map<String, dynamic> p, Map<String, dynamic> it) async {
+    await editPurchaseLine(context, p, it);
+    _load();
+  }
+
+  /// 日期栏 → 该日进货单列表（点单进进货记单页编辑该单全部商品明细）
+  Future<void> _openBatchEdit(String date, List<Map<String, dynamic>> purchases) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => PurchaseBatchEditPage(date: date, purchases: purchases)));
+    _load();
+  }
+
   Future<void> _deletePurchase(Map<String, dynamic> p) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -176,6 +191,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () => _editPurchase(p),
+        // 长按 = 删除整单（对齐交易页交互；确认删除，取消返回）
+        onLongPress: () => _deletePurchase(p),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -199,19 +216,25 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
               _menu(p),
             ]),
             for (final it in items)
-              Padding(
-                padding: const EdgeInsets.only(left: 40, top: 2),
-                child: Row(children: [
-                  Expanded(
-                    child: Text('${it['item_name']} ×${it['quantity']}${it['unit']}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+              // 点明细行 = 只编辑当前商品（数量/进价/单位/日期，弹窗即时保存）
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => _editPurchaseLine(p, it),
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 40, top: 2),
+                  child: Row(children: [
+                    Expanded(
+                      child: Text('${it['item_name']} ×${it['quantity']}${it['unit']}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 13, color: c.textSub)),
+                    ),
+                    Text('¥${fmtMoney(it['amount'])}',
                         style: TextStyle(fontSize: 13, color: c.textSub)),
-                  ),
-                  Text('¥${fmtMoney(it['amount'])}',
-                      style: TextStyle(fontSize: 13, color: c.textSub)),
-                  const SizedBox(width: 8),
-                ]),
+                    const SizedBox(width: 8),
+                    Icon(Icons.edit_outlined, size: 13, color: c.textSub.withOpacity(0.6)),
+                  ]),
+                ),
               ),
             if (note.isNotEmpty) const SizedBox(height: 2),
           ]),
@@ -324,24 +347,33 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
         children: [
           for (final e in grouped.entries) ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
-              child: Row(
-                children: [
-                  Text(_weekday(e.key),
+            // 日期栏 = 该日进货单列表编辑入口（点单整单编辑；点明细行单笔编辑）
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => _openBatchEdit(e.key, e.value),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
+                child: Row(
+                  children: [
+                    Icon(Icons.edit_calendar_outlined, size: 15, color: c.success),
+                    const SizedBox(width: 4),
+                    Text(_weekday(e.key),
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: c.textMain)),
+                    const Spacer(),
+                    Text(
+                      '${e.value.length} 笔 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, r) => s + ((r['total'] as num?)?.toDouble() ?? 0)))}',
                       style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: c.textMain)),
-                  const Spacer(),
-                  Text(
-                    '${e.value.length} 笔 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, r) => s + ((r['total'] as num?)?.toDouble() ?? 0)))}',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: c.textSub),
-                  ),
-                ],
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: c.textSub),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(Icons.chevron_right, size: 16, color: c.textSub),
+                  ],
+                ),
               ),
             ),
             for (final r in e.value) _card(r),
