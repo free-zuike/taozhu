@@ -144,7 +144,9 @@ class _LedgerPageState extends State<LedgerPage> {
         _sales = sales;
         _payments = payments;
         _loading = false;
-        _offline = firstLocal.isEmpty;
+        // Web 无本地库（firstLocal 恒空）：不能据此判离线，否则刷新时误闪「离线数据」横幅；
+        // 离线与否交给 _loadNetwork 的网络成败决定（true 离线时才显示提示）
+        _offline = kIsWeb ? false : firstLocal.isEmpty;
       });
     }
     if (kIsWeb) await _loadNetwork(firstLocal);
