@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { createStorage } from '../services/storage';
+import { notifyClients } from '../services/sync-hub';
 import { imageKey, LEGACY_IMAGE_PREFIXES } from '../lib/image-key';
 import type { AuthUser, Env } from '../types';
 
@@ -55,6 +56,8 @@ attachmentsRouter.post('/', async (c) => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const key = imageKey('attachments', [entity, id], bytes);
   await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
+  // 附件增删实时同步：广播 {type:'sync'}，其他在线端收到后拉取并刷新附件计数/图标
+  await notifyClients();
   return c.json({ key }, 201);
 });
 
@@ -124,5 +127,6 @@ attachmentsRouter.delete('/', async (c) => {
   const key = c.req.query('key');
   if (!key) return c.json({ error: 'key 必填' }, 400);
   await createStorage(c.env).delete(key);
+  await notifyClients();
   return c.body(null, 204);
 });

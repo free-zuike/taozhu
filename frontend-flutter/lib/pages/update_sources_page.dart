@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/update_sources.dart';
 import 'router.dart';
@@ -21,7 +22,19 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
   @override
   void initState() {
     super.initState();
+    // 其他端修改下载源后实时刷新（WS 推送 → 同步完成 → version 通知）
+    SyncService.version.addListener(_onSync);
     _load();
+  }
+
+  @override
+  void dispose() {
+    SyncService.version.removeListener(_onSync);
+    super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) _load();
   }
 
   Future<void> _load() async {

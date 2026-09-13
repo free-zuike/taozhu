@@ -1,6 +1,7 @@
 /** 用户级配置：下载源跨端同步（Web 设置 App 可读）+ 服务器端下载源探测（Web 浏览器不能跨域 HEAD GitHub） */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
+import { notifyClients } from '../services/sync-hub';
 import { APP_VERSION } from '../version';
 import type { AuthUser, Env } from '../types';
 
@@ -43,6 +44,8 @@ meRouter.put('/download-sources', async (c) => {
   await c.env.DB.prepare(
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
   ).bind(KEY_SOURCES, JSON.stringify(clean)).run();
+  // 下载源变更实时推送：其他在线端（App/Web）收到后重新拉取全局配置
+  await notifyClients();
   return c.json({ sources: clean });
 });
 
