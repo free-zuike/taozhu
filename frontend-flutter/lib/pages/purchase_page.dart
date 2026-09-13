@@ -476,6 +476,38 @@ class _PurchasePageState extends State<PurchasePage> {
       'total': (totalCalc * 100).round() / 100,
       'items': itemsPayload,
     };
+    if (kIsWeb) {
+      // Web 无本地库/同步队列：直连服务端。新增 POST /purchases（sync_key 幂等）；编辑 PATCH /purchases/:id 全量替换明细
+      final webItems = [
+        for (final r in valid)
+          {
+            'price_id': r.priceId,
+            'quantity': r.quantity,
+            'purchase_price': r.purchasePrice,
+            'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
+          },
+      ];
+      try {
+        if (_editing) {
+          await Api.instance.patch('/purchases/$purchaseId', {
+            'happened_at': orderDate, 'note': _noteCtrl.text.trim(), 'items': webItems,
+          });
+        } else {
+          await Api.instance.post('/purchases', {
+            'happened_at': orderDate, 'note': _noteCtrl.text.trim(),
+            'sync_key': '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(0x7fffffff)}',
+            'items': webItems,
+          });
+        }
+        toast(context, '已保存');
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      if (mounted) Navigator.pop(context, true);
+      return;
+    }
     await LocalDb.upsertOne('purchases', payload);
     await SyncService.enqueueChange(
       entityType: 'purchase',

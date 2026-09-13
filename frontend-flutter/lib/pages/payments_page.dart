@@ -149,6 +149,30 @@ class _PaymentsPageState extends State<PaymentsPage> {
       return;
     }
     setState(() => _busy = true);
+    if (kIsWeb) {
+      // Web 无本地库/同步队列：直连服务端（sync_key 幂等）
+      try {
+        await Api.instance.post('/payments', {
+          'client_id': _clientId,
+          'amount': (amount * 100).round() / 100,
+          'waived': (waived * 100).round() / 100,
+          'happened_at': _dateCtrl.text.trim(),
+          'method': _methodCtrl.text.trim(),
+          'note': _noteCtrl.text.trim(),
+          'sync_key': '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(0x7fffffff)}',
+        });
+        toast(context, waived > 0
+            ? '已登记：实收 ¥${amount.toStringAsFixed(2)}，平账 ¥${waived.toStringAsFixed(2)}'
+            : '已登记收款 ¥${amount.toStringAsFixed(2)}');
+        _amountCtrl.clear();
+        _waivedCtrl.clear();
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      return;
+    }
     // 写本地优先：落本地库 + 入队列 → debounce push
     final payId = 'pay${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
     final payload = {

@@ -426,11 +426,56 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       return;
     }
     setState(() => _busy = true);
-    // 写本地优先：构建完整 item payload（含 prices）→ 落本地库 → 入队列 → debounce push
     final selId = _subId ?? _topId;
     final catName = selId == null
         ? ''
         : _cats.where((c) => '${c['id']}' == selId).map((c) => '${c['name']}').firstOrNull ?? '';
+    if (kIsWeb) {
+      // Web 无本地库/同步队列：直连服务端。新增 POST /items（含价格组整体提交）；
+      // 编辑 PATCH /items/:id 改名称分类 + 价格组差量（新增行 POST /items/:id/prices、已有行 PATCH /item-prices/:id、被移除行 DELETE /item-prices/:id）
+      try {
+        if (_editing) {
+          final itemId = '${widget.item!['id']}';
+          await Api.instance.patch('/items/$itemId', {
+            'name': name, 'category': catName, 'category_id': selId ?? '',
+          });
+          for (final r in rows) {
+            final pid = r['priceId'] as String?;
+            if (pid == null || pid.isEmpty) {
+              await Api.instance.post('/items/$itemId/prices', {
+                'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell'],
+              });
+            } else {
+              await Api.instance.patch('/item-prices/$pid', {
+                'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell'],
+              });
+            }
+          }
+          final origIds = ((widget.item!['prices'] as List?) ?? [])
+              .map((p) => '${(p as Map)['id'] ?? ''}').where((x) => x.isNotEmpty).toSet();
+          final kept = rows.map((r) => r['priceId'] as String?).whereType<String>().toSet();
+          for (final pid in origIds.difference(kept)) {
+            await Api.instance.delete('/item-prices/$pid');
+          }
+        } else {
+          await Api.instance.post('/items', {
+            'name': name, 'category': catName, 'category_id': selId ?? '',
+            'prices': [
+              for (final r in rows)
+                {'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell']},
+            ],
+          });
+        }
+        toast(context, _editing ? '已保存' : '已添加');
+        if (mounted) Navigator.pop(context, true);
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      return;
+    }
+    // 原生：写本地优先：构建完整 item payload（含 prices）→ 落本地库 → 入队列 → debounce push
     final itemId = _editing ? '${widget.item!['id']}' : 'i${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
     final pricesPayload = <Map<String, dynamic>>[];
     for (final r in rows) {

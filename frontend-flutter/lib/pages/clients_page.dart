@@ -225,6 +225,26 @@ class _ClientsPageState extends State<ClientsPage> {
       return;
     }
     final categoryId = selSubId ?? selTopId;
+    if (kIsWeb) {
+      // Web 无本地库/同步队列：直连服务端（App 走本地优先队列）
+      try {
+        if (c == null) {
+          await Api.instance.post('/clients', {
+            'name': name, 'month_start_day': msd, 'category_id': categoryId ?? '',
+          });
+        } else {
+          await Api.instance.patch('/clients/${c['id']}', {
+            'name': name, 'month_start_day': msd, 'category_id': categoryId ?? '',
+          });
+        }
+        toast(context, '已保存');
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+        return;
+      }
+      _load();
+      return;
+    }
     // 写本地优先
     if (c == null) {
       final id = 'c${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';

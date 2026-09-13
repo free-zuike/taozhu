@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sembast/sembast.dart';
 import 'db_factory_io.dart' if (dart.library.html) 'db_factory_web.dart' as factory_impl;
 import 'log.dart';
+import 'sync_service.dart';
 
 /// 本地数据库（sembast，SQLite 文件）——**仅移动/桌面端启用**。
 /// Web 端禁用（无网络即无法加载页面，离线无意义）：kIsWeb 时各方法直接空操作，不初始化不报错。
@@ -12,6 +14,9 @@ import 'log.dart';
 class LocalDb {
   LocalDb._();
   static Database? _db;
+
+  /// 连续写失败计数（只读/损坏库自愈：≥3 次 → 删除重建 + 全量同步恢复）
+  static int _writeFailures = 0;
 
   /// 待推送变更队列 store 名（写本地优先时入队，后台批量 push）
   static const pendingStore = 'local_changes';
@@ -80,6 +85,8 @@ class LocalDb {
           if (db == null) return;
         } else {
           appLog('db', 'upsertOne($storeName,$id) 重试仍失败: ${e.toString().split('\n').first}', level: 'error');
+          _writeFailures++;
+          if (_writeFailures >= 3) await _rebuildDatabase();
         }
       }
     }
@@ -92,6 +99,49 @@ class LocalDb {
     } catch (_) {}
     _db = null;
     await _open();
+  }
+
+  /// 本地库持续写失败（只读/损坏）→ 删除（删不掉则改名绕开）重建数据库文件并触发全量同步恢复。
+  /// 若应用数据目录本身不可写（存储权限/分区异常），记录明确根因日志。
+  static Future<void> _rebuildDatabase() async {
+    _writeFailures = 0;
+    try {
+      await _db?.close();
+    } catch (_) {}
+    _db = null;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final f = File('${dir.path}/taozhu.db');
+      var rebuilt = false;
+      try {
+        if (await f.exists()) await f.delete();
+        rebuilt = true;
+      } catch (_) {
+        // 只读文件删不掉：改名绕开（Android 上只读文件常可 rename，改后新库文件可写）
+        try {
+          final bak = File('${dir.path}/taozhu_ro_${DateTime.now().millisecondsSinceEpoch}.db');
+          if (await f.exists()) await f.rename(bak.path);
+          rebuilt = true;
+        } catch (e2) {
+          appLog('db', '本地库重建失败（文件只读且无法改名）: ${e2.toString().split('\n').first}', level: 'error');
+        }
+      }
+      if (rebuilt) {
+        // 诊断：验证应用数据目录是否可写（区分"库文件只读"与"整个目录只读"）
+        var dirWritable = false;
+        try {
+          final probe = File('${dir.path}/.taozhu_probe');
+          await probe.writeAsString('ok');
+          await probe.delete();
+          dirWritable = true;
+        } catch (_) {}
+        appLog('db', '本地库已重建${dirWritable ? '，目录可写' : '，目录仍不可写（存储权限/分区异常，建议清理应用数据重装）'}，触发全量同步恢复', level: 'error');
+      }
+    } catch (_) {}
+    try {
+      await SyncService.resetSyncState();
+      unawaited(SyncService.sync());
+    } catch (_) {}
   }
 
   /// 删单行（delete action 合并用；不存在静默跳过；写失败自动重建连接重试一次）
@@ -111,6 +161,8 @@ class LocalDb {
           if (db == null) return;
         } else {
           appLog('db', 'deleteOne($storeName,$id) 重试仍失败: ${e.toString().split('\n').first}', level: 'error');
+          _writeFailures++;
+          if (_writeFailures >= 3) await _rebuildDatabase();
         }
       }
     }
@@ -175,6 +227,8 @@ class LocalDb {
           if (db == null) return;
         } else {
           appLog('db', 'addPendingChange 重试仍失败: ${e.toString().split('\n').first}', level: 'error');
+          _writeFailures++;
+          if (_writeFailures >= 3) await _rebuildDatabase();
         }
       }
     }

@@ -262,16 +262,39 @@ class SyncService {
     if (kIsWeb) return 0;
     try {
       final pending = await LocalDb.getPendingChanges();
-      if (pending.isEmpty) return 0;
+      // 本地库只读/队列写不进时，删除标记已存 SharedPreferences：合并为待推送变更（绕只读队列）
+      final extra = <Map<String, dynamic>>[];
+      try {
+        final p = await SharedPreferences.getInstance();
+        final delIds = p.getStringList(_persistDelKey) ?? [];
+        final nowIso = DateTime.now().toUtc().toIso8601String();
+        for (final did in delIds) {
+          extra.add({
+            'entity_type': 'item', 'entity_sync_id': did, 'action': 'upsert',
+            'updated_at': nowIso, 'payload': {'id': did, 'deleted_at': nowIso},
+          });
+        }
+      } catch (_) {}
+      if (pending.isEmpty && extra.isEmpty) return 0;
       final did = await deviceId();
-      final changes = pending.map((x) {
-        final m = Map<String, dynamic>.from(x);
-        m.remove('id'); // 队列内部 id 不传服务端
-        return m;
-      }).toList();
+      final changes = [
+        ...extra,
+        ...pending.map((x) {
+          final m = Map<String, dynamic>.from(x);
+          m.remove('id'); // 队列内部 id 不传服务端
+          return m;
+        }),
+      ];
       final d = await Api.instance.post('/sync/push', {'device_id': did, 'changes': changes});
       if (d == null) return 0;
       final accepted = d['accepted'] as int? ?? 0;
+      // 持久删除集合：本次全部接受后移除（避免重复推送/同步风暴）；部分拒绝则保留下次重推
+      if (extra.isNotEmpty && accepted >= changes.length) {
+        try {
+          final p = await SharedPreferences.getInstance();
+          await p.remove(_persistDelKey);
+        } catch (_) {}
+      }
       // 服务端时间校准：设备时钟偏慢会让 LWW 拒绝本设备写入（删除/改分类在服务端不生效，
       // pull 又拉回旧值）。用服务器时间给未推送成功的条目重刷 updated_at，下次推送必能胜出。
       final serverTime = DateTime.tryParse('${d['server_time'] ?? ''}')?.toUtc();
