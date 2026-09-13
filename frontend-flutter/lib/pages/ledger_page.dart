@@ -923,15 +923,16 @@ class _LedgerPageState extends State<LedgerPage> {
       }
       for (final it in items) {
         final id = '${it['happened_at'] ?? ''}';
-        // 分类优先用明细行自带分类（后端列表/详情/同步已 join items.category），
-        // 本地商品目录缺失时仍能正确显示；目录映射兜底（key=商品 id）
+        // 分类：优先用本地商品目录映射（商品分类修改后即时生效），
+        // 明细行自带快照（后端 join 时旧值）仅作本地目录缺该商品时的兜底
+        final dirCat = _itemCategory['${it['item_id'] ?? ''}'] ?? '';
         final catInline = '${it['item_category'] ?? it['category'] ?? ''}'.trim();
         lines.add({
           'date': id.length >= 10 ? id.substring(0, 10) : orderDate,
           'order': s,
           'client_name': '${s['client_name'] ?? ''}',
           'item_name': '${it['item_name'] ?? ''}',
-          'category': catInline.isNotEmpty ? catInline : (_itemCategory['${it['item_id'] ?? ''}'] ?? ''),
+          'category': dirCat.isNotEmpty ? dirCat : catInline,
           'quantity': '${it['quantity'] ?? ''}',
           'unit': '${it['unit'] ?? ''}',
           'amount': ((it['amount'] as num?)?.toDouble() ?? 0),

@@ -61,29 +61,58 @@ class LocalDb {
     }
   }
 
-  /// 增量 upsert 单行（按 id 覆盖；不删整表，增量 pull 合并用）
+  /// 增量 upsert 单行（按 id 覆盖；不删整表，增量 pull 合并用；写失败自动重建连接重试一次）
   static Future<void> upsertOne(String storeName, Map<String, dynamic> row) async {
-    final db = await _open();
+    var db = await _open();
     if (db == null) return;
-    try {
-      final id = '${row['id'] ?? ''}';
-      if (id.isEmpty) return;
-      final store = stringMapStoreFactory.store(storeName);
-      await store.record(id).put(db, row);
-    } catch (e) {
-      appLog('db', 'upsertOne($storeName) 失败: ${e.toString().split('\n').first}', level: 'error');
+    final id = '${row['id'] ?? ''}';
+    if (id.isEmpty) return;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final store = stringMapStoreFactory.store(storeName);
+        await store.record(id).put(db, row);
+        return;
+      } catch (e) {
+        if (attempt == 0) {
+          appLog('db', 'upsertOne($storeName,$id) 失败(${e.toString().split('\n').first})，重建连接重试', level: 'error');
+          await _reopen();
+          db = await _open();
+          if (db == null) return;
+        } else {
+          appLog('db', 'upsertOne($storeName,$id) 重试仍失败: ${e.toString().split('\n').first}', level: 'error');
+        }
+      }
     }
   }
 
-  /// 删单行（delete action 合并用；不存在静默跳过）
-  static Future<void> deleteOne(String storeName, String id) async {
-    final db = await _open();
-    if (db == null) return;
+  /// 写失败自愈：关闭并重建数据库连接（只读/坏连接等异常时重开后再试）
+  static Future<void> _reopen() async {
     try {
-      final store = stringMapStoreFactory.store(storeName);
-      await store.record(id).delete(db);
-    } catch (e) {
-      appLog('db', 'deleteOne($storeName,$id) 失败: ${e.toString().split('\n').first}', level: 'error');
+      await _db?.close();
+    } catch (_) {}
+    _db = null;
+    await _open();
+  }
+
+  /// 删单行（delete action 合并用；不存在静默跳过；写失败自动重建连接重试一次）
+  static Future<void> deleteOne(String storeName, String id) async {
+    var db = await _open();
+    if (db == null) return;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final store = stringMapStoreFactory.store(storeName);
+        await store.record(id).delete(db);
+        return;
+      } catch (e) {
+        if (attempt == 0) {
+          appLog('db', 'deleteOne($storeName,$id) 失败(${e.toString().split('\n').first})，重建连接重试', level: 'error');
+          await _reopen();
+          db = await _open();
+          if (db == null) return;
+        } else {
+          appLog('db', 'deleteOne($storeName,$id) 重试仍失败: ${e.toString().split('\n').first}', level: 'error');
+        }
+      }
     }
   }
 
@@ -128,15 +157,27 @@ class LocalDb {
 
   // ---------- 待推送变更队列（local_changes store，写本地优先时入队） ----------
 
-  /// 入队一条待推送变更（{id, entity_type, entity_sync_id, action, payload, updated_at}）
+  /// 入队一条待推送变更（{id, entity_type, entity_sync_id, action, payload, updated_at}；写失败自动重建连接重试一次）
   static Future<void> addPendingChange(Map<String, dynamic> change) async {
-    final db = await _open();
+    var db = await _open();
     if (db == null) return;
-    try {
-      final store = intMapStoreFactory.store(pendingStore);
-      final id = change['id'] ?? DateTime.now().microsecondsSinceEpoch;
-      await store.record(id as int).put(db, change);
-    } catch (_) {}
+    final id = change['id'] ?? DateTime.now().microsecondsSinceEpoch;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final store = intMapStoreFactory.store(pendingStore);
+        await store.record(id as int).put(db, change);
+        return;
+      } catch (e) {
+        if (attempt == 0) {
+          appLog('db', 'addPendingChange 失败(${e.toString().split('\n').first})，重建连接重试', level: 'error');
+          await _reopen();
+          db = await _open();
+          if (db == null) return;
+        } else {
+          appLog('db', 'addPendingChange 重试仍失败: ${e.toString().split('\n').first}', level: 'error');
+        }
+      }
+    }
   }
 
   /// 读取全部待推送变更（按入队顺序）

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../log.dart';
@@ -21,6 +22,8 @@ class _ItemsPageState extends State<ItemsPage> {
   /// 本次会话内已删除商品 id（内存兜底）：本地库删除失败/未生效时，
   /// _load 读回也会被过滤，保证「点击删除」后 UI 一定消失（离线场景也生效）
   final Set<String> _deletedIds = {};
+  /// 持久删除集合 key（SharedPreferences 独立存储）：本地库只读/写失败时删除标记仍跨重启保留
+  static const _delKey = 'taozhu_deleted_items';
   bool _loading = true;
   bool _isStaff = false; // 店员不可见进价
   Timer? _searchTimer;
@@ -46,14 +49,37 @@ class _ItemsPageState extends State<ItemsPage> {
     if (mounted) _load();
   }
 
+  /// 持久删除集合（SharedPreferences 独立存储）：本地库只读/写失败时删除标记仍跨重启保留（绕过 sembast 只读）
+  static Future<Set<String>> _persistentDeleted() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return (p.getStringList(_delKey) ?? []).toSet();
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Future<void> _persistDeletedId(String id) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final list = p.getStringList(_delKey) ?? [];
+      if (!list.contains(id)) {
+        list.add(id);
+        await p.setStringList(_delKey, list);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _load({String q = ''}) async {
     final searching = q.isNotEmpty;
     // 本地库兜底：剔除 deleted_at 非空的行（旧版本全量同步可能把已软删商品写进本地库）
     List<Map<String, dynamic>> alive(List<Map<String, dynamic>> list) =>
         [for (final x in list) if ('${x['deleted_at'] ?? ''}'.isEmpty) x];
-    // 本次会话已删商品（内存兜底）：任何加载路径都过滤，离线删除 UI 必消失
+    // 本次会话已删商品（内存）+ 持久删除集合（SharedPreferences，跨重启）：任何加载路径都过滤
+    final persistedDeleted = await _persistentDeleted();
     List<Map<String, dynamic>> hideDeleted(List<Map<String, dynamic>> list) =>
-        [for (final x in list) if (!_deletedIds.contains('${x['id']}')) x];
+        [for (final x in list)
+          if (!_deletedIds.contains('${x['id']}') && !persistedDeleted.contains('${x['id']}')) x];
     if (kIsWeb) {
       // Web（无本地库）：普通加载本地秒开 + 网络刷新；搜索直连服务器
       if (!searching) {
@@ -140,6 +166,7 @@ class _ItemsPageState extends State<ItemsPage> {
       // 即使本地库写入异常/挂起也不阻塞界面（异常记日志可查，联网后由队列推送服务端）
       final item = _items.where((x) => '${x['id']}' == id).firstOrNull; // 先取，随后内存移除
       _deletedIds.add(id);
+      await _persistDeletedId(id); // 持久删除标记（本地库只读时仍跨重启生效，商品不再出现）
       if (mounted) setState(() => _items.removeWhere((x) => '${x['id']}' == id));
       toast(context, '已删除，正在同步');
       try {
