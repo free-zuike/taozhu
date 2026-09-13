@@ -10,6 +10,7 @@ import '../avatar_cache.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../utils/update_sources.dart';
 import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
@@ -24,6 +25,7 @@ import 'login_page.dart';
 import 'members_page.dart';
 import 'logs_page.dart';
 import 'backup_page.dart';
+import 'update_sources_page.dart';
 import '../widgets/user_avatar.dart';
 
 class MyPage extends StatefulWidget {
@@ -375,19 +377,18 @@ class _MyPageState extends State<MyPage> {
 
   /// Android：应用内更新走系统下载器（DownloadManager）——
   /// 后台下载、通知栏（下滑栏）实时进度、退出应用仍继续，完成后引导安装。
-  /// 多镜像源列表：下载前轻量探测可用源，选最快可用交给系统下载器；
-  /// 下载失败自动换下一个源；**用户手动取消（CANCELED）立即停止，不换源重试**。
+  /// 源列表 = 官方 GitHub 直连（第一优先）+ 用户手动启用的自定义镜像（「下载源管理」页配置）；
+  /// 下载前轻量探测可用源（Content-Length ≥ 1MB 防拦截页误判），选最快可用交给系统下载器；
+  /// 下载失败自动换下一个源；下载完成会校验安装包大小，异常（代理拦截页）删除并换源重试；
+  /// 用户手动取消（CANCELED）立即停止，不换源重试。
   Future<void> _downloadAndInstall(String ver) async {
     _downloading = true;
     final fileName = 'taozhu-update-$ver.apk';
-    const prefixes = [
-      '',
-      'https://ghproxy.com/',
-      'https://mirror.ghproxy.com/',
-      'https://gh.ddlc.top/',
-      'https://github.moeyy.xyz/',
-      'https://gh-proxy.com/',
-      'https://ghfast.top/',
+    final custom = await loadUpdateSources();
+    final prefixes = [
+      '', // 官方 GitHub 直连始终第一优先
+      for (final s in custom)
+        if (s['enabled'] == true) '${s['url'] ?? ''}',
     ];
     // 拆包下载：按设备 ABI 选对应 APK（arm64-v8a / armeabi-v7a / x86_64）；查不到 ABI 时回退 universal 命名
     String apkName;
@@ -432,8 +433,22 @@ class _MyPageState extends State<MyPage> {
           }
           final status = (st['status'] as int?) ?? -1;
           if (status == 8) {
-            // DownloadManager.STATUS_SUCCESSFUL
-            await _installFromDownloads(fileName);
+            // DownloadManager.STATUS_SUCCESSFUL —— 但代理/镜像可能把拦截页当 200 下完：
+            // 先校验文件大小，小于安装包最小可信值 = 下载到的是假文件 → 删除并换下一个源
+            final dir = await getDownloadsDirectory();
+            final file = File('${dir?.path}/$fileName');
+            int size = 0;
+            try {
+              if (file.existsSync()) size = await file.length();
+            } catch (_) {}
+            if (size < minTrustedBytes) {
+              try {
+                if (file.existsSync()) await file.delete();
+              } catch (_) {}
+              failed = true;
+              break;
+            }
+            await _installFromDownloads(fileName, size);
             return;
           }
           if (status == -1 || status == 12) {
@@ -463,31 +478,12 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
-  /// 并行轻量探测下载源可用性（HEAD + Range，接受 200/206 且 Content-Length>0），
+  /// 并行轻量探测下载源可用性（HEAD + Range，Content-Length 需 ≥ 1MB 防拦截页误判），
   /// 按响应耗时升序返回（最快源优先，避免固定顺序导致"第一次不是最快的"）。
   Future<List<String>> _probeSources(List<String> urls) async {
     final results = await Future.wait(urls.map((u) async {
-      final t0 = DateTime.now();
-      try {
-        final client = http.Client();
-        try {
-          final req = http.Request('HEAD', Uri.parse(u));
-          req.headers['Range'] = 'bytes=0-0';
-          req.headers['User-Agent'] = 'Mozilla/5.0';
-          final res = await client.send(req).timeout(const Duration(seconds: 8));
-          final len = res.contentLength ?? -1;
-          if (res.statusCode == 200 || res.statusCode == 206) {
-            if (len > 0 || res.statusCode == 200) {
-              return (u, DateTime.now().difference(t0).inMilliseconds);
-            }
-          }
-          return null;
-        } finally {
-          client.close();
-        }
-      } catch (_) {
-        return null;
-      }
+      final ms = await probeDownloadSource(u);
+      return ms == null ? null : (u, ms);
     }));
     final usable = <(String, int)>[];
     for (final r in results) {
@@ -497,14 +493,14 @@ class _MyPageState extends State<MyPage> {
     return [for (final r in usable) r.$1];
   }
 
-  /// 下载完成后引导安装（文件在应用下载目录，由系统 DownloadManager 写入）
-  Future<void> _installFromDownloads(String fileName) async {
+  /// 下载完成后引导安装（文件在应用下载目录，由系统 DownloadManager 写入；size 已通过 ≥1MB 校验）
+  Future<void> _installFromDownloads(String fileName, int size) async {
     if (!mounted) return;
     final install = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('更新下载完成'),
-        content: Text('安装包已就绪（$fileName）。\n立即安装？'),
+        content: Text('安装包已就绪（$fileName · ${(size / 1048576).toStringAsFixed(1)}MB）。\n立即安装？'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('稍后')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('立即安装')),
@@ -704,6 +700,8 @@ class _MyPageState extends State<MyPage> {
                   () => goPage(context, const BackupPage())),
             _item(Icons.system_update_alt_outlined, c.primary, '检查更新',
                 kIsWeb ? 'Web 版随部署更新' : '对比最新版本，应用内下载安装', _checkUpdate),
+            _item(Icons.dns_outlined, c.primary, '下载源管理', '官方 GitHub 直连 + 自定义镜像（手动测试启用）',
+                () => goPage(context, const UpdateSourcesPage())),
             _item(Icons.cleaning_services_outlined, c.primary, '存储清理', '查看并删除安装包/临时文件，释放空间',
                 () => goPage(context, const CleanupPage())),
             _item(Icons.receipt_long_outlined, c.primary, '日志',
