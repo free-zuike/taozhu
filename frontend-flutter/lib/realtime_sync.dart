@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'api.dart';
 import 'sync_service.dart';
@@ -67,6 +68,11 @@ class RealtimeSync {
     final now = DateTime.now();
     if (now.difference(_lastTrigger).inMilliseconds < 1000) return;
     _lastTrigger = now;
+    if (kIsWeb) {
+      // Web 无本地库/同步流程：同步定级为 version 通知，各页面监听后重新直连拉取（App→Web 实时刷新）
+      SyncService.version.notifyListeners();
+      return;
+    }
     SyncService.sync();
   }
 
