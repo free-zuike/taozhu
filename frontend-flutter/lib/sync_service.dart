@@ -184,8 +184,9 @@ class SyncService {
       var total = 0;
       var hasMore = true;
       // 本地待推送删除的实体（删除尚未落地前，pull 不得把它们恢复，否则"删了又出现"）
-      final pendingDelete = <String, Set<String>>{};
-      Future<Set<String>> pendingOf(String t) async =>
+      // 值类型是 Future<Set<String>>：putIfAbsent 缓存的是"查询未来的结果"，调用处 double await 解包
+      final pendingDelete = <String, Future<Set<String>>>{};
+      Future<Set<String>> pendingOf(String t) =>
           pendingDelete.putIfAbsent(t, () => pendingDeletedIds(t));
       while (hasMore) {
         final d = await Api.instance.get('/sync/pull?since=$since&limit=500&device_id=$did');
