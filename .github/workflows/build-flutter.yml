@@ -140,7 +140,12 @@ jobs:
           fi
           gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
           for APK in /tmp/taozhu-app-${VERSION}*.apk; do
-            gh release upload "$REL" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
+            # upload 重试（GitHub 端瞬时 500/竞态；重试 5 次后再进入完整性校验）
+            for _c in 1 2 3 4 5; do
+              gh release upload "$REL" "$APK" --repo "$GITHUB_REPOSITORY" --clobber && break
+              echo "upload 重试 $_c/5 ($(basename "$APK"))"
+              sleep 5
+            done
           done
           # 完整性校验：本发布产物必须全部上传成功；缺失 → 删除整个 release 并失败（不留不全的 release，
           # 与版本守卫一致：开发者看到失败后递增版本号重新构建）

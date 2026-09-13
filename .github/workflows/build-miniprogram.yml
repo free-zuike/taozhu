@@ -77,7 +77,11 @@ jobs:
               --title "陶朱 v${VERSION}" --notes "$NOTES"
           fi
           gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
-          gh release upload "$REL" "/tmp/taozhu-miniprogram-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber
+          for _c in 1 2 3 4 5; do
+            gh release upload "$REL" "/tmp/taozhu-miniprogram-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
+            echo "upload 重试 $_c/5 (taozhu-miniprogram-${VERSION}.zip)"
+            sleep 5
+          done
           # 完整性校验：产物必须上传成功，缺失 → 删除整个 release 并失败（不留不全的 release）
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "taozhu-miniprogram-${VERSION}.zip"; then
             echo "::error::release $REL 资产不完整，按发版规则删除整个 release，请递增版本号重新构建"

@@ -175,7 +175,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
-          gh release upload "taozhu-v${VERSION}" "${{ env.web_zip }}" --repo "$GITHUB_REPOSITORY" --clobber
+          for _c in 1 2 3 4 5; do
+            gh release upload "taozhu-v${VERSION}" "${{ env.web_zip }}" --repo "$GITHUB_REPOSITORY" --clobber && break
+            echo "upload 重试 $_c/5 (web-${VERSION}.zip)"
+            sleep 5
+          done
           echo "uploaded: web-${VERSION}.zip"
 
       - name: 失败即清理不完整 release（本 workflow 统一创建 release，任一失败 → 删除整个 release，防止留下空壳/半成品）
