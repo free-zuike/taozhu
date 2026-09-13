@@ -78,4 +78,18 @@ jobs:
           fi
           gh release edit "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES"
           gh release upload "$REL" "/tmp/taozhu-miniprogram-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber
+          # 完整性校验：产物必须上传成功，缺失 → 删除整个 release 并失败（不留不全的 release）
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "taozhu-miniprogram-${VERSION}.zip"; then
+            echo "::error::release $REL 资产不完整，按发版规则删除整个 release，请递增版本号重新构建"
+            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes || true
+            exit 1
+          fi
           echo "uploaded taozhu-miniprogram-${VERSION}.zip"
+
+      - name: 失败即清理不完整 release（任一构建/上传失败 → 删除整个 release，防止留下半成品）
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || true)
+          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true

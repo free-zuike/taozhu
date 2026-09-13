@@ -177,3 +177,11 @@ jobs:
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
           gh release upload "taozhu-v${VERSION}" "${{ env.web_zip }}" --repo "$GITHUB_REPOSITORY" --clobber
           echo "uploaded: web-${VERSION}.zip"
+
+      - name: 失败即清理不完整 release（本 workflow 统一创建 release，任一失败 → 删除整个 release，防止留下空壳/半成品）
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || true)
+          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true

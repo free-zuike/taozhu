@@ -142,4 +142,27 @@ jobs:
           for APK in /tmp/taozhu-app-${VERSION}*.apk; do
             gh release upload "$REL" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
           done
+          # 完整性校验：本发布产物必须全部上传成功；缺失 → 删除整个 release 并失败（不留不全的 release，
+          # 与版本守卫一致：开发者看到失败后递增版本号重新构建）
+          MISSING=""
+          for APK in /tmp/taozhu-app-${VERSION}*.apk; do
+            FN=$(basename "$APK")
+            if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "$FN"; then
+              MISSING="$MISSING $FN"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::release $REL 资产不完整（缺:$MISSING），按发版规则删除整个 release。请递增版本号重新构建（不得保留不全产物）"
+            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes || true
+            exit 1
+          fi
           echo "uploaded taozhu-app (universal+split ABIs) ${VERSION}"
+      - name: 失败即清理不完整 release（构建/上传任一失败 → 删除整个 release，防止留下半成品）
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
+          if [ -n "$VERSION" ]; then
+            gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+          fi
