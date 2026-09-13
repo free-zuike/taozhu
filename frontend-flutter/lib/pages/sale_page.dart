@@ -447,21 +447,6 @@ class _SalePageState extends State<SalePage> {
             } catch (_) {}
           }
           if (stored == null) {
-            // 本地库仍无此商品：在线直连 PATCH（与 Web 一致），成功即生效，不再卡"请先同步"
-            try {
-              await Api.instance.patch('/items/$itemId', {
-                'category': catName,
-                'category_id': selected.isEmpty ? null : selected,
-              });
-              final idx = _items.indexWhere((x) => x.id == itemId);
-              if (idx >= 0) {
-                final it = _items[idx];
-                _items[idx] = _ItemOption(it.id, it.name, catName, it.prices);
-              }
-              setState(() {});
-              toast(context, '已更新分类');
-              return;
-            } catch (_) {}
             toast(context, '本地商品库无此商品，请先完成同步');
             return;
           }

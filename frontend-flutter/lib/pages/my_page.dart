@@ -227,6 +227,9 @@ class _MyPageState extends State<MyPage> {
   Future<void> _clearAccountData() async {
     await Api.instance.clearLocalData();
     await LocalDb.clearAll();
+    // 关键：本地库清空后同步进度必须一并重置，否则新账号登录只做增量 pull，
+    // 游标之前的服务器数据（大部分历史）永远拉不到，造成"假同步、数据拉不全"
+    await SyncService.resetSyncState();
   }
 
   /// 版本号比较：a < b ?（四段 x.y.z.w）

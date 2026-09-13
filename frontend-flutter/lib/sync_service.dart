@@ -78,6 +78,20 @@ class SyncService {
     return p.getBool(_fullDoneKey) ?? false;
   }
 
+  /// 重置同步进度（切换账号/清除数据时调用）：清掉"已全量同步"标记与增量游标，
+  /// 下次同步强制重新全量拉取（否则新账号只会做增量 pull，游标之前的服务器数据永远拉不到）。
+  /// 设备 id 保留（pull 排除本设备回声依赖它）。
+  static Future<void> resetSyncState() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove(_fullDoneKey);
+      await p.remove(_cursorKey);
+      await p.remove(_lastSyncKey);
+    } catch (_) {}
+    _lastSyncFailed = false;
+    _status = 'idle';
+  }
+
   /// 记录本次同步时间并通知监听者（本地库已被服务端数据刷新）
   static Future<void> _markSynced() async {
     final p = await SharedPreferences.getInstance();

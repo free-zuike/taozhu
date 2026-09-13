@@ -272,6 +272,22 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     }
   }
 
+  /// 重新全量同步：重置增量游标后强制 fullSync 拉全量（修复"清除数据后增量拉取拉不全"的缺口）
+  Future<void> _fullSyncNow() async {
+    if (_syncing) return;
+    setState(() => _syncing = true);
+    try {
+      await SyncService.resetSyncState();
+      await SyncService.sync().timeout(const Duration(seconds: 60));
+    } catch (_) {
+    } finally {
+      if (!mounted) return;
+      setState(() => _syncing = false);
+      _load();
+      toast(context, '已重新全量同步');
+    }
+  }
+
   String _fmtTime(String iso) {
     final t = DateTime.tryParse(iso);
     if (t == null) return '从未同步';
@@ -287,6 +303,11 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       appBar: AppBar(
         title: const Text('同步状态'),
         actions: [
+          IconButton(
+            tooltip: '重新全量同步（拉全量修复缺口）',
+            icon: const Icon(Icons.system_update_alt),
+            onPressed: _syncing ? null : _fullSyncNow,
+          ),
           IconButton(
             tooltip: '同步全部数据',
             icon: _syncing
