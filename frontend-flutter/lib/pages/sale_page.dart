@@ -437,10 +437,9 @@ class _SalePageState extends State<SalePage> {
         var stored = (await LocalDb.getAllByName('items'))
             .where((x) => '${x['id']}' == itemId).firstOrNull;
         if (stored == null) {
-          // 本地优先：改分类不访问网络（商品与分类都在本地库镜像，同步驱动）；
-          // 本地库无该商品 = 同步缺口（服务端有但未同步到本地），提示用同步修复
-          appLog('sync', '分类修改本地库缺商品 item=$itemId，需同步补齐', level: 'error');
-          toast(context, '本地商品库无此商品，请先同步（同步状态页可重新全量同步）');
+          // 本地优先：不访问网络。全量同步后本地仍无该商品 = 商品已从商品库删除
+          //（历史明细里的商品名是快照），改分类无意义——提示准确原因，不再引导反复全量同步
+          toast(context, '该商品已从商品库删除（历史明细仍显示原名称），无法修改分类');
           return;
         }
         final updated = Map<String, dynamic>.from(stored)
