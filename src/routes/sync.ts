@@ -135,7 +135,7 @@ syncRouter.get('/full', async (c) => {
   const db = c.env.DB;
   const isStaff = user.role === 'admin' ? false : true;
 
-  const clientRows = await db.prepare('SELECT * FROM clients ORDER BY name').all();
+  const clientRows = await db.prepare('SELECT * FROM clients WHERE deleted_at IS NULL ORDER BY name').all();
   const clients = clientRows.results.map((x) => {
     const r = x as Record<string, unknown>;
     return {

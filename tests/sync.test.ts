@@ -324,6 +324,22 @@ describe('同步协议', () => {
     expect(d.server_cursor).toBeGreaterThan(0);
   });
 
+  it('full 首同步快照：不含已软删的店铺/商品（删除后全量同步不得复活）', async () => {
+    const created = await call(env, 'POST', '/api/v1/clients', token, { name: '将删除店' });
+    const del = (await created.json()) as { id: string };
+    await call(env, 'DELETE', `/api/v1/clients/${del.id}`, token); // 软删（deleted_at）
+    await call(env, 'POST', '/api/v1/clients', token, { name: '留存店' });
+    await call(env, 'POST', '/api/v1/items', token, { name: '将删品', prices: [{ unit: '件', sale_price: 1 }] });
+    const itm = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string }> };
+    await call(env, 'DELETE', `/api/v1/items/${itm.items[0].id}`, token); // 软删
+    const res = await call(env, 'GET', '/api/v1/sync/full', token);
+    const d = (await res.json()) as { clients: Array<{ id: string; deleted_at: string | null }>; items: Array<{ id: string; deleted_at: string | null }> };
+    expect(d.clients.some((c) => c.id === del.id)).toBe(false);
+    expect(d.clients).toHaveLength(1);
+    expect(d.items.some((x) => x.deleted_at != null)).toBe(false);
+    expect(d.items.every((x) => x.id !== itm.items[0].id)).toBe(true);
+  });
+
   it('stats 返回服务器各实体计数与游标（差异面板数据源）', async () => {
     await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
     await call(env, 'POST', '/api/v1/clients', token, { name: '店B' });
