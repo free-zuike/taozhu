@@ -56,7 +56,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   Future<void> _load() async {
     // ① 本地库秒开（含空态；不再等网络转圈）
     final local = await LocalDb.getAll('purchases');
-    if (mounted) {
+    // Web 端 LocalDb 恒空：跳过空渲染，避免删除/同步通知时列表"空白→填充"跳动；仅本地有数据才先渲染
+    if ((!kIsWeb || local.isNotEmpty) && mounted) {
       setState(() {
         _purchases = _filterByRange(local);
         _loading = false;
@@ -158,86 +159,107 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     return '$date 周${wd[d.weekday - 1]}';
   }
 
-  Widget _menu(Map<String, dynamic> p) {
-    final c = Theme.of(context).extension<TaozhuColors>()!;
-    return PopupMenuButton<String>(
-      padding: EdgeInsets.zero,
-      icon: Icon(Icons.more_vert, size: 18, color: c.textSub),
-      onSelected: (v) {
-        if (v == 'attach') showAttachmentViewer(context, 'purchase', '${p['id']}', '进货单附件');
-        if (v == 'edit') _editPurchase(p);
-        if (v == 'del') _deletePurchase(p);
+  /// 进货流水行：三行卡片 —— ①商品名称+备注 ②商品分类+行级附件（常驻入口）③数量·进价·金额
+  Widget _lineTile(TaozhuColors c, Map<String, dynamic> l) {
+    final order = l['order'] as Map<String, dynamic>;
+    final itemName = '${l['item_name'] ?? ''}';
+    final qty = '${l['quantity'] ?? ''}';
+    final unit = '${l['unit'] ?? ''}';
+    final note = '${l['note'] ?? ''}'.trim();
+    final category = '${l['category'] ?? ''}'.trim();
+    final rowId = '${l['row_id'] ?? ''}';
+    final pp = (l['purchase_price'] as num?)?.toDouble() ?? 0;
+    final priceLine = StringBuffer();
+    if (pp > 0) priceLine.write('进价 ¥${fmtMoney(pp)} · ');
+    priceLine.write('数量 ×$qty$unit');
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      // 点行 = 只编辑当前商品（数量/进价/单位/日期）；长按 = 删除整单
+      onTap: () {
+        final line = Map<String, dynamic>.from(l)..['id'] = rowId;
+        if (rowId.isEmpty) {
+          _editPurchase(order);
+        } else {
+          _editPurchaseLine(order, line);
+        }
       },
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'attach', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.attachment_outlined, size: 18), title: Text('附件'))),
-        PopupMenuItem(value: 'edit', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.edit_outlined, size: 18), title: Text('编辑'))),
-        PopupMenuItem(value: 'del', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.delete_outline, size: 18, color: Color(0xFFEF4444)), title: Text('删除', style: TextStyle(color: Color(0xFFEF4444))))),
-      ],
-    );
-  }
-
-  Widget _card(Map<String, dynamic> p) {
-    final items = ((p['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-    final note = (p['note'] as String? ?? '').trim();
-    final c = Theme.of(context).extension<TaozhuColors>()!;
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 3),
-      elevation: 0,
-      color: c.card,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: c.success.withOpacity(0.3)),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => _editPurchase(p),
-        // 长按 = 删除整单（对齐交易页交互；确认删除，取消返回）
-        onLongPress: () => _deletePurchase(p),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              CircleAvatar(
-                radius: 16,
-                backgroundColor: c.success.withOpacity(0.12),
-                child: Icon(Icons.shopping_cart, size: 16, color: c.success),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  note.isNotEmpty ? note : (items.isNotEmpty ? '${items.first['item_name']} 等 ${items.length} 项' : '进货单'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: c.textMain),
-                ),
-              ),
-              Text('¥${fmtMoney(p['total'])}',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.danger)),
-              _menu(p),
-            ]),
-            for (final it in items)
-              // 点明细行 = 只编辑当前商品（数量/进价/单位/日期，弹窗即时保存）
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () => _editPurchaseLine(p, it),
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 40, top: 2),
-                  child: Row(children: [
-                    Expanded(
-                      child: Text('${it['item_name']} ×${it['quantity']}${it['unit']}',
+      onLongPress: () => _deletePurchase(order),
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 2),
+        padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),
+        decoration: BoxDecoration(
+          color: c.card,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: c.success.withOpacity(0.25)),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 14,
+              backgroundColor: c.success.withOpacity(0.12),
+              child: Icon(Icons.shopping_cart, size: 14, color: c.success),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ① 商品名称 + 备注
+                  Text.rich(
+                    TextSpan(children: [
+                      TextSpan(
+                        text: itemName.isEmpty ? '（无明细）' : itemName,
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.textMain),
+                      ),
+                      if (note.isNotEmpty)
+                        TextSpan(
+                          text: '  $note',
+                          style: TextStyle(fontSize: 11, color: c.textSub),
+                        ),
+                    ]),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  // ② 商品分类 + 行级附件（常驻入口：点开查看/添加该行独立凭证）
+                  Row(
+                    children: [
+                      Icon(Icons.sell_outlined, size: 12, color: c.textSub),
+                      const SizedBox(width: 3),
+                      Flexible(
+                        child: Text(
+                          category.isEmpty ? '未分类' : category,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 13, color: c.textSub)),
-                    ),
-                    Text('¥${fmtMoney(it['amount'])}',
-                        style: TextStyle(fontSize: 13, color: c.textSub)),
-                    const SizedBox(width: 8),
-                    Icon(Icons.edit_outlined, size: 13, color: c.textSub.withOpacity(0.6)),
-                  ]),
-                ),
+                          style: TextStyle(fontSize: 11, color: c.textSub),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: () async {
+                          await showAttachmentViewer(
+                              context, rowId.isEmpty ? 'purchase' : 'purchase_item',
+                              rowId.isEmpty ? '${order['id']}' : rowId,
+                              rowId.isEmpty ? '进货单附件' : '进货明细行附件');
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Icon(Icons.image_outlined, size: 15, color: c.textSub.withOpacity(0.5)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  // ③ 进价 · 数量单位（允许换行）
+                  Text(priceLine.toString(),
+                      style: TextStyle(fontSize: 12, color: c.textSub)),
+                ],
               ),
-            if (note.isNotEmpty) const SizedBox(height: 2),
-          ]),
+            ),
+            Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right, size: 14, color: c.textSub),
+          ],
         ),
       ),
     );
@@ -302,6 +324,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     );
   }
 
+  /// 进货流水行（商品明细铺开）：按明细行日期分组，每行一条商品。
+  /// 点行编辑该商品；长按=删除整单；行内附件=该条商品独立凭证。
   Widget _buildList() {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     if (_purchases.isEmpty) {
@@ -336,10 +360,43 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         ),
       );
     }
+    // 展开为明细行：行日期回退单据日期；无明细的单据显示备注/占位行
+    final lines = <Map<String, dynamic>>[];
+    for (final p in _purchases) {
+      final orderDate = _date(p['happened_at']);
+      final orderNote = '${p['note'] ?? ''}'.trim();
+      final items = ((p['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (items.isEmpty) {
+        lines.add({
+          'date': orderDate, 'order': p,
+          'item_name': '（无明细）', 'note': orderNote, 'category': '',
+          'quantity': '', 'unit': '', 'amount': ((p['total'] as num?)?.toDouble() ?? 0),
+          'id': '', 'row_id': '', 'purchase_price': 0,
+          'happened_at': '${p['happened_at'] ?? orderDate}',
+        });
+      }
+      for (final it in items) {
+        final id = '${it['happened_at'] ?? ''}';
+        lines.add({
+          'date': id.length >= 10 ? id.substring(0, 10) : orderDate,
+          'order': p,
+          'item_name': '${it['item_name'] ?? ''}',
+          'note': orderNote,
+          'category': '${it['item_category'] ?? ''}'.trim(),
+          'quantity': '${it['quantity'] ?? ''}',
+          'unit': '${it['unit'] ?? ''}',
+          'amount': ((it['amount'] as num?)?.toDouble() ?? 0),
+          'id': '${it['id'] ?? ''}',       // 明细行 id（行级附件/编辑用）
+          'row_id': '${it['id'] ?? ''}',   // 同 id，行级附件回退判断用
+          'purchase_price': (it['purchase_price'] as num?)?.toDouble() ?? 0,
+          'happened_at': '${it['happened_at'] ?? p['happened_at'] ?? orderDate}',
+        });
+      }
+    }
+    // 按行日期分组
     final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final r in _purchases) {
-      final d = _date(r['happened_at']);
-      (grouped[d] ??= []).add(r);
+    for (final l in lines) {
+      (grouped['${l['date']}'] ??= []).add(l);
     }
     return RefreshIndicator(
       onRefresh: _load,
@@ -350,7 +407,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
             // 日期栏 = 该日进货单列表编辑入口（点单整单编辑；点明细行单笔编辑）
             InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () => _openBatchEdit(e.key, e.value),
+              onTap: () => _openBatchEdit(e.key, _ordersOfDay(e.value)),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
                 child: Row(
@@ -364,7 +421,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                             color: c.textMain)),
                     const Spacer(),
                     Text(
-                      '${e.value.length} 笔 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, r) => s + ((r['total'] as num?)?.toDouble() ?? 0)))}',
+                      '${e.value.length} 条 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + ((l['amount'] as num?)?.toDouble() ?? 0)))}',
                       style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -376,10 +433,25 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                 ),
               ),
             ),
-            for (final r in e.value) _card(r),
+            for (final l in e.value) _lineTile(c, l),
           ],
         ],
       ),
     );
+  }
+
+  /// 由该日明细行还原所属进货单列表（日期栏批量编辑页按整单展示）
+  List<Map<String, dynamic>> _ordersOfDay(List<Map<String, dynamic>> lines) {
+    final orders = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final l in lines) {
+      final o = l['order'] as Map<String, dynamic>?;
+      if (o == null) continue;
+      final id = '${o['id']}';
+      if (id.isEmpty || seen.contains(id)) continue;
+      seen.add(id);
+      orders.add(o);
+    }
+    return orders;
   }
 }

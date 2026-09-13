@@ -5,6 +5,7 @@ import '../local_db.dart';
 import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import 'attachment_viewer.dart';
 import 'router.dart';
 
 /// 单商品编辑（账本页点明细行 / 日期栏编辑页点行共用）：
@@ -104,6 +105,26 @@ Future<Map<String, dynamic>?> editSaleLine(
                       if (cat != null && ctx.mounted) setDlg(() => category = cat);
                     },
                     child: const Text('修改分类'),
+                  ),
+                ],
+              ),
+              // 行级附件（该条商品独立凭证）：查看/添加不阻塞编辑保存
+              Row(
+                children: [
+                  Icon(Icons.image_outlined, size: 16, color: c.textSub),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '该条凭证附件',
+                      style: TextStyle(fontSize: 13, color: c.textMain),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await showAttachmentViewer(context, 'sale_item', '$itemId', '出货明细行附件');
+                      if (ctx.mounted) setDlg(() {});
+                    },
+                    child: const Text('查看/添加'),
                   ),
                 ],
               ),

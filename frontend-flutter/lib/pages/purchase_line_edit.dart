@@ -4,6 +4,7 @@ import '../api.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import 'attachment_viewer.dart';
 import 'router.dart';
 
 /// 单商品编辑（进货记录页点明细行）：弹窗修改 数量/单位/进价/日期，
@@ -72,6 +73,25 @@ Future<Map<String, dynamic>?> editPurchaseLine(
                       dateCtrl.text = '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
                       setDlg(() {});
                     },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              // 行级附件（该条商品独立凭证）：查看/添加不阻塞编辑保存
+              Row(
+                children: [
+                  Icon(Icons.image_outlined, size: 16, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text('该条凭证附件',
+                        style: TextStyle(fontSize: 13, color: Theme.of(ctx).extension<TaozhuColors>()!.textMain)),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await showAttachmentViewer(context, 'purchase_item', '$itemId', '进货明细行附件');
+                      if (ctx.mounted) setDlg(() {});
+                    },
+                    child: const Text('查看/添加'),
                   ),
                 ],
               ),

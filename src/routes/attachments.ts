@@ -1,5 +1,5 @@
 /** 交易附件（凭证图片）：公共图片存储（taozhu/images/attachments/...，MD5 内容去重）。
- *  entity ∈ sale|purchase|payment（出货/进货/收款）；零 D1 写。 */
+ *  entity ∈ sale|purchase|payment（单据级）| sale_item|purchase_item（明细行级）；零 D1 写。 */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { createStorage } from '../services/storage';
@@ -11,7 +11,9 @@ type V = { user: AuthUser };
 export const attachmentsRouter = new Hono<{ Bindings: Env; Variables: V }>();
 attachmentsRouter.use('*', authMiddleware());
 
-const VALID_ENTITY = ['sale', 'purchase', 'payment'];
+const VALID_ENTITY = ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'];
+/** 单据级实体（counts 支持按店铺汇总；行级无店铺维度，仅按 ids） */
+const ORDER_ENTITY = ['sale', 'purchase', 'payment'];
 
 /** 当前规范前缀：taozhu/images/attachments/{entity}/{id}/ */
 const prefixOf = (entity: string, id: string) => `taozhu/images/attachments/${entity}/${id}/`;
@@ -23,7 +25,7 @@ const legacyPrefixesOf = (entity: string, id: string) =>
 attachmentsRouter.get('/', async (c) => {
   const entity = c.req.query('entity');
   const id = c.req.query('id');
-  if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment' }, 400);
+  if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment 或明细行级 sale_item/purchase_item' }, 400);
   if (!id) return c.json({ error: '缺少 id' }, 400);
   const store = createStorage(c.env);
   const prefixes = [prefixOf(entity, id), ...legacyPrefixesOf(entity, id)];
@@ -40,7 +42,7 @@ attachmentsRouter.get('/', async (c) => {
 attachmentsRouter.post('/', async (c) => {
   const entity = c.req.query('entity');
   const id = c.req.query('id');
-  if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment' }, 400);
+  if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment 或明细行级 sale_item/purchase_item' }, 400);
   if (!id) return c.json({ error: '缺少 id' }, 400);
   let file: File | null = null;
   try {
@@ -66,11 +68,11 @@ attachmentsRouter.post('/', async (c) => {
 attachmentsRouter.post('/counts', async (c) => {
   const body = await c.req.json().catch(() => null) as { entity?: string; ids?: string[]; client_id?: string } | null;
   const entity = body?.entity;
-  if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment' }, 400);
+  if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment 或明细行级 sale_item/purchase_item' }, 400);
   const store = createStorage(c.env);
   let ids: string[] = [];
   const clientId = body?.client_id?.trim();
-  if (clientId) {
+  if (clientId && ORDER_ENTITY.includes(entity)) {
     const rows = await c.env.DB.prepare(`SELECT id FROM ${entity}s WHERE client_id = ?`).bind(clientId).all<{ id: string }>();
     ids = rows.results.map((r) => r.id);
   } else {

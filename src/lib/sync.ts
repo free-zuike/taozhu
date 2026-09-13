@@ -104,7 +104,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       ).bind(id).first<Record<string, unknown>>();
       if (!r) return null;
       const detail = await db.prepare(
-        `SELECT pi.*, i.name AS item_name FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`,
+        `SELECT pi.*, i.name AS item_name, i.category AS item_category FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`,
       ).bind(id).all();
       return {
         id: r.id, happened_at: r.happened_at, note: r.note ?? '', total: r.total ?? 0,

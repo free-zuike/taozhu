@@ -84,7 +84,8 @@ class _ItemsPageState extends State<ItemsPage> {
       // Web（无本地库）：普通加载本地秒开 + 网络刷新；搜索直连服务器
       if (!searching) {
         final local = hideDeleted(alive(await LocalDb.getAllByName('items')));
-        if (mounted) {
+        // Web 端 LocalDb 恒空：跳过空渲染，避免删除/同步通知时列表"空白→填充"跳动；仅本地有数据才先渲染
+        if (local.isNotEmpty && mounted) {
           setState(() {
             _items = local;
             _loading = false;

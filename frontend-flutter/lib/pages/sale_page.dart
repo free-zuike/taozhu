@@ -37,6 +37,8 @@ class _Row {
   double quantity = 0;
   double salePrice = 0;
   String happenedAt = ''; // 该行商品的独立日期（空=用单据日期）
+  /// 明细行 id（编辑模式加载原单时保存；行级附件锚点，空=新建未提交行）
+  String rowId = '';
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
   final nameCtrl = TextEditingController();
   final unitCtrl = TextEditingController();
@@ -220,6 +222,7 @@ class _SalePageState extends State<SalePage> {
           ..quantity = qty
           ..salePrice = sp
           ..happenedAt = '${it['happened_at'] ?? hd}'
+          ..rowId = '${it['id'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -943,6 +946,15 @@ class _SalePageState extends State<SalePage> {
                 icon: const Icon(Icons.search, size: 22, color: Color(0xFF409EFF)),
                 onPressed: () => _pickItem(row),
               ),
+              // 行级附件：该条商品独立凭证（仅编辑已有明细行；新建未提交行无行 id）
+              if (row.rowId.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                IconButton(
+                  tooltip: '该行凭证附件',
+                  icon: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF409EFF)),
+                  onPressed: () => showAttachmentViewer(context, 'sale_item', row.rowId, '出货明细行附件'),
+                ),
+              ],
               const SizedBox(width: 4),
               IconButton(
                 tooltip: '删除此商品',

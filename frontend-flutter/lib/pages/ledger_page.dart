@@ -36,8 +36,10 @@ class _LedgerPageState extends State<LedgerPage> {
   bool _offline = false; // 本次加载走了本地缓存（无网络）
   /// 店铺选择弹层本地汇总（原生：笔数/欠款本地计算；Web 直接显示服务端字段）
   Map<String, ({int count, double debt})> _clientStat = {};
-  /// 出货单 id → 附件数（「有附件才显示图标」：云端 counts + 本地副本兜底）
+  /// 出货单 id → 附件数（整单级，无明细备注行用）
   Map<String, int> _saleAttachCount = {};
+  /// 出货明细行 id → 附件数（行级，每行商品独立凭证）
+  Map<String, int> _saleLineAttachCount = {};
   /// 收款单 id → 附件数
   Map<String, int> _payAttachCount = {};
   /// 商品 id → 分类名（出货明细行第二行显示分类，替代无实际数据的交易时间）
@@ -166,16 +168,26 @@ class _LedgerPageState extends State<LedgerPage> {
     _loadAttachCounts(withCloud: kIsWeb);
   }
 
-  /// 统计当前可见出货/收款单的附件数：本地副本目录优先（原生，零网络），云端批量 counts 精确覆盖
+  /// 统计当前可见出货明细行/收款单的附件数：本地副本目录优先（原生，零网络），云端批量 counts 精确覆盖。
+  /// 出货按明细行（sale_item，每行商品独立凭证）；收款按单据。
   Future<void> _loadAttachCounts({bool withCloud = false}) async {
-    final saleIds = _sales.map((s) => '${s['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
+    final saleLineIds = [
+      for (final s in _sales)
+        for (final it in ((s['items'] as List?) ?? []) as List)
+          '${(it as Map)['id'] ?? ''}',
+    ].where((x) => x.isNotEmpty).toSet().toList();
+    // 无明细（备注行）整单附件仍按单据级展示
+    final saleOrderIds = _sales.map((s) => '${s['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
     final payIds = _payments.map((p) => '${p['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
-    final counts = <String, Map<String, int>>{'sale': {}, 'payment': {}};
+    final counts = <String, Map<String, int>>{
+      'sale_item': {}, 'sale': {},
+      'payment': {},
+    };
     // ① 本地副本（原生）：attachments/{entity}/{id}/ 目录里有多少文件
-    if (!kIsWeb && (saleIds.isNotEmpty || payIds.isNotEmpty)) {
+    if (!kIsWeb && (saleLineIds.isNotEmpty || payIds.isNotEmpty || saleOrderIds.isNotEmpty)) {
       try {
         final root = await getApplicationDocumentsDirectory();
-        for (final e in [(saleIds, 'sale'), (payIds, 'payment')]) {
+        for (final e in [(saleLineIds, 'sale_item'), (saleOrderIds, 'sale'), (payIds, 'payment')]) {
           for (final id in e.$1) {
             final dir = Directory('${root.path}/attachments/${e.$2}/$id');
             if (dir.existsSync()) {
@@ -199,10 +211,15 @@ class _LedgerPageState extends State<LedgerPage> {
           }
         } catch (_) {}
       }
-      await Future.wait([fetch('sale', saleIds), fetch('payment', payIds)]);
+      await Future.wait([
+        fetch('sale_item', saleLineIds),
+        fetch('sale', saleOrderIds),
+        fetch('payment', payIds),
+      ]);
     }
     if (!mounted) return;
     setState(() {
+      _saleLineAttachCount = counts['sale_item']!;
       _saleAttachCount = counts['sale']!;
       _payAttachCount = counts['payment']!;
     });
@@ -1038,7 +1055,11 @@ class _LedgerPageState extends State<LedgerPage> {
     final qtyNum = (l['qty_num'] as num?)?.toDouble() ?? 0;
     final note = '${l['note'] ?? ''}'.trim();
     final category = '${l['category'] ?? ''}'.trim();
-    final attachCount = _saleAttachCount['${order['id']}'] ?? 0;
+    // 行级附件：明细行独立凭证；无明细（备注占位行）回退整单附件
+    final lineId = '${l['item_id'] ?? ''}';
+    final attachCount = lineId.isEmpty
+        ? (_saleAttachCount['${order['id']}'] ?? 0)
+        : (_saleLineAttachCount[lineId] ?? 0);
     // 单行盈亏 = (售价 − 进价快照) × 数量；仅老板可见（店员成本被后端打码为 0 不参与计算）
     double? profit;
     if (!_isStaff && salePrice != null && costPrice != null && qtyNum > 0) {
@@ -1111,7 +1132,7 @@ class _LedgerPageState extends State<LedgerPage> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        // ② 商品分类 + 附件（分类在前，附件在后；有附件才显示图标）
+                        // ② 商品分类 + 附件（分类在前，附件常驻入口：点开查看/添加该行独立凭证）
                         Row(
                           children: [
                             Icon(Icons.sell_outlined, size: 12, color: c.textSub),
@@ -1124,22 +1145,30 @@ class _LedgerPageState extends State<LedgerPage> {
                                 style: TextStyle(fontSize: 11, color: c.textSub),
                               ),
                             ),
-                            if (attachCount > 0) ...[
-                              const SizedBox(width: 8),
-                              InkWell(
-                                borderRadius: BorderRadius.circular(6),
-                                onTap: () async {
-                                  await showAttachmentViewer(
-                                      context, 'sale', '${order['id']}', '出货单附件');
-                                  // 附件增删后立即刷新计数，避免图标残留/缺失（无需手动下拉）
-                                  _loadAttachCounts();
-                                },
-                                child: Padding(
-                                  padding: const EdgeInsets.all(2),
-                                  child: Icon(Icons.image_outlined, size: 15, color: c.primary),
-                                ),
+                            const SizedBox(width: 8),
+                            InkWell(
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: () async {
+                                await showAttachmentViewer(
+                                    context, lineId.isEmpty ? 'sale' : 'sale_item',
+                                    lineId.isEmpty ? '${order['id']}' : lineId,
+                                    lineId.isEmpty ? '出货单附件' : '出货明细行附件');
+                                // 附件增删后立即刷新计数，避免图标残留/缺失（无需手动下拉）
+                                _loadAttachCounts();
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.all(2),
+                                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Icon(Icons.image_outlined, size: 15,
+                                      color: attachCount > 0 ? c.primary : c.textSub.withOpacity(0.5)),
+                                  if (attachCount > 0) ...[
+                                    const SizedBox(width: 2),
+                                    Text('$attachCount',
+                                        style: TextStyle(fontSize: 10, color: c.primary)),
+                                  ],
+                                ]),
                               ),
-                            ],
+                            ),
                           ],
                         ),
                         // ③ 进价 · 售价 · 数量单位（允许换行，进价不被截断）

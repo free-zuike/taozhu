@@ -108,7 +108,7 @@ purchasesRouter.get('/', async (c) => {
   const ids = rows.results.map((r) => (r as { id: string }).id);
   const ph = ids.map(() => '?').join(',');
   const detail = await c.env.DB.prepare(
-    `SELECT pi.*, i.name AS item_name FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${ph}) ORDER BY pi.created_at`,
+    `SELECT pi.*, i.name AS item_name, i.category AS item_category FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${ph}) ORDER BY pi.created_at`,
   ).bind(...ids).all();
   const byId = new Map<string, unknown[]>();
   for (const d of detail.results) {
@@ -134,7 +134,7 @@ purchasesRouter.get('/:id', async (c) => {
   ).bind(id).first();
   if (!row) return c.json({ error: '进货单不存在' }, 404);
   const detail = await c.env.DB.prepare(
-    `SELECT pi.*, i.name AS item_name FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`,
+    `SELECT pi.*, i.name AS item_name, i.category AS item_category FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`,
   ).bind(id).all();
   return c.json({ ...(row as object), items: detail.results });
 });
