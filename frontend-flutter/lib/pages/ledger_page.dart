@@ -16,6 +16,7 @@ import 'sale_page.dart';
 import 'payments_page.dart';
 import 'attachment_viewer.dart';
 import 'sale_batch_edit_page.dart';
+import 'sale_line_edit.dart';
 
 /// 交易（账本=店铺）：出货 / 收款流水，按店铺+时间范围，支持编辑删除与附件（按日期分组列表）
 class LedgerPage extends StatefulWidget {
@@ -459,61 +460,23 @@ class _LedgerPageState extends State<LedgerPage> {
         .then((_) => _load());
   }
 
-  /// 日期栏 → 批量编辑该日全部明细（逐行改期 / 整体改期）
+  /// 点明细行 → 只编辑当前商品（数量/售价/单位/日期，弹窗即时保存）；
+  /// 无明细的占位行（备注行）没有可编辑的商品，回退整单编辑。
+  Future<void> _editSaleLine(Map<String, dynamic> l) async {
+    final order = l['order'] as Map<String, dynamic>;
+    if ('${l['item_id'] ?? ''}'.isEmpty) {
+      _editSale(order);
+      return;
+    }
+    await editSaleLine(context, l);
+    _load();
+  }
+
+  /// 日期栏 → 该日全部明细的编辑页（点行编辑对应商品）
   Future<void> _openBatchEdit(String date, List<Map<String, dynamic>> lines) async {
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => SaleBatchEditPage(date: date, lines: lines)));
     _load();
-  }
-
-  /// 删除一条出货流水明细行（该行商品）：只删这一行，同单其他商品不受影响；
-  /// 这是该单最后一行的商品时，整单删除（含备注）。
-  Future<void> _deleteSaleLine(Map<String, dynamic> l) async {
-    final order = l['order'] as Map<String, dynamic>;
-    final itemId = '${l['item_id'] ?? ''}';
-    final itemName = '${l['item_name'] ?? ''}';
-    final qty = '${l['quantity'] ?? ''}';
-    final items = (order['items'] as List? ?? []).cast<Map<String, dynamic>>();
-    final isLast = itemId.isEmpty || items.length <= 1;
-    if (!await _confirm('删除明细行',
-        isLast
-            ? itemName.isEmpty
-                ? '这是该单唯一的记录，删除后将整单删除。确定删除吗？'
-                : '这是该单唯一的商品，删除后将整单删除。确定删除「$itemName」吗？'
-            : '确定删除「$itemName${qty.isNotEmpty ? ' ×$qty' : ''}」这一行明细吗？同单其他商品不受影响。')) {
-      return;
-    }
-    try {
-      if (isLast) {
-        await _deleteSaleOrder(order);
-      } else {
-        // 只删该行：服务器删行级 + 本地镜像同步移除（等不到下次同步也立即生效）
-        await Api.instance.delete('/sales/items/$itemId');
-        final rest = <Map<String, dynamic>>[
-          for (final it in items)
-            if ('${it['id']}' != itemId) Map<String, dynamic>.from(it),
-        ];
-        final payload = Map<String, dynamic>.from(order)
-          ..['items'] = rest
-          ..['total'] = rest.fold<double>(
-              0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
-        final dates = [
-          for (final it in rest)
-            '${it['happened_at'] ?? ''}'.isNotEmpty
-                ? '${it['happened_at']}'
-                : '${payload['happened_at'] ?? ''}',
-        ];
-        if (dates.isNotEmpty) {
-          final maxD = dates.reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
-          if (maxD.isNotEmpty) payload['happened_at'] = maxD;
-        }
-        await LocalDb.upsertOne('sales', payload);
-      }
-      toast(context, '已删除');
-      _load();
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
-    }
   }
 
   /// 删除整单（长按卡片触发）：Web 直连 DELETE + 清本地行；原生 = 本地删行 + 同步队列推送 delete，跨端生效
@@ -907,14 +870,6 @@ class _LedgerPageState extends State<LedgerPage> {
     return '$date 周${wd[d.weekday - 1]}';
   }
 
-  /// 交易时间（HH:MM:SS）：有就显示，没有默认 00:00:00
-  String _timeOf(String happenedAt) {
-    final m = RegExp(r'(\d{1,2}):(\d{2})(?::(\d{2}))?').firstMatch(happenedAt.trim());
-    if (m == null) return '00:00:00';
-    final hh = m.group(1)!.padLeft(2, '0');
-    return '$hh:${m.group(2)}:${m.group(3) ?? '00'}';
-  }
-
   /// 卡片右上 ⋯ 菜单：编辑 / 删除（附件图标直接放行内，分类在「点击交易修改」里改）
   Widget _menu({required VoidCallback edit, required VoidCallback del}) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
@@ -933,7 +888,7 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   /// 出货流水（商品明细铺开）：按明细行日期分组，每行一条商品
-  /// （三行卡片：①商品名称+备注 ②交易时间+附件 ③售价·数量·进价）；点行编辑整单，附件图标直达凭证。
+  /// （三行卡片：①商品名称+备注 ②商品分类+附件 ③进价·售价·数量）；点行编辑该商品，附件图标直达凭证。
   Widget _buildSaleFlow(String emptyText) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     // 展开为明细行：行日期回退单据日期；无明细的单据显示备注/占位
@@ -1019,7 +974,7 @@ class _LedgerPageState extends State<LedgerPage> {
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
         children: [
           for (final e in grouped.entries) ...[
-            // 日期栏 = 该日全部明细的批量编辑入口（逐行改期 / 整体改期）
+            // 日期栏 = 该日全部明细的编辑入口（点行编辑对应商品；不跨日期改期）
             InkWell(
               borderRadius: BorderRadius.circular(8),
               onTap: () => _openBatchEdit(e.key, e.value),
@@ -1049,7 +1004,7 @@ class _LedgerPageState extends State<LedgerPage> {
     );
   }
 
-  /// 出货流水行：三行卡片 —— ①商品名称+备注 ②交易时间+附件（时间在前，有附件才显示图标）③售价×数量·进价
+  /// 出货流水行：三行卡片 —— ①商品名称+备注 ②商品分类+附件（分类在前，有附件才显示图标）③进价·售价·数量单位
   Widget _saleLineTile(TaozhuColors c, Map<String, dynamic> l) {
     final order = l['order'] as Map<String, dynamic>;
     final clientName = '${l['client_name'] ?? ''}';
@@ -1083,7 +1038,8 @@ class _LedgerPageState extends State<LedgerPage> {
     if (qty.isNotEmpty) priceLine.write(' · ×$qty$unit');
     return InkWell(
       borderRadius: BorderRadius.circular(10),
-      onTap: () => _editSale(order),
+      // 点行 = 只编辑当前商品（数量/售价/单位/日期）；长按 = 删除整单
+      onTap: () => _editSaleLine(l),
       // 长按 = 删除整单（弹确认框；确认删除，取消返回）
       onLongPress: () => _deleteSaleOrder(order),
       child: Container(

@@ -209,6 +209,45 @@ salesRouter.get('/:id', async (c) => {
   });
 });
 
+// PATCH /sales/items/:id — 编辑单条出货明细行（数量/单位/售价/日期；回滚旧库存再按新值扣减，重算金额与单据日期）
+salesRouter.patch('/items/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => null) as {
+    quantity?: number; unit?: string; sale_price?: number; happened_at?: string;
+  } | null;
+  const row = await c.env.DB.prepare(
+    'SELECT id, sale_id, item_id, unit, quantity, sale_price, happened_at FROM sale_items WHERE id = ?',
+  ).bind(id).first<{ id: string; sale_id: string; item_id: string; unit: string; quantity: number; sale_price: number; happened_at: string | null }>();
+  if (!row) return c.json({ error: '明细行不存在' }, 404);
+
+  const qty = body?.quantity !== undefined ? Number(body.quantity) : row.quantity;
+  if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
+  const unit = body?.unit?.trim() || row.unit;
+  const sp = body?.sale_price !== undefined ? Number(body.sale_price) : row.sale_price;
+  const salePrice = Number.isFinite(sp) && sp > 0 ? sp : row.sale_price;
+  const happenedAt = body?.happened_at?.trim() || row.happened_at || '';
+  if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
+
+  const amount = Math.round(qty * salePrice * 100) / 100;
+  const batch: D1PreparedStatement[] = [
+    stockDelta(c.env.DB, row.item_id, row.unit, row.quantity), // 出货扣减恢复（旧值）
+    stockDelta(c.env.DB, row.item_id, unit, -qty),             // 按新值重新扣减（不变时净零）
+    c.env.DB.prepare(
+      'UPDATE sale_items SET quantity = ?, unit = ?, sale_price = ?, amount = ?, happened_at = ? WHERE id = ?',
+    ).bind(qty, unit, salePrice, amount, happenedAt || null, id),
+  ];
+  await c.env.DB.batch(batch);
+  // 单据日期自动取明细最大日期（与记单页 orderDate=最大行日期口径一致）
+  const saleId = row.sale_id;
+  await c.env.DB.prepare(
+    `UPDATE sales SET happened_at = (
+       SELECT MAX(COALESCE(happened_at, '')) FROM sale_items WHERE sale_id = ?
+     ) WHERE id = ? AND EXISTS (SELECT 1 FROM sale_items WHERE sale_id = ?)`,
+  ).bind(saleId, saleId, saleId).run();
+  await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: c.get('user').username });
+  return c.json({ id, sale_id: saleId, item_id: row.item_id, unit, quantity: qty, sale_price: salePrice, amount, happened_at: happenedAt || null });
+});
+
 // PATCH /sales/:id — 编辑出货单（改店铺/日期/备注；传 items 则整体替换明细，原子事务）
 salesRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');

@@ -254,6 +254,40 @@ describe('出货明细行级操作（改期 / 单行删除，交易页流水行�
     expect(d2.total).toBe(50); // 20 × 2.5
     expect((await call(env, 'DELETE', '/api/v1/sales/items/nope', token)).status).toBe(404);
   });
+
+  it('单行编辑：改数量/售价/日期只影响该行，总额与单据日期联动', async () => {
+    const sale = (await (await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clientId, happened_at: '2026-09-06',
+      items: [
+        { price_id: priceId, quantity: 10, happened_at: '2026-09-05' },
+        { price_id: priceId, quantity: 20, happened_at: '2026-09-06' },
+      ],
+    })).json()) as { id: string };
+    const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sales: Array<{ id: string; happened_at: string; items: Array<{ id: string; quantity: number; sale_price: number; happened_at: string | null }>; total: number }>;
+    };
+    const detail = list.sales.find((s) => s.id === sale.id)!;
+    const first = detail.items[0];
+    // 改第一行：数量 10→15、售价 2.5→3、日期 09-05→09-07（单据日期取最大行日期 → 09-07）
+    const edit = await call(env, 'PATCH', `/api/v1/sales/items/${first.id}`, token, {
+      quantity: 15, sale_price: 3, happened_at: '2026-09-07',
+    });
+    expect(edit.status).toBe(200);
+    const after = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sales: Array<{ id: string; happened_at: string; items: Array<{ quantity: number; sale_price: number; happened_at: string | null }>; total: number }>;
+    };
+    const d2 = after.sales.find((s) => s.id === sale.id)!;
+    expect(d2.total).toBe(95); // 15 × 3 + 20 × 2.5
+    expect(d2.happened_at).toBe('2026-09-07');
+    expect(d2.items[0].quantity).toBe(15);
+    expect(d2.items[0].sale_price).toBe(3);
+    expect(d2.items[1].quantity).toBe(20); // 第二行不受影响
+    expect(d2.items[1].sale_price).toBe(2.5);
+    // 非法输入：数量 ≤ 0 → 400；不存在的行 → 404
+    expect((await call(env, 'PATCH', `/api/v1/sales/items/${first.id}`, token, { quantity: 0 })).status).toBe(400);
+    expect((await call(env, 'PATCH', `/api/v1/sales/items/${first.id}`, token, { happened_at: '09-08' })).status).toBe(400);
+    expect((await call(env, 'PATCH', '/api/v1/sales/items/nope', token, { quantity: 1 })).status).toBe(404);
+  });
 });
 
 describe('列表分页（limit/offset + total）', () => {
