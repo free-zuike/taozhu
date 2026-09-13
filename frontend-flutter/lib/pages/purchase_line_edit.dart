@@ -5,6 +5,7 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import 'attachment_viewer.dart';
+import 'change_category.dart';
 import 'router.dart';
 
 /// 单商品编辑（进货记录页点明细行）：弹窗修改 数量/单位/进价/日期，
@@ -24,6 +25,7 @@ Future<Map<String, dynamic>?> editPurchaseLine(
   final happenedAt = '${line['happened_at'] ?? ''}';
   final dateCtrl = TextEditingController(
       text: happenedAt.length >= 10 ? happenedAt.substring(0, 10) : '');
+  var category = '${line['category'] ?? ''}';
 
   final ok = await showDialog<bool>(
     context: context,
@@ -77,6 +79,31 @@ Future<Map<String, dynamic>?> editPurchaseLine(
                 ],
               ),
               const SizedBox(height: 4),
+              // 商品分类（商品级，全局生效）：点击「修改分类」选择后即时保存
+              Row(
+                children: [
+                  Icon(Icons.label_outline, size: 16, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      category.isEmpty ? '未分类' : category,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 13, color: Theme.of(ctx).extension<TaozhuColors>()!.textMain),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final goodsId = '${line['item_id'] ?? ''}';
+                      if (goodsId.isEmpty) return;
+                      final cat = await changeCategory(context, goodsId,
+                          itemName: '${line['item_name'] ?? ''}');
+                      if (cat != null && ctx.mounted) setDlg(() => category = cat);
+                    },
+                    child: const Text('修改分类'),
+                  ),
+                ],
+              ),
               // 行级附件（该条商品独立凭证）：查看/添加不阻塞编辑保存
               Row(
                 children: [

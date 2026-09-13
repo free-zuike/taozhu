@@ -23,6 +23,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   List<Map<String, dynamic>> _purchases = [];
   bool _loading = true;
   bool _offline = false;
+  /// 商品 id → 分类名（流水行分类显示：优先查询商品设置分类，明细行快照仅兜底）
+  Map<String, String> _itemCategory = {};
 
   @override
   void initState() {
@@ -56,10 +58,18 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   Future<void> _load() async {
     // ① 本地库秒开（含空态；不再等网络转圈）
     final local = await LocalDb.getAll('purchases');
+    // 商品目录分类映射：流水行分类优先查询商品设置分类（改动即时生效），明细快照仅兜底
+    final catMap = <String, String>{};
+    try {
+      for (final x in await LocalDb.getAllByName('items')) {
+        catMap['${x['id']}'] = '${x['category'] ?? ''}';
+      }
+    } catch (_) {}
     // Web 端 LocalDb 恒空：跳过空渲染，避免删除/同步通知时列表"空白→填充"跳动；仅本地有数据才先渲染
     if ((!kIsWeb || local.isNotEmpty) && mounted) {
       setState(() {
         _purchases = _filterByRange(local);
+        _itemCategory = catMap;
         _loading = false;
       });
     }
@@ -74,6 +84,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         if (!mounted) return;
         setState(() {
           _purchases = _filterByRange(rows);
+          _itemCategory = catMap;
           _loading = false;
           _offline = false;
         });
@@ -223,7 +234,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                   // ② 商品分类 + 行级附件（常驻入口：点开查看/添加该行独立凭证）
                   Row(
                     children: [
-                      Icon(Icons.sell_outlined, size: 12, color: c.textSub),
+                      Icon(Icons.label_outline, size: 12, color: c.textSub),
                       const SizedBox(width: 3),
                       Flexible(
                         child: Text(
@@ -377,12 +388,17 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       }
       for (final it in items) {
         final id = '${it['happened_at'] ?? ''}';
+        final itemId = '${it['item_id'] ?? ''}';
+        // 分类：优先查询商品设置分类（目录映射，改分类即时生效），明细快照仅兜底
+        final dirCat = _itemCategory[itemId] ?? '';
+        final catInline = '${it['item_category'] ?? ''}'.trim();
         lines.add({
           'date': id.length >= 10 ? id.substring(0, 10) : orderDate,
           'order': p,
           'item_name': '${it['item_name'] ?? ''}',
+          'item_id': itemId,  // 真实商品 id（改分类等商品级操作用）
           'note': orderNote,
-          'category': '${it['item_category'] ?? ''}'.trim(),
+          'category': dirCat.isNotEmpty ? dirCat : catInline,
           'quantity': '${it['quantity'] ?? ''}',
           'unit': '${it['unit'] ?? ''}',
           'amount': ((it['amount'] as num?)?.toDouble() ?? 0),

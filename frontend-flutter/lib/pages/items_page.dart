@@ -164,12 +164,13 @@ class _ItemsPageState extends State<ItemsPage> {
       }
     } else {
       // 本地优先删除：UI 立即反馈（内存隐藏 + 提示），本地写与队列后台尽力执行——
-      // 即使本地库写入异常/挂起也不阻塞界面（异常记日志可查，联网后由队列推送服务端）
+      // 即使本地库写入异常/挂起也不阻塞反馈与推送（异常记日志可查）
       final item = _items.where((x) => '${x['id']}' == id).firstOrNull; // 先取，随后内存移除
       _deletedIds.add(id);
       await _persistDeletedId(id); // 持久删除标记（本地库只读时仍跨重启生效，商品不再出现）
       if (mounted) setState(() => _items.removeWhere((x) => '${x['id']}' == id));
       toast(context, '已删除，正在同步');
+      // ① 本地写（tombstone 先行保证重启不复活；失败仅记日志，绝不阻断后续推送）
       try {
         if (item != null) {
           final delPayload = Map<String, dynamic>.from(item);
@@ -177,24 +178,28 @@ class _ItemsPageState extends State<ItemsPage> {
           final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
           for (final p in prices) { p['active'] = 1; }
           delPayload['prices'] = prices;
-          // 软删 tombstone 先写（保证重启不复活，不依赖物理删除完成）→ 物理删除后尽力 →
-          // 入队推送服务端（本地优先、离线可用，全程不访问网络）
           await LocalDb.upsertOne('items', delPayload);
           try {
             await LocalDb.deleteOne('items', id);
           } catch (e) {
             appLog('delete', '物理删除失败 item=$id（tombstone 已写入，不影响删除）: ${e.toString().split('\n').first}', level: 'error');
           }
-          await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
-        } else {
-          // 本地镜像找不到（可能已被删/未同步）→ 直接推删除 payload
-          await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: {
-            'id': id, 'name': name, 'deleted_at': DateTime.now().toIso8601String(),
-          });
         }
       } catch (e) {
         appLog('delete', '删除商品本地写入异常 item=$id: ${e.toString().split('\n').first}', level: 'error');
       }
+      // ② 入队推送（与本地写解耦：本地库只读/写失败也照常入队；
+      // 入队本身失败时 SharedPreferences 删除集合作为兜底，pushPending 合并推送）
+      try {
+        final pushPayload = item != null
+            ? (Map<String, dynamic>.from(item)..['deleted_at'] = DateTime.now().toIso8601String())
+            : <String, dynamic>{'id': id, 'name': name, 'deleted_at': DateTime.now().toIso8601String()};
+        await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: pushPayload);
+      } catch (e) {
+        appLog('delete', '删除商品入队异常 item=$id: ${e.toString().split('\n').first}', level: 'error');
+      }
+      // ③ 立即推送（不等 debounce 全量同步）：离线静默失败，联网后由同步流程兜底
+      unawaited(SyncService.pushPending());
     }
     _load();
   }

@@ -1135,7 +1135,7 @@ class _LedgerPageState extends State<LedgerPage> {
                         // ② 商品分类 + 附件（分类在前，附件常驻入口：点开查看/添加该行独立凭证）
                         Row(
                           children: [
-                            Icon(Icons.sell_outlined, size: 12, color: c.textSub),
+                            Icon(Icons.label_outline, size: 12, color: c.textSub),
                             const SizedBox(width: 3),
                             Flexible(
                               child: Text(

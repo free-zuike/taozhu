@@ -974,7 +974,7 @@ class _SalePageState extends State<SalePage> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.sell_outlined, size: 13, color: Color(0xFF409EFF)),
+                      const Icon(Icons.label_outline, size: 13, color: Color(0xFF409EFF)),
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
