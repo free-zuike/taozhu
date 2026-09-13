@@ -67,7 +67,7 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
         final params = <String>[
           'date_from=${widget.date}',
           'date_to=${widget.date}',
-          if (widget.clientId != null) 'client_id=$clientId',
+          if (widget.clientId != null) 'client_id=${widget.clientId}',
         ];
         final d = await Api.instance.get('/sales?${params.join('&')}');
         orders = ((d['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
