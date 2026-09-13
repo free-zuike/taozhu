@@ -23,7 +23,7 @@ class _ItemsPageState extends State<ItemsPage> {
   /// _load 读回也会被过滤，保证「点击删除」后 UI 一定消失（离线场景也生效）
   final Set<String> _deletedIds = {};
   /// 持久删除集合 key（SharedPreferences 独立存储）：本地库只读/写失败时删除标记仍跨重启保留
-  static const _delKey = 'taozhu_deleted_items';
+  static const _delKey = kDeletedItemsKey;
   bool _loading = true;
   bool _isStaff = false; // 店员不可见进价
   Timer? _searchTimer;

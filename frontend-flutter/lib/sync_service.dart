@@ -6,6 +6,10 @@ import 'api.dart';
 import 'local_db.dart';
 import 'log.dart';
 
+/// 商品持久删除集合 key（SharedPreferences 独立存储）：本地库只读/写失败时删除标记跨重启保留，
+/// 且 pushPending 合并该集合推送服务端（绕过只读队列）。与 items_page 共用。
+const kDeletedItemsKey = 'taozhu_deleted_items';
+
 /// 同步服务（增量式）：本地库增量 upsert/delete + 变更队列批量推送。
 ///
 /// 流程：
@@ -266,7 +270,7 @@ class SyncService {
       final extra = <Map<String, dynamic>>[];
       try {
         final p = await SharedPreferences.getInstance();
-        final delIds = p.getStringList(_persistDelKey) ?? [];
+        final delIds = p.getStringList(kDeletedItemsKey) ?? [];
         final nowIso = DateTime.now().toUtc().toIso8601String();
         for (final did in delIds) {
           extra.add({
@@ -292,7 +296,7 @@ class SyncService {
       if (extra.isNotEmpty && accepted >= changes.length) {
         try {
           final p = await SharedPreferences.getInstance();
-          await p.remove(_persistDelKey);
+          await p.remove(kDeletedItemsKey);
         } catch (_) {}
       }
       // 服务端时间校准：设备时钟偏慢会让 LWW 拒绝本设备写入（删除/改分类在服务端不生效，
