@@ -337,9 +337,10 @@ class _MyPageState extends State<MyPage> {
             ),
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('取消')),
-              if (isAndroid || isDesktop)
-                FilledButton(onPressed: () => Navigator.pop(ctx, 'update'), child: const Text('立即更新'))
-              else
+              if (isAndroid || isDesktop) ...[
+                TextButton(onPressed: () => Navigator.pop(ctx, 'pick'), child: const Text('选择下载源')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, 'update'), child: const Text('立即更新')),
+              ] else
                 FilledButton(onPressed: () => Navigator.pop(ctx, 'copy'), child: const Text('复制下载链接')),
             ],
           );
@@ -351,6 +352,8 @@ class _MyPageState extends State<MyPage> {
         } else if (isDesktop) {
           await _downloadDesktop(ver);
         }
+      } else if (action == 'pick') {
+        await _pickSource(ver);
       } else if (action == 'copy') {
         await Clipboard.setData(ClipboardData(text: releaseUrl));
         toast(context, '已复制下载链接');
@@ -358,6 +361,58 @@ class _MyPageState extends State<MyPage> {
     } catch (e) {
       toast(context, '检查更新失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
+  }
+
+  /// 手动选择本次更新的下载源：并行探测候选源（官方直连 + 已启用镜像），
+  /// 列出可达性与耗时，点选后只用该源下载（failed 时不轮换其他源）。
+  Future<void> _pickSource(String ver) async {
+    final custom = await loadUpdateSources();
+    final prefixes = [
+      '',
+      for (final s in custom)
+        if (s['enabled'] == true) '${s['url'] ?? ''}',
+    ];
+    final results = await Future.wait(prefixes.map((p) async {
+      final ms = await probeDownloadSource(p);
+      return (p, ms);
+    }));
+    if (!mounted) return;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Text('选择下载源（已探测可达性）',
+                  style: TextStyle(fontWeight: FontWeight.w600, color: c.textMain)),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final (p, ms) in results)
+                    ListTile(
+                      enabled: ms != null,
+                      leading: Icon(ms == null ? Icons.block : Icons.check_circle, size: 20,
+                          color: ms == null ? c.danger : c.success),
+                      title: Text(p.isEmpty ? 'GitHub 官方直连' : p,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(ms == null ? '不可达（网络受限）' : '可达 · ${ms}ms'),
+                      onTap: ms == null ? null : () => Navigator.pop(ctx, p),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) await _downloadAndInstall(ver, forcedPrefix: picked);
   }
 
   /// 构建中就绪自动重试：每 30 秒查一次，安装包就绪后提醒（最多约 2 分钟）
@@ -378,18 +433,21 @@ class _MyPageState extends State<MyPage> {
   /// Android：应用内更新走系统下载器（DownloadManager）——
   /// 后台下载、通知栏（下滑栏）实时进度、退出应用仍继续，完成后引导安装。
   /// 源列表 = 官方 GitHub 直连（第一优先）+ 用户手动启用的自定义镜像（「下载源管理」页配置）；
+  /// [forcedPrefix] 非空 = 手动指定本次只用该源（「选择下载源」后调用），失败不轮换；
   /// 下载前轻量探测可用源（Content-Length ≥ 1MB 防拦截页误判），选最快可用交给系统下载器；
   /// 下载失败自动换下一个源；下载完成会校验安装包大小，异常（代理拦截页）删除并换源重试；
   /// 用户手动取消（CANCELED）立即停止，不换源重试。
-  Future<void> _downloadAndInstall(String ver) async {
+  Future<void> _downloadAndInstall(String ver, {String? forcedPrefix}) async {
     _downloading = true;
     final fileName = 'taozhu-update-$ver.apk';
     final custom = await loadUpdateSources();
-    final prefixes = [
-      '', // 官方 GitHub 直连始终第一优先
-      for (final s in custom)
-        if (s['enabled'] == true) '${s['url'] ?? ''}',
-    ];
+    final prefixes = forcedPrefix != null
+        ? [forcedPrefix]
+        : [
+            '', // 官方 GitHub 直连始终第一优先
+            for (final s in custom)
+              if (s['enabled'] == true) '${s['url'] ?? ''}',
+          ];
     // 拆包下载：按设备 ABI 选对应 APK（arm64-v8a / armeabi-v7a / x86_64）；查不到 ABI 时回退 universal 命名
     String apkName;
     try {
@@ -401,10 +459,9 @@ class _MyPageState extends State<MyPage> {
       apkName = 'taozhu-app-$ver.apk';
     }
     final base = 'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/$apkName';
-    final urls = [for (final p in prefixes) '$p$base'];
     try {
       // 下载前并行轻量探测（HEAD Range 0-0），过滤不可达源，避免直接失败
-      final usable = await _probeSources(urls);
+      final usable = await _probeSources(prefixes);
       if (usable.isEmpty) {
         toast(context, '所有下载源均不可达，请稍后重试或从 GitHub Release 页手动下载');
         return;
@@ -412,7 +469,7 @@ class _MyPageState extends State<MyPage> {
       var urlIdx = 0;
       while (urlIdx < usable.length) {
         final id = await _dlChannel
-            .invokeMethod<int>('enqueue', {'url': usable[urlIdx], 'fileName': fileName});
+            .invokeMethod<int>('enqueue', {'url': '${usable[urlIdx]}$base', 'fileName': fileName});
         if (id == null) {
           urlIdx++;
           continue;
@@ -480,10 +537,11 @@ class _MyPageState extends State<MyPage> {
 
   /// 并行轻量探测下载源可用性（HEAD + Range，Content-Length 需 ≥ 1MB 防拦截页误判），
   /// 按响应耗时升序返回（最快源优先，避免固定顺序导致"第一次不是最快的"）。
-  Future<List<String>> _probeSources(List<String> urls) async {
-    final results = await Future.wait(urls.map((u) async {
-      final ms = await probeDownloadSource(u);
-      return ms == null ? null : (u, ms);
+  /// 入参为下载前缀列表（'' = 官方直连），探测函数内部拼完整资产 URL。
+  Future<List<String>> _probeSources(List<String> prefixes) async {
+    final results = await Future.wait(prefixes.map((p) async {
+      final ms = await probeDownloadSource(p);
+      return ms == null ? null : (p, ms);
     }));
     final usable = <(String, int)>[];
     for (final r in results) {

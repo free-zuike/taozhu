@@ -44,10 +44,13 @@ class _ItemsPageState extends State<ItemsPage> {
 
   Future<void> _load({String q = ''}) async {
     final searching = q.isNotEmpty;
+    // 本地库兜底：剔除 deleted_at 非空的行（旧版本全量同步可能把已软删商品写进本地库）
+    List<Map<String, dynamic>> alive(List<Map<String, dynamic>> list) =>
+        [for (final x in list) if ('${x['deleted_at'] ?? ''}'.isEmpty) x];
     if (kIsWeb) {
       // Web（无本地库）：普通加载本地秒开 + 网络刷新；搜索直连服务器
       if (!searching) {
-        final local = await LocalDb.getAllByName('items');
+        final local = alive(await LocalDb.getAllByName('items'));
         if (mounted) {
           setState(() {
             _items = local;
@@ -59,7 +62,7 @@ class _ItemsPageState extends State<ItemsPage> {
       try {
         final d = await Api.instance
             .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
-        final rows = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        final rows = alive(((d['items'] as List?) ?? []).cast<Map<String, dynamic>>());
         // 本地已删除但尚未推送落地的商品：过滤掉再展示/写库，防止"删了又出现"
         //（推送成功后的 pull 会以 deleted_at 变化正式删除本地行）
         var visible = rows;
@@ -83,7 +86,7 @@ class _ItemsPageState extends State<ItemsPage> {
       return;
     }
     // 原生：列表页刷新只读本地库（同步只由「我的」页/进应用自动同步驱动）；搜索也搜本地镜像
-    final local = await LocalDb.getAllByName('items');
+    final local = alive(await LocalDb.getAllByName('items'));
     // 本地已删除但尚未推送落地的商品：过滤掉，防止"删了又出现"（与 Web 分支口径一致）
     final hideIds = await SyncService.pendingDeletedIds('item');
     final visible = hideIds.isEmpty

@@ -474,10 +474,10 @@ class _LedgerPageState extends State<LedgerPage> {
     _load();
   }
 
-  /// 日期栏 → 该日全部明细的编辑页（点行编辑对应商品）
+  /// 日期栏 → 该日出货单列表（点单进出货记单页编辑该单全部商品明细）
   Future<void> _openBatchEdit(String date, List<Map<String, dynamic>> lines) async {
-    await Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => SaleBatchEditPage(date: date, lines: lines)));
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SaleBatchEditPage(date: date, lines: lines, clientId: _clientId)));
     _load();
   }
 

@@ -13,9 +13,11 @@ import 'attachment_viewer.dart';
 import 'router.dart';
 
 class SalePage extends StatefulWidget {
-  const SalePage({super.key, this.editId});
+  const SalePage({super.key, this.editId, this.initDate});
   /// 非空 = 编辑已有出货单（从账本进入），提交走 PATCH
   final String? editId;
+  /// 新建模式预填日期（如从账本日期栏补录当天出货）；编辑模式忽略
+  final String? initDate;
   @override
   State<SalePage> createState() => _SalePageState();
 }
@@ -48,12 +50,21 @@ class _SalePageState extends State<SalePage> {
   List<DropdownMenuItem<String>> _itemMenus = [];
   String? _clientId;
   final List<_Row> _rows = [_Row()];
-  final _dateCtrl = TextEditingController(text: _today());
+  late final _dateCtrl = TextEditingController(text: _initDate());
   final _noteCtrl = TextEditingController();
   bool _busy = false;
   Map<String, double> _lastQty = {}; // price_id → 上次数量（选单位自动带出）
 
   bool get _editing => widget.editId != null;
+
+  /// 新建模式表单默认日期：优先 initDate（如账本日期栏补录当天），否则今天；编辑模式忽略
+  String _initDate() {
+    if (!_editing) {
+      final d = widget.initDate ?? '';
+      if (d.length >= 10) return d.substring(0, 10);
+    }
+    return _today();
+  }
 
   /// 单据 id：编辑模式用原单 id；新建模式提前生成（附件/提交都挂在这个 id 上）
   late final String _saleId =

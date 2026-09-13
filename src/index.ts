@@ -17,6 +17,7 @@ import { stocksRouter } from './routes/stocks';
 import { backupRouter } from './routes/backup';
 import { shareRouter, renderShareHtml } from './routes/share';
 import { syncRouter } from './routes/sync';
+import { meRouter } from './routes/me';
 import { ensureSchema } from './schema';
 import { verifyToken } from './lib/jwt';
 import { setHubEnv, SyncHub } from './services/sync-hub';
@@ -62,6 +63,7 @@ app.route('/api/v1/attachments', attachmentsRouter);
 app.route('/api/v1/stocks', stocksRouter);
 app.route('/api/v1/backup', backupRouter);
 app.route('/api/v1/share', shareRouter);
+app.route('/api/v1/me', meRouter);
 
 // 实时同步 WebSocket（token 走查询参数：浏览器 WebSocket 无法自定义请求头）。
 // 必须注册在 syncRouter 挂载之前：否则会被 syncRouter 的 authMiddleware 先拦截（无 Authorization 头 → 401）。

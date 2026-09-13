@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../utils/update_sources.dart';
-import '../version.dart';
 import 'router.dart';
 
 /// 下载源管理：官方 GitHub 源固定置顶（始终启用）；
 /// 第三方/自定义镜像默认停用，逐个「测试」验证可达（Content-Length ≥ 1MB 防拦截页误判）后再手动启用，
-/// 支持添加 / 修改 / 删除；自动更新时官方源失败才会轮换到已启用的自定义源。
+/// 支持添加 / 修改 / 删除；配置存服务器跨端同步（Web 设置 App 可读）；自动更新时官方源失败才会轮换到已启用的自定义源。
 class UpdateSourcesPage extends StatefulWidget {
   const UpdateSourcesPage({super.key});
   @override
@@ -15,13 +14,9 @@ class UpdateSourcesPage extends StatefulWidget {
 
 class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
   List<Map<String, dynamic>> _sources = [];
-  /// url → 最近一次测试结果（null=未测试）
+  /// url → 最近一次测试结果（不存在=未测试）
   final Map<String, ({bool ok, int ms})> _testResult = {};
   final Set<String> _testing = {};
-
-  /// 官方 release 下载基址（探测用）：universal APK 资产恒存在
-  static String _officialAsset(String ver) =>
-      'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/taozhu-app-$ver.apk';
 
   @override
   void initState() {
@@ -39,18 +34,18 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
     if (mounted) setState(() {});
   }
 
-  /// 探测一个前缀源：拼上官方 universal 资产路径做 HEAD
+  /// 探测一个前缀源（Web 走服务器、原生本地直连；失败也记录结果，让用户看到「不可达」）
   Future<void> _test(String prefix) async {
     if (_testing.contains(prefix)) return;
     setState(() {
       _testing.add(prefix);
       _testResult.remove(prefix);
     });
-    final ms = await probeDownloadSource('$prefix${_officialAsset(APP_VERSION)}');
+    final ms = await probeDownloadSource(prefix);
     if (!mounted) return;
     setState(() {
       _testing.remove(prefix);
-      if (ms != null) _testResult[prefix] = (ok: true, ms: ms);
+      _testResult[prefix] = ms == null ? (ok: false, ms: 0) : (ok: true, ms: ms);
     });
   }
 

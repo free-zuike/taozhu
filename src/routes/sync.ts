@@ -145,7 +145,7 @@ syncRouter.get('/full', async (c) => {
     };
   });
 
-  const itemRows = await db.prepare('SELECT * FROM items ORDER BY name').all();
+  const itemRows = await db.prepare('SELECT * FROM items WHERE deleted_at IS NULL ORDER BY name').all();
   const priceRows = await db.prepare('SELECT * FROM item_prices ORDER BY unit').all();
   const byItem = new Map<string, unknown[]>();
   for (const p of priceRows.results) {

@@ -7,7 +7,8 @@ import '../theme.dart';
 import 'router.dart';
 
 /// 单商品编辑（账本页点明细行 / 日期栏编辑页点行共用）：
-/// 弹窗修改 数量/单位/售价/日期，保存后返回该单最新 payload；取消/未修改/出错返回 null。
+/// 弹窗修改 数量/单位/售价/日期/分类（分类为商品级，全局生效），保存后返回该单最新 payload；
+/// 取消/未修改/出错返回 null。
 /// - Web：PATCH /sales/items/:id（行级编辑端点，服务端联动金额与单据日期）后 GET 单据刷新；
 /// - 原生：更新本地库镜像 + 入同步队列（离线可保存，服务端以整单快照应用）。
 Future<Map<String, dynamic>?> editSaleLine(
@@ -24,6 +25,7 @@ Future<Map<String, dynamic>?> editSaleLine(
   final happenedAt = '${line['happened_at'] ?? ''}';
   final dateCtrl = TextEditingController(
       text: happenedAt.length >= 10 ? happenedAt.substring(0, 10) : '');
+  var category = '${line['category'] ?? ''}';
   final c = Theme.of(context).extension<TaozhuColors>()!;
 
   final ok = await showDialog<bool>(
@@ -31,52 +33,77 @@ Future<Map<String, dynamic>?> editSaleLine(
     builder: (ctx) => AlertDialog(
       title: Text('编辑「${line['item_name'] ?? ''}」'),
       content: StatefulBuilder(
-        builder: (ctx, setDlg) => Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: qtyCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: '数量'),
-            ),
-            const SizedBox(height: 8),
-            TextField(controller: unitCtrl, decoration: const InputDecoration(labelText: '单位（斤/件/箱…）')),
-            const SizedBox(height: 8),
-            TextField(
-              controller: priceCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: '售价（元）'),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: dateCtrl,
-                    decoration: const InputDecoration(labelText: '日期（YYYY-MM-DD）'),
+        builder: (ctx, setDlg) => SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: qtyCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: '数量'),
+              ),
+              const SizedBox(height: 8),
+              TextField(controller: unitCtrl, decoration: const InputDecoration(labelText: '单位（斤/件/箱…）')),
+              const SizedBox(height: 8),
+              TextField(
+                controller: priceCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: '售价（元）'),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: dateCtrl,
+                      decoration: const InputDecoration(labelText: '日期（YYYY-MM-DD）'),
+                    ),
                   ),
-                ),
-                IconButton(
-                  tooltip: '选择日期',
-                  visualDensity: VisualDensity.compact,
-                  icon: Icon(Icons.calendar_month_outlined, size: 20, color: c.primary),
-                  onPressed: () async {
-                    final now = DateTime.now();
-                    final cur = DateTime.tryParse(dateCtrl.text.trim()) ?? now;
-                    final picked = await showDatePicker(
-                      context: ctx,
-                      initialDate: cur,
-                      firstDate: DateTime(now.year - 3),
-                      lastDate: DateTime(now.year + 3, 12, 31),
-                    );
-                    if (picked == null) return;
-                    dateCtrl.text = '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
-                    setDlg(() {});
-                  },
-                ),
-              ],
-            ),
-          ],
+                  IconButton(
+                    tooltip: '选择日期',
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(Icons.calendar_month_outlined, size: 20, color: c.primary),
+                    onPressed: () async {
+                      final now = DateTime.now();
+                      final cur = DateTime.tryParse(dateCtrl.text.trim()) ?? now;
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: cur,
+                        firstDate: DateTime(now.year - 3),
+                        lastDate: DateTime(now.year + 3, 12, 31),
+                      );
+                      if (picked == null) return;
+                      dateCtrl.text = '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+                      setDlg(() {});
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              // 商品分类（商品级，全局生效）：点击「修改分类」选择后即时保存
+              Row(
+                children: [
+                  Icon(Icons.sell_outlined, size: 16, color: c.textSub),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      category.isEmpty ? '未分类' : category,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 13, color: c.textMain),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final cat = await _changeCategory(context, itemId);
+                      if (cat != null && ctx.mounted) setDlg(() => category = cat);
+                    },
+                    child: const Text('修改分类'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -158,6 +185,81 @@ Future<Map<String, dynamic>?> editSaleLine(
         entityType: 'sale', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
     toast(context, '已保存');
     return payload;
+  } catch (e) {
+    toast(context, e.toString().replaceFirst('Exception: ', ''));
+    return null;
+  }
+}
+
+/// 修改商品分类（分类为商品级、全局生效）：两级目录选择 → Web PATCH /items / 原生本地+同步队列。
+/// 成功返回新的分类名（'' = 未分类），取消返回 null。
+Future<String?> _changeCategory(BuildContext context, String itemId) async {
+  // 商品分类目录（两级）：原生优先读本地镜像；Web/本地为空时拉网络
+  var cats = await LocalDb.getAll('categories');
+  cats = cats.where((x) => '${x['type'] ?? ''}' == 'item').toList()
+    ..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
+  if (cats.isEmpty || kIsWeb) {
+    try {
+      final d = await Api.instance.get('/categories?type=item');
+      cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+    } catch (_) {}
+  }
+  final parents = cats.where((x) => (x['parent_id'] as String? ?? '').isEmpty).toList();
+  final childOf = (String pid) => cats.where((x) => '${x['parent_id']}' == pid).toList();
+  final selected = await showDialog<String>(
+    context: context,
+    builder: (ctx) => SimpleDialog(
+      title: const Text('选择商品分类'),
+      children: [
+        SimpleDialogOption(
+          onPressed: () => Navigator.pop(ctx, ''),
+          child: const Text('无分类', style: TextStyle(fontSize: 15)),
+        ),
+        for (final p in parents) ...[
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, '${p['id']}'),
+            child: Text('${p['name']}',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          ),
+          for (final ch in childOf('${p['id']}'))
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, '${ch['id']}'),
+              child: Padding(
+                padding: const EdgeInsets.only(left: 16),
+                child: Text('${ch['name']}', style: const TextStyle(fontSize: 15)),
+              ),
+            ),
+        ],
+        const SizedBox(height: 8),
+      ],
+    ),
+  );
+  if (selected == null) return null;
+  final catName = selected.isEmpty
+      ? ''
+      : '${cats.where((x) => '${x['id']}' == selected).firstOrNull?['name'] ?? ''}';
+  try {
+    if (kIsWeb) {
+      await Api.instance.patch('/items/$itemId', {
+        'category': catName,
+        'category_id': selected.isEmpty ? null : selected,
+      });
+    } else {
+      final stored = (await LocalDb.getAllByName('items'))
+          .where((x) => '${x['id']}' == itemId).firstOrNull;
+      if (stored == null) {
+        toast(context, '本地商品库无此商品，请先完成同步');
+        return null;
+      }
+      final updated = Map<String, dynamic>.from(stored)
+        ..['category'] = catName
+        ..['category_id'] = selected.isEmpty ? null : selected;
+      await LocalDb.upsertOne('items', updated);
+      await SyncService.enqueueChange(
+          entityType: 'item', entitySyncId: itemId, action: 'upsert', payload: updated);
+    }
+    toast(context, '已更新分类');
+    return catName;
   } catch (e) {
     toast(context, e.toString().replaceFirst('Exception: ', ''));
     return null;
