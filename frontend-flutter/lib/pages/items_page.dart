@@ -17,6 +17,9 @@ class ItemsPage extends StatefulWidget {
 class _ItemsPageState extends State<ItemsPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _items = [];
+  /// 本次会话内已删除商品 id（内存兜底）：本地库删除失败/未生效时，
+  /// _load 读回也会被过滤，保证「点击删除」后 UI 一定消失（离线场景也生效）
+  final Set<String> _deletedIds = {};
   bool _loading = true;
   bool _isStaff = false; // 店员不可见进价
   Timer? _searchTimer;
@@ -47,10 +50,13 @@ class _ItemsPageState extends State<ItemsPage> {
     // 本地库兜底：剔除 deleted_at 非空的行（旧版本全量同步可能把已软删商品写进本地库）
     List<Map<String, dynamic>> alive(List<Map<String, dynamic>> list) =>
         [for (final x in list) if ('${x['deleted_at'] ?? ''}'.isEmpty) x];
+    // 本次会话已删商品（内存兜底）：任何加载路径都过滤，离线删除 UI 必消失
+    List<Map<String, dynamic>> hideDeleted(List<Map<String, dynamic>> list) =>
+        [for (final x in list) if (!_deletedIds.contains('${x['id']}')) x];
     if (kIsWeb) {
       // Web（无本地库）：普通加载本地秒开 + 网络刷新；搜索直连服务器
       if (!searching) {
-        final local = alive(await LocalDb.getAllByName('items'));
+        final local = hideDeleted(alive(await LocalDb.getAllByName('items')));
         if (mounted) {
           setState(() {
             _items = local;
@@ -62,7 +68,7 @@ class _ItemsPageState extends State<ItemsPage> {
       try {
         final d = await Api.instance
             .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
-        final rows = alive(((d['items'] as List?) ?? []).cast<Map<String, dynamic>>());
+        final rows = hideDeleted(alive(((d['items'] as List?) ?? []).cast<Map<String, dynamic>>()));
         // 本地已删除但尚未推送落地的商品：过滤掉再展示/写库，防止"删了又出现"
         //（推送成功后的 pull 会以 deleted_at 变化正式删除本地行）
         var visible = rows;
@@ -86,7 +92,7 @@ class _ItemsPageState extends State<ItemsPage> {
       return;
     }
     // 原生：列表页刷新只读本地库（同步只由「我的」页/进应用自动同步驱动）；搜索也搜本地镜像
-    final local = alive(await LocalDb.getAllByName('items'));
+    final local = hideDeleted(alive(await LocalDb.getAllByName('items')));
     // 本地已删除但尚未推送落地的商品：过滤掉，防止"删了又出现"（与 Web 分支口径一致）
     final hideIds = await SyncService.pendingDeletedIds('item');
     final visible = hideIds.isEmpty
@@ -131,6 +137,9 @@ class _ItemsPageState extends State<ItemsPage> {
     } else {
       // 软删：本地删行 + 队列推送 upsert 带 deleted_at（prices 补 active:1 防服务端恢复时跳过）
       final item = _items.where((x) => '${x['id']}' == id).firstOrNull;
+      // 内存级标记（任何 _load 都会过滤）：保证离线/本地库异常时删除的 UI 也立即消失
+      _deletedIds.add(id);
+      if (mounted) setState(() => _items.removeWhere((x) => '${x['id']}' == id));
       if (item == null) {
         // 本地镜像找不到（可能已被删/未同步）→ 直接推删除 payload，不假成功
         final delPayload = {'id': id, 'name': name, 'deleted_at': DateTime.now().toIso8601String()};
@@ -145,8 +154,6 @@ class _ItemsPageState extends State<ItemsPage> {
       for (final p in prices) { p['active'] = 1; }
       delPayload['prices'] = prices;
       await LocalDb.deleteOne('items', id);
-      // 立即从内存移除（本地库写入失败时 UI 也先消失，不依赖读库刷新）
-      if (mounted) setState(() => _items.removeWhere((x) => '${x['id']}' == id));
       await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
     }
     toast(context, '已删除，正在同步');
