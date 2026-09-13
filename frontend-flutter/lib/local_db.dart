@@ -70,7 +70,7 @@ class LocalDb {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
         final store = stringMapStoreFactory.store(storeName);
-        await store.record(id).put(db, row);
+        await store.record(id).put(db!, row);
         return;
       } catch (e) {
         if (attempt == 0) {
@@ -101,7 +101,7 @@ class LocalDb {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
         final store = stringMapStoreFactory.store(storeName);
-        await store.record(id).delete(db);
+        await store.record(id).delete(db!);
         return;
       } catch (e) {
         if (attempt == 0) {
@@ -165,7 +165,7 @@ class LocalDb {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
         final store = intMapStoreFactory.store(pendingStore);
-        await store.record(id as int).put(db, change);
+        await store.record(id as int).put(db!, change);
         return;
       } catch (e) {
         if (attempt == 0) {
