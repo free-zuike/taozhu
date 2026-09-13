@@ -119,37 +119,44 @@ class _ItemsPageState extends State<ItemsPage> {
       ),
     );
     if (ok != true) return;
+    var online = false;
     if (kIsWeb) {
       // Web 无本地库/同步队列：直连接口软删（App 走本地优先队列）
       try {
         await Api.instance.delete('/items/$id');
-        toast(context, '已删除');
+        online = true;
       } catch (e) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
         return;
       }
     } else {
-      // 软删：本地删行 + 队列推送 upsert 带 deleted_at（prices 补 active:1 防服务端恢复时跳过）
-      final item = _items.where((x) => '${x['id']}' == id).firstOrNull;
-      if (item == null) {
-        // 本地镜像找不到（可能已被删/未同步）→ 直接推删除 payload，不假成功
-        final delPayload = {'id': id, 'name': name, 'deleted_at': DateTime.now().toIso8601String()};
-        await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
-        toast(context, '已删除，正在同步');
-        _load();
-        return;
+      // 在线优先：直连服务端软删（与 Web 一致，立即全局生效），
+      // 失败（离线/服务器不可达）回退本地删行+队列推送（恢复后同步）
+      try {
+        await Api.instance.delete('/items/$id');
+        online = true;
+      } catch (_) {}
+      if (!online) {
+        final item = _items.where((x) => '${x['id']}' == id).firstOrNull;
+        if (item == null) {
+          // 本地镜像找不到（可能已被删/未同步）→ 直接推删除 payload，不假成功
+          await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: {
+            'id': id, 'name': name, 'deleted_at': DateTime.now().toIso8601String(),
+          });
+        } else {
+          final delPayload = Map<String, dynamic>.from(item);
+          delPayload['deleted_at'] = DateTime.now().toIso8601String();
+          final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+          for (final p in prices) { p['active'] = 1; }
+          delPayload['prices'] = prices;
+          await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
+        }
       }
-      final delPayload = Map<String, dynamic>.from(item);
-      delPayload['deleted_at'] = DateTime.now().toIso8601String();
-      final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
-      for (final p in prices) { p['active'] = 1; }
-      delPayload['prices'] = prices;
       await LocalDb.deleteOne('items', id);
       // 立即从内存移除（本地库写入失败时 UI 也先消失，不依赖读库刷新）
       if (mounted) setState(() => _items.removeWhere((x) => '${x['id']}' == id));
-      await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
     }
-    toast(context, '已删除，正在同步');
+    toast(context, online ? '已删除' : '已删除，正在同步');
     _load();
   }
 
