@@ -93,8 +93,8 @@ class LocalDb {
     if (db == null) return null;
     try {
       final store = stringMapStoreFactory.store(storeName);
-      final snap = await store.record(id).get(db);
-      return snap == null ? null : Map<String, dynamic>.from(snap.value);
+      final snap = await store.find(db, finder: Finder(filter: Filter.byKey(id), limit: 1));
+      return snap.isEmpty ? null : Map<String, dynamic>.from(snap.first.value);
     } catch (_) {
       return null;
     }
