@@ -153,7 +153,11 @@ class _ItemsPageState extends State<ItemsPage> {
       final prices = ((delPayload['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
       for (final p in prices) { p['active'] = 1; }
       delPayload['prices'] = prices;
+      // 双保险：物理删除 + 软删 tombstone。
+      // 物理删除在个别环境会静默失败（本地行残留）→ 重启后 _load 又读回它；
+      // 软删标记配合 _load 的 alive 过滤（deleted_at 非空剔除）保证本地不显示、不复活
       await LocalDb.deleteOne('items', id);
+      await LocalDb.upsertOne('items', delPayload);
       await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: delPayload);
     }
     toast(context, '已删除，正在同步');

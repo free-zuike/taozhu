@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
@@ -258,7 +259,9 @@ Future<String?> _changeCategory(BuildContext context, String itemId,
             stored = ((dd['items'] as List?) ?? []).cast<Map<String, dynamic>>()
                 .where((x) => '${x['id']}' == itemId).firstOrNull;
             if (stored != null) await LocalDb.upsertOne('items', Map<String, dynamic>.from(stored));
-          } catch (_) {}
+          } catch (e) {
+            appLog('sync', '分类兜底拉取商品失败 item=$itemId ($itemName): ${e.toString().split('\n').first}', level: 'error');
+          }
         }
         if (stored == null) {
           toast(context, '本地商品库无此商品，请先完成同步');

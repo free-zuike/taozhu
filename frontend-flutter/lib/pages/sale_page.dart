@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../local_freq.dart';
+import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
@@ -444,7 +445,9 @@ class _SalePageState extends State<SalePage> {
               stored = ((dd['items'] as List?) ?? []).cast<Map<String, dynamic>>()
                   .where((x) => '${x['id']}' == itemId).firstOrNull;
               if (stored != null) await LocalDb.upsertOne('items', Map<String, dynamic>.from(stored));
-            } catch (_) {}
+            } catch (e) {
+              appLog('sync', '分类兜底拉取商品失败 item=$itemId ($name): ${e.toString().split('\n').first}', level: 'error');
+            }
           }
           if (stored == null) {
             toast(context, '本地商品库无此商品，请先完成同步');
