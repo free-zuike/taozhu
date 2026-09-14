@@ -293,6 +293,23 @@ class _CleanupPageState extends State<CleanupPage> {
     } catch (e) {
       toast(context, '扫描失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
+    // 在用附件二次校验：服务器 /attachments/in-use 返回全部在用 key（含其 entity/id）。
+    // 任一本地副本若与在用 key 同名同目录 → 在用，从列表中剔除（防止把正在使用的凭证误列为孤儿）
+    if (!kIsWeb) {
+      try {
+        final du = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
+        final inUseKeys = ((du['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
+        if (inUseKeys.isNotEmpty) {
+          final inUseSet = <String>{};
+          for (final a in inUseKeys) {
+            final key = '${a['key'] ?? ''}';
+            final m = RegExp(r'attachments/([a-z_]+)/([^/]+)/([^/]+)$').firstMatch(key);
+            if (m != null) inUseSet.add('${m.group(1)}/${m.group(2)}/${m.group(3)}');
+          }
+          files.removeWhere((f) => f.kind == 'attach' && inUseSet.contains(f.name));
+        }
+      } catch (_) {}
+    }
     if (!mounted) return;
     setState(() {
       _files = files;

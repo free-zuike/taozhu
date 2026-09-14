@@ -206,6 +206,36 @@ describe('交易附件（R2）', () => {
     expect(scan.orphans.every((o) => o.id !== saleId)).toBe(true);
   });
 
+  it('在用附件扫描：R2 附件对照 D1 单据，有对应单据的列为在用（同步后据此下载本地副本）', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-02',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    // 上传到在用 sale（在用）
+    const up1 = await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json() as { key: string };
+    // 孤儿：不存在的 sale/ghost（不应出现在在用列表）
+    const ghostKey = 'taozhu/images/attachments/sale/ghost123/deadbeef.jpg';
+    await env.BUCKET.put(ghostKey, new Uint8Array([9, 9, 9]));
+
+    const scan = await (await call(env, 'GET', '/api/v1/attachments/in-use', token)).json() as {
+      attachments: Array<{ key: string; id: string }>;
+      total: number;
+    };
+    // 在用 sale 的附件出现在列表；孤儿不出现
+    expect(scan.attachments.some((o) => o.key === up1.key)).toBe(true);
+    expect(scan.attachments.some((o) => o.key === ghostKey)).toBe(false);
+    expect(scan.attachments.length).toBe(1);
+  });
+
   it('删除孤儿：仅删无引用的附件，在用附件不动；非 admin 拒绝', async () => {
     // 塞孤儿 + 在用
     await call(env, 'POST', '/api/v1/clients', token, { name: '店B' });

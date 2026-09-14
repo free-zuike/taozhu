@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'local_db.dart';
@@ -108,6 +110,50 @@ class SyncService {
     version.notifyListeners();
   }
 
+  /// 全量同步成功后：补齐"在用"附件的本地副本（附件不走 sync_changes，同步只拉实体不拉图；
+  /// 若本地副本被清理（存储清理页删孤儿时误列/删了在用），联网靠网络兜底、离线不可见——违背本地优先。
+  /// 从 /attachments/in-use 拿服务器在用 key，逐张下载到本地 attachments/{entity}/{id}/；已存在跳过。
+  /// 静默失败（网络波动单张跳过，下次同步再补），不阻塞同步主流程。
+  static Future<void> downloadInUseAttachments() async {
+    if (kIsWeb) return;
+    List<Map<String, dynamic>> inUse;
+    try {
+      final d = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
+      inUse = ((d['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return;
+    }
+    if (inUse.isEmpty) return;
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      // key 形如 taozhu/images/attachments/{entity}/{id}/{md5}.jpg（兼容历史前缀）
+      final re = RegExp(r'attachments/([a-z_]+)/([^/]+)/([^/]+)$');
+      var downloaded = 0;
+      for (final a in inUse) {
+        final key = '${a['key'] ?? ''}';
+        final m = re.firstMatch(key);
+        if (m == null) continue;
+        final entity = m.group(1)!;
+        final id = m.group(2)!;
+        final file = m.group(3)!;
+        final dir = Directory('${root.path}/attachments/$entity/$id');
+        final target = File('${dir.path}/$file');
+        if (target.existsSync()) continue; // 已有副本
+        try {
+          final bytes = await Api.instance.getRaw('/attachments/$key').timeout(const Duration(seconds: 12));
+          if (!dir.existsSync()) dir.createSync(recursive: true);
+          await target.writeAsBytes(bytes);
+          downloaded++;
+        } catch (_) {
+          // 单张失败跳过：下次同步再补
+        }
+      }
+      if (downloaded > 0) {
+        appLog('sync', '已补齐在用附件本地副本 $downloaded 张', level: 'info');
+      }
+    } catch (_) {}
+  }
+
   /// 上次成功同步时间（null=从未同步过）
   static Future<String?> lastSyncAt() async {
     try {
@@ -200,6 +246,8 @@ class SyncService {
       await p.setInt(_cursorKey, cursor);
       await p.setBool(_fullDoneKey, true);
       await _markSynced();
+      // 全量同步后补齐在用附件本地副本（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）
+      unawaited(downloadInUseAttachments());
       // 全量同步数量含全部实体（含分类、收款账户）——同步面板日志/统计口径与实体数一致
       return clients.length + items.length + categories.length + accounts.length +
           sales.length + purchases.length + payments.length;

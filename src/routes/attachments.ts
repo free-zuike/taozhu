@@ -120,6 +120,65 @@ attachmentsRouter.get('/total', async (c) => {
   return c.json({ total });
 });
 
+// GET /attachments/in-use — 列出云端"在用"附件（与 orphans 对称）：
+// R2 中所有附件 key 对照 D1 在用的单据/明细行 id —— 有对应单据的 = 在用。
+// 同步完成后 App 据此把在用凭证的附件副本下载到本地（附件不走 sync_changes，同步只拉实体不拉图，
+// 若本地副本被清理则联网靠网络兜底、离线不可见——违背本地优先；本接口让"全量同步能下载回附件"）。
+attachmentsRouter.get('/in-use', async (c) => {
+  const store = createStorage(c.env);
+  const db = c.env.DB;
+  const inUse = new Map<string, Set<string>>();
+  const add = (entity: string, id: string) => {
+    if (!id) return;
+    let s = inUse.get(entity);
+    if (!s) { s = new Set(); inUse.set(entity, s); }
+    s.add(id);
+  };
+  const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
+    db.prepare('SELECT id FROM sales').all<{ id: string }>(),
+    db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
+    db.prepare('SELECT id FROM purchases').all<{ id: string }>(),
+    db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
+    db.prepare('SELECT id FROM payments').all<{ id: string }>(),
+  ]);
+  sales.results.forEach((r) => add('sale', r.id));
+  saleItems.results.forEach((r) => add('sale_item', r.id));
+  purchases.results.forEach((r) => add('purchase', r.id));
+  purchaseItems.results.forEach((r) => add('purchase_item', r.id));
+  payments.results.forEach((r) => add('payment', r.id));
+  const parseKey = (key: string): { entity: string; id: string } | null => {
+    let m = /^taozhu\/images\/attachments\/([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
+    if (m) return { entity: m[1], id: m[2] };
+    m = /^(?:taozhu\/attachments\/)?([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
+    if (m && ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'].includes(m[1])) {
+      return { entity: m[1], id: m[2] };
+    }
+    return null;
+  };
+  const inUseKeys: Array<{ key: string; entity: string; id: string; size: number }> = [];
+  const seen = new Set<string>();
+  for (const prefix of ['taozhu/images/attachments/', 'taozhu/attachments/', '']) {
+    let cursor: string | undefined;
+    do {
+      const r = await store.list(prefix, cursor);
+      for (const o of r.objects) {
+        if (seen.has(o.key)) continue; // 多前缀扫描去重（空前缀会重复命中）
+        const parsed = parseKey(o.key);
+        if (!parsed) continue;
+        if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) {
+          seen.add(o.key);
+          inUseKeys.push({ key: o.key, entity: parsed.entity, id: parsed.id, size: o.size });
+        }
+      }
+      cursor = r.truncated ? r.cursor : undefined;
+    } while (cursor);
+  }
+  return c.json({
+    attachments: inUseKeys,
+    total: inUseKeys.length,
+  });
+});
+
 // GET /attachments/orphans — 扫描云端孤儿附件（参考 beecount-cloud 原版 B1/B3）：
 // R2 中所有附件 key 对照 D1 在用的单据/明细行 id —— 无对应单据的 = 孤儿（单据已删但 R2 残留）。
 // 返回孤儿列表（key/entity/id/size），供清理页展示与删除；只读扫描不改数据。
