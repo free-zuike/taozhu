@@ -44,9 +44,7 @@ class _LedgerPageState extends State<LedgerPage> {
   Map<String, int> _payAttachCount = {};
   /// 商品 id → 分类名（出货明细行第二行显示分类，替代无实际数据的交易时间）
   Map<String, String> _itemCategory = {};
-  /// 月度结余（beecount 式三列卡）：支出=当月进货 / 收入=当前店铺出货 / 结余=收入−支出
-  double _mIncome = 0;
-  double _mExpense = 0;
+  /// 月度结余（beecount 式四列卡）
   double _mIncome = 0; // 收入 = 收款（实收，未收为 0）
   double _mExpense = 0; // 支出 = 进货（全店通用）
   double _mSold = 0; // 售出 = 出货（当前店铺）
