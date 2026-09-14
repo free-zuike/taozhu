@@ -71,8 +71,8 @@ syncRouter.post('/push', async (c) => {
       }
     }
 
-    // 应用到业务表（投影；含库存联动），成功后追加变更流
-    const applied = await applyChange(c.env.DB, { entity_type: entityType, entity_sync_id: id, action, payload: ch.payload ?? {} });
+    // 应用到业务表（投影；含库存联动与附件引用差集 GC），成功后追加变更流
+    const applied = await applyChange(c.env.DB, c.env, { entity_type: entityType, entity_sync_id: id, action, payload: ch.payload ?? {} });
     if (!applied.ok) {
       result.rejected += 1;
       if (result.conflict_samples.length < 10) {

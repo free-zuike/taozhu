@@ -227,13 +227,18 @@ describe('交易附件（R2）', () => {
     await env.BUCKET.put(ghostKey, new Uint8Array([9, 9, 9]));
 
     const scan = await (await call(env, 'GET', '/api/v1/attachments/in-use', token)).json() as {
-      attachments: Array<{ key: string; id: string }>;
+      attachments: Array<{ key: string; id: string; entity: string; file: string }>;
       total: number;
     };
     // 在用 sale 的附件出现在列表；孤儿不出现
     expect(scan.attachments.some((o) => o.key === up1.key)).toBe(true);
     expect(scan.attachments.some((o) => o.key === ghostKey)).toBe(false);
     expect(scan.attachments.length).toBe(1);
+    // 规范化三元组：entity/id/file 与 key 对照（前端同步下载/清理页在用判定直接用，不做正则）
+    const hit = scan.attachments[0];
+    expect(hit.entity).toBe('sale');
+    expect(hit.id).toBe(saleId);
+    expect(hit.file).toBe(up1.key.split('/').pop());
   });
 
   it('附件引用表：上传写引用、删附件清引用、删单据级联清引用', async () => {
@@ -306,6 +311,101 @@ describe('交易附件（R2）', () => {
     expect(ghostStill).toBeNull();
     const inUseStill = await env.BUCKET.get(inUseKey);
     expect(inUseStill).not.toBeNull();
+  });
+});
+
+describe('附件删除走同步变更流（beecount 式：本地删 → push → 云端删引用+GC → 其他端 pull 同步删）', () => {
+  let env: Env;
+  let token: string;
+
+  beforeEach(async () => {
+    env = await setup();
+    token = await loginAdmin(env);
+  });
+
+  it('push attachment delete 后：引用表被清、R2 文件被 GC、in-use 不再列出', async () => {
+    // 建真实单据 + 上传两附件 → 2 条引用
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-06',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const up1 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+    const fd2 = new FormData();
+    fd2.append('photo', new File([new Uint8Array([0xff, 0xd8, 0xff, 0x01])], 'photo2.jpg', { type: 'image/jpeg' }));
+    const up2 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, fd2, true)).json()) as { key: string };
+    expect(up1.key).not.toBe(up2.key); // 不同内容 → 不同 key
+    const refs0 = await (env.DB as FakeD1).prepare('SELECT COUNT(*) AS n FROM attachment_refs').first<{ n: number }>();
+    expect(refs0?.n).toBe(2);
+
+    // 模拟 App 删除其中一张：push attachment delete 变更（payload.file_key）→ 云端删该引用 + GC 文件
+    const delPush = await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'dev-delete-test',
+      changes: [
+        {
+          entity_type: 'attachment', entity_sync_id: up1.key, action: 'delete',
+          updated_at: new Date().toISOString(),
+          payload: { file_key: up1.key },
+        },
+      ],
+    });
+    const delRes = (await delPush.json()) as { accepted: number; rejected: number };
+    expect(delRes.accepted).toBe(1);
+    expect(delRes.rejected).toBe(0);
+
+    // 引用表只剩 up2；up1 R2 文件被 GC（零引用）；in-use 只列 up2
+    const refs1 = await (env.DB as FakeD1).prepare('SELECT file_key FROM attachment_refs').all<{ file_key: string }>();
+    expect(refs1.results.length).toBe(1);
+    expect(refs1.results[0].file_key).toBe(up2.key);
+    expect(await env.BUCKET.get(up1.key)).toBeNull();
+    expect(await env.BUCKET.get(up2.key)).not.toBeNull();
+
+    const inUse = await (await call(env, 'GET', '/api/v1/attachments/in-use', token)).json() as {
+      attachments: Array<{ key: string }>;
+    };
+    expect(inUse.attachments.some((a) => a.key === up1.key)).toBe(false);
+    expect(inUse.attachments.some((a) => a.key === up2.key)).toBe(true);
+  });
+
+  it('一图多单共用：删除一个实体的引用，文件仍被其他实体引用 → R2 不删', async () => {
+    // 建两个单据，同一内容（同 md5）各传一次（不同 entity_id → 两个 key）
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-07',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const upA = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+
+    // 删除该引用：文件被其他引用保护（这里造一个残留引用模拟共用场景）
+    await (env.DB as FakeD1).prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', 'other-sale', ?, 'deadbeef')",
+    ).bind('ref-other', upA.key).run();
+    const delPush = await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'dev-c',
+      changes: [{
+        entity_type: 'attachment', entity_sync_id: upA.key, action: 'delete',
+        updated_at: new Date().toISOString(), payload: { file_key: upA.key },
+      }],
+    });
+    expect(((await delPush.json()) as { accepted: number }).accepted).toBe(1);
+    // 仍有其他引用 → 文件保留
+    expect(await env.BUCKET.get(upA.key)).not.toBeNull();
   });
 });
 

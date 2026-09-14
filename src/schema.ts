@@ -245,6 +245,10 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!uCols.results.some((x) => x.name === 'avatar')) {
       await db.prepare('ALTER TABLE users ADD COLUMN avatar TEXT').run();
     }
+    // 头像版本号（对齐参考架构 profile 体系）：每次上传 +1，客户端按版本比对决定是否重下载（省流量/防脏缓存）
+    if (!uCols.results.some((x) => x.name === 'avatar_version')) {
+      await db.prepare('ALTER TABLE users ADD COLUMN avatar_version INTEGER NOT NULL DEFAULT 0').run();
+    }
     if (!uCols.results.some((x) => x.name === 'totp_secret')) {
       await db.prepare('ALTER TABLE users ADD COLUMN totp_secret TEXT').run();
     }

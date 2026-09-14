@@ -243,15 +243,24 @@ class _CleanupPageState extends State<CleanupPage> {
           }
         } catch (_) {}
         // ③ 服务器在用附件（beecount 同款的"引用"判定：交易引用的附件文件 = 在用）：
-        // /attachments/in-use 基于 D1 单据全表给出在用 key，把其 entity/id 并入在用集合——
-        // 主扫描按目录跳过（交易引用过的附件副本绝不出现在可清理列表）
+        // /attachments/in-use 返回规范化三元组 {entity,id,file}（后端 attachment_refs 引用表为权威
+        // + R2 扫描兜底历史存量）。主扫描按"目录 entity/id"与"文件级三元组"双重比对——
+        // 交易引用过的附件副本绝不出现在可清理列表。这里直接用三元组构建 entity→id 集合
+        // （不再用正则解析 key：历史根级前缀 sale/s1/a.jpg 前端正则匹配失败是"在用附件被
+        // 误列为孤儿"的根因之一）。
         try {
           final du = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
+          final inUseFiles = <String>{}; // "entity/id/file" 三元组集合（文件级精确比对）
           for (final a in ((du['attachments'] as List?) ?? []).cast<Map<String, dynamic>>()) {
-            final key = '${a['key'] ?? ''}';
-            final m = RegExp(r'attachments/([a-z_]+)/([^/]+)/[^/]+$').firstMatch(key);
-            if (m != null) addUse(m.group(1)!, m.group(2)!);
+            final entity = '${a['entity'] ?? ''}';
+            final id = '${a['id'] ?? ''}';
+            final file = '${a['file'] ?? ''}';
+            if (entity.isEmpty || id.isEmpty || file.isEmpty) continue;
+            addUse(entity, id);
+            inUseFiles.add('$entity/$id/$file');
           }
+          // 文件级在用校验：本地附件副本若与在用三元组完全匹配 → 从列表中剔除
+          files.removeWhere((f) => f.kind == 'attach' && inUseFiles.contains(f.name));
         } catch (_) {}
         final root = await getApplicationDocumentsDirectory();
         final att = Directory('${root.path}/attachments');
@@ -260,9 +269,12 @@ class _CleanupPageState extends State<CleanupPage> {
           await for (final entity in att.list(followLinks: false)) {
             if (entity is! Directory) continue;
             final entityName = entity.uri.pathSegments.last;
+            // 空段目录（attachments//xxx 或 attachments/x// 等脏路径）跳过——不属于任何实体，不参与清理判定
+            if (entityName.isEmpty) continue;
             await for (final id in entity.list(followLinks: false)) {
               if (id is! Directory) continue;
               final idName = id.uri.pathSegments.last;
+              if (idName.isEmpty) continue;
               // 在用实体 → 跳过（附件仍在单据上使用，不属可清理）
               if ((inUse[entityName] ?? {}).contains(idName)) continue;
               await for (final f in id.list(followLinks: false)) {

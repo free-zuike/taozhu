@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
+import '../local_db.dart';
+import '../sync_service.dart';
 import '../widgets/center_sheet.dart';
 import 'router.dart';
 
@@ -76,31 +78,55 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
   }
 
   Future<void> _load() async {
-    try {
-      final d = await Api.instance.get('/attachments?entity=${widget.entity}&id=${widget.id}');
-      final keys = ((d['attachments'] as List?) ?? [])
-          .cast<Map<String, dynamic>>()
-          .map((x) => '${x['key']}');
-      final dir = await _dir();
-      final locals = <String, String>{};
-      if (dir != null) {
+    // **打开附件查看器：App 零网络**——只读本地副本目录（离线也能查看本地已有副本）。
+    // 附件副本由「同步状态页」同步统一下载（downloadInUseAttachments），此处不下载、不请求云端。
+    if (kIsWeb) {
+      // Web 无本地文件系统：只能云端直连（Web 固有形态，页面即云端界面）
+      try {
+        final d = await Api.instance.get('/attachments?entity=${widget.entity}&id=${widget.id}');
+        final keys = ((d['attachments'] as List?) ?? [])
+            .cast<Map<String, dynamic>>()
+            .map((x) => '${x['key']}');
+        if (!mounted) return;
+        setState(() {
+          _items = keys.map((key) => _Item(key, null)).toList();
+          _resetIndex();
+          _loading = false;
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _loading = false);
+      }
+      return;
+    }
+    // 原生/桌面：本地副本目录（同步时下载，零网络）
+    final dir = await _dir();
+    final locals = <String, String>{};
+    if (dir != null) {
+      try {
         for (final f in dir.listSync()) {
           if (f is File) locals[f.uri.pathSegments.last] = f.path;
         }
-      }
-      if (!mounted) return;
-      setState(() {
-        _items = keys.map((key) => _Item(key, locals[key.split('/').last])).toList();
-        if (_index >= _items.length) _index = _items.length - 1;
-        if (_index < 0) _index = 0;
-        _loading = false;
-      });
-      // 附件本地副本由「同步状态页」同步时统一补齐（downloadInUseAttachments，fullSync 后执行）；
-      // 此处不做任何下载——页面不自行同步（本地优先铁律：数据同步只能从同步状态入口发生）
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loading = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _items = [
+        for (final e in locals.entries) _Item(e.key, e.value),
+      ];
+      _resetIndex();
+      _loading = false;
+    });
+  }
+
+  /// 修正当前索引到合法范围（列表重建后调用）
+  void _resetIndex() {
+    if (_items.isEmpty) {
+      _index = 0;
+    } else if (_index >= _items.length) {
+      _index = _items.length - 1;
+    } else if (_index < 0) {
+      _index = 0;
     }
   }
 
@@ -180,24 +206,45 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       ),
     );
     if (ok != true) return;
-    try {
-      await Api.instance.delete('/attachments?key=${it.key}');
-      final lp = it.localPath;
-      if (lp != null) {
+    // 附件删除走变更流（beecount 式：本地删副本 → enqueueChange attachment 删除 → push → 云端删引用+GC → 其他端 pull 同步删副本）：
+    // 不再 App 直连删云端。Web 无本地副本，删云端走同一条变更（入本地队列后 push）。
+    var localDeleted = false;
+    final lp = it.localPath;
+    if (lp != null) {
+      try {
         final f = File(lp);
-        if (f.existsSync()) f.deleteSync();
-      }
-      toast(context, '已删除');
-      final prev = _index;
-      await _load();
-      if (mounted && _items.isNotEmpty) {
-        final target = prev >= _items.length ? _items.length - 1 : prev;
-        _index = target;
-        setState(() {});
-        if (_pageCtrl.hasClients) _pageCtrl.jumpToPage(target);
-      }
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+        if (f.existsSync()) {
+          f.deleteSync();
+          localDeleted = true;
+        }
+      } catch (_) {}
+    }
+    // 完整的云端 key（含存储前缀）：本地优先展示时 key 可能只是文件名占位，需还原实体维度 key
+    var cloudKey = it.key;
+    if (!cloudKey.startsWith('taozhu/')) {
+      cloudKey = 'taozhu/images/attachments/${widget.entity}/${widget.id}/${cloudKey}';
+    }
+    try {
+      await SyncService.enqueueChange(
+        entityType: 'attachment',
+        entitySyncId: cloudKey,
+        action: 'delete',
+        payload: {'file_key': cloudKey},
+      );
+    } catch (_) {
+      // 入队失败（本地只读等）：Web 直连兜底删除云端；其余交由同步流程重试
+      try {
+        await Api.instance.delete('/attachments?key=$cloudKey');
+      } catch (_) {}
+    }
+    toast(context, localDeleted ? '已删除（稍后同步删除云端）' : '已删除（本地无副本）');
+    final prev = _index;
+    await _load();
+    if (mounted && _items.isNotEmpty) {
+      final target = prev >= _items.length ? _items.length - 1 : prev;
+      _index = target;
+      setState(() {});
+      if (_pageCtrl.hasClients) _pageCtrl.jumpToPage(target);
     }
   }
 
@@ -255,29 +302,56 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     );
   }
 
-  /// 单张图片：本地副本优先，否则走云端代理（带鉴权）
+  /// 单张图片：**本地副本优先，本地没有就不显示网络兜底**——
+  /// App/桌面端附件副本只由同步状态页同步下载（本地优先铁律"同步从同步状态获取"）；
+  /// 本地无副本 → 提示去同步，避免"联网能看到、离线看不到"的错觉。
+  /// Web 端无本地库/文件系统，直连云端展示是 Web 固有形态（保留）。
   Widget _page(_Item it) {
     final local = it.localPath;
+    final hasLocal = local != null && File(local).existsSync();
+    final Widget content = hasLocal
+        ? Image.file(File(local), fit: BoxFit.contain, errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF), size: 40))
+        : kIsWeb
+            ? Image.network(
+                '$_base/api/v1/attachments/${it.key}',
+                fit: BoxFit.contain,
+                headers: _token.isEmpty ? null : {'Authorization': 'Bearer $_token'},
+                loadingBuilder: (_, child, progress) => progress == null
+                    ? child
+                    : const Center(
+                        child: SizedBox(
+                          width: 28,
+                          height: 28,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        ),
+                      ),
+                errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF), size: 40),
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.cloud_download_outlined, size: 44, color: Color(0xFF6B7280)),
+                  const SizedBox(height: 12),
+                  const Text('本地无此附件副本', style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
+                  const SizedBox(height: 6),
+                  const Text('请在「我的 → 同步状态」同步后查看',
+                      style: TextStyle(color: Color(0xFF6B7280), fontSize: 12), textAlign: TextAlign.center),
+                  const SizedBox(height: 10),
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF409EFF)),
+                    onPressed: () {
+                      SyncService.sync();
+                      toast(context, '已开始同步，完成后自动下载附件副本');
+                    },
+                    child: const Text('立即同步'),
+                  ),
+                ],
+              );
     return Container(
       color: Colors.black,
       alignment: Alignment.center,
-      child: local != null && File(local).existsSync()
-          ? Image.file(File(local), fit: BoxFit.contain, errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF), size: 40))
-          : Image.network(
-              '$_base/api/v1/attachments/${it.key}',
-              fit: BoxFit.contain,
-              headers: _token.isEmpty ? null : {'Authorization': 'Bearer $_token'},
-              loadingBuilder: (_, child, progress) => progress == null
-                  ? child
-                  : const Center(
-                      child: SizedBox(
-                        width: 28,
-                        height: 28,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      ),
-                    ),
-              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF), size: 40),
-            ),
+      child: content,
     );
   }
 }

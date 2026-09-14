@@ -83,6 +83,8 @@ class _MyPageState extends State<MyPage> {
     SyncService.stockChanged.addListener(_onSyncChanged);
     // 店铺切换后实时刷新统计卡（本店交易笔数），无需退出重进
     SyncService.selectedClientChanged.addListener(_onSelectedClientChanged);
+    // 头像跨端同步：其他端改头像（WS profile_change → syncMyProfile 下载新版）后实时刷新
+    avatarChanged.addListener(_onAvatarChanged);
     _loadProfile();
     _loadLowStocks();
     _loadPending();
@@ -97,7 +99,27 @@ class _MyPageState extends State<MyPage> {
     SyncService.status.removeListener(_onSyncStatus);
     SyncService.stockChanged.removeListener(_onSyncChanged);
     SyncService.selectedClientChanged.removeListener(_onSelectedClientChanged);
+    avatarChanged.removeListener(_onAvatarChanged);
     super.dispose();
+  }
+
+  /// 头像本地副本变更（跨端同步下载新版/清除）后重读显示
+  void _onAvatarChanged() {
+    if (!mounted) return;
+    avatarLocalFile().then((f) {
+      Api.instance.hasAvatar().then((has) {
+        if (!mounted) return;
+        setState(() {
+          _avatarLocalPath = f?.path ?? '';
+          _avatar = f != null || has;
+          // 缓存破坏：强制 Image.network 分支取新图
+          _avatarUrl = '';
+        });
+        Api.instance.avatarUrl().then((u) {
+          if (mounted) setState(() => _avatarUrl = '$u?t=${DateTime.now().millisecondsSinceEpoch}');
+        });
+      });
+    });
   }
 
   void _onSyncStatus() {
@@ -166,8 +188,9 @@ class _MyPageState extends State<MyPage> {
       await Api.instance.setUsername(name);
       await Api.instance.setAccount('${u['username'] ?? ''}');
       await Api.instance.setAvatar(u['avatar'] != null);
-      // 头像缓存后台校验：服务器有→下载覆盖本地；无→清本地；离线→保留旧缓存
-      final avatarSync = await syncAvatarCache();
+      // 头像缓存后台校验（版本驱动：传入已拉取的 profile，避免重复请求 /auth/me）：
+      // 服务器有新版→下载覆盖本地；无→清本地；离线→保留旧缓存
+      final avatarSync = await syncAvatarCache(u.cast<String, dynamic>());
       if (avatarSync != null) {
         await Api.instance.setAvatar(avatarSync);
       }

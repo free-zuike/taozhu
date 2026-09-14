@@ -126,12 +126,27 @@ attachmentsRouter.get('/total', async (c) => {
 });
 
 // GET /attachments/in-use — 列出云端"在用"附件（与 orphans 对称）：
-// R2 中所有附件 key 对照 D1 在用的单据/明细行 id —— 有对应单据的 = 在用。
-// 同步完成后 App 据此把在用凭证的附件副本下载到本地（附件不走 sync_changes，同步只拉实体不拉图，
-// 若本地副本被清理则联网靠网络兜底、离线不可见——违背本地优先；本接口让"全量同步能下载回附件"）。
+// ① attachment_refs 引用表（beecount 式权威：上传即写引用行，实体删除即级联清引用，有引用行=在用）
+// ② 兼容历史：R2 中尚未写引用行但仍有对应单据的 key（v0.17.84 之前上传的存量附件）
+// 返回规范化三元组 {key, entity, id, file} —— 前端同步下载/清理页在用判定直接用三元组，
+// 不再各自用正则解析 key（此前前后端正则不一致：历史根级前缀 sale/s1/a.jpg 前端匹配失败，
+// 导致在用附件被清理页误列为孤儿、同步也不下载）。
 attachmentsRouter.get('/in-use', async (c) => {
   const store = createStorage(c.env);
   const db = c.env.DB;
+  const out: Array<{ key: string; entity: string; id: string; file: string; size: number }> = [];
+  const seen = new Set<string>();
+  // ① 引用表（权威）：entity/id/file 直接从表取，不做任何正则
+  const refRows = await db.prepare('SELECT file_key, entity, entity_id FROM attachment_refs').all<{
+    file_key: string; entity: string; entity_id: string;
+  }>();
+  for (const r of refRows.results) {
+    const file = r.file_key.split('/').pop() ?? '';
+    if (!file) continue;
+    seen.add(r.file_key);
+    out.push({ key: r.file_key, entity: r.entity, id: r.entity_id, file, size: 0 });
+  }
+  // ② 历史兜底：R2 所有附件 key 对照 D1 在用单据 id，未写入引用表的视为在用（仅一次性补列，不写表）
   const inUse = new Map<string, Set<string>>();
   const add = (entity: string, id: string) => {
     if (!id) return;
@@ -160,27 +175,31 @@ attachmentsRouter.get('/in-use', async (c) => {
     }
     return null;
   };
-  const inUseKeys: Array<{ key: string; entity: string; id: string; size: number }> = [];
-  const seen = new Set<string>();
   for (const prefix of ['taozhu/images/attachments/', 'taozhu/attachments/', '']) {
     let cursor: string | undefined;
     do {
       const r = await store.list(prefix, cursor);
       for (const o of r.objects) {
-        if (seen.has(o.key)) continue; // 多前缀扫描去重（空前缀会重复命中）
+        if (seen.has(o.key)) continue; // 引用表已列
         const parsed = parseKey(o.key);
         if (!parsed) continue;
         if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) {
           seen.add(o.key);
-          inUseKeys.push({ key: o.key, entity: parsed.entity, id: parsed.id, size: o.size });
+          out.push({
+            key: o.key,
+            entity: parsed.entity,
+            id: parsed.id,
+            file: o.key.split('/').pop() ?? '',
+            size: o.size,
+          });
         }
       }
       cursor = r.truncated ? r.cursor : undefined;
     } while (cursor);
   }
   return c.json({
-    attachments: inUseKeys,
-    total: inUseKeys.length,
+    attachments: out,
+    total: out.length,
   });
 });
 

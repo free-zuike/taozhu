@@ -5,6 +5,7 @@ import { hashPassword, randomId, verifyPassword } from '../lib/password';
 import { randomSecret, verifyTotp } from '../lib/totp';
 import { authMiddleware } from '../middleware/auth';
 import { createStorage } from '../services/storage';
+import { notifyClients } from '../services/sync-hub';
 import { APP_NAME, APP_VERSION } from '../version';
 import type { Env, UserRow } from '../types';
 
@@ -56,13 +57,14 @@ authRouter.post('/login', async (c) => {
   return c.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
 
-// GET /auth/me — 当前用户（登录账号/显示名/头像/两步验证；实时查库）
+// GET /auth/me — 当前用户（登录账号/显示名/头像+版本/两步验证；实时查库）
+// avatar_version 对齐参考架构 profile 体系：客户端按版本比对决定是否重下载头像
 authRouter.get('/me', authMiddleware(), async (c) => {
   const u = c.get('user');
   const row = await c.env.DB.prepare(
-    'SELECT id, username, display_name, role, avatar, totp_enabled FROM users WHERE id = ?',
+    'SELECT id, username, display_name, role, avatar, avatar_version, totp_enabled FROM users WHERE id = ?',
   ).bind(u.id).first<{
-    id: string; username: string; display_name: string | null; role: string; avatar: string | null; totp_enabled: number;
+    id: string; username: string; display_name: string | null; role: string; avatar: string | null; avatar_version: number; totp_enabled: number;
   }>();
   if (!row) return c.json({ error: '账号不存在' }, 404);
   return c.json({ user: row });
@@ -93,6 +95,8 @@ authRouter.patch('/profile', authMiddleware(), async (c) => {
   }
   await c.env.DB.prepare('UPDATE users SET display_name = ?, password_hash = ? WHERE id = ?')
     .bind(displayName, passwordHash, me.id).run();
+  // 资料变更广播 profile_change：其他在线端收到后 syncMyProfile 拉取最新显示名（对齐参考架构 WS 分发）
+  await notifyClients('profile_change');
   return c.json({ user: { id: me.id, username: row.username, display_name: displayName, role: row.role } });
 });
 
@@ -144,6 +148,8 @@ authRouter.post('/totp/disable', authMiddleware(), async (c) => {
 });
 
 // POST /auth/avatar — 上传头像（multipart photo，存 R2；key 固定为 taozhu/images/avatars/{userId}.jpg）
+// 版本号递增（对齐参考架构 avatar_version 体系）：客户端按版本比对决定是否重下载；
+// 上传后广播 profile_change，其他在线端收到即同步新头像，无需重启/手动刷新
 authRouter.post('/avatar', authMiddleware(), async (c) => {
   const me = c.get('user');
   let file: File | null = null;
@@ -159,8 +165,12 @@ authRouter.post('/avatar', authMiddleware(), async (c) => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const key = `taozhu/images/avatars/${me.id}.jpg`;
   await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
-  await c.env.DB.prepare('UPDATE users SET avatar = ? WHERE id = ?').bind(key, me.id).run();
-  return c.json({ ok: true });
+  const cur = await c.env.DB.prepare('SELECT avatar_version FROM users WHERE id = ?')
+    .bind(me.id).first<{ avatar_version: number | null }>();
+  const ver = (cur?.avatar_version ?? 0) + 1;
+  await c.env.DB.prepare('UPDATE users SET avatar = ?, avatar_version = ? WHERE id = ?').bind(key, ver, me.id).run();
+  await notifyClients('profile_change');
+  return c.json({ ok: true, avatar_version: ver });
 });
 
 // GET /auth/avatar — 读取当前用户头像（带鉴权；前端 Image.network 加 Authorization 头）

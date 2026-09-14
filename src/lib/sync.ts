@@ -7,8 +7,10 @@
 import { stockDelta } from './stock';
 import { randomId } from './password';
 import { notifyClients } from '../services/sync-hub';
+import { createStorage } from '../services/storage';
+import type { Env } from '../types';
 
-export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'sale', 'purchase', 'payment'] as const;
+export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'sale', 'purchase', 'payment', 'attachment'] as const;
 export type SyncEntityType = (typeof SYNC_ENTITIES)[number];
 
 export interface SyncChangeInput {
@@ -96,10 +98,15 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       const detail = await db.prepare(
         `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`,
       ).bind(id).all();
+      // beecount 式附件引用：该实体（单据+明细行）引用的全部附件 key，随实体 payload 同步
+      const refs = await db.prepare(
+        "SELECT entity, entity_id, file_key FROM attachment_refs WHERE (entity = 'sale' AND entity_id = ?) OR (entity = 'sale_item' AND entity_id IN (SELECT id FROM sale_items WHERE sale_id = ?))",
+      ).bind(id, id).all<{ entity: string; entity_id: string; file_key: string }>();
       return {
         id: r.id, client_id: r.client_id, client_name: r.client_name,
         happened_at: r.happened_at, note: r.note ?? '', total: r.total ?? 0,
         items: detail.results,
+        attachments: refs.results.map((x) => x.file_key),
       };
     }
     case 'purchase': {
@@ -111,17 +118,25 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       const detail = await db.prepare(
         `SELECT pi.*, i.name AS item_name, i.category AS item_category FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`,
       ).bind(id).all();
+      const refs = await db.prepare(
+        "SELECT entity, entity_id, file_key FROM attachment_refs WHERE (entity = 'purchase' AND entity_id = ?) OR (entity = 'purchase_item' AND entity_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?))",
+      ).bind(id, id).all<{ entity: string; entity_id: string; file_key: string }>();
       return {
         id: r.id, happened_at: r.happened_at, note: r.note ?? '', total: r.total ?? 0,
         items: detail.results,
+        attachments: refs.results.map((x) => x.file_key),
       };
     }
     case 'payment': {
       const r = await db.prepare('SELECT * FROM payments WHERE id = ?').bind(id).first<Record<string, unknown>>();
       if (!r) return null;
+      const refs = await db.prepare(
+        "SELECT entity, entity_id, file_key FROM attachment_refs WHERE entity = 'payment' AND entity_id = ?",
+      ).bind(id).all<{ entity: string; entity_id: string; file_key: string }>();
       return {
         id: r.id, client_id: r.client_id, happened_at: r.happened_at,
         amount: r.amount, waived: r.waived ?? 0, method: r.method ?? '', note: r.note ?? '',
+        attachments: refs.results.map((x) => x.file_key),
       };
     }
     default:
@@ -196,9 +211,53 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
   await db.batch(batch);
 }
 
+/** 单据级实体 upsert 后：附件引用差集对齐（beecount 式——payload.attachments 为期望引用全集）：
+ *  将 attachment_refs 中属于该单据（含明细行）但不在 payload.attachments 的引用删除；
+ *  删除后若某 file_key 无任何引用（其他单据也不再用）→ 物理删除 R2 文件（GC）。
+ *  新增引用在 POST /attachments 上传时已写入 refs，此处只做"删除侧"收敛。 */
+async function syncAttachRefsAfterUpsert(
+  env: Env,
+  entityType: 'sale' | 'purchase' | 'payment',
+  id: string,
+  wantKeys: Set<string>,
+): Promise<void> {
+  const db = env.DB;
+  let refs: Array<{ file_key: string }>;
+  if (entityType === 'sale') {
+    refs = (await db.prepare(
+      `SELECT r.file_key FROM attachment_refs r
+       WHERE (r.entity = 'sale' AND r.entity_id = ?)
+          OR (r.entity = 'sale_item' AND r.entity_id IN (SELECT id FROM sale_items WHERE sale_id = ?))`,
+    ).bind(id, id).all<{ file_key: string }>()).results;
+  } else if (entityType === 'purchase') {
+    refs = (await db.prepare(
+      `SELECT r.file_key FROM attachment_refs r
+       WHERE (r.entity = 'purchase' AND r.entity_id = ?)
+          OR (r.entity = 'purchase_item' AND r.entity_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?))`,
+    ).bind(id, id).all<{ file_key: string }>()).results;
+  } else {
+    refs = (await db.prepare(
+      "SELECT file_key FROM attachment_refs WHERE entity = 'payment' AND entity_id = ?",
+    ).bind(id).all<{ file_key: string }>()).results;
+  }
+  if (refs.length === 0) return;
+  const remove = refs.filter((r) => !wantKeys.has(r.file_key)).map((r) => r.file_key);
+  if (remove.length === 0) return;
+  const store = createStorage(env);
+  for (const key of remove) {
+    // 全局引用计数：其他实体是否仍引用该文件
+    const cnt = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(key).first<{ n: number }>();
+    await db.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run();
+    if ((cnt?.n ?? 0) <= 1) {
+      try { await store.delete(key); } catch (_) {}
+    }
+  }
+}
+
 /** 把一条变更应用到业务表；返回是否成功（校验/异常失败 → rejected） */
 export async function applyChange(
   db: D1Database,
+  env: Env,
   ch: { entity_type: string; entity_sync_id: string; action: string; payload: unknown },
 ): Promise<{ ok: boolean; error?: string }> {
   const { entity_type, entity_sync_id: id, action } = ch;
@@ -267,8 +326,17 @@ export async function applyChange(
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, it.quantity));
           bt.push(db.prepare('DELETE FROM sales WHERE id = ?').bind(id));
           await db.batch(bt);
+          // 删除单据：级联清附件引用 + 无引用文件 GC（对齐 beecount 实体删除语义）
+          await db.prepare(
+            "DELETE FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
+          ).bind(id).run();
+          await db.prepare(
+            "DELETE FROM attachment_refs WHERE entity = 'sale_item' AND entity_id IN (SELECT id FROM sale_items WHERE sale_id = ?)",
+          ).bind(id).run();
         } else {
           await applySaleUpsert(db, id, p);
+          // 附件引用差集：payload.attachments 为期望全集，收敛被移除的引用与无引用文件（beecount 删除=实体变更驱动）
+          await syncAttachRefsAfterUpsert(env, 'sale', id, new Set((p.attachments as string[] ?? [])));
         }
         break;
       case 'purchase':
@@ -278,13 +346,23 @@ export async function applyChange(
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, -it.quantity));
           bt.push(db.prepare('DELETE FROM purchases WHERE id = ?').bind(id));
           await db.batch(bt);
+          await db.prepare(
+            "DELETE FROM attachment_refs WHERE entity = 'purchase' AND entity_id = ?",
+          ).bind(id).run();
+          await db.prepare(
+            "DELETE FROM attachment_refs WHERE entity = 'purchase_item' AND entity_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?)",
+          ).bind(id).run();
         } else {
           await applyPurchaseUpsert(db, id, p);
+          await syncAttachRefsAfterUpsert(env, 'purchase', id, new Set((p.attachments as string[] ?? [])));
         }
         break;
       case 'payment':
         if (action === 'delete') {
           await db.prepare('DELETE FROM payments WHERE id = ?').bind(id).run();
+          await db.prepare(
+            "DELETE FROM attachment_refs WHERE entity = 'payment' AND entity_id = ?",
+          ).bind(id).run();
         } else {
           await db.prepare(
             `INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -292,6 +370,22 @@ export async function applyChange(
                amount = excluded.amount, waived = excluded.waived, method = excluded.method, note = excluded.note`,
           ).bind(id, p.client_id ?? '', p.happened_at ?? '', Number(p.amount) || 0, Number(p.waived) || 0,
             p.method ?? '', p.note ?? '').run();
+          await syncAttachRefsAfterUpsert(env, 'payment', id, new Set((p.attachments as string[] ?? [])));
+        }
+        break;
+      case 'attachment':
+        // 附件删除变更：客户端已删本地副本 → 推送 → 云端删 attachment_refs 引用，
+        // 无其他引用则物理删除 R2 文件（beecount 同款：删除以引用差集驱动，不直连删云端）
+        if (action !== 'delete') break;
+        {
+          const key = String(p?.file_key ?? p?.key ?? '').trim();
+          if (!key) return { ok: false, error: 'attachment 删除需 file_key' };
+          const cnt = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(key).first<{ n: number }>();
+          await db.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run();
+          // 该文件仍被其他实体引用（共用图）→ 不删 R2；零引用才物理删
+          if ((cnt?.n ?? 0) <= 1) {
+            try { await createStorage(env).delete(key); } catch (_) {}
+          }
         }
         break;
       default:

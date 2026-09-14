@@ -67,8 +67,8 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       await Api.instance.setUsername(name);
       await Api.instance.setAccount('${u['username'] ?? ''}');
       await Api.instance.setAvatar(hasAvatar);
-      // 头像缓存后台校验：服务器有→下载覆盖本地；无→清本地；离线→保留旧缓存
-      final avatarSync = await syncAvatarCache();
+      // 头像缓存后台校验（版本驱动：传入已拉取的 profile，避免重复请求 /auth/me）
+      final avatarSync = await syncAvatarCache(u.cast<String, dynamic>());
       if (avatarSync != null) {
         await Api.instance.setAvatar(avatarSync);
       }
@@ -114,9 +114,10 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     final bytes = await picked.readAsBytes();
     toast(context, '上传中…');
     try {
-      await Api.instance.uploadPhoto('/auth/avatar', bytes, 'avatar.jpg');
-      // 本地副本：离线也能显示
+      final d = await Api.instance.uploadPhoto('/auth/avatar', bytes, 'avatar.jpg');
+      // 本地副本：离线也能显示；记录服务器版本号（其他端按版本比对同步）
       await saveAvatarLocal(bytes);
+      await setStoredAvatarVersion((d['avatar_version'] as num?)?.toInt() ?? 0);
       await Api.instance.setAvatar(true);
       final localPath = (await avatarLocalFile())?.path ?? '';
       if (mounted) {

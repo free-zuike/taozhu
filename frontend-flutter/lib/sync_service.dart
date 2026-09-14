@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
+import 'avatar_cache.dart';
 import 'local_db.dart';
 import 'log.dart';
 
@@ -110,10 +111,10 @@ class SyncService {
     version.notifyListeners();
   }
 
-  /// 全量同步成功后：补齐"在用"附件的本地副本（附件不走 sync_changes，同步只拉实体不拉图；
-  /// 若本地副本被清理（存储清理页删孤儿时误列/删了在用），联网靠网络兜底、离线不可见——违背本地优先。
-  /// 从 /attachments/in-use 拿服务器在用 key，逐张下载到本地 attachments/{entity}/{id}/；已存在跳过。
-  /// 静默失败（网络波动单张跳过，下次同步再补），不阻塞同步主流程。
+  /// 全量/增量同步完成后：补齐"在用"附件的本地副本（附件不走 sync_changes，同步只拉实体不拉图；
+  /// 本地副本被清理后离线不可见——违背本地优先。从 /attachments/in-use 拿服务器在用引用的规范化三元组
+  /// {entity,id,file}（后端以 attachment_refs 引用表为权威 + R2 扫描兜底），逐张下载。
+  /// 已存在跳过；静默失败不阻塞同步主流程，下次同步再补。
   static Future<void> downloadInUseAttachments() async {
     if (kIsWeb) return;
     List<Map<String, dynamic>> inUse;
@@ -126,22 +127,19 @@ class SyncService {
     if (inUse.isEmpty) return;
     try {
       final root = await getApplicationDocumentsDirectory();
-      // key 形如 taozhu/images/attachments/{entity}/{id}/{md5}.jpg（兼容历史前缀）
-      final re = RegExp(r'attachments/([a-z_]+)/([^/]+)/([^/]+)$');
       var downloaded = 0;
       for (final a in inUse) {
-        final key = '${a['key'] ?? ''}';
-        final m = re.firstMatch(key);
-        if (m == null) continue;
-        final entity = m.group(1)!;
-        final id = m.group(2)!;
-        final file = m.group(3)!;
+        final entity = '${a['entity'] ?? ''}';
+        final id = '${a['id'] ?? ''}';
+        final file = '${a['file'] ?? ''}';
+        // 后端已规范化三元组，此处不再做 key 正则解析（此前前后端正则不一致会产生 // 空段路径）
+        if (entity.isEmpty || id.isEmpty || file.isEmpty) continue;
         final dir = Directory('${root.path}/attachments/$entity/$id');
         final target = File('${dir.path}/$file');
         if (target.existsSync()) continue; // 已有副本
         try {
-          final bytes = await Api.instance.getRaw('/attachments/$key').timeout(const Duration(seconds: 12));
-          if (!dir.existsSync()) dir.createSync(recursive: true);
+          final bytes = await Api.instance.getRaw('/attachments/${a['key'] ?? '$entity/$id/$file'}').timeout(const Duration(seconds: 12));
+          if (bytes.isNotEmpty && !dir.existsSync()) dir.createSync(recursive: true);
           await target.writeAsBytes(bytes);
           downloaded++;
         } catch (_) {
@@ -150,6 +148,8 @@ class SyncService {
       }
       if (downloaded > 0) {
         appLog('sync', '已补齐在用附件本地副本 $downloaded 张', level: 'info');
+        // 下载完成通知页面重读本地附件（账本图标/缩略图即时显示，不必手动刷新/多次同步）
+        version.notifyListeners();
       }
     } catch (_) {}
   }
@@ -282,6 +282,22 @@ class SyncService {
           final id = '${ch['entity_sync_id'] ?? ''}';
           final action = '${ch['action'] ?? 'upsert'}';
           final payload = ch['payload'] as Map<String, dynamic>? ?? {};
+          // 附件删除变更：其他端删了附件 → 本地同步删对应副本（beecount 式：引用变更流驱动跨端删除）
+          if (entityType == 'attachment' && action == 'delete') {
+            try {
+              final root = await getApplicationDocumentsDirectory();
+              final key = '${payload['file_key'] ?? ''}';
+              if (key.isNotEmpty) {
+                final m = RegExp(r'attachments/([a-z_]+)/([^/]+)/([^/]+)$').firstMatch(key);
+                if (m != null) {
+                  final f = File('${root.path}/attachments/${m.group(1)}/${m.group(2)}/${m.group(3)}');
+                  if (f.existsSync()) f.deleteSync();
+                }
+              }
+            } catch (_) {}
+            total++;
+            continue;
+          }
           final store = _storeOf(entityType);
           if (store.isEmpty) continue;
           if (action == 'delete') {
@@ -439,6 +455,26 @@ class SyncService {
     });
   }
 
+  /// 用户资料同步（对齐参考架构 syncMyProfile）：拉 /auth/me 把显示名/头像回写本地。
+  /// 头像按 avatar_version 比对，有新版才下载（avatar_cache 内部 bump avatarChanged 通知页面）。
+  /// 挂 sync() 编排末尾，也由 WS profile_change 事件独立触发；失败静默（保留旧缓存）。
+  static Future<bool> syncMyProfile() async {
+    if (kIsWeb) return false;
+    try {
+      final d = await Api.instance.get('/auth/me');
+      final u = d['user'] as Map<String, dynamic>?;
+      if (u == null) return false;
+      final name = '${u['display_name'] ?? u['username'] ?? ''}';
+      if (name.isNotEmpty) await Api.instance.setUsername(name);
+      await Api.instance.setAccount('${u['username'] ?? ''}');
+      final avatarState = await syncAvatarCache(u);
+      if (avatarState != null) await Api.instance.setAvatar(avatarState);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 触发一次增量拉取（账户等以服务端全量覆盖保存成功后调用：
   /// 服务端已入变更流，本机镜像需 pull 合并到最新）
   static void schedulePullNow() {
@@ -472,8 +508,11 @@ class SyncService {
       pushed = await pushPending();
       appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条', level: 'info');
       // 同步完成后补齐在用附件本地副本（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）：
-      // 全量/增量同一入口，静默失败不阻塞同步状态
-      unawaited(downloadInUseAttachments());
+      // **await 等待附件下载完，同步中的动画/状态行才消失**（用户：完全同步之后再消失）；
+      // 单张失败内部静默跳过，下次同步自动重补，不阻塞主流程
+      await downloadInUseAttachments();
+      // 资料（显示名/头像版本）同步对齐参考架构 sync() 编排：实体+附件完成后统一 syncMyProfile
+      await syncMyProfile();
     } catch (e) {
       _lastSyncFailed = true;
       appLog('sync', '同步失败: ${e.toString().split('\n').first}', level: 'error');

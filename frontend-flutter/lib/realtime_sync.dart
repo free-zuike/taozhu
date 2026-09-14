@@ -7,14 +7,18 @@ import 'api.dart';
 import 'sync_service.dart';
 
 /// 实时同步：保持一条 WebSocket 连接（SyncHub Durable Object），
-/// 服务端在数据变更后推送 {type:'sync'}，客户端收到后触发增量同步（pull），
-/// 实现"一端改动、多端实时同步"。断线自动重连（指数退避 1/3/8/20/60s）。
+/// 服务端推送类型化消息（对齐参考架构 WS 分发模型）：
+/// - {type:'sync'}：业务实体变更 → 防抖触发增量同步（pull/push）
+/// - {type:'profile_change'}：资料/头像变更 → syncMyProfile（按头像版本比对下载）
+/// 连接建立（首连/断线重连）后自动触发一次完整同步，冲刷离线期间累积的本地变更。
+/// 断线自动重连（指数退避 1/3/8/20/60s）。
 class RealtimeSync {
   RealtimeSync._();
   static final RealtimeSync instance = RealtimeSync._();
 
   WebSocketChannel? _channel;
   Timer? _retry;
+  Timer? _autoSync;
   int _failCount = 0;
   bool _closed = true;
   DateTime _lastTrigger = DateTime.fromMillisecondsSinceEpoch(0);
@@ -30,6 +34,7 @@ class RealtimeSync {
   void stop() {
     _closed = true;
     _retry?.cancel();
+    _autoSync?.cancel();
     _channel?.sink.close();
     _channel = null;
   }
@@ -51,16 +56,52 @@ class RealtimeSync {
         onDone: _scheduleReconnect,
         onError: (_) => _scheduleReconnect(),
       );
+      // 连接建立（首连/重连）：防抖触发一次完整同步——离线期间累积的本地变更在此冲刷，
+      // 服务端错过的推送也由这次同步补齐（对齐参考架构 ws_connected → autoSync 语义）
+      _scheduleAutoSync();
     } catch (_) {
       _scheduleReconnect();
     }
   }
 
+  /// 2 秒防抖的自动同步：连续上线信号（重连/切网）只触发一次
+  void _scheduleAutoSync() {
+    if (_closed) return;
+    _autoSync?.cancel();
+    _autoSync = Timer(const Duration(seconds: 2), () {
+      if (_closed) return;
+      if (kIsWeb) {
+        SyncService.version.notifyListeners();
+        return;
+      }
+      SyncService.sync();
+    });
+  }
+
   void _onMessage(String msg) {
     try {
       final d = jsonDecode(msg);
-      if (d is Map && d['type'] == 'sync') _trigger();
+      if (d is! Map) return;
+      final type = '${d['type'] ?? 'sync'}';
+      if (type == 'profile_change') {
+        _triggerProfile();
+      } else {
+        _trigger();
+      }
     } catch (_) {}
+  }
+
+  /// 资料/头像变更：其他端改了显示名/头像 → 拉 /auth/me 回写本地（头像按版本比对下载）
+  void _triggerProfile() {
+    final now = DateTime.now();
+    if (now.difference(_lastTrigger).inMilliseconds < 1000) return;
+    _lastTrigger = now;
+    if (kIsWeb) {
+      // Web 无本地库：通知页面重新直连拉取资料
+      SyncService.version.notifyListeners();
+      return;
+    }
+    SyncService.syncMyProfile();
   }
 
   /// 防抖：1 秒内多次通知合并为一次同步
