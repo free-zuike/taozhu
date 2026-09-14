@@ -157,10 +157,12 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 .map((c) => '${c['name']}')
                 .firstOrNull ??
             '';
-        // 当前店铺本地出货/收款计数（按 client_id 过滤本地镜像）
+        // 当前店铺本地出货/收款的商品明细行数（按 client_id 过滤本地镜像后 items 聚合；一张单多商品=多行）
         final sales = await LocalDb.getAll('sales');
         final payments = await LocalDb.getAll('payments');
-        clientLocalSales = sales.where((s) => '${s['client_id']}' == selectedId).length;
+        final selSales = sales.where((s) => '${s['client_id']}' == selectedId);
+        clientLocalSales =
+            selSales.fold<int>(0, (sum, s) => sum + ((s['items'] as List?)?.length ?? 0));
         clientLocalPayments = payments.where((p) => '${p['client_id']}' == selectedId).length;
       }
     } catch (e) {
@@ -235,7 +237,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       localAttachTotal = await _localAllAttachCount();
     }
     if (cStats != null) {
-      clientServerSales = (cStats['sales'] as num?)?.toInt() ?? 0;
+      // 出货/进货按商品明细行数（服务器 /sync/stats 已按明细行统计；进货不分店铺）
+      clientServerSales = ((cStats['sale_items'] as num?)?.toInt() ?? 0);
       clientServerPayments = (cStats['payments'] as num?)?.toInt() ?? 0;
     }
     final statsLoaded = serverStats != null;
@@ -439,7 +442,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                   ])
                 else if (!kIsWeb)
                   _card(c, [
-                    _diffRow(c, '出货单',
+                    _diffRow(c, '出货商品',
                         _localSynced ? _clientLocalSales : null,
                         _clientServerLoaded ? _clientServerSales : null),
                     _diffRow(c, '收款单',
@@ -451,7 +454,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                   ])
                 else
                   _card(c, [
-                    _row(c, '出货单', _clientServerLoaded ? '服务器 $_clientServerSales 条' : '服务器 —'),
+                    _row(c, '出货商品', _clientServerLoaded ? '服务器 $_clientServerSales 条' : '服务器 —'),
                     _row(c, '收款单', _clientServerLoaded ? '服务器 $_clientServerPayments 条' : '服务器 —'),
                     _row(c, '附件', _clientAttachLoaded ? '服务器 $_clientServerAttach 张' : '服务器 —'),
                   ]),

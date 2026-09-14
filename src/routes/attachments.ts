@@ -1,7 +1,7 @@
 /** 交易附件（凭证图片）：公共图片存储（taozhu/images/attachments/...，MD5 内容去重）。
  *  entity ∈ sale|purchase|payment（单据级）| sale_item|purchase_item（明细行级）；零 D1 写。 */
 import { Hono } from 'hono';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, adminOnly } from '../middleware/auth';
 import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
 import { imageKey, LEGACY_IMAGE_PREFIXES } from '../lib/image-key';
@@ -118,6 +118,117 @@ attachmentsRouter.get('/total', async (c) => {
     } while (cursor);
   }));
   return c.json({ total });
+});
+
+// GET /attachments/orphans — 扫描云端孤儿附件（参考 beecount-cloud 原版 B1/B3）：
+// R2 中所有附件 key 对照 D1 在用的单据/明细行 id —— 无对应单据的 = 孤儿（单据已删但 R2 残留）。
+// 返回孤儿列表（key/entity/id/size），供清理页展示与删除；只读扫描不改数据。
+attachmentsRouter.get('/orphans', async (c) => {
+  const store = createStorage(c.env);
+  const db = c.env.DB;
+  // D1 在用附件单元 id 集合（entity → id set）
+  const inUse = new Map<string, Set<string>>();
+  const add = (entity: string, id: string) => {
+    if (!id) return;
+    let s = inUse.get(entity);
+    if (!s) { s = new Set(); inUse.set(entity, s); }
+    s.add(id);
+  };
+  const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
+    db.prepare('SELECT id FROM sales').all<{ id: string }>(),
+    db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
+    db.prepare('SELECT id FROM purchases').all<{ id: string }>(),
+    db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
+    db.prepare('SELECT id FROM payments').all<{ id: string }>(),
+  ]);
+  sales.results.forEach((r) => add('sale', r.id));
+  saleItems.results.forEach((r) => add('sale_item', r.id));
+  purchases.results.forEach((r) => add('purchase', r.id));
+  purchaseItems.results.forEach((r) => add('purchase_item', r.id));
+  payments.results.forEach((r) => add('payment', r.id));
+  // 解析 R2 key → (entity, id)；支持 当前规范 + 历史前缀
+  const parseKey = (key: string): { entity: string; id: string } | null => {
+    // 规范: taozhu/images/attachments/{entity}/{id}/{md5}.jpg
+    let m = /^taozhu\/images\/attachments\/([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
+    if (m) return { entity: m[1], id: m[2] };
+    // 历史: taozhu/attachments/{entity}/{id}/{md5}.jpg 或 {entity}/{id}/{md5}.jpg
+    m = /^(?:taozhu\/attachments\/)?([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
+    if (m && ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'].includes(m[1])) {
+      return { entity: m[1], id: m[2] };
+    }
+    return null;
+  };
+  const orphans: Array<{ key: string; entity: string; id: string; size: number }> = [];
+  for (const prefix of ['taozhu/images/attachments/', 'taozhu/attachments/', '']) {
+    let cursor: string | undefined;
+    do {
+      const r = await store.list(prefix, cursor);
+      for (const o of r.objects) {
+        const parsed = parseKey(o.key);
+        if (!parsed) continue;
+        if (!(inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) {
+          orphans.push({ key: o.key, entity: parsed.entity, id: parsed.id, size: o.size });
+        }
+      }
+      cursor = r.truncated ? r.cursor : undefined;
+    } while (cursor);
+  }
+  return c.json({
+    orphans,
+    total: orphans.length,
+    bytes: orphans.reduce((s, o) => s + o.size, 0),
+  });
+});
+
+// DELETE /attachments/orphans — 批量删除云端孤儿附件（body: { keys: string[] }）
+// 参考 beecount-cloud 原版 cleaner：删无引用的附件文件（孤儿）。best-effort 逐个删。
+attachmentsRouter.delete('/orphans', adminOnly(), async (c) => {
+  const body = await c.req.json().catch(() => null) as { keys?: string[] } | null;
+  const keys = (body?.keys ?? []).filter((k) => typeof k === 'string' && k);
+  if (keys.length === 0) return c.json({ error: '请提供要删除的附件 key 列表' }, 400);
+  // 安全校验：只允许删除孤儿（再扫一遍确认键确属孤儿，防误删在用凭证）
+  const store = createStorage(c.env);
+  const db = c.env.DB;
+  const inUse = new Map<string, Set<string>>();
+  const add = (entity: string, id: string) => {
+    if (!id) return;
+    let s = inUse.get(entity);
+    if (!s) { s = new Set(); inUse.set(entity, s); }
+    s.add(id);
+  };
+  const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
+    db.prepare('SELECT id FROM sales').all<{ id: string }>(),
+    db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
+    db.prepare('SELECT id FROM purchases').all<{ id: string }>(),
+    db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
+    db.prepare('SELECT id FROM payments').all<{ id: string }>(),
+  ]);
+  sales.results.forEach((r) => add('sale', r.id));
+  saleItems.results.forEach((r) => add('sale_item', r.id));
+  purchases.results.forEach((r) => add('purchase', r.id));
+  purchaseItems.results.forEach((r) => add('purchase_item', r.id));
+  payments.results.forEach((r) => add('payment', r.id));
+  const parseKey = (key: string): { entity: string; id: string } | null => {
+    let m = /^taozhu\/images\/attachments\/([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
+    if (m) return { entity: m[1], id: m[2] };
+    m = /^(?:taozhu\/attachments\/)?([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
+    if (m && ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'].includes(m[1])) {
+      return { entity: m[1], id: m[2] };
+    }
+    return null;
+  };
+  let deleted = 0;
+  for (const key of keys) {
+    const parsed = parseKey(key);
+    if (!parsed) continue;
+    if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) continue; // 在用防误删
+    try {
+      await store.delete(key);
+      deleted++;
+    } catch (_) {}
+  }
+  if (deleted > 0) await notifyClients();
+  return c.json({ deleted });
 });
 
 // GET /attachments/:key{.+} — 代理读取图片内容（key 含斜杠如 sale/s1/123.jpg，{.+} 捕获多段）
