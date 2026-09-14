@@ -243,14 +243,20 @@ syncRouter.get('/full', async (c) => {
 syncRouter.get('/stats', async (c) => {
   const db = c.env.DB;
   const clientId = c.req.query('client_id')?.trim() ?? '';
-  const [clients, items, categories, paymentAccounts, sales, purchases, payments] = await Promise.all([
+  const [clients, items, catItems, catClients, paymentAccounts, saleItems, purchaseItems, purchases, payments] = await Promise.all([
     db.prepare('SELECT COUNT(*) AS n FROM clients WHERE deleted_at IS NULL').first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM items WHERE deleted_at IS NULL').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM categories').first<{ n: number }>(),
+    db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'item'").first<{ n: number }>(),
+    db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'client'").first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>(),
+    // 出货/进货按商品明细行数统计（不是单据数：一张单多商品 = 多明细行）
     clientId
-      ? db.prepare('SELECT COUNT(*) AS n FROM sales WHERE client_id = ?').bind(clientId).first<{ n: number }>()
-      : db.prepare('SELECT COUNT(*) AS n FROM sales').first<{ n: number }>(),
+      ? db.prepare(
+          'SELECT COUNT(*) AS n FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.client_id = ?',
+        ).bind(clientId).first<{ n: number }>()
+      : db.prepare('SELECT COUNT(*) AS n FROM sale_items').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM purchase_items').first<{ n: number }>(),
+    // 进货不分店铺
     db.prepare('SELECT COUNT(*) AS n FROM purchases').first<{ n: number }>(),
     clientId
       ? db.prepare('SELECT COUNT(*) AS n FROM payments WHERE client_id = ?').bind(clientId).first<{ n: number }>()
@@ -259,10 +265,13 @@ syncRouter.get('/stats', async (c) => {
   return c.json({
     clients: clients?.n ?? 0,
     items: items?.n ?? 0,
-    categories: categories?.n ?? 0,
+    categories_item: catItems?.n ?? 0,
+    categories_client: catClients?.n ?? 0,
     payment_accounts: paymentAccounts?.n ?? 0,
-    sales: sales?.n ?? 0,
-    purchases: purchases?.n ?? 0,
+    // 出货/进货按商品明细行数（并非单据数）
+    sale_items: saleItems?.n ?? 0,
+    purchase_items: purchaseItems?.n ?? 0,
+    purchases: purchases?.n ?? 0, // 保留（进货单数，供需要时使用）
     payments: payments?.n ?? 0,
     server_cursor: await maxCursor(db),
   });

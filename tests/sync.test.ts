@@ -348,9 +348,10 @@ describe('同步协议', () => {
     const d = (await res.json()) as Record<string, number>;
     expect(d.clients).toBe(2);
     expect(d.items).toBe(0);
-    expect(d.categories).toBe(0);
-    expect(d.sales).toBe(0);
-    expect(d.purchases).toBe(0);
+    expect(d.categories_item).toBe(0);
+    expect(d.categories_client).toBe(0);
+    expect(d.sale_items).toBe(0);
+    expect(d.purchase_items).toBe(0);
     expect(d.payments).toBe(0);
     expect(d.server_cursor).toBeGreaterThanOrEqual(2);
   });
@@ -368,7 +369,7 @@ describe('同步协议', () => {
     const idA = (await a.json()) as { id: string };
     const b = await call(env, 'POST', '/api/v1/clients', token, { name: '店B' });
     const idB = (await b.json()) as { id: string };
-    // 店A 记一笔出货
+    // 店A 记一笔出货（1 个商品 = 1 条明细行）
     const sale = await call(env, 'POST', '/api/v1/sales', token, {
       client_id: idA.id, happened_at: '2026-01-02',
       items: [{ price_id: priceId, quantity: 1 }],
@@ -377,11 +378,11 @@ describe('同步协议', () => {
     const res = await call(env, 'GET', `/api/v1/sync/stats?client_id=${idA.id}`, token);
     expect(res.status).toBe(200);
     const d = (await res.json()) as Record<string, number>;
-    expect(d.sales).toBe(1);
+    expect(d.sale_items).toBe(1); // 按商品明细行数
     expect(d.payments).toBe(0);
     const resB = await call(env, 'GET', `/api/v1/sync/stats?client_id=${idB.id}`, token);
     const dB = (await resB.json()) as Record<string, number>;
-    expect(dB.sales).toBe(0);
+    expect(dB.sale_items).toBe(0);
   });
 
   it('staff full/拉取：item 进价与单据进价快照打码为 0', async () => {

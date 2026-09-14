@@ -54,10 +54,12 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   static const _entities = [
     ('clients', '店铺'),
     ('items', '商品'),
-    ('categories', '分类'),
+    ('categories_item', '商品分类'),
+    ('categories_client', '店铺分类'),
     ('payment_accounts', '收款账户'),
-    ('sales', '出货单'),
-    ('purchases', '进货单'),
+    // 出货/进货按商品明细行数统计（不是单据数：一张单多商品 = 多明细行）
+    ('sale_items', '出货商品'),
+    ('purchase_items', '进货商品'),
     ('payments', '收款单'),
   ];
 
@@ -100,9 +102,33 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     var localSynced = false;
     String? localError;
     try {
+      // 普通实体：读本地库对应 store 计数
       for (final (store, _) in _entities) {
-        local[store] = (await LocalDb.getAll(store)).length;
+        local[store] = 0;
       }
+      final allClients = await LocalDb.getAllByName('clients');
+      final allItems = await LocalDb.getAll('items');
+      final allCats = await LocalDb.getAll('categories');
+      final allSales = await LocalDb.getAll('sales');
+      final allPurchases = await LocalDb.getAll('purchases');
+      final allPayments = await LocalDb.getAll('payments');
+      // 店铺/商品数量
+      local['clients'] = allClients.length;
+      local['items'] = allItems.length;
+      // 分类：商品分类 / 店铺分类分开统计（按 type 过滤）
+      local['categories_item'] =
+          allCats.where((c) => '${c['type'] ?? ''}' == 'item').length;
+      local['categories_client'] =
+          allCats.where((c) => '${c['type'] ?? ''}' == 'client').length;
+      // 收款账户
+      local['payment_accounts'] = (await LocalDb.getAll('payment_accounts')).length;
+      // 出货/进货按商品明细行数计算（一张单多商品 = 多行；不是单据数）
+      local['sale_items'] = allSales.fold<int>(
+          0, (s, x) => s + ((x['items'] as List?)?.length ?? 0));
+      local['purchase_items'] = allPurchases.fold<int>(
+          0, (s, x) => s + ((x['items'] as List?)?.length ?? 0));
+      // 收款单数
+      local['payments'] = allPayments.length;
       pending = await SyncService.pendingCount();
       deviceId = await SyncService.deviceId();
       lastSync = (await SyncService.lastSyncAt()) ?? '';
