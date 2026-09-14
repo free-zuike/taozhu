@@ -159,7 +159,8 @@ class _CleanupPageState extends State<CleanupPage> {
       // 附件本地副本（attachments/{entity}/{id}/ 目录）：随账号下载的图片缓存。
       // **只列"孤儿"附件**——服务器/本地库已无对应单据或明细行的副本（单据删除后残留）才可清理；
       // 使用中的图片（对应出货/进货/收款或其明细行仍存在）不列出，防止误删。
-      // "在用"判断：本地库镜像 + 服务器在用单据**并集**（任一来源可用即正确判断，不因本地库缺失而误列/漏列）。
+      // "在用"判断：服务器在用单据（权威）+ 本地库镜像**并集**，两者任一匹配即视为在用；
+      // 确保本地库 id 与附件目录不一致时服务器仍能兜底，使用中凭证绝不误列。
       if (!kIsWeb) {
         final inUse = <String, Set<String>>{};
         void addUse(String entity, String id) {
@@ -195,40 +196,38 @@ class _CleanupPageState extends State<CleanupPage> {
             addUse('payment', '${p['id'] ?? ''}');
           }
         } catch (_) {}
-        // ② 服务器在用单据（在线补充：本地库缺失/未同步时仍能正确判断在用）
+        // ② 服务器在用单据（权威补充：无论本地库是否有数据都拉取并集，防本地库 id 不匹配误判）
         var serverHasData = false;
-        if (!localHasData) {
-          try {
-            final results = await Future.wait([
-              Api.instance.get('/sales?limit=5000').timeout(const Duration(seconds: 8)),
-              Api.instance.get('/purchases?limit=5000').timeout(const Duration(seconds: 8)),
-              Api.instance.get('/payments?limit=5000').timeout(const Duration(seconds: 8)),
-            ]);
-            final sales = ((results[0]['sales'] as List?) ?? []);
-            serverHasData = serverHasData || sales.isNotEmpty;
-            for (final s in sales) {
-              final sm = s as Map;
-              addUse('sale', '${sm['id'] ?? ''}');
-              for (final it in ((sm['items'] as List?) ?? [])) {
-                addUse('sale_item', '${(it as Map)['id'] ?? ''}');
-              }
+        try {
+          final results = await Future.wait([
+            Api.instance.get('/sales?limit=5000').timeout(const Duration(seconds: 8)),
+            Api.instance.get('/purchases?limit=5000').timeout(const Duration(seconds: 8)),
+            Api.instance.get('/payments?limit=5000').timeout(const Duration(seconds: 8)),
+          ]);
+          final sales = ((results[0]['sales'] as List?) ?? []);
+          serverHasData = serverHasData || sales.isNotEmpty;
+          for (final s in sales) {
+            final sm = s as Map;
+            addUse('sale', '${sm['id'] ?? ''}');
+            for (final it in ((sm['items'] as List?) ?? [])) {
+              addUse('sale_item', '${(it as Map)['id'] ?? ''}');
             }
-            final purchases = ((results[1]['purchases'] as List?) ?? []);
-            serverHasData = serverHasData || purchases.isNotEmpty;
-            for (final p in purchases) {
-              final pm = p as Map;
-              addUse('purchase', '${pm['id'] ?? ''}');
-              for (final it in ((pm['items'] as List?) ?? [])) {
-                addUse('purchase_item', '${(it as Map)['id'] ?? ''}');
-              }
+          }
+          final purchases = ((results[1]['purchases'] as List?) ?? []);
+          serverHasData = serverHasData || purchases.isNotEmpty;
+          for (final p in purchases) {
+            final pm = p as Map;
+            addUse('purchase', '${pm['id'] ?? ''}');
+            for (final it in ((pm['items'] as List?) ?? [])) {
+              addUse('purchase_item', '${(it as Map)['id'] ?? ''}');
             }
-            final pays = ((results[2]['payments'] as List?) ?? []);
-            serverHasData = serverHasData || pays.isNotEmpty;
-            for (final p in pays) {
-              addUse('payment', '${(p as Map)['id'] ?? ''}');
-            }
-          } catch (_) {}
-        }
+          }
+          final pays = ((results[2]['payments'] as List?) ?? []);
+          serverHasData = serverHasData || pays.isNotEmpty;
+          for (final p in pays) {
+            addUse('payment', '${(p as Map)['id'] ?? ''}');
+          }
+        } catch (_) {}
         final root = await getApplicationDocumentsDirectory();
         final att = Directory('${root.path}/attachments');
         // 两种来源都拿不到在用数据（离线且本地库空）→ 无法判断在用，暂不列出附件（宁可不清理不误删）

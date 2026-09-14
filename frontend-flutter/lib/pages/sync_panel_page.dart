@@ -292,14 +292,13 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
           addUse('payment', '${p['id'] ?? ''}');
         }
       } catch (_) {}
-      // 本地库无单据数据 → 服务器在用单据兜底（与存储清理页一致）
-      if (!localHasData) {
-        try {
-          final results = await Future.wait([
-            Api.instance.get('/sales?limit=5000').timeout(const Duration(seconds: 8)),
-            Api.instance.get('/purchases?limit=5000').timeout(const Duration(seconds: 8)),
-            Api.instance.get('/payments?limit=5000').timeout(const Duration(seconds: 8)),
-          ]);
+      // 服务器在用单据补充（无论本地库是否有数据都并集，防本地库 id 不匹配误判；与存储清理页一致）
+      try {
+        final results = await Future.wait([
+          Api.instance.get('/sales?limit=5000').timeout(const Duration(seconds: 8)),
+          Api.instance.get('/purchases?limit=5000').timeout(const Duration(seconds: 8)),
+          Api.instance.get('/payments?limit=5000').timeout(const Duration(seconds: 8)),
+        ]);
           final sales = ((results[0]['sales'] as List?) ?? []);
           for (final s in sales) {
             final sm = s as Map;
@@ -321,7 +320,6 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
             addUse('payment', '${(p as Map)['id'] ?? ''}');
           }
         } catch (_) {}
-      }
       final root = await getApplicationDocumentsDirectory();
       final dir = Directory('${root.path}/attachments');
       if (!dir.existsSync()) return 0;

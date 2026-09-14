@@ -504,7 +504,7 @@ class _LedgerPageState extends State<LedgerPage> {
               const SizedBox(width: 3),
               col('售出（出货）', sold, c.primary),
               const SizedBox(width: 3),
-              col('收入（收款）', income, c.success),
+              col('收入（收款）', income, income > 0 ? c.success : c.warning),
               const SizedBox(width: 3),
               col('结余', balance, balance >= 0 ? c.success : c.danger),
             ],

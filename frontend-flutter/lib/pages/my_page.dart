@@ -279,6 +279,46 @@ class _MyPageState extends State<MyPage> {
     return '${t.month}月${t.day}日 ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
   }
 
+  /// 更新说明逐行渲染（GitHub release body 是 markdown，逐行清洗展示）：
+  /// 以「# / - / 数字. 」开头的行转标题/列表，其余为普通文本；空行留间隔。
+  static List<Widget> _renderNotes(String notes, TaozhuColors c) {
+    final widgets = <Widget>[];
+    final lines = notes.split('\n');
+    for (final raw in lines) {
+      final line = raw.trim();
+      if (line.isEmpty) {
+        widgets.add(const SizedBox(height: 4));
+        continue;
+      }
+      // 清洗 markdown 符号：加粗/链接/行内代码等
+      String text = line
+          .replaceAll(RegExp(r'\*\*(.+?)\*\*'), r'$1')
+          .replaceAll(RegExp(r'\*(.+?)\*'), r'$1')
+          .replaceAll(RegExp(r'`(.+?)`'), r'$1')
+          .replaceAll(RegExp(r'\[(.+?)\]\(.+?\)'), r'$1')
+          .replaceAll(RegExp(r'^#+\s*'), '')
+          .replaceAll(RegExp(r'^[-*]\s*'), '• ')
+          .replaceAll(RegExp(r'^\d+[.)]\s*'), '');
+      if (text.trim().isEmpty) continue;
+      // 标题行（原本 # 开头）加粗；列表项前缀 • 保持缩进
+      final isTitle = RegExp(r'^#+\s').hasMatch(line);
+      final isList = RegExp(r'^[-*]\s').hasMatch(line);
+      widgets.add(Padding(
+        padding: EdgeInsets.only(left: isList ? 8 : 0, top: 2, bottom: 2),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: isTitle ? 13 : 12,
+            color: isTitle ? c.textMain : c.textSub,
+            fontWeight: isTitle ? FontWeight.w700 : FontWeight.w400,
+            height: 1.4,
+          ),
+        ),
+      ));
+    }
+    return widgets;
+  }
+
   /// 备份导出/导入已迁移到「数据备份」页（BackupPage）
   Future<void> _logout() async {
     await _clearAccountData();
@@ -440,8 +480,8 @@ class _MyPageState extends State<MyPage> {
                     const SizedBox(height: 10),
                     const Text('更新内容', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                     const SizedBox(height: 4),
-                    Text(notes,
-                        style: TextStyle(fontSize: 12, color: c.textSub, height: 1.5)),
+                    // 更新说明逐行渲染：识别标题/列表项/普通文本，去掉 markdown 符号（好看易读）
+                    ..._renderNotes(notes, c),
                   ] else ...[
                     const SizedBox(height: 10),
                     const Text('更新内容', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
