@@ -280,16 +280,18 @@ class _MyPageState extends State<MyPage> {
   }
 
   /// 更新说明逐行渲染（GitHub release body 是 markdown，逐行清洗展示）：
-  /// 以「# / - / 数字. 」开头的行转标题/列表，其余为普通文本；空行留间隔。
+  /// ① 先按原始换行拆行；② 每行内再用中文分号「；」/英文「;」拆成多条（commit 用①…②…揉一行，
+  /// 拆开后一条更新占一行）；③ 列表项加 • 前缀、标题加粗，清洗 markdown 符号；空行留间隔。
   static List<Widget> _renderNotes(String notes, TaozhuColors c) {
     final widgets = <Widget>[];
-    final lines = notes.split('\n');
-    for (final raw in lines) {
-      final line = raw.trim();
-      if (line.isEmpty) {
-        widgets.add(const SizedBox(height: 4));
-        continue;
-      }
+    // 拆出行：先按换行，再按分号拆（避免"一条更新"挤在一行）
+    final lines = notes
+        .split('\n')
+        .expand((l) => l.split(RegExp(r'[；;]')))
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    for (final line in lines) {
       // 清洗 markdown 符号：加粗/链接/行内代码等
       String text = line
           .replaceAll(RegExp(r'\*\*(.+?)\*\*'), r'$1')
@@ -297,16 +299,16 @@ class _MyPageState extends State<MyPage> {
           .replaceAll(RegExp(r'`(.+?)`'), r'$1')
           .replaceAll(RegExp(r'\[(.+?)\]\(.+?\)'), r'$1')
           .replaceAll(RegExp(r'^#+\s*'), '')
-          .replaceAll(RegExp(r'^[-*]\s*'), '• ')
-          .replaceAll(RegExp(r'^\d+[.)]\s*'), '');
-      if (text.trim().isEmpty) continue;
-      // 标题行（原本 # 开头）加粗；列表项前缀 • 保持缩进
+          .replaceAll(RegExp(r'^[-*\d.\s]+'), '')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (text.isEmpty) continue;
       final isTitle = RegExp(r'^#+\s').hasMatch(line);
-      final isList = RegExp(r'^[-*]\s').hasMatch(line);
+      final isList = line.startsWith('-') || line.startsWith('*') || line.startsWith('·');
       widgets.add(Padding(
         padding: EdgeInsets.only(left: isList ? 8 : 0, top: 2, bottom: 2),
         child: Text(
-          text,
+          isList ? '• $text' : text,
           style: TextStyle(
             fontSize: isTitle ? 13 : 12,
             color: isTitle ? c.textMain : c.textSub,

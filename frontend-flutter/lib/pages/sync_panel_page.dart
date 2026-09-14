@@ -253,88 +253,25 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   }
 
   /// 全部本地附件副本计数（App 文档目录 attachments/ 递归；Web 无本地副本返回 0）。
-  /// **只统计在用实体的附件**（仍有对应出货/进货/收款或明细行的单元）；
-  /// 孤儿附件（单据已删的残留）不计数——同步记录反映"正在使用的数据"，孤儿由存储清理页处理。
-  /// 本地库为空（未同步/读不到）时用服务器在用单据 id 兜底，避免误显示 0。
+  /// **直接数附件目录全部文件数**（本地实际存在多少副本就是多少，与服务器 R2 总数对应对比，
+  /// 不做在用/孤儿过滤——孤儿归存储清理页决策）。
   Future<int> _localAllAttachCount() async {
     if (kIsWeb) return 0;
     try {
-      final inUse = <String, Set<String>>{};
-      void addUse(String entity, String id) {
-        if (id.isEmpty) return;
-        (inUse[entity] ??= {}).add(id);
-      }
-      var localHasData = false;
-      try {
-        final sales = await LocalDb.getAll('sales');
-        localHasData = localHasData || sales.isNotEmpty;
-        for (final s in sales) {
-          addUse('sale', '${s['id'] ?? ''}');
-          for (final it in ((s['items'] as List?) ?? [])) {
-            addUse('sale_item', '${(it as Map)['id'] ?? ''}');
-          }
-        }
-      } catch (_) {}
-      try {
-        final purchases = await LocalDb.getAll('purchases');
-        localHasData = localHasData || purchases.isNotEmpty;
-        for (final p in purchases) {
-          addUse('purchase', '${p['id'] ?? ''}');
-          for (final it in ((p['items'] as List?) ?? [])) {
-            addUse('purchase_item', '${(it as Map)['id'] ?? ''}');
-          }
-        }
-      } catch (_) {}
-      try {
-        final pays = await LocalDb.getAll('payments');
-        localHasData = localHasData || pays.isNotEmpty;
-        for (final p in pays) {
-          addUse('payment', '${p['id'] ?? ''}');
-        }
-      } catch (_) {}
-      // 服务器在用单据补充（无论本地库是否有数据都并集，防本地库 id 不匹配误判；与存储清理页一致）
-      try {
-        final results = await Future.wait([
-          Api.instance.get('/sales?limit=5000').timeout(const Duration(seconds: 8)),
-          Api.instance.get('/purchases?limit=5000').timeout(const Duration(seconds: 8)),
-          Api.instance.get('/payments?limit=5000').timeout(const Duration(seconds: 8)),
-        ]);
-          final sales = ((results[0]['sales'] as List?) ?? []);
-          for (final s in sales) {
-            final sm = s as Map;
-            addUse('sale', '${sm['id'] ?? ''}');
-            for (final it in ((sm['items'] as List?) ?? [])) {
-              addUse('sale_item', '${(it as Map)['id'] ?? ''}');
-            }
-          }
-          final purchases = ((results[1]['purchases'] as List?) ?? []);
-          for (final p in purchases) {
-            final pm = p as Map;
-            addUse('purchase', '${pm['id'] ?? ''}');
-            for (final it in ((pm['items'] as List?) ?? [])) {
-              addUse('purchase_item', '${(it as Map)['id'] ?? ''}');
-            }
-          }
-          final pays = ((results[2]['payments'] as List?) ?? []);
-          for (final p in pays) {
-            addUse('payment', '${(p as Map)['id'] ?? ''}');
-          }
-        } catch (_) {}
       final root = await getApplicationDocumentsDirectory();
       final dir = Directory('${root.path}/attachments');
       if (!dir.existsSync()) return 0;
       var n = 0;
-      for (final e in dir.listSync()) {
-        if (e is! Directory) continue;
-        final entityName = e.uri.pathSegments.last;
-        for (final f in e.listSync()) {
-          if (f is! Directory) continue;
-          final idName = f.uri.pathSegments.last;
-          if ((inUse[entityName] ?? {}).contains(idName)) {
+      try {
+        // att/{entity}/{id}/file.jpg 三层结构
+        for (final e in dir.listSync()) {
+          if (e is! Directory) continue;
+          for (final f in e.listSync()) {
+            if (f is! Directory) continue;
             n += f.listSync().whereType<File>().length;
           }
         }
-      }
+      } catch (_) {}
       return n;
     } catch (_) {
       return 0;
