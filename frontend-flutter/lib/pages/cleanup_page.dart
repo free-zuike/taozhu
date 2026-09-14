@@ -33,7 +33,8 @@ class _CacheFile {
     if (n.endsWith('.zip')) return 'zip';
     if (n == 'avatar.jpg') return 'avatar';
     if (n.startsWith('taozhu_ro_') && n.endsWith('.db')) return 'dbbak';
-    if (path.contains('/attachments/')) return 'attach'; // 附件文件路径形如 .../attachments/sale/s1/xxx.jpg
+    // 附件文件路径形如 .../attachments/sale/s1/xxx.jpg（Windows 路径为反斜杠，两者都判）
+    if (path.contains('/attachments/') || path.contains('\\attachments\\')) return 'attach';
     return 'other';
   }
 }
@@ -241,6 +242,17 @@ class _CleanupPageState extends State<CleanupPage> {
             addUse('payment', '${(p as Map)['id'] ?? ''}');
           }
         } catch (_) {}
+        // ③ 服务器在用附件（beecount 同款的"引用"判定：交易引用的附件文件 = 在用）：
+        // /attachments/in-use 基于 D1 单据全表给出在用 key，把其 entity/id 并入在用集合——
+        // 主扫描按目录跳过（交易引用过的附件副本绝不出现在可清理列表）
+        try {
+          final du = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
+          for (final a in ((du['attachments'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+            final key = '${a['key'] ?? ''}';
+            final m = RegExp(r'attachments/([a-z_]+)/([^/]+)/[^/]+$').firstMatch(key);
+            if (m != null) addUse(m.group(1)!, m.group(2)!);
+          }
+        } catch (_) {}
         final root = await getApplicationDocumentsDirectory();
         final att = Directory('${root.path}/attachments');
         // 两种来源都拿不到在用数据（离线且本地库空）→ 无法判断在用，暂不列出附件（宁可不清理不误删）
@@ -292,23 +304,6 @@ class _CleanupPageState extends State<CleanupPage> {
       }
     } catch (e) {
       toast(context, '扫描失败：${e.toString().replaceFirst('Exception: ', '')}');
-    }
-    // 在用附件二次校验：服务器 /attachments/in-use 返回全部在用 key（含其 entity/id）。
-    // 任一本地副本若与在用 key 同名同目录 → 在用，从列表中剔除（防止把正在使用的凭证误列为孤儿）
-    if (!kIsWeb) {
-      try {
-        final du = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
-        final inUseKeys = ((du['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
-        if (inUseKeys.isNotEmpty) {
-          final inUseSet = <String>{};
-          for (final a in inUseKeys) {
-            final key = '${a['key'] ?? ''}';
-            final m = RegExp(r'attachments/([a-z_]+)/([^/]+)/([^/]+)$').firstMatch(key);
-            if (m != null) inUseSet.add('${m.group(1)}/${m.group(2)}/${m.group(3)}');
-          }
-          files.removeWhere((f) => f.kind == 'attach' && inUseSet.contains(f.name));
-        }
-      } catch (_) {}
     }
     if (!mounted) return;
     setState(() {

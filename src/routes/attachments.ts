@@ -58,6 +58,11 @@ attachmentsRouter.post('/', async (c) => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const key = imageKey('attachments', [entity, id], bytes);
   await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
+  // 附件引用表（beecount 式）：记录"哪个实体引用了哪个文件"。幂等：同 entity+entity_id+key 已存在则跳过，
+  // 不同实体引用同一内容（同 md5 不同 key）各自一行——多单共用不互相影响
+  await c.env.DB.prepare(
+    'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
+  ).bind(`${entity}:${id}:${key}`, entity, id, key, key.split('/').pop()?.replace('.jpg', '') ?? '').run();
   // 附件增删实时同步：广播 {type:'sync'}，其他在线端收到后拉取并刷新附件计数/图标
   await notifyClients();
   return c.json({ key }, 201);
@@ -283,6 +288,8 @@ attachmentsRouter.delete('/orphans', adminOnly(), async (c) => {
     if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) continue; // 在用防误删
     try {
       await store.delete(key);
+      // 引用行同步清理（孤儿本来就不应存在引用；防御性删除防脏引用残留）
+      await db.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run();
       deleted++;
     } catch (_) {}
   }
@@ -300,11 +307,14 @@ attachmentsRouter.get('/:key{.+}', async (c) => {
   return new Response(obj.body, { headers });
 });
 
-// DELETE /attachments?key= — 删除附件
+// DELETE /attachments?key= — 删除附件（文件 + 引用行一起删）
 attachmentsRouter.delete('/', async (c) => {
   const key = c.req.query('key');
   if (!key) return c.json({ error: 'key 必填' }, 400);
   await createStorage(c.env).delete(key);
+  try {
+    await c.env.DB.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run();
+  } catch (_) {}
   await notifyClients();
   return c.body(null, 204);
 });

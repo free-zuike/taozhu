@@ -236,6 +236,45 @@ describe('交易附件（R2）', () => {
     expect(scan.attachments.length).toBe(1);
   });
 
+  it('附件引用表：上传写引用、删附件清引用、删单据级联清引用', async () => {
+    // 建真实单据
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-05',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+
+    // 上传 → refs 表有对应行
+    const up = await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json() as { key: string };
+    const refs = await (env.DB as FakeD1).prepare(
+      "SELECT id, entity, entity_id, file_key FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
+    ).bind(saleId).all<{ id: string; entity: string; entity_id: string; file_key: string }>();
+    expect(refs.results.length).toBe(1);
+    expect(refs.results[0].file_key).toBe(up.key);
+
+    // 删除单个附件 → refs 行被清
+    await call(env, 'DELETE', `/api/v1/attachments?key=${up.key}`, token);
+    const afterDel = await (env.DB as FakeD1).prepare(
+      "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
+    ).bind(saleId).first<{ n: number }>();
+    expect(afterDel?.n ?? 0).toBe(0);
+
+    // 重新上传，删单据 → 级联清引用
+    const up2 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+    const delSale = await call(env, 'DELETE', `/api/v1/sales/${saleId}`, token);
+    expect(delSale.status).toBe(204);
+    const afterSale = await (env.DB as FakeD1).prepare("SELECT COUNT(*) AS n FROM attachment_refs").first<{ n: number }>();
+    expect(afterSale?.n ?? 0).toBe(0);
+  });
+
   it('删除孤儿：仅删无引用的附件，在用附件不动；非 admin 拒绝', async () => {
     // 塞孤儿 + 在用
     await call(env, 'POST', '/api/v1/clients', token, { name: '店B' });

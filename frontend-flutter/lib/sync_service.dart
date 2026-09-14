@@ -246,8 +246,7 @@ class SyncService {
       await p.setInt(_cursorKey, cursor);
       await p.setBool(_fullDoneKey, true);
       await _markSynced();
-      // 全量同步后补齐在用附件本地副本（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）
-      unawaited(downloadInUseAttachments());
+      // 在用附件本地副本补齐已统一在 sync() 编排末尾执行（全量/增量同一入口）
       // 全量同步数量含全部实体（含分类、收款账户）——同步面板日志/统计口径与实体数一致
       return clients.length + items.length + categories.length + accounts.length +
           sales.length + purchases.length + payments.length;
@@ -452,6 +451,8 @@ class SyncService {
 
   /// 启动/回前台同步：首次 full，后续增量 pull + 推送待发（静默）。
   /// 同步中会通知 status 监听者（「我的」页实时显示 同步中/已同步/同步失败）。
+  /// 编排对齐 beecount sync()：实体 pull/push 完成后统一补齐在用附件本地副本
+  /// （upload 由页面落库时直接调云端接口上传；download 在此处补本地缺失副本）。
   static Future<void> sync() async {
     if (kIsWeb) return;
     _lastSyncFailed = false;
@@ -470,6 +471,9 @@ class SyncService {
       }
       pushed = await pushPending();
       appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条', level: 'info');
+      // 同步完成后补齐在用附件本地副本（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）：
+      // 全量/增量同一入口，静默失败不阻塞同步状态
+      unawaited(downloadInUseAttachments());
     } catch (e) {
       _lastSyncFailed = true;
       appLog('sync', '同步失败: ${e.toString().split('\n').first}', level: 'error');

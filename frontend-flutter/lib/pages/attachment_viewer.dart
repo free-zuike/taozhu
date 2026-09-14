@@ -95,34 +95,12 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         if (_index < 0) _index = 0;
         _loading = false;
       });
-      // 查看即落盘：本地无副本的图从云端下载写入本地目录（此后离线也可看，本地优先不裸网络兜底）
-      _cacheMissingLocals(dir);
+      // 附件本地副本由「同步状态页」同步时统一补齐（downloadInUseAttachments，fullSync 后执行）；
+      // 此处不做任何下载——页面不自行同步（本地优先铁律：数据同步只能从同步状态入口发生）
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
       toast(context, e.toString().replaceFirst('Exception: ', ''));
-    }
-  }
-
-  /// 把本地缺失副本的云端附件下载到本地 attachments/{entity}/{id}/（逐张静默，失败跳过下次再试）
-  Future<void> _cacheMissingLocals(Directory? dir) async {
-    if (dir == null || kIsWeb) return;
-    for (var i = 0; i < _items.length; i++) {
-      final it = _items[i];
-      if (it.localPath != null && File(it.localPath!).existsSync()) continue;
-      final file = it.key.split('/').last;
-      try {
-        final bytes = await Api.instance.getRaw('/attachments/${it.key}').timeout(const Duration(seconds: 12));
-        final target = File('${dir.path}/$file');
-        if (bytes.isNotEmpty && !target.existsSync()) {
-          await target.writeAsBytes(bytes);
-          if (mounted) {
-            setState(() => _items[i] = _Item(it.key, target.path));
-          }
-        }
-      } catch (_) {
-        // 单张失败跳过：下次进入仍可重试
-      }
     }
   }
 

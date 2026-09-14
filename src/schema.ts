@@ -157,6 +157,16 @@ const DDL: string[] = [
     updated_by_username TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON sync_changes (entity_type, entity_sync_id)`,
+  `CREATE TABLE IF NOT EXISTS attachment_refs (
+    id TEXT PRIMARY KEY,
+    entity TEXT NOT NULL,          -- sale | purchase | payment | sale_item | purchase_item
+    entity_id TEXT NOT NULL,
+    file_key TEXT NOT NULL,        -- R2 唯一 key（taozhu/images/attachments/...）
+    md5 TEXT NOT NULL,             -- 内容去重（一图多单共用：同 md5 多个实体各自引用）
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_attachment_refs_entity ON attachment_refs (entity, entity_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_attachment_refs_key ON attachment_refs (file_key)`,
 ];
 
 let schemaReady = false;
@@ -202,6 +212,18 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!syncTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS sync_changes'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
+    }
+    // v0.17.84.0：附件引用表 attachment_refs（beecount 式：文件被哪些实体引用 → 孤儿=零引用）
+    const aRefTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachment_refs'",
+    ).first<{ name: string }>();
+    if (!aRefTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS attachment_refs'));
+      await db.batch([
+        db.prepare(DDL[i]),
+        db.prepare(DDL[i + 1]), // idx_attachment_refs_entity
+        db.prepare(DDL[i + 2]), // idx_attachment_refs_key
+      ]);
     }
     // v0.17.68.0：收款账户 payment_accounts（收款方式预设：现金/微信/支付宝等，同步实体）
     const paTable = await db.prepare(

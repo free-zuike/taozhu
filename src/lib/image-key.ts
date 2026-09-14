@@ -21,7 +21,8 @@ export function attachmentPrefixesOf(entity: string, id: string): string[] {
   ];
 }
 
-/** 删除某交易的全部附件对象（分页列 + 逐个删；删除交易后调用，避免 R2 残留孤儿文件） */
+/** 删除某交易的全部附件对象（分页列 + 逐个删；删除交易后调用，避免 R2 残留孤儿文件）。
+ *  同时删除 attachment_refs 引用行（beecount 式：实体删除 → 引用删除 → 文件由孤儿清理兜底） */
 export async function deleteEntityAttachments(env: Env, entity: string, id: string): Promise<void> {
   const store: AttachmentStorage = createStorage(env);
   for (const prefix of attachmentPrefixesOf(entity, id)) {
@@ -31,5 +32,10 @@ export async function deleteEntityAttachments(env: Env, entity: string, id: stri
       for (const o of r.objects) await store.delete(o.key);
       cursor = r.truncated ? r.cursor : undefined;
     } while (cursor);
+  }
+  try {
+    await env.DB.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind(entity, id).run();
+  } catch (_) {
+    // 引用清理失败不阻断：孤儿扫描仍可兜底
   }
 }
