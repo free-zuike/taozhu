@@ -216,7 +216,8 @@ class _MyPageState extends State<MyPage> {
     } catch (_) {}
   }
 
-  /// 本地核算统计卡（仅老板）：记账天数（最早一笔记账至今）/ 当前店铺总笔数 / 总账本结余（Σ出货−Σ收款）。
+  /// 本地核算统计卡（仅老板）：记账天数（最早一笔记账至今）/ 当前店铺总笔数 / 店铺结余。
+  /// 店铺结余 = 当前店铺收款 − 进货（全店通用）＝结账后的盈利（与交易页月度结余口径一致）。
   /// Web 无本地库：跳过（显示 0，由老板在 App/统计页查看）。
   Future<void> _loadStats() async {
     if (kIsWeb) return;
@@ -253,19 +254,20 @@ class _MyPageState extends State<MyPage> {
           ? 0
           : sales.where((s) => '${s['client_id']}' == selId).length +
               pays.where((p) => '${p['client_id']}' == selId).length;
-      // 店铺结余 = 当前店铺 Σ出货 − Σ收款（含减免=平账，与欠款口径一致）；
-      // 全部店铺合计结余在「统计」页查看
-      final salesTotal = sales
-          .where((s) => selId == null || '${s['client_id']}' == selId)
-          .fold<double>(0, (s, x) => s + ((x['total'] as num?)?.toDouble() ?? 0));
-      final paysTotal = pays
+      // 店铺结余 = 当前店铺收款（含减免=平账） − 进货（全店通用）＝结账后的盈利
+      final paidTotal = pays
           .where((p) => selId == null || '${p['client_id']}' == selId)
           .fold<double>(0,
               (s, x) => s + ((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0));
+      var purchaseTotal = 0.0;
+      try {
+        final buys = await LocalDb.getAll('purchases');
+        purchaseTotal = buys.fold<double>(0, (s, x) => s + ((x['total'] as num?)?.toDouble() ?? 0));
+      } catch (_) {}
       setState(() {
         _bookDays = days;
         _curClientCount = curCount;
-        _totalBalance = salesTotal - paysTotal;
+        _totalBalance = paidTotal - purchaseTotal;
       });
     } catch (_) {}
   }

@@ -335,10 +335,13 @@ class _LedgerPageState extends State<LedgerPage> {
         _offline = false;
       });
     } catch (_) {
-      // 网络失败不打扰（本地数据已展示）；本地无数据时标记离线态
-      if (mounted && firstLocal.isEmpty) {
-        setState(() => _offline = true);
-      }
+      // 网络失败：Web 无本地库（无法离线展示）→ 复位 loading 显示空态/错误，不显示"离线数据"横幅；
+      // 原生已有本地数据展示，静默即可；本地也无数据时标记离线态
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        if (!kIsWeb && firstLocal.isEmpty) _offline = true;
+      });
     }
   }
 
@@ -492,8 +495,6 @@ class _LedgerPageState extends State<LedgerPage> {
                 onPressed: () => _shiftMonth(1),
               ),
               const Spacer(),
-              Text('支出=进货 · 售出=出货 · 收入=收款',
-                  style: TextStyle(fontSize: 10, color: c.textSub)),
             ],
           ),
           const SizedBox(height: 2),

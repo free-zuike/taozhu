@@ -372,7 +372,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                       onPressed: () => _shiftMonth(1),
                     ),
                     const Spacer(),
-                    Text('支出=进货', style: TextStyle(fontSize: 10, color: c.textSub)),
                   ],
                 ),
                 const SizedBox(height: 4),

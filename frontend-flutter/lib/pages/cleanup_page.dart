@@ -156,18 +156,21 @@ class _CleanupPageState extends State<CleanupPage> {
         await scan(await getTemporaryDirectory());
       }
       // 附件本地副本（attachments/{entity}/{id}/ 目录）：随账号下载的图片缓存。
-      // **只列"孤儿"附件**——本地库中已无对应单据/明细行的副本（单据删除后残留）才可清理；
+      // **只列"孤儿"附件**——服务器/本地库已无对应单据或明细行的副本（单据删除后残留）才可清理；
       // 使用中的图片（对应出货/进货/收款或其明细行仍存在）不列出，防止误删。
-      // 每张图片单独一行（行首缩略图），点「查看」全屏预览。
+      // "在用"判断：本地库镜像 + 服务器在用单据**并集**（任一来源可用即正确判断，不因本地库缺失而误列/漏列）。
       if (!kIsWeb) {
-        // 收集在用附件单元 id 集合（entity → id set）
         final inUse = <String, Set<String>>{};
         void addUse(String entity, String id) {
           if (id.isEmpty) return;
           (inUse[entity] ??= {}).add(id);
         }
+        // ① 本地库镜像（离线权威）
+        var localHasData = false;
         try {
-          for (final s in await LocalDb.getAll('sales')) {
+          final sales = await LocalDb.getAll('sales');
+          localHasData = localHasData || sales.isNotEmpty;
+          for (final s in sales) {
             addUse('sale', '${s['id'] ?? ''}');
             for (final it in ((s['items'] as List?) ?? [])) {
               addUse('sale_item', '${(it as Map)['id'] ?? ''}');
@@ -175,7 +178,9 @@ class _CleanupPageState extends State<CleanupPage> {
           }
         } catch (_) {}
         try {
-          for (final p in await LocalDb.getAll('purchases')) {
+          final purchases = await LocalDb.getAll('purchases');
+          localHasData = localHasData || purchases.isNotEmpty;
+          for (final p in purchases) {
             addUse('purchase', '${p['id'] ?? ''}');
             for (final it in ((p['items'] as List?) ?? [])) {
               addUse('purchase_item', '${(it as Map)['id'] ?? ''}');
@@ -183,13 +188,50 @@ class _CleanupPageState extends State<CleanupPage> {
           }
         } catch (_) {}
         try {
-          for (final p in await LocalDb.getAll('payments')) {
+          final pays = await LocalDb.getAll('payments');
+          localHasData = localHasData || pays.isNotEmpty;
+          for (final p in pays) {
             addUse('payment', '${p['id'] ?? ''}');
           }
         } catch (_) {}
+        // ② 服务器在用单据（在线补充：本地库缺失/未同步时仍能正确判断在用）
+        var serverHasData = false;
+        if (!localHasData) {
+          try {
+            final results = await Future.wait([
+              Api.instance.get('/sales?limit=5000').timeout(const Duration(seconds: 8)),
+              Api.instance.get('/purchases?limit=5000').timeout(const Duration(seconds: 8)),
+              Api.instance.get('/payments?limit=5000').timeout(const Duration(seconds: 8)),
+            ]);
+            final sales = ((results[0]['sales'] as List?) ?? []);
+            serverHasData = serverHasData || sales.isNotEmpty;
+            for (final s in sales) {
+              final sm = s as Map;
+              addUse('sale', '${sm['id'] ?? ''}');
+              for (final it in ((sm['items'] as List?) ?? [])) {
+                addUse('sale_item', '${(it as Map)['id'] ?? ''}');
+              }
+            }
+            final purchases = ((results[1]['purchases'] as List?) ?? []);
+            serverHasData = serverHasData || purchases.isNotEmpty;
+            for (final p in purchases) {
+              final pm = p as Map;
+              addUse('purchase', '${pm['id'] ?? ''}');
+              for (final it in ((pm['items'] as List?) ?? [])) {
+                addUse('purchase_item', '${(it as Map)['id'] ?? ''}');
+              }
+            }
+            final pays = ((results[2]['payments'] as List?) ?? []);
+            serverHasData = serverHasData || pays.isNotEmpty;
+            for (final p in pays) {
+              addUse('payment', '${(p as Map)['id'] ?? ''}');
+            }
+          } catch (_) {}
+        }
         final root = await getApplicationDocumentsDirectory();
         final att = Directory('${root.path}/attachments');
-        if (await att.exists()) {
+        // 两种来源都拿不到在用数据（离线且本地库空）→ 无法判断在用，暂不列出附件（宁可不清理不误删）
+        if (await att.exists() && (localHasData || serverHasData)) {
           await for (final entity in att.list(followLinks: false)) {
             if (entity is! Directory) continue;
             final entityName = entity.uri.pathSegments.last;
