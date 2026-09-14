@@ -162,7 +162,9 @@ class Api {
           return http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
               .timeout(const Duration(seconds: 8));
         case 'DELETE':
-          return http.delete(Uri.parse(url), headers: headers)
+          return (body == null
+                  ? http.delete(Uri.parse(url), headers: headers)
+                  : http.delete(Uri.parse(url), headers: headers, body: jsonEncode(body)))
               .timeout(const Duration(seconds: 8));
         default:
           return http.get(Uri.parse(url), headers: headers)
@@ -245,6 +247,8 @@ class Api {
   Future<Map<String, dynamic>> patch(String path, [Map<String, dynamic>? body]) =>
       request(path, method: 'PATCH', body: body);
   Future<Map<String, dynamic>> delete(String path) => request(path, method: 'DELETE');
+  Future<Map<String, dynamic>> deleteBody(String path, Map<String, dynamic> body) =>
+      request(path, method: 'DELETE', body: body);
 
   /// 读本地缓存（TTL 内返回缓存，未命中/过期返回 null）——下拉等常用数据秒开
   Future<Map<String, dynamic>?> getCached(String path, {Duration ttl = const Duration(minutes: 10)}) async {

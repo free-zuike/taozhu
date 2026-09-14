@@ -20,13 +20,13 @@ class CleanupPage extends StatefulWidget {
 class _CacheFile {
   final String name;
   final String path; // 文件路径（Android DownloadManager 返回；空=不可安装）
-  final String kind; // apk/zip/attach/avatar/dbbak/other
+  final String kind; // apk/zip/attach/cloudattach/dbbak/other
   int size; // 字节；0=未知
   bool selected = false;
-  _CacheFile(this.name, this.size, [this.path = ''])
-      : kind = _kindOf(name, path);
+  _CacheFile(this.name, this.size, [this.path = '', String? kind])
+      : kind = kind ?? _kindOf(name, path);
 
-  /// 文件类型：apk=安装包 / zip=压缩包 / attach=附件副本（图片文件）/ avatar=头像缓存 / dbbak=库重建备份 / other=临时文件
+  /// 文件类型：apk=安装包 / zip=压缩包 / attach=本地附件副本（图片文件）/ cloudattach=云端孤儿附件 / dbbak=库重建备份 / other=临时文件
   static String _kindOf(String name, String path) {
     final n = name.toLowerCase();
     if (n.endsWith('.apk')) return 'apk';
@@ -73,19 +73,32 @@ class _CleanupPageState extends State<CleanupPage> {
     );
   }
 
-  /// 查看附件图片：单张查看（f.path 是该图片文件）；同单元其余图片可左右滑动
+  /// 查看附件图片：预览**该分组全部附件**（不是单个交易）——
+  /// attach=本地孤儿全部文件左右滑动；cloudattach=云端孤儿全部用网络预览（带鉴权）。
   Future<void> _viewAttach(_CacheFile f) async {
-    final file = File(f.path);
-    if (!await file.exists()) {
-      toast(context, '图片不存在（可能已清理）');
+    // 云端孤儿：网络预览（key 即 R2 存储 key，经 /attachments/{key} 鉴权代理读取）
+    if (f.kind == 'cloudattach') {
+      final base = await Api.instance.getBase();
+      final token = await Api.instance.getTokenValue() ?? '';
+      final allCloud = _files.where((x) => x.kind == 'cloudattach').toList();
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => _CloudPhotoViewer(
+            keys: allCloud.map((x) => x.path).toList(),
+            base: base,
+            token: token,
+            initialKey: f.path,
+          ),
+        ),
+      );
       return;
     }
-    // 同目录图片（同一附件单元）一并预览
-    final dir = file.parent;
-    final files = dir
-        .listSync(followLinks: false)
-        .whereType<File>()
-        .where((x) => RegExp(r'\.(jpg|jpeg|png|webp|gif)$', caseSensitive: false).hasMatch(x.path))
+    // 本地孤儿：预览该分组全部附件文件（所有本地孤儿一张张滑动，而非单交易）
+    final files = _files
+        .where((x) => x.kind == 'attach' && File(x.path).existsSync())
+        .map((x) => File(x.path))
         .toList()
       ..sort((a, b) => a.path.compareTo(b.path));
     if (files.isEmpty) {
@@ -259,6 +272,21 @@ class _CleanupPageState extends State<CleanupPage> {
           }
         } catch (_) {}
       }
+      // 云端孤儿附件（R2 中无对应单据的残留图片，单据已删但云端未清）：**所有平台（含 Web）都扫描**——Web 无本地文件，云端孤儿就是清理对象
+      try {
+        final d = await Api.instance.get('/attachments/orphans').timeout(const Duration(seconds: 10));
+        final orphans = ((d['orphans'] as List?) ?? []).cast<Map<String, dynamic>>();
+        for (final o in orphans) {
+          final key = '${o['key'] ?? ''}';
+          if (key.isEmpty) continue;
+          files.add(_CacheFile(
+            key.split('/').last, // 文件名（md5.jpg）
+            ((o['size'] as num?) ?? 0).toInt(),
+            key, // path 存 key 供云端删除
+            'cloudattach',
+          ));
+        }
+      } catch (_) {};
     } catch (e) {
       toast(context, '扫描失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
@@ -290,6 +318,18 @@ class _CleanupPageState extends State<CleanupPage> {
     if (ok != true) return;
     setState(() => _busy = true);
     try {
+      // 云端孤儿附件（kind=cloudattach）：调服务器批量删除接口（DELETE /attachments/orphans）
+      final cloudKeys = _files
+          .where((f) => f.selected && f.kind == 'cloudattach' && f.path.isNotEmpty)
+          .map((f) => f.path)
+          .toList();
+      var cloudDelCount = 0;
+      if (cloudKeys.isNotEmpty) {
+        try {
+          final r = await Api.instance.deleteBody('/attachments/orphans', {'keys': cloudKeys});
+          cloudDelCount = ((r['deleted'] as num?) ?? 0).toInt();
+        } catch (_) {}
+      }
       // 通用：附件副本（kind=attach）/ 头像缓存（avatar）/ 库重建备份（dbbak）——
       // path 是真实文件路径，直接按文件删除（逐张独立删除）
       final fileDeletes = _files
@@ -312,10 +352,15 @@ class _CleanupPageState extends State<CleanupPage> {
           .map((f) => f.name)
           .toList();
       // 全选了且仅附件类 → 不再走系统下载器
+      final parts = <String>[
+        if (cloudDelCount > 0) '云端孤儿附件 $cloudDelCount 个',
+        if (fileDelCount > 0) '本地附件/缓存 $fileDelCount 个',
+      ];
+      final cloudNote = parts.join('、');
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android && names.isNotEmpty) {
         // Android 走系统下载器：删文件 + 移除下载记录（通知栏通知一并消失）
         final n = await _dlChannel.invokeMethod<int>('deleteFiles', {'names': names}) ?? 0;
-        toast(context, fileDelCount > 0 ? '已删除 $fileDelCount 个附件/缓存 + $n 个文件' : '已删除 $n 个文件');
+        toast(context, cloudNote.isNotEmpty ? '已删除 $cloudNote + $n 个文件' : '已删除 $n 个文件');
       } else if (!kIsWeb && names.isNotEmpty) {
         // 桌面：直接按名删除（下载目录/临时目录）
         var n = 0;
@@ -332,11 +377,11 @@ class _CleanupPageState extends State<CleanupPage> {
 
         await delIn(await getDownloadsDirectory());
         await delIn(await getTemporaryDirectory());
-        toast(context, fileDelCount > 0 ? '已删除 $fileDelCount 个附件/缓存 + $n 个文件' : '已删除 $n 个文件');
+        toast(context, cloudNote.isNotEmpty ? '已删除 $cloudNote + $n 个文件' : '已删除 $n 个文件');
       }
       // 仅选了附件/缓存类（无 apk/zip/other）或 Web：不触发下载器/下载目录逻辑
-      if (fileDelCount > 0 && names.isEmpty) {
-        toast(context, '已删除 $fileDelCount 个附件/缓存文件');
+      if ((fileDelCount > 0 || cloudDelCount > 0) && names.isEmpty) {
+        toast(context, cloudNote.isNotEmpty ? '已删除 $cloudNote' : '已删除 $fileDelCount 个附件/缓存文件');
       }
       await _load();
     } catch (e) {
@@ -381,8 +426,8 @@ class _CleanupPageState extends State<CleanupPage> {
                   const SizedBox(height: 4),
                   Text(
                     kIsWeb
-                        ? 'Web 版无本地文件'
-                        : '更新安装包（APK/Zip）、附件副本（逐张图片）、头像缓存、库重建备份与临时文件',
+                        ? '云端孤儿附件（服务器残留图片，可清理）'
+                        : '更新安装包（APK/Zip）、附件副本（逐张图片）、云端孤儿附件、头像缓存、库重建备份与临时文件',
                     style: TextStyle(fontSize: 12, color: c.textSub),
                   ),
                 ],
@@ -410,6 +455,7 @@ class _CleanupPageState extends State<CleanupPage> {
                             ('apk', '安装包（APK）', Icons.android),
                             ('zip', '压缩包（Zip）', Icons.archive_outlined),
                             ('attach', '附件副本（本地缓存）', Icons.image_outlined),
+                            ('cloudattach', '云端孤儿附件', Icons.cloud_off_outlined),
                             ('avatar', '头像缓存', Icons.account_circle_outlined),
                             ('dbbak', '库重建备份', Icons.storage_outlined),
                             ('other', '临时文件', Icons.description_outlined),
@@ -440,17 +486,20 @@ class _CleanupPageState extends State<CleanupPage> {
                                       // 整行点击=勾选删除；APK 行尾独立「安装」按钮（CheckboxListTile 无 trailing，用 ListTile+Checkbox 组合）
                                       ListTile(
                                         dense: true,
-                                        // 附件副本：直接显示图片缩略图（不再笼统显示"N 张"）
+                                        // 附件副本：直接显示图片缩略图（本地）；云端孤儿用图标（网络查看）
                                         leading: f.kind == 'attach'
                                             ? _thumb(f)
-                                            : Icon(f.kind == 'apk' ? Icons.android : (f.kind == 'zip' ? Icons.archive_outlined : (f.kind == 'avatar' ? Icons.account_circle_outlined : (f.kind == 'dbbak' ? Icons.storage_outlined : Icons.insert_drive_file_outlined))),
-                                            color: f.kind == 'apk' ? c.success : c.primary),
+                                            : Icon(f.kind == 'cloudattach'
+                                                ? Icons.cloud_off_outlined
+                                                : (f.kind == 'apk' ? Icons.android : (f.kind == 'zip' ? Icons.archive_outlined : (f.kind == 'avatar' ? Icons.account_circle_outlined : (f.kind == 'dbbak' ? Icons.storage_outlined : Icons.insert_drive_file_outlined)))),
+                                            color: f.kind == 'apk' ? c.success : (f.kind == 'cloudattach' ? c.warning : c.primary)),
                                         title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
                                         subtitle: Text(
                                           switch (f.kind) {
                                             'apk' => '${_fmtSize(f.size)} · APK 安装包',
                                             'zip' => '${_fmtSize(f.size)} · 压缩包',
                                             'attach' => '${_fmtSize(f.size)} · 附件图片',
+                                            'cloudattach' => '${_fmtSize(f.size)} · 云端孤儿（单据已删，可清理）',
                                             'avatar' => '${_fmtSize(f.size)} · 头像缓存',
                                             'dbbak' => '${_fmtSize(f.size)} · 本地库重建备份',
                                             _ => '${_fmtSize(f.size)} · 临时文件',
@@ -468,8 +517,8 @@ class _CleanupPageState extends State<CleanupPage> {
                                                 color: c.primary,
                                                 onPressed: () => _installFile(f),
                                               ),
-                                            // 附件副本：查看图片（本地全屏预览）
-                                            if (f.kind == 'attach')
+                                            // 附件副本 / 云端孤儿：查看图片（本地/网络全屏预览）
+                                            if (f.kind == 'attach' || f.kind == 'cloudattach')
                                               IconButton(
                                                 tooltip: '查看图片',
                                                 icon: const Icon(Icons.photo_outlined, size: 20),
@@ -575,6 +624,82 @@ class _LocalPhotoViewerState extends State<_LocalPhotoViewer> {
           child: Image.file(
             widget.files[i],
             fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined,
+                color: Color(0xFF9CA3AF), size: 40),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 云端孤儿附件全屏查看器：黑底 PageView，经 /attachments/{key} 鉴权代理读取
+class _CloudPhotoViewer extends StatefulWidget {
+  const _CloudPhotoViewer({
+    required this.keys,
+    required this.base,
+    required this.token,
+    this.initialKey,
+  });
+  final List<String> keys;
+  final String base;
+  final String token;
+  final String? initialKey;
+  @override
+  State<_CloudPhotoViewer> createState() => _CloudPhotoViewerState();
+}
+
+class _CloudPhotoViewerState extends State<_CloudPhotoViewer> {
+  late int _index;
+  late final PageController _pageCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = 0;
+    if (widget.initialKey != null) {
+      final i = widget.keys.indexOf(widget.initialKey!);
+      if (i >= 0) _index = i;
+    }
+    _pageCtrl = PageController(initialPage: _index);
+  }
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text('${_index + 1}/${widget.keys.length}',
+            style: const TextStyle(fontSize: 15)),
+      ),
+      body: PageView.builder(
+        controller: _pageCtrl,
+        itemCount: widget.keys.length,
+        onPageChanged: (i) => setState(() => _index = i),
+        itemBuilder: (_, i) => Center(
+          child: Image.network(
+            '${widget.base}/api/v1/attachments/${widget.keys[i]}',
+            fit: BoxFit.contain,
+            headers: widget.token.isEmpty
+                ? null
+                : {'Authorization': 'Bearer ${widget.token}'},
+            loadingBuilder: (_, child, progress) => progress == null
+                ? child
+                : const Center(
+                    child: SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    ),
+                  ),
             errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined,
                 color: Color(0xFF9CA3AF), size: 40),
           ),
