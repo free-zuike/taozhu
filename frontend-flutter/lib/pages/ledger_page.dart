@@ -47,7 +47,10 @@ class _LedgerPageState extends State<LedgerPage> {
   /// 月度结余（beecount 式三列卡）：支出=当月进货 / 收入=当前店铺出货 / 结余=收入−支出
   double _mIncome = 0;
   double _mExpense = 0;
-  double _mBalance = 0;
+  double _mIncome = 0; // 收入 = 收款（实收，未收为 0）
+  double _mExpense = 0; // 支出 = 进货（全店通用）
+  double _mSold = 0; // 售出 = 出货（当前店铺）
+  double _mBalance = 0; // 结余 = 收入 − 支出 = 收款 − 进货（收款后的盈利）
   bool _mLoaded = false; // 月度结余是否已加载（未加载显示占位符，不闪 0）
   int _selYear = DateTime.now().year; // 月度结余所选年份（beecount 式头部月份切换）
   int _selMonth = DateTime.now().month; // 所选月份
@@ -80,8 +83,11 @@ class _LedgerPageState extends State<LedgerPage> {
     if (!kIsWeb) _loadAttachCounts(withCloud: true);
   }
 
-  /// 加载所选月份的月度结余：收入=当前店铺出货（/stats/summary 带 client_id），
-  /// 支出=进货（全店通用，接口口径与店铺无关）；结余=收入−支出。
+  /// 加载所选月份的月度结余：
+  /// 售出=当前店铺出货（/stats/summary 带 client_id 的 sales_total），
+  /// 支出=进货（全店通用 purchase_total），
+  /// 收入=收款（带 client_id 的 paid_total，未收为 0），
+  /// 结余=收入−支出=收款−进货（收款后的盈利）。
   /// 店员无统计权限跳过；离线保留上次值。
   Future<void> _loadMonthly() async {
     if (_isStaff) return;
@@ -95,12 +101,14 @@ class _LedgerPageState extends State<LedgerPage> {
           .get('/stats/summary?start=$start&end=$end$cq')
           .timeout(const Duration(seconds: 8));
       if (!mounted) return;
-      final income = (d['sales_total'] as num?)?.toDouble() ?? 0;
+      final sold = (d['sales_total'] as num?)?.toDouble() ?? 0;
       final expense = (d['purchase_total'] as num?)?.toDouble() ?? 0;
+      final paid = (d['paid_total'] as num?)?.toDouble() ?? 0;
       setState(() {
-        _mIncome = income;
+        _mSold = sold;
         _mExpense = expense;
-        _mBalance = income - expense;
+        _mIncome = paid;
+        _mBalance = paid - expense;
         _mLoaded = true;
       });
     } catch (_) {
@@ -393,16 +401,17 @@ class _LedgerPageState extends State<LedgerPage> {
     }).toList();
   }
 
-  /// 月度结余卡（beecount 式三列 + 月份切换）：支出=进货（全店）/ 收入=当前店铺出货 / 结余=收入−支出。
-  /// 头部月份可直接切换（← 年月 →），不必进独立页；网络值优先，本地兜底按所选月份+当前店铺算收入。
+  /// 月度结余卡（beecount 式四列 + 月份切换）：
+  /// 支出=进货（全店）/ 售出=出货（当前店铺）/ 收入=收款（实收，未收为 0）/ 结余=收入−支出（收款后的盈利）。
+  /// 头部月份可直接切换（← 年月 →）；网络值优先，本地兜底按所选月份+当前店铺算售出/收款。
   Widget _monthlyCard(TaozhuColors c) {
-    // 本地快照（所选月份，当前店铺出货）：明细日期空→单据日期
+    // 本地快照（所选月份，当前店铺）：明细日期空→单据日期
     final y = _selYear;
     final m = _selMonth;
     final monthStart = _fmtDate(DateTime(y, m, 1));
     final monthEnd = _fmtDate(DateTime(y, m + 1, 0));
     bool inMonth(String d) => d.isNotEmpty && d.compareTo(monthStart) >= 0 && d.compareTo(monthEnd) <= 0;
-    double localIncome = 0;
+    double localSold = 0; // 售出=出货
     for (final s in _sales) {
       if (_clientId != null && '${s['client_id']}' != _clientId) continue;
       final orderDate = _date('${s['happened_at'] ?? ''}');
@@ -411,13 +420,21 @@ class _LedgerPageState extends State<LedgerPage> {
         final d = _date('${it['happened_at'] ?? ''}');
         final use = d.isNotEmpty ? d : orderDate;
         if (!inMonth(use)) continue;
-        localIncome += ((it['amount'] as num?)?.toDouble() ?? 0);
+        localSold += ((it['amount'] as num?)?.toDouble() ?? 0);
       }
     }
-    // 网络值（精确，含进货/其他设备写入）优先；未加载时本地出货快照兜底
-    final income = _mLoaded ? _mIncome : localIncome;
+    double localPaid = 0; // 收入=收款
+    for (final p in _payments) {
+      if (_clientId != null && '${p['client_id']}' != _clientId) continue;
+      final d = _date('${p['happened_at'] ?? ''}');
+      if (!inMonth(d)) continue;
+      localPaid += ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0);
+    }
+    // 网络值（精确，含进货/其他设备写入）优先；未加载时本地快照兜底
+    final sold = _mLoaded ? _mSold : localSold;
     final expense = _mLoaded ? _mExpense : 0.0;
-    final balance = _mLoaded ? _mBalance : income;
+    final income = _mLoaded ? _mIncome : localPaid;
+    final balance = _mLoaded ? _mBalance : (income - expense);
 
     Widget col(String label, double value, Color color) {
       return Expanded(
@@ -477,7 +494,7 @@ class _LedgerPageState extends State<LedgerPage> {
                 onPressed: () => _shiftMonth(1),
               ),
               const Spacer(),
-              Text('支出=进货 · 收入=出货',
+              Text('支出=进货 · 售出=出货 · 收入=收款',
                   style: TextStyle(fontSize: 10, color: c.textSub)),
             ],
           ),
@@ -485,9 +502,11 @@ class _LedgerPageState extends State<LedgerPage> {
           Row(
             children: [
               col('支出（进货）', expense, c.danger),
-              const SizedBox(width: 4),
-              col('收入（出货）', income, c.success),
-              const SizedBox(width: 4),
+              const SizedBox(width: 3),
+              col('售出（出货）', sold, c.primary),
+              const SizedBox(width: 3),
+              col('收入（收款）', income, c.success),
+              const SizedBox(width: 3),
               col('结余', balance, balance >= 0 ? c.success : c.danger),
             ],
           ),

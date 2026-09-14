@@ -252,18 +252,44 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     } catch (_) {}
   }
 
-  /// 全部本地附件副本计数（App 文档目录 attachments/ 递归；Web 无本地副本返回 0）
+  /// 全部本地附件副本计数（App 文档目录 attachments/ 递归；Web 无本地副本返回 0）。
+  /// **只统计在用实体的附件**（本地库中仍有对应出货/进货/收款或明细行的单元）；
+  /// 孤儿附件（单据已删的残留）不计数——同步记录反映"正在使用的数据"，孤儿由存储清理页处理。
   Future<int> _localAllAttachCount() async {
     if (kIsWeb) return 0;
     try {
+      final inUse = <String, Set<String>>{};
+      void addUse(String entity, String id) {
+        if (id.isEmpty) return;
+        (inUse[entity] ??= {}).add(id);
+      }
+      for (final s in await LocalDb.getAll('sales')) {
+        addUse('sale', '${s['id'] ?? ''}');
+        for (final it in ((s['items'] as List?) ?? [])) {
+          addUse('sale_item', '${(it as Map)['id'] ?? ''}');
+        }
+      }
+      for (final p in await LocalDb.getAll('purchases')) {
+        addUse('purchase', '${p['id'] ?? ''}');
+        for (final it in ((p['items'] as List?) ?? [])) {
+          addUse('purchase_item', '${(it as Map)['id'] ?? ''}');
+        }
+      }
+      for (final p in await LocalDb.getAll('payments')) {
+        addUse('payment', '${p['id'] ?? ''}');
+      }
       final root = await getApplicationDocumentsDirectory();
       final dir = Directory('${root.path}/attachments');
       if (!dir.existsSync()) return 0;
       var n = 0;
       for (final e in dir.listSync()) {
-        if (e is Directory) {
-          for (final f in e.listSync()) {
-            if (f is Directory) n += f.listSync().whereType<File>().length;
+        if (e is! Directory) continue;
+        final entityName = e.uri.pathSegments.last;
+        for (final f in e.listSync()) {
+          if (f is! Directory) continue;
+          final idName = f.uri.pathSegments.last;
+          if ((inUse[entityName] ?? {}).contains(idName)) {
+            n += f.listSync().whereType<File>().length;
           }
         }
       }

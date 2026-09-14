@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import '../local_db.dart';
 import '../theme.dart';
 import 'router.dart';
 
@@ -155,19 +156,51 @@ class _CleanupPageState extends State<CleanupPage> {
         await scan(await getTemporaryDirectory());
       }
       // 附件本地副本（attachments/{entity}/{id}/ 目录）：随账号下载的图片缓存。
-      // 退出登录/切换账号会清空，但历史遗留/未清理的副本可在这里**逐张**查看与删除
-      // （每张图片单独一行，行首缩略图，不再按单元合并成"N 张"）。
+      // **只列"孤儿"附件**——本地库中已无对应单据/明细行的副本（单据删除后残留）才可清理；
+      // 使用中的图片（对应出货/进货/收款或其明细行仍存在）不列出，防止误删。
+      // 每张图片单独一行（行首缩略图），点「查看」全屏预览。
       if (!kIsWeb) {
+        // 收集在用附件单元 id 集合（entity → id set）
+        final inUse = <String, Set<String>>{};
+        void addUse(String entity, String id) {
+          if (id.isEmpty) return;
+          (inUse[entity] ??= {}).add(id);
+        }
+        try {
+          for (final s in await LocalDb.getAll('sales')) {
+            addUse('sale', '${s['id'] ?? ''}');
+            for (final it in ((s['items'] as List?) ?? [])) {
+              addUse('sale_item', '${(it as Map)['id'] ?? ''}');
+            }
+          }
+        } catch (_) {}
+        try {
+          for (final p in await LocalDb.getAll('purchases')) {
+            addUse('purchase', '${p['id'] ?? ''}');
+            for (final it in ((p['items'] as List?) ?? [])) {
+              addUse('purchase_item', '${(it as Map)['id'] ?? ''}');
+            }
+          }
+        } catch (_) {}
+        try {
+          for (final p in await LocalDb.getAll('payments')) {
+            addUse('payment', '${p['id'] ?? ''}');
+          }
+        } catch (_) {}
         final root = await getApplicationDocumentsDirectory();
         final att = Directory('${root.path}/attachments');
         if (await att.exists()) {
           await for (final entity in att.list(followLinks: false)) {
             if (entity is! Directory) continue;
+            final entityName = entity.uri.pathSegments.last;
             await for (final id in entity.list(followLinks: false)) {
               if (id is! Directory) continue;
+              final idName = id.uri.pathSegments.last;
+              // 在用实体 → 跳过（附件仍在单据上使用，不属可清理）
+              if ((inUse[entityName] ?? {}).contains(idName)) continue;
               await for (final f in id.list(followLinks: false)) {
                 if (f is! File) continue;
-                final rel = '${entity.uri.pathSegments.last}/${id.uri.pathSegments.last}/${f.uri.pathSegments.last}';
+                final rel = '$entityName/$idName/${f.uri.pathSegments.last}';
                 files.add(_CacheFile(rel, await f.length(), f.path));
               }
             }
