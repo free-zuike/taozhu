@@ -57,7 +57,12 @@
         <view class="sheet-title">编辑收款</view>
         <input class="ipt" v-model="payForm.amount" type="digit" placeholder="金额（元）" />
         <input class="ipt" v-model="payForm.date" placeholder="日期 YYYY-MM-DD" />
-        <input class="ipt" v-model="payForm.method" placeholder="收款方式（现金/微信…）" />
+        <picker class="field" mode="selector" :range="accounts" :value="payForm.methodIdx" @change="onEditMethod">
+          <view class="field-inner">
+            <text class="label">收款方式（账户）</text>
+            <text :class="['value', { placeholder: !payForm.method }]">{{ payForm.method || '点击选择账户' }}</text>
+          </view>
+        </picker>
         <input class="ipt" v-model="payForm.note" placeholder="备注" />
         <button class="btn-save" :disabled="saving" @click="savePayment">{{ saving ? '保存中…' : '保存' }}</button>
       </view>
@@ -75,17 +80,35 @@ const sales = ref<Array<Record<string, any>>>([]);
 const purchases = ref<Array<Record<string, any>>>([]);
 const payments = ref<Array<Record<string, any>>>([]);
 const saving = ref(false);
+// 收款账户：服务器同步实体（云端直连读取）
+const accounts = ref<string[]>(['现金', '微信', '支付宝', '银行卡', '转账']);
 const payForm = ref<{
-  show: boolean; id: string; amount: string; date: string; method: string; note: string;
-}>({ show: false, id: '', amount: '', date: '', method: '', note: '' });
+  show: boolean; id: string; amount: string; date: string; method: string; methodIdx: number; note: string;
+}>({ show: false, id: '', amount: '', date: '', method: '', methodIdx: 0, note: '' });
 
 onShow(async () => {
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
   }
+  await loadAccounts();
   await load();
 });
+
+async function loadAccounts() {
+  try {
+    const d = await request<{ accounts: Array<{ id: string; name: string }> }>('/payment-accounts', 'GET');
+    const list = (d.accounts || []).map((a) => a.name).filter((s) => s && s.trim());
+    if (list.length > 0) accounts.value = list;
+  } catch (e) {
+    accounts.value = ['现金', '微信', '支付宝', '银行卡', '转账'];
+  }
+}
+
+function onEditMethod(e: { detail: { value: number } }) {
+  payForm.value.method = accounts.value[e.detail.value] || '';
+  payForm.value.methodIdx = e.detail.value;
+}
 
 async function load() {
   try {
@@ -141,11 +164,13 @@ async function removePurchase(p: Record<string, any>) {
 }
 
 function editPayment(p: Record<string, any>) {
+  const method = p.method || '';
   payForm.value = {
     show: true, id: p.id,
     amount: String(p.amount),
     date: String(p.happened_at || '').slice(0, 10),
-    method: p.method || '',
+    method,
+    methodIdx: Math.max(0, accounts.value.indexOf(method)),
     note: p.note || '',
   };
 }
@@ -204,5 +229,10 @@ async function removePayment(p: Record<string, any>) {
 .sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.field { margin-bottom: 16rpx; }
+.field-inner { display: flex; justify-content: space-between; padding: 18rpx 20rpx; background: #f5f7fa; border-radius: 10rpx; }
+.label { color: #909399; font-size: 28rpx; }
+.value { color: #303133; font-size: 28rpx; }
+.placeholder { color: #c0c4cc; }
 .btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

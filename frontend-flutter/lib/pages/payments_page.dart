@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../local_accounts.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
@@ -26,8 +27,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
   final _amountCtrl = TextEditingController();
   final _waivedCtrl = TextEditingController(); // 平账减免（实收+减免=账面已收）
   final _dateCtrl = TextEditingController(text: _today());
-  final _methodCtrl = TextEditingController();
   final _noteCtrl = TextEditingController();
+  String _method = ''; // 收款方式（本地账户下拉选择）
   bool _busy = false;
   bool _loading = true;
 
@@ -50,7 +51,6 @@ class _PaymentsPageState extends State<PaymentsPage> {
     _amountCtrl.dispose();
     _waivedCtrl.dispose();
     _dateCtrl.dispose();
-    _methodCtrl.dispose();
     _noteCtrl.dispose();
     super.dispose();
   }
@@ -157,7 +157,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
           'amount': (amount * 100).round() / 100,
           'waived': (waived * 100).round() / 100,
           'happened_at': _dateCtrl.text.trim(),
-          'method': _methodCtrl.text.trim(),
+          'method': _method,
           'note': _noteCtrl.text.trim(),
           'sync_key': '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(0x7fffffff)}',
         });
@@ -181,7 +181,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
       'amount': (amount * 100).round() / 100,
       'waived': (waived * 100).round() / 100,
       'happened_at': _dateCtrl.text.trim(),
-      'method': _methodCtrl.text.trim(),
+      'method': _method,
       'note': _noteCtrl.text.trim(),
     };
     await LocalDb.upsertOne('payments', payload);
@@ -205,36 +205,49 @@ class _PaymentsPageState extends State<PaymentsPage> {
     final amountCtrl = TextEditingController(text: '${p['amount']}');
     final waivedCtrl = TextEditingController(text: '${p['waived'] ?? 0}');
     final dateCtrl = TextEditingController(text: _date('${p['happened_at']}'));
-    final methodCtrl = TextEditingController(text: '${p['method'] ?? ''}');
     final noteCtrl = TextEditingController(text: '${p['note'] ?? ''}');
+    var method = '${p['method'] ?? ''}';
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('编辑收款'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: amountCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: '金额（元）'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: waivedCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: '平账减免（元，可改）'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: dateCtrl,
-              decoration: const InputDecoration(labelText: '日期（YYYY-MM-DD）'),
-            ),
-            const SizedBox(height: 8),
-            TextField(controller: methodCtrl, decoration: const InputDecoration(labelText: '收款方式（现金/微信/转账…）')),
-            const SizedBox(height: 8),
-            TextField(controller: noteCtrl, decoration: const InputDecoration(labelText: '备注')),
-          ],
+        content: StatefulBuilder(
+          builder: (ctx, setDlg) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: amountCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: '金额（元）'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: waivedCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: '平账减免（元，可改）'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: dateCtrl,
+                decoration: const InputDecoration(labelText: '日期（YYYY-MM-DD）'),
+              ),
+              const SizedBox(height: 8),
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () async {
+                  final picked = await pickAccount(ctx, current: method);
+                  if (picked != null && ctx.mounted) setDlg(() => method = picked);
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(labelText: '收款方式（账户）'),
+                  child: Text(method.isEmpty ? '点击选择' : method,
+                      style: TextStyle(color: Theme.of(ctx).brightness == Brightness.dark ? Colors.white : Colors.black)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(controller: noteCtrl, decoration: const InputDecoration(labelText: '备注')),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
@@ -258,7 +271,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
         'amount': amount,
         'waived': waived,
         'happened_at': dateCtrl.text.trim(),
-        'method': methodCtrl.text.trim(),
+        'method': method,
         'note': noteCtrl.text.trim(),
       });
       toast(context, '已保存');
@@ -385,9 +398,22 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             hint: '默认今天，可补录历史',
                           ),
                           const SizedBox(height: 8),
-                          TextField(
-                            controller: _methodCtrl,
-                            decoration: const InputDecoration(labelText: '收款方式（现金/微信/转账…，可选）'),
+                          InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: () async {
+                              final picked = await pickAccount(context, current: _method);
+                              if (picked != null && mounted) {
+                                setState(() => _method = picked);
+                              }
+                            },
+                            child: InputDecorator(
+                              decoration: const InputDecoration(
+                                labelText: '收款方式（账户）',
+                                suffixIcon: Icon(Icons.expand_more),
+                              ),
+                              child: Text(_method.isEmpty ? '点击选择账户' : _method,
+                                  style: TextStyle(color: c.textMain)),
+                            ),
                           ),
                           const SizedBox(height: 8),
                           TextField(controller: _noteCtrl, decoration: const InputDecoration(labelText: '备注（可选）')),

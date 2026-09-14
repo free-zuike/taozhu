@@ -20,6 +20,7 @@ interface PurchaseItemInput {
   quantity: number;
   purchase_price?: number;   // 可覆盖默认进价
   happened_at?: string;      // 行独立日期（缺省用单据日期）
+  note?: string;             // 行级备注（缺省空）
 }
 
 // POST /purchases
@@ -72,9 +73,9 @@ purchasesRouter.post('/', async (c) => {
     total += amount;
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(randomId(), purchaseId, price.item_id, price.unit, qty, effective, amount,
-        item.happened_at?.trim() || happenedAt),
+        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? ''),
     );
     // 进货增加库存
     batch.push(stockDelta(c.env.DB, price.item_id, price.unit, qty));
@@ -174,15 +175,15 @@ purchasesRouter.post('/items/date', async (c) => {
   return c.json({ updated: batch.length });
 });
 
-// PATCH /purchases/items/:id — 编辑单条进货明细行（数量/单位/进价/日期；回滚旧库存再按新值增加，重算金额与单据日期）
+// PATCH /purchases/items/:id — 编辑单条进货明细行（数量/单位/进价/日期/备注；回滚旧库存再按新值增加，重算金额与单据日期）
 purchasesRouter.patch('/items/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => null) as {
-    quantity?: number; unit?: string; purchase_price?: number; happened_at?: string;
+    quantity?: number; unit?: string; purchase_price?: number; happened_at?: string; note?: string;
   } | null;
   const row = await c.env.DB.prepare(
-    'SELECT id, purchase_id, item_id, unit, quantity, purchase_price, happened_at FROM purchase_items WHERE id = ?',
-  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number; purchase_price: number; happened_at: string | null }>();
+    'SELECT id, purchase_id, item_id, unit, quantity, purchase_price, happened_at, note FROM purchase_items WHERE id = ?',
+  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number; purchase_price: number; happened_at: string | null; note: string | null }>();
   if (!row) return c.json({ error: '明细行不存在' }, 404);
 
   const qty = body?.quantity !== undefined ? Number(body.quantity) : row.quantity;
@@ -192,14 +193,15 @@ purchasesRouter.patch('/items/:id', async (c) => {
   const purchasePrice = Number.isFinite(pp) && pp > 0 ? pp : row.purchase_price;
   const happenedAt = body?.happened_at?.trim() || row.happened_at || '';
   if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
+  const note = body?.note !== undefined ? (body.note ?? '').trim() : (row.note ?? '');
 
   const amount = Math.round(qty * purchasePrice * 100) / 100;
   const batch: D1PreparedStatement[] = [
     stockDelta(c.env.DB, row.item_id, row.unit, -row.quantity), // 进货增加恢复（旧值）
     stockDelta(c.env.DB, row.item_id, unit, qty),               // 按新值重新增加（不变时净零）
     c.env.DB.prepare(
-      'UPDATE purchase_items SET quantity = ?, unit = ?, purchase_price = ?, amount = ?, happened_at = ? WHERE id = ?',
-    ).bind(qty, unit, purchasePrice, amount, happenedAt || null, id),
+      'UPDATE purchase_items SET quantity = ?, unit = ?, purchase_price = ?, amount = ?, happened_at = ?, note = ? WHERE id = ?',
+    ).bind(qty, unit, purchasePrice, amount, happenedAt || null, note, id),
   ];
   await c.env.DB.batch(batch);
   // 单据日期自动取明细最大日期（与记单页 orderDate=最大行日期口径一致）
@@ -268,9 +270,9 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       const amount = Math.round(qty * effective * 100) / 100;
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).bind(randomId(), id, price.item_id, price.unit, qty, effective, amount,
-          item.happened_at?.trim() || happenedAt),
+          item.happened_at?.trim() || happenedAt, item.note?.trim() ?? ''),
       );
       // 按新明细增加库存
       batch.push(stockDelta(c.env.DB, price.item_id, price.unit, qty));

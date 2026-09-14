@@ -159,12 +159,24 @@ class _CleanupPageState extends State<CleanupPage> {
     if (ok != true) return;
     setState(() => _busy = true);
     try {
-      final names = _files.where((f) => f.selected).map((f) => f.name).toList();
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      // 通用：附件副本（kind=attach）按完整目录删除（path 即 attachments/{entity}/{id}/）
+      final attachDirs = _files
+          .where((f) => f.kind == 'attach' && f.selected && f.path.isNotEmpty)
+          .map((f) => f.path)
+          .toList();
+      for (final dir in attachDirs) {
+        try {
+          final d = Directory(dir);
+          if (await d.exists()) await d.delete(recursive: true);
+        } catch (_) {}
+      }
+      final names = _files.where((f) => f.selected && f.kind != 'attach').map((f) => f.name).toList();
+      // 全选了且仅附件 → 不再走系统下载器
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android && names.isNotEmpty) {
         // Android 走系统下载器：删文件 + 移除下载记录（通知栏通知一并消失）
         final n = await _dlChannel.invokeMethod<int>('deleteFiles', {'names': names}) ?? 0;
-        toast(context, '已删除 $n 个文件');
-      } else if (!kIsWeb) {
+        toast(context, attachDirs.isNotEmpty ? '已删除 ${attachDirs.length} 个附件副本 + $n 个文件' : '已删除 $n 个文件');
+      } else if (!kIsWeb && names.isNotEmpty) {
         // 桌面：直接按名删除（下载目录/临时目录）
         var n = 0;
         Future<void> delIn(Directory? dir) async {
@@ -181,6 +193,10 @@ class _CleanupPageState extends State<CleanupPage> {
         await delIn(await getDownloadsDirectory());
         await delIn(await getTemporaryDirectory());
         toast(context, '已删除 $n 个文件');
+      }
+      // 仅选了附件副本（无 apk/zip/other）或 Web：不触发下载器/下载目录逻辑
+      if (attachDirs.isNotEmpty && names.isEmpty) {
+        toast(context, '已删除 ${attachDirs.length} 个附件副本');
       }
       await _load();
     } catch (e) {
@@ -250,7 +266,12 @@ class _CleanupPageState extends State<CleanupPage> {
                     : ListView(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
                         children: [
-                          for (final g in const [('apk', '安装包（APK）', Icons.android), ('zip', '压缩包（Zip）', Icons.archive_outlined), ('other', '临时文件', Icons.description_outlined)])
+                          for (final g in const [
+                            ('apk', '安装包（APK）', Icons.android),
+                            ('zip', '压缩包（Zip）', Icons.archive_outlined),
+                            ('attach', '附件副本（本地缓存）', Icons.image_outlined),
+                            ('other', '临时文件', Icons.description_outlined),
+                          ])
                             if (_files.any((f) => f.kind == g.$1)) ...[
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(4, 10, 4, 6),
@@ -281,7 +302,12 @@ class _CleanupPageState extends State<CleanupPage> {
                                             color: f.kind == 'apk' ? c.success : c.primary),
                                         title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
                                         subtitle: Text(
-                                          f.kind == 'apk' ? '${_fmtSize(f.size)} · APK 安装包' : '${_fmtSize(f.size)} · ${f.kind == 'zip' ? '压缩包' : '临时文件'}',
+                                          switch (f.kind) {
+                                            'apk' => '${_fmtSize(f.size)} · APK 安装包',
+                                            'zip' => '${_fmtSize(f.size)} · 压缩包',
+                                            'attach' => '${_fmtSize(f.size)} · 附件本地副本',
+                                            _ => '${_fmtSize(f.size)} · 临时文件',
+                                          },
                                           style: TextStyle(fontSize: 12, color: c.textSub),
                                         ),
                                         onTap: () => setState(() => f.selected = !f.selected),

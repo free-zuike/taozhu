@@ -15,7 +15,7 @@
       <button class="btn" @click="go('/pages/items/items')">商品管理</button>
       <button class="btn" @click="go('/pages/clients/clients')">饭店管理</button>
       <button class="btn" @click="go('/pages/categories/categories')">分类管理</button>
-      <button class="btn" @click="go('/pages/ledger/ledger')">账本</button>
+      <button class="btn" @click="go('/pages/ledger/ledger')">交易</button>
       <button class="btn" @click="go('/pages/payments/payments')">收款结账</button>
       <button class="btn" @click="go('/pages/statement/statement')">对账单</button>
       <button class="btn" @click="go('/pages/stocks/stocks')">库存</button>
@@ -69,17 +69,18 @@ function go(url: string) {
 
 <style>
 .page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
-.cards { display: flex; flex-wrap: wrap; gap: 16rpx; margin-bottom: 24rpx; }
+/* 两列网格：小程序对 flex gap / calc(50% - x) 兼容性差，用 48% + space-between 最稳 */
+.cards { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
 .card {
-  width: calc(50% - 8rpx); background: #fff; border-radius: 12rpx;
-  padding: 24rpx; box-sizing: border-box;
+  width: 48%; background: #fff; border-radius: 12rpx;
+  padding: 22rpx 20rpx; box-sizing: border-box; margin-bottom: 16rpx;
 }
 .cl { display: block; color: #909399; font-size: 26rpx; margin-bottom: 10rpx; }
-.cv { font-size: 40rpx; font-weight: bold; }
+.cv { font-size: 38rpx; font-weight: bold; }
 .green { color: #67c23a; }
 .red { color: #f56c6c; }
-.entries { display: flex; flex-wrap: wrap; gap: 16rpx; margin-bottom: 24rpx; }
-.btn { width: calc(50% - 8rpx); margin: 0; background: #fff; border-radius: 12rpx; font-size: 28rpx; }
+.entries { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
+.btn { width: 48%; margin: 0 0 16rpx; background: #fff; border-radius: 12rpx; font-size: 28rpx; }
 .list { background: #fff; border-radius: 12rpx; padding: 24rpx; }
 .list-title { font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .list-row { display: flex; justify-content: space-between; padding: 16rpx 0; border-bottom: 1rpx solid #f0f0f0; }

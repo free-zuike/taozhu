@@ -63,6 +63,7 @@ const DDL: string[] = [
     purchase_price REAL NOT NULL DEFAULT 0,
     amount REAL NOT NULL DEFAULT 0,
     happened_at TEXT,
+    note TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id)`,
@@ -88,6 +89,7 @@ const DDL: string[] = [
     cost_price REAL NOT NULL DEFAULT 0,
     amount REAL NOT NULL DEFAULT 0,
     happened_at TEXT,
+    note TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id)`,
@@ -120,6 +122,12 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_categories_type ON categories (type)`,
+  `CREATE TABLE IF NOT EXISTS payment_accounts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
   `CREATE TABLE IF NOT EXISTS stocks (
     id TEXT PRIMARY KEY,
     item_id TEXT NOT NULL REFERENCES items(id),
@@ -193,6 +201,21 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS sync_changes'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
     }
+    // v0.17.68.0：收款账户 payment_accounts（收款方式预设：现金/微信/支付宝等，同步实体）
+    const paTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'payment_accounts'",
+    ).first<{ name: string }>();
+    if (!paTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS payment_accounts'));
+      await db.batch([db.prepare(DDL[i])]);
+    }
+    // 首次使用（空表）自动写入默认账户（现金/微信/支付宝/银行卡/转账），用户可后续增删改；
+    // 空表才插，避免覆盖用户已自定义的列表
+    const paCount = await db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>();
+    if (!paCount || (paCount.n ?? 0) === 0) {
+      await db.prepare('INSERT OR IGNORE INTO payment_accounts (id, name, sort) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?), (?, ?, ?), (?, ?, ?)')
+        .bind('acct_cash', '现金', 0, 'acct_wechat', '微信', 1, 'acct_alipay', '支付宝', 2, 'acct_bank', '银行卡', 3, 'acct_transfer', '转账', 4).run();
+    }
     // v0.17.17.0：users 账号列（头像 / 两步验证 TOTP）
     const uCols = await db.prepare('PRAGMA table_info(users)').all<{ name: string }>();
     if (!uCols.results.some((x) => x.name === 'avatar')) {
@@ -219,6 +242,13 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const iCols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
       if (!iCols.results.some((x) => x.name === 'happened_at')) {
         await db.prepare(`ALTER TABLE ${t} ADD COLUMN happened_at TEXT`).run();
+      }
+    }
+    // v0.17.68.0：明细行级备注 note（每行商品可加备注；历史行回退单据级备注）
+    for (const t of ['sale_items', 'purchase_items'] as const) {
+      const iCols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
+      if (!iCols.results.some((x) => x.name === 'note')) {
+        await db.prepare(`ALTER TABLE ${t} ADD COLUMN note TEXT DEFAULT ''`).run();
       }
     }
     for (const t of ['clients', 'items'] as const) {

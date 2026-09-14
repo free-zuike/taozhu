@@ -6,6 +6,7 @@ import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import 'monthly_flow_page.dart';
 
 /// 统计：店铺胶囊选择 + 周期胶囊（今日/本月/上月/滚动月/自定义） + 日/月/年视图
 /// 总览卡（含日均） + 折线图 + 商品排行 + 按店结账
@@ -296,7 +297,18 @@ class _StatsPageState extends State<StatsPage> {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final (start, end) = _viewRange;
     return Scaffold(
-      appBar: AppBar(title: const Text('统计报表')),
+      appBar: AppBar(
+        title: const Text('统计报表'),
+        actions: [
+          IconButton(
+            tooltip: '月度结余（支出=进货·收入=出货）',
+            icon: const Icon(Icons.trending_up),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const MonthlyFlowPage()),
+            ),
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(

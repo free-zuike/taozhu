@@ -39,7 +39,7 @@
 		{
 			"path": "pages/ledger/ledger",
 			"style": {
-				"navigationBarTitleText": "账本"
+				"navigationBarTitleText": "交易"
 			}
 		},
 		{

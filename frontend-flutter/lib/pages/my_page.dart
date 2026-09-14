@@ -10,6 +10,7 @@ import '../avatar_cache.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../utils/money.dart';
 import '../utils/update_sources.dart';
 import '../version.dart';
 import 'router.dart';
@@ -53,6 +54,10 @@ class _MyPageState extends State<MyPage> {
   int _lowStocks = -1; // 低库存数量（-1=未加载）
   int _pending = 0; // 待同步单据数（合并旧 Api 队列 + 新 SyncService 队列）
   String _lastSync = ''; // 上次同步时间（人类可读）
+  // 统计卡（本地核算，仅老板可见）：记账天数 / 当前店铺总笔数 / 总账本结余（全部店铺出货−收款）
+  int _bookDays = 0;
+  int _curClientCount = 0;
+  double _totalBalance = 0;
   /// 最近一次按钮点击时间戳（防连点：500ms 内忽略重复触发）
   int _lastTapAt = 0;
   /// 检查更新请求进行中（防止连点重复发请求/弹多个更新窗）
@@ -72,9 +77,12 @@ class _MyPageState extends State<MyPage> {
     _syncing = SyncService.syncStatus == 'syncing';
     SyncService.version.addListener(_onSyncChanged);
     SyncService.status.addListener(_onSyncStatus);
+    // 库存变更（盘点/调整/记单）后实时刷新低库存红字，无需重启 App
+    SyncService.stockChanged.addListener(_onSyncChanged);
     _loadProfile();
     _loadLowStocks();
     _loadPending();
+    _loadStats();
     _autoSync();
     if (kIsWeb) _checkWebSync();
   }
@@ -83,6 +91,7 @@ class _MyPageState extends State<MyPage> {
   void dispose() {
     SyncService.version.removeListener(_onSyncChanged);
     SyncService.status.removeListener(_onSyncStatus);
+    SyncService.stockChanged.removeListener(_onSyncChanged);
     super.dispose();
   }
 
@@ -94,10 +103,11 @@ class _MyPageState extends State<MyPage> {
     });
   }
 
-  /// 同步完成（版本号变化）后刷新待同步数/上次同步时间/低库存
+  /// 同步完成（版本号变化）后刷新待同步数/上次同步时间/低库存/统计卡
   void _onSyncChanged() {
     _loadPending();
     _loadLowStocks();
+    _loadStats();
   }
 
   /// Web 端进入即检查服务器连通（Web 无本地库，同步=直连服务器实时读取）
@@ -192,6 +202,55 @@ class _MyPageState extends State<MyPage> {
       setState(() {
         _pending = legacy.length + changes.length;
         if (lastSync != null && lastSync.isNotEmpty) _lastSync = _fmtSyncTime(lastSync);
+      });
+    } catch (_) {}
+  }
+
+  /// 本地核算统计卡（仅老板）：记账天数（最早一笔记账至今）/ 当前店铺总笔数 / 总账本结余（Σ出货−Σ收款）。
+  /// Web 无本地库：跳过（显示 0，由老板在 App/统计页查看）。
+  Future<void> _loadStats() async {
+    if (kIsWeb) return;
+    try {
+      final sales = await LocalDb.getAll('sales');
+      final pays = await LocalDb.getAll('payments');
+      if (!mounted) return;
+      // 记账天数：取三种单据最早的日期到今天
+      var first = '';
+      String minD(String a, String b) {
+        if (a.isEmpty) return b;
+        if (b.isEmpty) return a;
+        return a.compareTo(b) <= 0 ? a : b;
+      }
+      for (final s in sales) first = minD(first, '${s['happened_at'] ?? ''}');
+      for (final p in pays) first = minD(first, '${p['happened_at'] ?? ''}');
+      try {
+        final buys = await LocalDb.getAll('purchases');
+        for (final b in buys) first = minD(first, '${b['happened_at'] ?? ''}');
+      } catch (_) {}
+      var days = 0;
+      final f = DateTime.tryParse(first);
+      if (f != null) {
+        final now = DateTime.now();
+        days = DateTime(now.year, now.month, now.day)
+                .difference(DateTime(f.year, f.month, f.day))
+                .inDays +
+            1;
+        if (days < 1) days = 1;
+      }
+      // 当前店铺总笔数（选中店铺 sales+payments）
+      final selId = await SyncService.selectedClientId();
+      final curCount = (selId == null || selId.isEmpty)
+          ? 0
+          : sales.where((s) => '${s['client_id']}' == selId).length +
+              pays.where((p) => '${p['client_id']}' == selId).length;
+      // 总账本结余 = Σ出货 − Σ收款（含减免=平账，与欠款口径一致）
+      final salesTotal = sales.fold<double>(0, (s, x) => s + ((x['total'] as num?)?.toDouble() ?? 0));
+      final paysTotal = pays.fold<double>(0,
+          (s, x) => s + ((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0));
+      setState(() {
+        _bookDays = days;
+        _curClientCount = curCount;
+        _totalBalance = salesTotal - paysTotal;
       });
     } catch (_) {}
   }
@@ -780,7 +839,11 @@ class _MyPageState extends State<MyPage> {
         padding: const EdgeInsets.all(16),
         children: [
           _userCard(),
-          const SizedBox(height: 18),
+          const SizedBox(height: 12),
+          // 统计卡（仅老板）：记账天数 / 当前店铺总笔数 / 总账本结余（本地核算，秒开）
+          if (_role != 'staff' && !kIsWeb)
+            _statsCard(),
+          if (_role != 'staff' && !kIsWeb) const SizedBox(height: 18),
           // 账号与同步（账号卡下方、经营上方）：同步状态 + 成员（账号设置+账号管理，移到同步下方）
           _card([
             _item(Icons.sync_alt, c.primary, '同步状态', _syncSubtitle(),
@@ -795,7 +858,7 @@ class _MyPageState extends State<MyPage> {
           if (_role != 'staff') ...[
             _groupTitle('经营'),
             _card([
-              _item(Icons.store_outlined, c.primary, '店铺管理', '店铺（账本）列表、新增、编辑',
+              _item(Icons.store_outlined, c.primary, '店铺管理', '店铺列表、新增、编辑',
                   () => goPage(context, const ClientsPage())),
               _item(Icons.payments_outlined, c.success, '收款结账', '登记收款、查看收款历史',
                   () => goPage(context, const PaymentsPage())),
@@ -891,6 +954,46 @@ class _MyPageState extends State<MyPage> {
       ),
     );
   }
+
+  /// 统计卡：记账天数 / 当前店铺总笔数 / 总账本结余（本地核算，三格并排）
+  Widget _statsCard() {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    Widget cell(String label, String value, {Color? color}) {
+      return Expanded(
+        child: Column(
+          children: [
+            Text(value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 17, fontWeight: FontWeight.w800, color: color ?? c.textMain)),
+            const SizedBox(height: 4),
+            Text(label, style: TextStyle(fontSize: 11, color: c.textSub)),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        color: c.card,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          cell('记账天数', '$_bookDays'),
+          _vsep(c),
+          cell('本店交易', '$_curClientCount'),
+          _vsep(c),
+          cell('总账本结余', '¥${fmtMoney(_totalBalance)}',
+              color: _totalBalance >= 0 ? c.success : c.danger),
+        ],
+      ),
+    );
+  }
+
+  Widget _vsep(TaozhuColors c) => Container(width: 1, height: 30, color: c.divider);
 
   /// 顶部用户卡：头像 + 用户名/角色 + 服务器地址
   Widget _userCard() {

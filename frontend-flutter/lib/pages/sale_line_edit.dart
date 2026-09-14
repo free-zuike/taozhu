@@ -9,8 +9,8 @@ import 'attachment_viewer.dart';
 import 'change_category.dart';
 import 'router.dart';
 
-/// 单商品编辑（账本页点明细行 / 日期栏编辑页点行共用）：
-/// 弹窗修改 数量/单位/售价/日期/分类（分类为商品级，全局生效），保存后返回该单最新 payload；
+// 单商品编辑（账本页点明细行 / 日期栏编辑页点行共用）：
+/// 弹窗修改 数量/单位/售价/日期/分类/备注（分类为商品级，全局生效），保存后返回该单最新 payload；
 /// 取消/未修改/出错返回 null。
 /// - Web：PATCH /sales/items/:id（行级编辑端点，服务端联动金额与单据日期）后 GET 单据刷新；
 /// - 原生：更新本地库镜像 + 入同步队列（离线可保存，服务端以整单快照应用）。
@@ -29,6 +29,7 @@ Future<Map<String, dynamic>?> editSaleLine(
   final dateCtrl = TextEditingController(
       text: happenedAt.length >= 10 ? happenedAt.substring(0, 10) : '');
   var category = '${line['category'] ?? ''}';
+  final noteCtrl = TextEditingController(text: '${line['note'] ?? ''}');
   final c = Theme.of(context).extension<TaozhuColors>()!;
 
   final ok = await showDialog<bool>(
@@ -129,6 +130,11 @@ Future<Map<String, dynamic>?> editSaleLine(
                   ),
                 ],
               ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: noteCtrl,
+                decoration: const InputDecoration(labelText: '备注（该条商品，可留空）'),
+              ),
             ],
           ),
         ),
@@ -162,8 +168,10 @@ Future<Map<String, dynamic>?> editSaleLine(
   final origQty = double.tryParse('${line['quantity'] ?? ''}');
   final origUnit = '${line['unit'] ?? ''}';
   final origDate = happenedAt.length >= 10 ? happenedAt.substring(0, 10) : '';
+  final origNote = '${line['note'] ?? ''}';
+  final note = noteCtrl.text.trim();
   final unchanged =
-      (origQty != null && qty == origQty) && unit == origUnit && price == salePrice && date == origDate;
+      (origQty != null && qty == origQty) && unit == origUnit && price == salePrice && date == origDate && note == origNote;
   if (unchanged) return null;
 
   try {
@@ -173,6 +181,7 @@ Future<Map<String, dynamic>?> editSaleLine(
         'unit': unit,
         'sale_price': price,
         'happened_at': date,
+        'note': note,
       });
       // 行级编辑后服务端已联动总额/单据日期：重新拉取该单最新快照
       final d = await Api.instance.get('/sales/${order['id']}');
@@ -190,6 +199,7 @@ Future<Map<String, dynamic>?> editSaleLine(
         itMap['sale_price'] = price;
         itMap['amount'] = (qty * price * 100).round() / 100;
         itMap['happened_at'] = date;
+        itMap['note'] = note;
       }
       updatedItems.add(itMap);
     }

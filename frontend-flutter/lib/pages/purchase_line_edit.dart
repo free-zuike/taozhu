@@ -8,7 +8,7 @@ import 'attachment_viewer.dart';
 import 'change_category.dart';
 import 'router.dart';
 
-/// 单商品编辑（进货记录页点明细行）：弹窗修改 数量/单位/进价/日期，
+/// 单商品编辑（进货记录页点明细行）：弹窗修改 数量/单位/进价/日期/备注，
 /// 保存后返回该单最新 payload；取消/未修改/出错返回 null。
 /// - Web：PATCH /purchases/items/:id（行级编辑端点，服务端联动金额与单据日期）后 GET 单据刷新；
 /// - 原生：更新本地库镜像 + 入同步队列（离线可保存，服务端以整单快照应用）。
@@ -26,6 +26,7 @@ Future<Map<String, dynamic>?> editPurchaseLine(
   final dateCtrl = TextEditingController(
       text: happenedAt.length >= 10 ? happenedAt.substring(0, 10) : '');
   var category = '${line['category'] ?? ''}';
+  final noteCtrl = TextEditingController(text: '${line['note'] ?? ''}');
 
   final ok = await showDialog<bool>(
     context: context,
@@ -122,6 +123,11 @@ Future<Map<String, dynamic>?> editPurchaseLine(
                   ),
                 ],
               ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: noteCtrl,
+                decoration: const InputDecoration(labelText: '备注（该条商品，可留空）'),
+              ),
             ],
           ),
         ),
@@ -155,8 +161,10 @@ Future<Map<String, dynamic>?> editPurchaseLine(
   final origQty = double.tryParse('${line['quantity'] ?? ''}');
   final origUnit = '${line['unit'] ?? ''}';
   final origDate = happenedAt.length >= 10 ? happenedAt.substring(0, 10) : '';
+  final origNote = '${line['note'] ?? ''}';
+  final note = noteCtrl.text.trim();
   final unchanged =
-      (origQty != null && qty == origQty) && unit == origUnit && price == pp && date == origDate;
+      (origQty != null && qty == origQty) && unit == origUnit && price == pp && date == origDate && note == origNote;
   if (unchanged) return null;
 
   try {
@@ -166,6 +174,7 @@ Future<Map<String, dynamic>?> editPurchaseLine(
         'unit': unit,
         'purchase_price': price,
         'happened_at': date,
+        'note': note,
       });
       // 行级编辑后服务端已联动总额/单据日期：重新拉取该单最新快照
       final d = await Api.instance.get('/purchases/${order['id']}');
@@ -183,6 +192,7 @@ Future<Map<String, dynamic>?> editPurchaseLine(
         itMap['purchase_price'] = price;
         itMap['amount'] = (qty * price * 100).round() / 100;
         itMap['happened_at'] = date;
+        itMap['note'] = note;
       }
       updatedItems.add(itMap);
     }

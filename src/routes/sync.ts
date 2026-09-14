@@ -165,6 +165,9 @@ syncRouter.get('/full', async (c) => {
   const catRows = await db.prepare('SELECT id, type, name, parent_id, sort FROM categories ORDER BY sort, name').all();
   const categories = catRows.results.map((x) => ({ ...(x as Record<string, unknown>) }));
 
+  const paRows = await db.prepare('SELECT id, name, sort FROM payment_accounts ORDER BY sort, name').all();
+  const payment_accounts = paRows.results.map((x) => ({ ...(x as Record<string, unknown>) }));
+
   // 收支单据：id/店铺/日期/备注/总额 + 明细（分页全量，数据量通常有限）
   const saleRows = await db.prepare(
     `SELECT s.id, s.client_id, c.name AS client_name, s.happened_at, s.note,
@@ -232,7 +235,7 @@ syncRouter.get('/full', async (c) => {
     return isStaff ? { ...r, cost_price: 0 } : r;
   });
 
-  return c.json({ clients, items, categories, sales, purchases, payments, stocks, server_cursor: await maxCursor(db) });
+  return c.json({ clients, items, categories, payment_accounts, sales, purchases, payments, stocks, server_cursor: await maxCursor(db) });
 });
 
 // GET /sync/stats — 服务器端各实体计数 + 变更流游标（同步状态面板/差异诊断用）
@@ -240,10 +243,11 @@ syncRouter.get('/full', async (c) => {
 syncRouter.get('/stats', async (c) => {
   const db = c.env.DB;
   const clientId = c.req.query('client_id')?.trim() ?? '';
-  const [clients, items, categories, sales, purchases, payments] = await Promise.all([
+  const [clients, items, categories, paymentAccounts, sales, purchases, payments] = await Promise.all([
     db.prepare('SELECT COUNT(*) AS n FROM clients WHERE deleted_at IS NULL').first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM items WHERE deleted_at IS NULL').first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM categories').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>(),
     clientId
       ? db.prepare('SELECT COUNT(*) AS n FROM sales WHERE client_id = ?').bind(clientId).first<{ n: number }>()
       : db.prepare('SELECT COUNT(*) AS n FROM sales').first<{ n: number }>(),
@@ -256,6 +260,7 @@ syncRouter.get('/stats', async (c) => {
     clients: clients?.n ?? 0,
     items: items?.n ?? 0,
     categories: categories?.n ?? 0,
+    payment_accounts: paymentAccounts?.n ?? 0,
     sales: sales?.n ?? 0,
     purchases: purchases?.n ?? 0,
     payments: payments?.n ?? 0,

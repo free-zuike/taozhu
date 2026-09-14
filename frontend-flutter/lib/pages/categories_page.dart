@@ -18,6 +18,8 @@ class _CategoriesPageState extends State<CategoriesPage> {
   String _type = 'item';
   List<Map<String, dynamic>> _cats = [];
   bool _loading = true;
+  /// 已收起的一级分类 id（二级分类默认展开，点一级标题折叠/展开）
+  final Set<String> _collapsed = {};
 
   List<Map<String, dynamic>> get _top => _cats.where((c) => c['parent_id'] == null || '${c['parent_id']}' == '').toList();
   List<Map<String, dynamic>> _childrenOf(String id) =>
@@ -192,7 +194,8 @@ class _CategoriesPageState extends State<CategoriesPage> {
                           ),
                         for (final c in _top) ...[
                           _itemTile(c, indent: false),
-                          for (final child in _childrenOf('${c['id']}')) _itemTile(child, indent: true),
+                          if (!_collapsed.contains('${c['id']}'))
+                            for (final child in _childrenOf('${c['id']}')) _itemTile(child, indent: true),
                         ],
                       ],
                     ),
@@ -205,15 +208,28 @@ class _CategoriesPageState extends State<CategoriesPage> {
 
   Widget _itemTile(Map<String, dynamic> c, {required bool indent}) {
     final isParent = _childrenOf('${c['id']}').isNotEmpty;
+    final collapsed = _collapsed.contains('${c['id']}');
     return Card(
       child: ListTile(
         contentPadding: EdgeInsets.only(left: indent ? 32 : 16, right: 8),
         leading: Icon(indent ? Icons.subdirectory_arrow_right : (isParent ? Icons.folder : Icons.label_outline),
             color: _c.primary, size: 20),
         title: Text('${c['name']}', style: TextStyle(fontWeight: indent ? FontWeight.w400 : FontWeight.w600)),
+        // 一级分类可点击折叠/展开子分类（有子分类时显示箭头）
+        onTap: isParent && !indent
+            ? () => setState(() {
+                  if (!_collapsed.add('${c['id']}')) _collapsed.remove('${c['id']}');
+                })
+            : null,
+        subtitle: (isParent && !indent)
+            ? Text('${_childrenOf('${c['id']}').length} 个子分类 · ${collapsed ? '点击展开' : '点击收起'}',
+                style: TextStyle(fontSize: 11, color: _c.textSub))
+            : null,
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (isParent && !indent)
+              Icon(collapsed ? Icons.expand_more : Icons.expand_less, size: 20, color: _c.textSub),
             IconButton(
               icon: const Icon(Icons.add, size: 20),
               tooltip: '添加子分类',

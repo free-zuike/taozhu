@@ -55,6 +55,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     ('clients', '店铺'),
     ('items', '商品'),
     ('categories', '分类'),
+    ('payment_accounts', '收款账户'),
     ('sales', '出货单'),
     ('purchases', '进货单'),
     ('payments', '收款单'),
@@ -290,22 +291,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     }
   }
 
-  Future<void> _syncNow() async {
-    if (_syncing) return;
-    setState(() => _syncing = true);
-    try {
-      await SyncService.sync().timeout(const Duration(seconds: 30));
-    } catch (_) {
-      // 同步超时/异常也结束转圈（服务端卡死不阻塞 UI）
-    } finally {
-      if (!mounted) return;
-      setState(() => _syncing = false);
-      _load();
-      toast(context, '已触发同步');
-    }
-  }
-
-  /// 重新全量同步：重置增量游标后强制 fullSync 拉全量（修复"清除数据后增量拉取拉不全"的缺口）
+  /// 重新全量同步：重置增量游标后强制 fullSync 拉全量（修复"清除数据后增量拉取拉不全"的缺口）。
+  /// 下拉整个页面触发（无右上角按钮）。
   Future<void> _fullSyncNow() async {
     if (_syncing) return;
     setState(() => _syncing = true);
@@ -335,26 +322,17 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('同步状态'),
-        actions: [
-          IconButton(
-            tooltip: '重新全量同步（拉全量修复缺口）',
-            icon: const Icon(Icons.system_update_alt),
-            onPressed: _syncing ? null : _fullSyncNow,
-          ),
-          IconButton(
-            tooltip: '同步全部数据',
-            icon: _syncing
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.sync),
-            onPressed: _syncing ? null : _syncNow,
-          ),
-        ],
+        // 无右上角按钮：下拉整个页面 = 重新全量同步（拉全量修复缺口）
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              children: [
+          : RefreshIndicator(
+              onRefresh: _fullSyncNow,
+              edgeOffset: 24,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                children: [
                 if (_error != null)
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -387,7 +365,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                             _syncStatus == 'syncing'
                                 ? '正在同步…'
                                 : _syncFailed
-                                    ? '上次同步失败（下拉重试 / 右上角同步）'
+                                    ? '上次同步失败（下拉重新全量同步）'
                                     : _lastSync == '从未同步'
                                         ? '等待首次同步'
                                         : '已同步 · $_lastSync',
@@ -425,7 +403,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                   _card(c, [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      child: Text('尚未选择店铺：请先到「交易（账本）」页选择店铺后再查看', style: TextStyle(fontSize: 13, color: c.textSub)),
+                      child: Text('尚未选择店铺：请先到「交易」页选择店铺后再查看', style: TextStyle(fontSize: 13, color: c.textSub)),
                     ),
                   ])
                 else if (!kIsWeb)
@@ -495,11 +473,12 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 ]),
                 const SizedBox(height: 8),
                 Center(
-                  child: Text('进入系统时已自动同步；右上角按钮可随时手动同步',
+                  child: Text('下拉整个页面 = 重新全量同步（拉全量修复本地缺口）',
                       style: TextStyle(fontSize: 11, color: c.textSub)),
                 ),
-              ],
-            ),
+                ],
+                ),
+              ),
     );
   }
 

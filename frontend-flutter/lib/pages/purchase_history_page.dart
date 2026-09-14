@@ -388,12 +388,14 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         // 分类：优先查询商品设置分类（目录映射，改分类即时生效），明细快照仅兜底
         final dirCat = _itemCategory[itemId] ?? '';
         final catInline = '${it['item_category'] ?? ''}'.trim();
+        // 备注：行级 note 优先，空则回退单据 note（仅首行显示，避免每行重复）
+        final lineNote = '${it['note'] ?? ''}'.trim();
         lines.add({
           'date': id.length >= 10 ? id.substring(0, 10) : orderDate,
           'order': p,
           'item_name': '${it['item_name'] ?? ''}',
           'item_id': itemId,  // 真实商品 id（改分类等商品级操作用）
-          'note': orderNote,
+          'note': lineNote.isNotEmpty ? lineNote : (it == items.first ? orderNote : ''),
           'category': dirCat.isNotEmpty ? dirCat : catInline,
           'quantity': '${it['quantity'] ?? ''}',
           'unit': '${it['unit'] ?? ''}',

@@ -727,6 +727,23 @@ class _PurchasePageState extends State<PurchasePage> {
             style: TextStyle(color: c.textMain),
             decoration: _fieldDec(icon: Icons.notes_outlined, label: '备注（可留空）'),
           ),
+          // 整单通用附件（当天单据共用的凭证：送货单/发货单等）；行级附件在各商品行单独加
+          const SizedBox(height: 4),
+          Card(
+            margin: EdgeInsets.zero,
+            elevation: 0,
+            color: c.success.withOpacity(0.06),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            child: ListTile(
+              dense: true,
+              visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
+              leading: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF67C23A)),
+              title: const Text('整单附件（通用凭证）', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              subtitle: const Text('点击查看/添加整单共用附件', style: TextStyle(fontSize: 11)),
+              trailing: const Icon(Icons.chevron_right, size: 20),
+              onTap: () => showAttachmentViewer(context, 'purchase', _purchaseId, '进货单附件'),
+            ),
+          ),
         ],
       ),
     ));

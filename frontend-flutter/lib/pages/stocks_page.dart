@@ -128,6 +128,7 @@ class _StocksPageState extends State<StocksPage> {
     try {
       await Api.instance.patch('/stocks/${s['id']}', {'quantity': qty, 'min_stock': min});
       toast(context, '已保存');
+      SyncService.notifyStockChanged(); // 我的页低库存红字实时刷新
       _refresh();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -253,6 +254,7 @@ class _StocksPageState extends State<StocksPage> {
       }
       await Api.instance.put('/stocks', {'rows': payload});
       toast(context, '盘点已保存');
+      SyncService.notifyStockChanged(); // 我的页低库存红字实时刷新
       _refresh();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));

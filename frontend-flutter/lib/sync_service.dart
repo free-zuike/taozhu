@@ -40,6 +40,11 @@ class SyncService {
     status.notifyListeners();
   }
 
+  /// 库存变更通知器：库存盘点/调整/记单后触发，库存页与「我的」页低库存红字监听后刷新（无需重启 App）
+  static final ChangeNotifier stockChanged = ChangeNotifier();
+  /// 触发库存变更通知（stocks_page 保存/盘点成功后调用）
+  static void notifyStockChanged() => stockChanged.notifyListeners();
+
   static String? _deviceId;
   static bool _syncing = false;
   static Timer? _debounce;
@@ -174,12 +179,14 @@ class SyncService {
       final clients = (d['clients'] as List?) ?? [];
       final items = (d['items'] as List?) ?? [];
       final categories = (d['categories'] as List?) ?? [];
+      final accounts = (d['payment_accounts'] as List?) ?? [];
       final sales = (d['sales'] as List?) ?? [];
       final purchases = (d['purchases'] as List?) ?? [];
       final payments = (d['payments'] as List?) ?? [];
       await LocalDb.putAll('clients', clients.cast<Map<String, dynamic>>());
       await LocalDb.putAll('items', items.cast<Map<String, dynamic>>());
       await LocalDb.putAll('categories', categories.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('payment_accounts', accounts.cast<Map<String, dynamic>>());
       await LocalDb.putAll('sales', sales.cast<Map<String, dynamic>>());
       await LocalDb.putAll('purchases', purchases.cast<Map<String, dynamic>>());
       await LocalDb.putAll('payments', payments.cast<Map<String, dynamic>>());
@@ -188,7 +195,9 @@ class SyncService {
       await p.setInt(_cursorKey, cursor);
       await p.setBool(_fullDoneKey, true);
       await _markSynced();
-      return clients.length + items.length + sales.length + purchases.length + payments.length;
+      // 全量同步数量含全部实体（含分类、收款账户）——同步面板日志/统计口径与实体数一致
+      return clients.length + items.length + categories.length + accounts.length +
+          sales.length + purchases.length + payments.length;
     } catch (_) {
       _lastSyncFailed = true;
       return 0;
@@ -378,6 +387,16 @@ class SyncService {
     });
   }
 
+  /// 触发一次增量拉取（账户等以服务端全量覆盖保存成功后调用：
+  /// 服务端已入变更流，本机镜像需 pull 合并到最新）
+  static void schedulePullNow() {
+    if (kIsWeb) return;
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 200), () {
+      pullChanges();
+    });
+  }
+
   /// 启动/回前台同步：首次 full，后续增量 pull + 推送待发（静默）。
   /// 同步中会通知 status 监听者（「我的」页实时显示 同步中/已同步/同步失败）。
   static Future<void> sync() async {
@@ -413,6 +432,7 @@ class SyncService {
       case 'client': return 'clients';
       case 'item': return 'items';
       case 'category': return 'categories';
+      case 'payment_account': return 'payment_accounts';
       case 'sale': return 'sales';
       case 'purchase': return 'purchases';
       case 'payment': return 'payments';

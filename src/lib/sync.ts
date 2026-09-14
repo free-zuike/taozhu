@@ -8,7 +8,7 @@ import { stockDelta } from './stock';
 import { randomId } from './password';
 import { notifyClients } from '../services/sync-hub';
 
-export const SYNC_ENTITIES = ['client', 'item', 'category', 'sale', 'purchase', 'payment'] as const;
+export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'sale', 'purchase', 'payment'] as const;
 export type SyncEntityType = (typeof SYNC_ENTITIES)[number];
 
 export interface SyncChangeInput {
@@ -80,6 +80,11 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       const r = await db.prepare('SELECT * FROM categories WHERE id = ?').bind(id).first<Record<string, unknown>>();
       if (!r) return null;
       return { id: r.id, type: r.type, name: r.name, parent_id: r.parent_id ?? null, sort: r.sort ?? 0 };
+    }
+    case 'payment_account': {
+      const r = await db.prepare('SELECT * FROM payment_accounts WHERE id = ?').bind(id).first<Record<string, unknown>>();
+      if (!r) return null;
+      return { id: r.id, name: r.name, sort: r.sort ?? 0 };
     }
     case 'sale': {
       const r = await db.prepare(
@@ -159,10 +164,10 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
     if (qty <= 0) continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.sale_price) || 0) * 100) / 100;
     batch.push(db.prepare(
-      'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(it.id ?? randomId(), id, it.item_id ?? '', it.unit ?? '', qty,
       Number(it.sale_price) || 0, Number(it.cost_price) || 0, Math.round(amount * 100) / 100,
-      it.happened_at || p.happened_at || null));
+      it.happened_at || p.happened_at || null, it.note ?? ''));
     batch.push(stockDelta(db, it.item_id ?? '', it.unit ?? '', -qty));
   }
   await db.batch(batch);
@@ -182,10 +187,10 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
     if (qty <= 0) continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.purchase_price) || 0) * 100) / 100;
     batch.push(db.prepare(
-      'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(it.id ?? randomId(), id, it.item_id ?? '', it.unit ?? '', qty,
       Number(it.purchase_price) || 0, Math.round(amount * 100) / 100,
-      it.happened_at || p.happened_at || null));
+      it.happened_at || p.happened_at || null, it.note ?? ''));
     batch.push(stockDelta(db, it.item_id ?? '', it.unit ?? '', qty));
   }
   await db.batch(batch);
@@ -243,6 +248,16 @@ export async function applyChange(
              ON CONFLICT(id) DO UPDATE SET type = excluded.type, name = excluded.name,
                parent_id = excluded.parent_id, sort = excluded.sort`,
           ).bind(id, p.type ?? 'item', p.name ?? '', p.parent_id ?? null, Number(p.sort) || 0).run();
+        }
+        break;
+      case 'payment_account':
+        if (action === 'delete') {
+          await db.prepare('DELETE FROM payment_accounts WHERE id = ?').bind(id).run();
+        } else {
+          await db.prepare(
+            `INSERT INTO payment_accounts (id, name, sort) VALUES (?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort = excluded.sort`,
+          ).bind(id, p.name ?? '', Number(p.sort) || 0).run();
         }
         break;
       case 'sale':

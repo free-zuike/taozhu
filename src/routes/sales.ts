@@ -20,6 +20,7 @@ interface SaleItemInput {
   quantity: number;
   sale_price?: number;       // 可覆盖默认售价
   happened_at?: string;      // 行独立日期（缺省用单据日期）
+  note?: string;             // 行级备注（缺省空）
 }
 
 // POST /sales — 记一张出货单（原子事务）
@@ -84,9 +85,9 @@ salesRouter.post('/', async (c) => {
     saleItemIds.push(siId);
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(siId, saleId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
-        item.happened_at?.trim() || happenedAt),
+        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? ''),
     );
     // 出货扣减库存
     batch.push(stockDelta(c.env.DB, price.item_id, price.unit, -qty));
@@ -209,15 +210,15 @@ salesRouter.get('/:id', async (c) => {
   });
 });
 
-// PATCH /sales/items/:id — 编辑单条出货明细行（数量/单位/售价/日期；回滚旧库存再按新值扣减，重算金额与单据日期）
+// PATCH /sales/items/:id — 编辑单条出货明细行（数量/单位/售价/日期/备注；回滚旧库存再按新值扣减，重算金额与单据日期）
 salesRouter.patch('/items/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => null) as {
-    quantity?: number; unit?: string; sale_price?: number; happened_at?: string;
+    quantity?: number; unit?: string; sale_price?: number; happened_at?: string; note?: string;
   } | null;
   const row = await c.env.DB.prepare(
-    'SELECT id, sale_id, item_id, unit, quantity, sale_price, happened_at FROM sale_items WHERE id = ?',
-  ).bind(id).first<{ id: string; sale_id: string; item_id: string; unit: string; quantity: number; sale_price: number; happened_at: string | null }>();
+    'SELECT id, sale_id, item_id, unit, quantity, sale_price, happened_at, note FROM sale_items WHERE id = ?',
+  ).bind(id).first<{ id: string; sale_id: string; item_id: string; unit: string; quantity: number; sale_price: number; happened_at: string | null; note: string | null }>();
   if (!row) return c.json({ error: '明细行不存在' }, 404);
 
   const qty = body?.quantity !== undefined ? Number(body.quantity) : row.quantity;
@@ -227,14 +228,15 @@ salesRouter.patch('/items/:id', async (c) => {
   const salePrice = Number.isFinite(sp) && sp > 0 ? sp : row.sale_price;
   const happenedAt = body?.happened_at?.trim() || row.happened_at || '';
   if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
+  const note = body?.note !== undefined ? (body.note ?? '').trim() : (row.note ?? '');
 
   const amount = Math.round(qty * salePrice * 100) / 100;
   const batch: D1PreparedStatement[] = [
     stockDelta(c.env.DB, row.item_id, row.unit, row.quantity), // 出货扣减恢复（旧值）
     stockDelta(c.env.DB, row.item_id, unit, -qty),             // 按新值重新扣减（不变时净零）
     c.env.DB.prepare(
-      'UPDATE sale_items SET quantity = ?, unit = ?, sale_price = ?, amount = ?, happened_at = ? WHERE id = ?',
-    ).bind(qty, unit, salePrice, amount, happenedAt || null, id),
+      'UPDATE sale_items SET quantity = ?, unit = ?, sale_price = ?, amount = ?, happened_at = ?, note = ? WHERE id = ?',
+    ).bind(qty, unit, salePrice, amount, happenedAt || null, note, id),
   ];
   await c.env.DB.batch(batch);
   // 单据日期自动取明细最大日期（与记单页 orderDate=最大行日期口径一致）
@@ -306,9 +308,9 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       const amount = Math.round(qty * effectiveSale * 100) / 100;
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).bind(randomId(), id, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
-          item.happened_at?.trim() || happenedAt),
+          item.happened_at?.trim() || happenedAt, item.note?.trim() ?? ''),
       );
       // 按新明细扣减库存
       batch.push(stockDelta(c.env.DB, price.item_id, price.unit, -qty));

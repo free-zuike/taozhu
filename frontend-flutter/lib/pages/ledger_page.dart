@@ -6,20 +6,18 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../api.dart';
+import '../local_accounts.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/center_sheet.dart';
 import 'router.dart';
-import 'clients_page.dart';
-import 'sale_page.dart';
-import 'payments_page.dart';
 import 'attachment_viewer.dart';
 import 'sale_batch_edit_page.dart';
 import 'sale_line_edit.dart';
 
-/// 交易（账本=店铺）：出货 / 收款流水，按店铺+时间范围，支持编辑删除与附件（按日期分组列表）
+/// 交易（店铺）：出货 / 收款流水，按店铺+时间范围，支持编辑删除与附件（按日期分组列表）
 class LedgerPage extends StatefulWidget {
   const LedgerPage({super.key});
   @override
@@ -30,7 +28,7 @@ class _LedgerPageState extends State<LedgerPage> {
   List<Map<String, dynamic>> _sales = [];
   List<Map<String, dynamic>> _payments = [];
   List<Map<String, dynamic>> _clients = [];
-  String? _clientId; // 账本（店铺）维度：必选，默认第一个；无店铺时自动建「默认店铺」
+  String? _clientId; // 店铺维度：必选，默认第一个；无店铺时自动建「默认店铺」
   String _range = 'month'; // month | 2m | 3m | all
   bool _isStaff = false; // 店员账号：仅当天出货视角
   bool _loading = true;
@@ -68,7 +66,7 @@ class _LedgerPageState extends State<LedgerPage> {
     if (!mounted) return;
     _load();
     // 同步完成后后台刷新一次云端附件数（其他设备/Web 上传的附件），
-    // 不在页面加载时访问网络（本地优先：离线进账本页零网络请求）
+    // 不在页面加载时访问网络（本地优先：离线进交易页零网络请求）
     if (!kIsWeb) _loadAttachCounts(withCloud: true);
   }
 
@@ -88,7 +86,7 @@ class _LedgerPageState extends State<LedgerPage> {
 
   String _dateQuery() => ''; // （进货独立 tab，本页不再使用）
 
-  /// 出货/收款查询：账本（店铺）必选 + 时间范围；进货不按店铺（仅时间范围）
+  /// 出货/收款查询：店铺必选 + 时间范围；进货不按店铺（仅时间范围）
   String _clientQuery() {
     final r = _rangeDates();
     final params = <String>[];
@@ -323,7 +321,7 @@ class _LedgerPageState extends State<LedgerPage> {
     }).toList();
   }
 
-  /// 账本选择弹层：全部店铺（名称 + 交易笔数 + 欠款），底部管理店铺
+  /// 店选弹层：全部店铺（名称 + 交易笔数 + 欠款），底部新增店铺
   Future<void> _showLedgerPicker() async {
     final selected = await showCenterSheet<String>(
       context: context,
@@ -333,7 +331,7 @@ class _LedgerPageState extends State<LedgerPage> {
         children: [
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 14),
-            child: Text('选择店铺（账本）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+            child: Text('选择店铺', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
           ),
           Flexible(
             child: ListView(
@@ -363,16 +361,6 @@ class _LedgerPageState extends State<LedgerPage> {
             onTap: () {
               Navigator.pop(ctx);
               _addClientQuick();
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.manage_search_outlined, color: Color(0xFF409EFF)),
-            title: const Text('管理店铺（账本）'),
-            onTap: () {
-              Navigator.pop(ctx);
-              Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => const ClientsPage()))
-                  .then((_) => _load());
             },
           ),
           const SizedBox(height: 8),
@@ -532,8 +520,8 @@ class _LedgerPageState extends State<LedgerPage> {
   Future<void> _editPayment(Map<String, dynamic> p) async {
     final amountCtrl = TextEditingController(text: '${p['amount']}');
     final dateCtrl = TextEditingController(text: _date(p['happened_at']));
-    final methodCtrl = TextEditingController(text: '${p['method'] ?? ''}');
     final noteCtrl = TextEditingController(text: '${p['note'] ?? ''}');
+    var method = '${p['method'] ?? ''}';
     String? clientId = '${p['client_id']}';
     final ok = await showDialog<bool>(
       context: context,
@@ -560,9 +548,18 @@ class _LedgerPageState extends State<LedgerPage> {
               const SizedBox(height: 8),
               TextField(controller: dateCtrl, decoration: const InputDecoration(labelText: '日期（YYYY-MM-DD）')),
               const SizedBox(height: 8),
-              TextField(
-                  controller: methodCtrl,
-                  decoration: const InputDecoration(labelText: '收款方式（现金/微信/转账…）')),
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () async {
+                  final picked = await pickAccount(ctx, current: method);
+                  if (picked != null && ctx.mounted) setDlg(() => method = picked);
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(labelText: '收款方式（账户）'),
+                  child: Text(method.isEmpty ? '点击选择' : method,
+                      style: TextStyle(color: Theme.of(ctx).brightness == Brightness.dark ? Colors.white : Colors.black)),
+                ),
+              ),
               const SizedBox(height: 8),
               TextField(controller: noteCtrl, decoration: const InputDecoration(labelText: '备注')),
             ],
@@ -589,7 +586,7 @@ class _LedgerPageState extends State<LedgerPage> {
         'client_id': clientId,
         'amount': amount,
         'happened_at': dateCtrl.text.trim(),
-        'method': methodCtrl.text.trim(),
+        'method': method,
         'note': noteCtrl.text.trim(),
       });
       toast(context, '已保存');
@@ -620,7 +617,7 @@ class _LedgerPageState extends State<LedgerPage> {
     return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
   }
 
-  /// 导出当前筛选 CSV（出货/收款，按账本+范围）
+  /// 导出当前筛选 CSV（出货/收款，按店铺+范围）
   Future<void> _exportCsv() async {
     final buf = StringBuffer('\uFEFF');
     buf.writeln('类型,日期,店铺,商品,数量,单位,单价,金额,备注');
@@ -655,8 +652,8 @@ class _LedgerPageState extends State<LedgerPage> {
     }
     final bytes = Uint8List.fromList(utf8.encode(buf.toString()));
     await Share.shareXFiles(
-      [XFile.fromData(bytes, mimeType: 'text/csv', name: 'taozhu-账本.csv')],
-      text: '陶朱账本 CSV',
+      [XFile.fromData(bytes, mimeType: 'text/csv', name: 'taozhu-店铺.csv')],
+      text: '陶朱店铺 CSV',
     );
   }
 
@@ -713,7 +710,7 @@ class _LedgerPageState extends State<LedgerPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 账本（店铺）选择：点击弹出全部账本弹层（名称+交易笔数+欠款+管理）
+                  // 店铺选择：点击弹出全部店铺弹层（名称+交易笔数+欠款+新增）
                   if (_clients.isNotEmpty)
                     Material(
                       color: Colors.transparent,
@@ -939,6 +936,8 @@ class _LedgerPageState extends State<LedgerPage> {
         // 明细行自带快照（后端 join 时旧值）仅作本地目录缺该商品时的兜底
         final dirCat = _itemCategory['${it['item_id'] ?? ''}'] ?? '';
         final catInline = '${it['item_category'] ?? it['category'] ?? ''}'.trim();
+        // 备注：行级 note 优先，空则回退单据 note（仅首行显示，避免每行重复）
+        final lineNote = '${it['note'] ?? ''}'.trim();
         lines.add({
           'date': id.length >= 10 ? id.substring(0, 10) : orderDate,
           'order': s,
@@ -953,7 +952,7 @@ class _LedgerPageState extends State<LedgerPage> {
           'sale_price': (it['sale_price'] as num?)?.toDouble(),
           'cost_price': (it['cost_price'] as num?)?.toDouble(),
           'qty_num': (it['quantity'] as num?)?.toDouble() ?? 0,
-          'note': it == items.first ? orderNote : '',
+          'note': lineNote.isNotEmpty ? lineNote : (it == items.first ? orderNote : ''),
           'happened_at': id.isEmpty ? '${s['happened_at'] ?? orderDate}' : id,
         });
       }
@@ -1224,16 +1223,23 @@ class _LedgerPageState extends State<LedgerPage> {
             ),
             Text('¥${fmtMoney(p['amount'])}',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.success)),
-            // 附件直接可见：有附件才显示图标，点图标全屏查看全部凭证图片（左右滑动切换）
+            // 附件直接可见：有附件才显示图标+数量，点图标全屏查看全部凭证图片（左右滑动切换）
             if ((_payAttachCount['${p['id']}'] ?? 0) > 0)
-              IconButton(
-                tooltip: '凭证附件',
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.image_outlined, size: 20, color: c.success),
-                onPressed: () async {
+              InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: () async {
                   await showAttachmentViewer(context, 'payment', '${p['id']}', '收款凭证');
                   _loadAttachCounts();
                 },
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.image_outlined, size: 20, color: c.success),
+                    const SizedBox(width: 2),
+                    Text('${_payAttachCount['${p['id']}'] ?? 0}',
+                        style: TextStyle(fontSize: 11, color: c.success, fontWeight: FontWeight.w700)),
+                  ]),
+                ),
               ),
             _menu(
               edit: () => _editPayment(p),

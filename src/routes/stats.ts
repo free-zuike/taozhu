@@ -126,6 +126,42 @@ statsRouter.get('/monthly', async (c) => {
   });
 });
 
+// GET /stats/monthly-flow?year=2026 — 按月流式结余（类似 beecount 首页卡片）：
+// 支出 = 当月全部进货额，收入 = 当月全部出货额，结余 = 出货 − 进货。
+// 进货不分店铺（全局），故本口径为全店汇总；供「月度结余」页流式展示。
+statsRouter.get('/monthly-flow', async (c) => {
+  const canSeeProfit = c.get('user').role === 'admin';
+  const year = c.req.query('year')?.trim() || String(new Date().getUTCFullYear());
+  const salesRows = await c.env.DB.prepare(
+    `SELECT substr(COALESCE(si.happened_at, s.happened_at), 1, 7) AS month, SUM(si.amount) AS sales_total
+     FROM sale_items si JOIN sales s ON s.id = si.sale_id
+     WHERE substr(COALESCE(si.happened_at, s.happened_at), 1, 4) = ?
+     GROUP BY month ORDER BY month`,
+  ).bind(year).all<{ month: string; sales_total: number }>();
+  const buyRows = await c.env.DB.prepare(
+    `SELECT substr(COALESCE(pi.happened_at, p.happened_at), 1, 7) AS month, SUM(pi.amount) AS purchase_total
+     FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
+     WHERE substr(COALESCE(pi.happened_at, p.happened_at), 1, 4) = ?
+     GROUP BY month ORDER BY month`,
+  ).bind(year).all<{ month: string; purchase_total: number }>();
+  const buyMap = new Map(buyRows.results.map((r) => [r.month, r.purchase_total]));
+  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const months = salesRows.results.map((s) => {
+    const sales = r(s.sales_total);
+    const buys = r(buyMap.get(s.month) ?? 0);
+    return { month: s.month, sales_total: sales, purchase_total: buys, balance: r(sales - buys) };
+  });
+  // 无出货但有进货的月份也要展示（支出列非空）
+  for (const b of buyRows.results) {
+    if (!months.some((m) => m.month === b.month)) {
+      const buys = r(b.purchase_total);
+      months.push({ month: b.month, sales_total: 0, purchase_total: buys, balance: r(-buys) });
+    }
+  }
+  months.sort((a, b) => a.month.localeCompare(b.month));
+  return c.json({ year, can_see_profit: canSeeProfit, months });
+});
+
 // GET /stats/categories?start=&end=&client_id= — 区间内按商品分类聚合出货（额降序）
 statsRouter.get('/categories', async (c) => {
   const start = c.req.query('start')?.trim();

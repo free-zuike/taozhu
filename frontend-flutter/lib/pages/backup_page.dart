@@ -37,7 +37,7 @@ class _BackupPageState extends State<BackupPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('导入备份'),
-        content: const Text('将备份文件中的记录合并到当前账本：\n· 相同 ID 的记录跳过（不覆盖现有数据）\n· 只新增备份里有、本地没有的记录\n\n建议导入前先导出留底。'),
+        content: const Text('将备份文件中的记录合并到当前数据：\n· 相同 ID 的记录跳过（不覆盖现有数据）\n· 只新增备份里有、本地没有的记录\n\n建议导入前先导出留底。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('选择文件并导入')),
