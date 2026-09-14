@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 /// 圆角卡片式、宽度随内容（超宽设备限制最大宽度）、高度不超过屏幕 88%。
 /// 替代历史上分散的 showModalBottomSheet，保证全局版式一致。
 /// 点击遮罩关闭（barrierDismissible），与底部抽屉行为一致。
-Future<T?> showCenterSheet<T>(
-  BuildContext context, {
+Future<T?> showCenterSheet<T>({
+  required BuildContext context,
   required Widget Function(BuildContext) builder,
   double maxHeightFactor = 0.88,
 }) {
