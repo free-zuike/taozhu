@@ -10,6 +10,7 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../widgets/center_sheet.dart';
 import 'router.dart';
 import 'clients_page.dart';
 import 'sale_page.dart';
@@ -78,10 +79,6 @@ class _LedgerPageState extends State<LedgerPage> {
   (String, String)? _rangeDates() {
     final now = DateTime.now();
     switch (_range) {
-      case '2m':
-        return (_fmtDate(DateTime(now.year, now.month - 2, now.day)), _fmtDate(now));
-      case '3m':
-        return (_fmtDate(DateTime(now.year, now.month - 3, now.day)), _fmtDate(now));
       case 'all':
         return null;
       default:
@@ -328,60 +325,58 @@ class _LedgerPageState extends State<LedgerPage> {
 
   /// 账本选择弹层：全部店铺（名称 + 交易笔数 + 欠款），底部管理店铺
   Future<void> _showLedgerPicker() async {
-    final selected = await showModalBottomSheet<String>(
+    final selected = await showCenterSheet<String>(
       context: context,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 14),
-              child: Text('选择店铺（账本）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+      maxHeightFactor: 0.8,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Text('选择店铺（账本）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+          ),
+          Flexible(
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                // 按店铺分类分组（食堂/档口等）：分类标题 + 组内店铺
+                ..._clientGroups().entries.map((g) => [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+                        child: Text(g.key,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Theme.of(context).extension<TaozhuColors>()!.textSub,
+                            )),
+                      ),
+                      for (final c in g.value)
+                        _storeTile(ctx, c),
+                    ]).expand((x) => x),
+              ],
             ),
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                children: [
-                  // 按店铺分类分组（食堂/档口等）：分类标题 + 组内店铺
-                  ..._clientGroups().entries.map((g) => [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
-                          child: Text(g.key,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: Theme.of(context).extension<TaozhuColors>()!.textSub,
-                              )),
-                        ),
-                        for (final c in g.value)
-                          _storeTile(ctx, c),
-                      ]).expand((x) => x),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.add_business_outlined, color: Color(0xFF409EFF)),
-              title: const Text('新增店铺'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _addClientQuick();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.manage_search_outlined, color: Color(0xFF409EFF)),
-              title: const Text('管理店铺（账本）'),
-              onTap: () {
-                Navigator.pop(ctx);
-                Navigator.of(context)
-                    .push(MaterialPageRoute(builder: (_) => const ClientsPage()))
-                    .then((_) => _load());
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.add_business_outlined, color: Color(0xFF409EFF)),
+            title: const Text('新增店铺'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _addClientQuick();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.manage_search_outlined, color: Color(0xFF409EFF)),
+            title: const Text('管理店铺（账本）'),
+            onTap: () {
+              Navigator.pop(ctx);
+              Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const ClientsPage()))
+                  .then((_) => _load());
+            },
+          ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
     if (selected != null && selected != _clientId) {
@@ -758,7 +753,7 @@ class _LedgerPageState extends State<LedgerPage> {
                       ),
                     ),
                   const SizedBox(height: 8),
-                  // 时间范围：当月 / 最近2个月 / 最近3个月 / 全部（Wrap 自动换行，文字完整显示）
+                  // 时间范围：当月 / 全部流水（去掉 2m/3m，简化选择；店员账号：仅当天出货）
                   // 店员账号：仅当天出货（后端强制），隐藏范围选择
                   if (!_isStaff)
                     Wrap(
@@ -767,8 +762,6 @@ class _LedgerPageState extends State<LedgerPage> {
                       children: [
                         for (final r in const [
                           ('month', '当月'),
-                          ('2m', '最近2个月'),
-                          ('3m', '最近3个月'),
                           ('all', '全部流水'),
                         ])
                           ChoiceChip(

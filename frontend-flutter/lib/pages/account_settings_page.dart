@@ -8,6 +8,7 @@ import '../avatar_cache.dart';
 import '../log.dart';
 import '../theme.dart';
 import '../widgets/user_avatar.dart';
+import '../widgets/center_sheet.dart';
 import 'router.dart';
 
 /// 账号设置（自助）：头像 / 用户名 / 密码 / 两步验证（TOTP）/ 服务器地址。
@@ -88,25 +89,23 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   }
 
   Future<void> _changeAvatar() async {
-    final src = await showModalBottomSheet<ImageSource>(
+    final src = await showCenterSheet<ImageSource>(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined, color: Color(0xFF409EFF)),
-              title: const Text('拍照'),
-              onTap: () => Navigator.pop(ctx, ImageSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined, color: Color(0xFF67C23A)),
-              title: const Text('从相册选择'),
-              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.photo_camera_outlined, color: Color(0xFF409EFF)),
+            title: const Text('拍照'),
+            onTap: () => Navigator.pop(ctx, ImageSource.camera),
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_library_outlined, color: Color(0xFF67C23A)),
+            title: const Text('从相册选择'),
+            onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+          ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
     if (src == null) return;

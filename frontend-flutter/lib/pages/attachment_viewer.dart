@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
+import '../widgets/center_sheet.dart';
 import 'router.dart';
 
 /// 附件全屏查看器：点图标直接全屏显示该单据的全部附件，左/右滑切换；
@@ -102,25 +103,23 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
   }
 
   Future<void> _add() async {
-    final src = await showModalBottomSheet<ImageSource>(
+    final src = await showCenterSheet<ImageSource>(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined, color: Color(0xFF409EFF)),
-              title: const Text('拍照（扫描凭证）'),
-              onTap: () => Navigator.pop(ctx, ImageSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined, color: Color(0xFF67C23A)),
-              title: const Text('从相册选择（手动添加）'),
-              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.photo_camera_outlined, color: Color(0xFF409EFF)),
+            title: const Text('拍照（扫描凭证）'),
+            onTap: () => Navigator.pop(ctx, ImageSource.camera),
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_library_outlined, color: Color(0xFF67C23A)),
+            title: const Text('从相册选择（手动添加）'),
+            onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+          ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
     if (src == null) return;

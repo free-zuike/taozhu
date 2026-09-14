@@ -25,10 +25,32 @@ stocksRouter.get('/', async (c) => {
   const rows = await c.env.DB.prepare(sql).bind(...params).all<{
     id: string; item_id: string; unit: string; quantity: number; min_stock: number; item_name: string; cost_price: number | null;
   }>();
+  // 建议预警阈值 = 近 30 天平均每笔出货量 × 40%（无出货记录则 0）。
+  // 前端仅"阈值未手动设置（min_stock=0）且库存 ≥1"时自动填充，不覆盖用户手设值。
+  const keys = rows.results.map((r) => `${r.item_id}\u0000${r.unit}`);
+  let suggest = new Map<string, number>();
+  if (keys.length > 0) {
+    const ph = new Set(keys);
+    const itemIds = [...ph].map((k) => k.split('\u0000')[0]);
+    const units = [...ph].map((k) => k.split('\u0000')[1]);
+    // 按 商品+单位 近 30 天出货行均值（避免跨单位混算）
+    const avgRows = await c.env.DB.prepare(
+      `SELECT si.item_id, si.unit, AVG(si.quantity) AS avg_qty
+       FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.happened_at >= date('now','-30 day')
+         AND si.item_id IN (${itemIds.map(() => '?').join(',')})
+       GROUP BY si.item_id, si.unit`,
+    ).bind(...itemIds).all<{ item_id: string; unit: string; avg_qty: number }>();
+    suggest = new Map(avgRows.results.map((r) => [
+      `${r.item_id}\u0000${r.unit}`,
+      Math.round((Number(r.avg_qty) || 0) * 0.4 * 100) / 100,
+    ]));
+  }
   return c.json({
     stocks: rows.results.map((r) => ({
       id: r.id, item_id: r.item_id, item_name: r.item_name, unit: r.unit,
       quantity: r.quantity, min_stock: r.min_stock,
+      suggest_min: suggest.get(`${r.item_id}\u0000${r.unit}`) ?? 0,
       cost_price: canSeeCost ? (r.cost_price ?? 0) : 0,
       low: r.quantity < r.min_stock,
     })),

@@ -28,6 +28,9 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   String _selectedClientId = '';
   String _selectedClientName = '';
   String? _error;
+  /// 同步全局状态（idle/syncing/error）；页面顶部状态行区分 成功✓ / 失败✗ / 同步中转圈
+  String _syncStatus = 'idle';
+  bool _syncFailed = false;
 
   // 当前店铺同步状况（本地 vs 服务器，出货/收款/附件）
   int _clientLocalSales = 0;
@@ -61,7 +64,24 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   void initState() {
     super.initState();
     // 进入本页只加载差异展示，不自动同步（进入系统时已自动同步；右上角可手动）
+    _syncStatus = SyncService.syncStatus;
+    _syncFailed = SyncService.lastSyncFailed;
+    SyncService.status.addListener(_onStatus);
     _load();
+  }
+
+  @override
+  void dispose() {
+    SyncService.status.removeListener(_onStatus);
+    super.dispose();
+  }
+
+  void _onStatus() {
+    if (!mounted) return;
+    setState(() {
+      _syncStatus = SyncService.syncStatus;
+      _syncFailed = SyncService.lastSyncFailed;
+    });
   }
 
   Future<void> _load() async {
@@ -124,6 +144,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     Map<String, dynamic>? clientStats;
     Map<String, dynamic>? saleCounts;
     Map<String, dynamic>? payCounts;
+    Map<String, dynamic>? saleLineCounts; // 明细行级附件（v0.17.61+ 每行商品独立凭证）
     Map<String, dynamic>? attachTotal;
     await Future.wait([
       _safe(() async {
@@ -143,6 +164,11 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         _safe(() async {
           payCounts = await Api.instance
               .post('/attachments/counts', {'entity': 'payment', 'client_id': selectedId})
+              .timeout(const Duration(seconds: 6));
+        }),
+        _safe(() async {
+          saleLineCounts = await Api.instance
+              .post('/attachments/counts', {'entity': 'sale_item', 'client_id': selectedId})
               .timeout(const Duration(seconds: 6));
         }),
       ],
@@ -169,6 +195,13 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
           ((sCounts['total'] as num?) ?? 0).toInt() + ((pCounts['total'] as num?) ?? 0).toInt();
       clientLocalAttach =
           await _localAttachCount('sale', saleIds) + await _localAttachCount('payment', payIds);
+    }
+    // 明细行级附件并入当前店铺统计（服务器 + 本地副本）
+    final slCounts = saleLineCounts;
+    if (slCounts != null) {
+      clientServerAttach += ((slCounts['total'] as num?) ?? 0).toInt();
+      final lineIds = ((slCounts['ids'] as List?) ?? []).cast<String>();
+      clientLocalAttach += await _localAttachCount('sale_item', lineIds);
     }
     if (tTotal != null) {
       serverAttachTotal = (tTotal['total'] as num?)?.toInt() ?? 0;
@@ -335,6 +368,42 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                     ),
                   ),
                 _card(c, [
+                  // 同步状态行：成功绿勾 / 失败红叉 / 同步中转圈（图标+颜色区分，避免"一样不明显"）
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Row(
+                      children: [
+                        if (_syncStatus == 'syncing')
+                          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        else
+                          Icon(
+                            _syncFailed ? Icons.error_outline : Icons.check_circle_outline,
+                            size: 20,
+                            color: _syncFailed ? c.danger : c.success,
+                          ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _syncStatus == 'syncing'
+                                ? '正在同步…'
+                                : _syncFailed
+                                    ? '上次同步失败（下拉重试 / 右上角同步）'
+                                    : _lastSync == '从未同步'
+                                        ? '等待首次同步'
+                                        : '已同步 · $_lastSync',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: _syncFailed ? c.danger : c.textMain,
+                            ),
+                          ),
+                        ),
+                        if (_syncStatus == 'syncing')
+                          Text('稍等', style: TextStyle(fontSize: 12, color: c.textSub)),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
                   _row(c, '当前设备', _deviceId.isEmpty ? '—' : _deviceId.substring(0, 8)),
                   _row(c, '上次成功同步', _fmtTime(_lastSync)),
                   _row(c, '待推送变更', kIsWeb ? '—（Web 无本地队列）' : '$_pending 条'),

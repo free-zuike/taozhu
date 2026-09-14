@@ -22,11 +22,12 @@ class _CacheFile {
   bool selected = false;
   _CacheFile(this.name, this.size, [this.path = '']);
 
-  /// 文件类型：apk=安装包 / zip=压缩包 / other=其他临时文件
+  /// 文件类型：apk=安装包 / zip=压缩包 / attach=附件副本（本地缓存目录）/ other=其他临时文件
   String get kind {
     final n = name.toLowerCase();
     if (n.endsWith('.apk')) return 'apk';
     if (n.endsWith('.zip')) return 'zip';
+    if (n.contains('/')) return 'attach'; // 附件单元名形如 sale/s1（entity/id）
     return 'other';
   }
 }
@@ -100,6 +101,32 @@ class _CleanupPageState extends State<CleanupPage> {
 
         await scan(await getDownloadsDirectory());
         await scan(await getTemporaryDirectory());
+      }
+      // 附件本地副本（attachments/{entity}/{id}/ 目录）：随账号下载的图片缓存。
+      // 退出登录/切换账号会清空，但历史遗留/未清理的副本可在这里按单元删除
+      if (!kIsWeb) {
+        final root = await getApplicationDocumentsDirectory();
+        final att = Directory('${root.path}/attachments');
+        if (await att.exists()) {
+          await for (final entity in att.list(followLinks: false)) {
+            if (entity is! Directory) continue;
+            await for (final id in entity.list(followLinks: false)) {
+              if (id is! Directory) continue;
+              var size = 0;
+              var count = 0;
+              await for (final f in id.list(followLinks: false)) {
+                if (f is File) {
+                  size += await f.length();
+                  count++;
+                }
+              }
+              if (count > 0) {
+                final rel = '${entity.uri.pathSegments.last}/${id.uri.pathSegments.last}';
+                files.add(_CacheFile('$rel ($count 张)', size, id.path));
+              }
+            }
+          }
+        }
       }
     } catch (e) {
       toast(context, '扫描失败：${e.toString().replaceFirst('Exception: ', '')}');

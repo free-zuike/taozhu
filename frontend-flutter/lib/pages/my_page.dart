@@ -27,6 +27,7 @@ import 'logs_page.dart';
 import 'backup_page.dart';
 import 'update_sources_page.dart';
 import '../widgets/user_avatar.dart';
+import '../widgets/center_sheet.dart';
 
 class MyPage extends StatefulWidget {
   const MyPage({super.key});
@@ -52,6 +53,10 @@ class _MyPageState extends State<MyPage> {
   int _lowStocks = -1; // 低库存数量（-1=未加载）
   int _pending = 0; // 待同步单据数（合并旧 Api 队列 + 新 SyncService 队列）
   String _lastSync = ''; // 上次同步时间（人类可读）
+  /// 最近一次按钮点击时间戳（防连点：500ms 内忽略重复触发）
+  int _lastTapAt = 0;
+  /// 检查更新请求进行中（防止连点重复发请求/弹多个更新窗）
+  bool _checkingUpdate = false;
 
   @override
   void initState() {
@@ -223,13 +228,25 @@ class _MyPageState extends State<MyPage> {
     await _logout();
   }
 
-  /// 清除当前账号本地数据：token/角色/接口缓存/离线队列 + 本地数据库
+  /// 清除当前账号本地数据：token/角色/接口缓存/离线队列 + 本地数据库 + 附件本地副本
   Future<void> _clearAccountData() async {
     await Api.instance.clearLocalData();
     await LocalDb.clearAll();
+    await _clearLocalAttachments(); // 附件本地副本（防止退出后残留、换账号串号显示）
     // 关键：本地库清空后同步进度必须一并重置，否则新账号登录只做增量 pull，
     // 游标之前的服务器数据（大部分历史）永远拉不到，造成"假同步、数据拉不全"
     await SyncService.resetSyncState();
+  }
+
+  /// 清空本地附件副本目录（attachments/{entity}/{id}/）：退出/切换账号时调用，
+  /// 防止旧账号附件残留（附件查看器本地副本优先会直接显示，且清理页此前扫不到）
+  Future<void> _clearLocalAttachments() async {
+    if (kIsWeb) return;
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final dir = Directory('${root.path}/attachments');
+      if (dir.existsSync()) await dir.delete(recursive: true);
+    } catch (_) {}
   }
 
   /// 版本号比较：a < b ?（四段 x.y.z.w）
@@ -251,6 +268,17 @@ class _MyPageState extends State<MyPage> {
       toast(context, '更新正在后台下载中，下拉通知栏可查看进度');
       return;
     }
+    // 检查请求进行中：忽略重复点击
+    if (_checkingUpdate) return;
+    _checkingUpdate = true;
+    try {
+      await _checkUpdate0();
+    } finally {
+      _checkingUpdate = false;
+    }
+  }
+
+  Future<void> _checkUpdate0() async {
     // Web 端特殊处理：版本由部署方控制，刷新不升级（fork 实例需重新部署）。仅如实提示版本号
     if (kIsWeb) {
       try {
@@ -267,8 +295,16 @@ class _MyPageState extends State<MyPage> {
       return;
     }
     final releaseUrl = 'https://github.com/free-zuike/taozhu/releases/latest';
+    // 首查失败自动重试（有新版时 GitHub 探测偶发失败，多点几次能出——把"人手多点"改成自动）
+    var d = <String, dynamic>{};
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        d = await Api.instance.get('/auth/latest-version');
+        if ('${d['latest'] ?? ''}'.isNotEmpty) break;
+      } catch (_) {}
+      if (attempt < 2) await Future.delayed(const Duration(milliseconds: 600));
+    }
     try {
-      final d = await Api.instance.get('/auth/latest-version');
       final ver = '${d['latest'] ?? ''}';
       final ready = d['ready'] != false; // null/true 均视为就绪（备源无法确认资产）
       if (ver.isEmpty) {
@@ -371,8 +407,8 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
-  /// 手动选择本次更新的下载源：并行探测候选源（官方直连 + 已启用镜像），
-  /// 列出可达性与耗时，点选后只用该源下载（failed 时不轮换其他源）。
+  /// 手动选择本次更新的下载源：点击立即弹窗（中间弹出），内部异步并行探测候选源
+  /// （官方直连 + 已启用镜像），逐个填充可达性与耗时；点选后只用该源下载（failed 时不轮换其他源）。
   Future<void> _pickSource(String ver) async {
     final custom = await loadUpdateSources();
     final specified = specifiedSource;
@@ -382,44 +418,60 @@ class _MyPageState extends State<MyPage> {
       for (final s in custom)
         if (s['enabled'] == true && '${s['url'] ?? ''}' != specified) '${s['url'] ?? ''}',
     ];
-    final results = await Future.wait(prefixes.map((p) async {
-      final ms = await probeDownloadSource(p);
-      return (p, ms);
-    }));
-    if (!mounted) return;
-    final c = Theme.of(context).extension<TaozhuColors>()!;
-    final picked = await showModalBottomSheet<String>(
+    // 结果容器（弹窗内共享）：null=探测中，否则为耗时 ms
+    final results = <(String, int?)>[];
+    // 先弹窗（0 延迟），再后台探测逐个填充——避免此前"等到全部探测完才显示"的 2 秒白屏
+    final picked = await showCenterSheet<String>(
       context: context,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-              child: Text('选择下载源（已探测可达性）',
-                  style: TextStyle(fontWeight: FontWeight.w600, color: c.textMain)),
-            ),
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                children: [
-                  for (final (p, ms) in results)
-                    ListTile(
-                      enabled: ms != null,
-                      leading: Icon(ms == null ? Icons.block : Icons.check_circle, size: 20,
-                          color: ms == null ? c.danger : c.success),
-                      title: Text(p.isEmpty ? 'GitHub 官方直连' : p,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(ms == null ? '不可达（网络受限）' : '可达 · ${ms}ms'),
-                      onTap: ms == null ? null : () => Navigator.pop(ctx, p),
-                    ),
-                ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          // 首次构建时启动探测（不阻塞弹窗出现）
+          if (results.isEmpty) {
+            Future.microtask(() async {
+              final r = await Future.wait(prefixes.map((p) async {
+                final ms = await probeDownloadSource(p);
+                return (p, ms);
+              }));
+              if (ctx.mounted) {
+                setSheet(() => results.addAll(r.where((x) => !results.contains(x))));
+              }
+            });
+          }
+          final c = Theme.of(ctx).extension<TaozhuColors>()!;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                child: Text('选择下载源（已探测可达性）',
+                    style: TextStyle(fontWeight: FontWeight.w600, color: c.textMain)),
               ),
-            ),
-            const SizedBox(height: 6),
-          ],
-        ),
+              Flexible(
+                child: results.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                      )
+                    : ListView(
+                        shrinkWrap: true,
+                        children: [
+                          for (final (p, ms) in results)
+                            ListTile(
+                              enabled: ms != null,
+                              leading: Icon(ms == null ? Icons.block : Icons.check_circle, size: 20,
+                                  color: ms == null ? c.danger : c.success),
+                              title: Text(p.isEmpty ? 'GitHub 官方直连' : p,
+                                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                              subtitle: Text(ms == null ? '不可达（网络受限）' : '可达 · ${ms}ms'),
+                              onTap: ms == null ? null : () => Navigator.pop(ctx, p),
+                            ),
+                        ],
+                      ),
+              ),
+              const SizedBox(height: 6),
+            ],
+          );
+        },
       ),
     );
     if (picked != null) await _downloadAndInstall(ver, forcedPrefix: picked);
@@ -954,7 +1006,13 @@ class _MyPageState extends State<MyPage> {
       subtitle: Text(subtitle,
           style: TextStyle(fontSize: 12, color: warn ? c.danger : c.textSub)),
       trailing: Icon(Icons.chevron_right, color: c.textSub),
-      onTap: onTap,
+      // 防连点：500ms 内重复点击忽略（避免连续 push 页面/重复触发网络请求）
+      onTap: () {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastTapAt < 500) return;
+        _lastTapAt = now;
+        onTap();
+      },
     );
   }
 }

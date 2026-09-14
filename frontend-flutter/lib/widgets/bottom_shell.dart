@@ -3,6 +3,7 @@ import '../api.dart';
 import '../realtime_sync.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import 'center_sheet.dart';
 import '../pages/sale_page.dart';
 import '../pages/my_page.dart';
 import '../pages/purchase_page.dart';
@@ -128,40 +129,35 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
   }
 
   void _showQuickBook() {
-    showModalBottomSheet<void>(
+    showCenterSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 14),
-              child: Text('记一笔', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-            ),
-            ListTile(
-              leading: const Icon(Icons.storefront, color: Color(0xFF409EFF)),
-              title: const Text('出货记单'),
-              subtitle: const Text('给店铺送货'),
-              onTap: () {
-                Navigator.pop(ctx);
-                Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalePage()));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.shopping_cart, color: Color(0xFF67C23A)),
-              title: const Text('进货记单'),
-              subtitle: const Text('从供应商进货'),
-              onTap: () {
-                Navigator.pop(ctx);
-                Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PurchasePage()));
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Text('记一笔', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.storefront, color: Color(0xFF409EFF)),
+            title: const Text('出货记单'),
+            subtitle: const Text('给店铺送货'),
+            onTap: () {
+              Navigator.pop(ctx);
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalePage()));
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.shopping_cart, color: Color(0xFF67C23A)),
+            title: const Text('进货记单'),
+            subtitle: const Text('从供应商进货'),
+            onTap: () {
+              Navigator.pop(ctx);
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PurchasePage()));
+            },
+          ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
   }

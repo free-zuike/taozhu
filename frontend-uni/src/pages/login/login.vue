@@ -6,6 +6,7 @@
       <input class="ipt" v-model="baseUrl" placeholder="服务器地址（留空=当前网页；App/小程序填 https://xxx.workers.dev）" />
       <input class="ipt" v-model="username" placeholder="登录名" />
       <input class="ipt" v-model="password" type="password" placeholder="密码" />
+      <input v-if="needTotp" class="ipt" v-model="code" type="number" placeholder="两步验证码（验证器 6 位数字）" />
       <button class="btn" :disabled="loading" @click="submit">{{ loading ? '登录中…' : (initialized ? '登录' : '创建账号并登录') }}</button>
       <view v-if="!initialized" class="tip">首次使用：以上为老板账号，创建后即可登录</view>
     </view>
@@ -15,17 +16,23 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
-import { request, getApiBase, setApiBase, setToken } from '../../api';
-
-const APP_VERSION = '0.1.0';
+import { request, getApiBase, setApiBase, setToken, getToken } from '../../api';
+import { APP_VERSION } from '../../version';
 
 const baseUrl = ref(getApiBase());
 const username = ref('');
 const password = ref('');
+const code = ref('');
 const loading = ref(false);
 const initialized = ref(true);
+const needTotp = ref(false); // 该账号已开启两步验证，等待输入验证码
 
 onLoad(async () => {
+  // 已有 token：直接进入工作台（免每次重输账号密码）；失效由 api 401 统一踢回登录页
+  if (getToken()) {
+    uni.switchTab({ url: '/pages/dashboard/dashboard' });
+    return;
+  }
   try {
     const s = await request<{ initialized: boolean }>('/auth/bootstrap/status', 'GET');
     initialized.value = s.initialized;
@@ -39,14 +46,26 @@ async function submit() {
     uni.showToast({ title: '请输入登录名和密码', icon: 'none' });
     return;
   }
+  if (needTotp.value && !code.value.trim()) {
+    uni.showToast({ title: '请输入两步验证码', icon: 'none' });
+    return;
+  }
   setApiBase(baseUrl.value);
   loading.value = true;
   try {
+    const body: Record<string, unknown> = { username: username.value.trim(), password: password.value };
+    if (needTotp.value) body.code = code.value.trim();
     if (initialized.value) {
-      const d = await request<{ token: string }>('/auth/login', 'POST', { username: username.value.trim(), password: password.value });
-      setToken(d.token);
+      const d = await request<{ token: string; need_totp?: boolean }>('/auth/login', 'POST', body);
+      // 两步验证：密码正确但缺少/错误验证码 → need_totp 让用户补输入（参照 App 端流程）
+      if ((d as { need_totp?: boolean }).need_totp) {
+        needTotp.value = true;
+        uni.showToast({ title: '该账号已开启两步验证，请输入验证码', icon: 'none' });
+        return;
+      }
+      setToken((d as { token: string }).token);
     } else {
-      const d = await request<{ token: string }>('/auth/bootstrap', 'POST', { username: username.value.trim(), password: password.value });
+      const d = await request<{ token: string }>('/auth/bootstrap', 'POST', body);
       setToken(d.token);
     }
     uni.switchTab({ url: '/pages/dashboard/dashboard' });

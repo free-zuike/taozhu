@@ -5,6 +5,7 @@ import '../api.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../widgets/center_sheet.dart';
 import 'router.dart';
 
 /// 库存：按 商品+单位 查看/预警/调整（进货自动入库、出货自动扣减，见单据页）
@@ -25,9 +26,10 @@ class _StocksPageState extends State<StocksPage> {
   @override
   void initState() {
     super.initState();
-    // 本地优先：页面加载只读缓存不访问网络；同步完成后（version 通知）再刷新库存
+    // 本地优先：页面加载只读缓存不访问网络；同步完成后（version 通知）再刷新库存。
+    // 库存数据以服务端为准（盘点/多端变动），进入页面即静默网络刷新一次（缓存秒开兜底）
     SyncService.version.addListener(_onSync);
-    _load();
+    _load(network: true);
   }
 
   @override
@@ -75,6 +77,16 @@ class _StocksPageState extends State<StocksPage> {
   }
 
   Future<void> _refresh() => _load(network: true, q: '', below: _belowOnly);
+
+  /// 盘点阈值默认值：已有手设阈值（>0）保留；未设置且库存≥1 时自动带出建议值
+  /// （后端 suggest_min = 近 30 天平均每笔出货量 × 40%，无出货记录为 0）；既不设也无建议 → 0
+  static String _defaultMin(Map<String, dynamic>? cur) {
+    final hand = (cur?['min_stock'] as num?)?.toDouble() ?? 0;
+    if (hand > 0) return hand.toString();
+    final suggest = (cur?['suggest_min'] as num?)?.toDouble() ?? 0;
+    if (suggest > 0) return suggest.toString();
+    return '0';
+  }
 
   /// 单行编辑：数量 / 预警阈值
   Future<void> _edit(Map<String, dynamic> s) async {
@@ -143,7 +155,8 @@ class _StocksPageState extends State<StocksPage> {
             'item_name': it['name'],
             'unit': p['unit'],
             'quantity': cur?['quantity'] ?? '0',
-            'min_stock': cur?['min_stock'] ?? '0',
+            // 阈值：已有手设值保留；未设置（0）且库存≥1 时自动带出建议值（近30天平均出货×40%）
+            'min_stock': _defaultMin(cur),
           });
         }
       }
@@ -158,63 +171,57 @@ class _StocksPageState extends State<StocksPage> {
                 'min': TextEditingController(text: '${r['min_stock']}'),
               })
           .toList();
-      final saved = await showModalBottomSheet<bool>(
+      final saved = await showCenterSheet<bool>(
         context: context,
-        isScrollControlled: true,
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-        builder: (ctx) => SafeArea(
-          child: SizedBox(
-            height: MediaQuery.of(ctx).size.height * 0.85,
-            child: Column(
-              children: [
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text('库存盘点', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-                ),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: rows.length,
-                    itemBuilder: (_, i) => Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text('${rows[i]['item_name']}（${rows[i]['unit']}）',
-                                style: const TextStyle(fontSize: 13)),
-                          ),
-                          SizedBox(
-                            width: 84,
-                            child: TextField(
-                              controller: ctrls[i]['qty'],
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              decoration: const InputDecoration(labelText: '库存', isDense: true),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          SizedBox(
-                            width: 84,
-                            child: TextField(
-                              controller: ctrls[i]['min'],
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              decoration: const InputDecoration(labelText: '阈值', isDense: true),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: const Text('保存盘点'),
-                  ),
-                ),
-              ],
+        maxHeightFactor: 0.9,
+        builder: (ctx) => Column(
+          children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Text('库存盘点', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
             ),
-          ),
+            Flexible(
+              child: ListView.builder(
+                itemCount: rows.length,
+                itemBuilder: (_, i) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text('${rows[i]['item_name']}（${rows[i]['unit']}）',
+                            style: const TextStyle(fontSize: 13)),
+                      ),
+                      SizedBox(
+                        width: 84,
+                        child: TextField(
+                          controller: ctrls[i]['qty'],
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(labelText: '库存', isDense: true),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 84,
+                        child: TextField(
+                          controller: ctrls[i]['min'],
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(labelText: '阈值', isDense: true),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: FilledButton(
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('保存盘点'),
+              ),
+            ),
+          ],
         ),
       );
       if (saved != true) {

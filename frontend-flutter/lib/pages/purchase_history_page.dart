@@ -19,7 +19,7 @@ class PurchaseHistoryPage extends StatefulWidget {
 }
 
 class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
-  String _range = 'month'; // month | 2m | 3m | all
+  String _range = 'month'; // month | all
   List<Map<String, dynamic>> _purchases = [];
   bool _loading = true;
   bool _offline = false;
@@ -47,8 +47,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     final now = DateTime.now();
     final today = _fmt(now);
     if (_range == 'all') return 'date_from=1970-01-01&date_to=$today';
-    final months = _range == '2m' ? 1 : (_range == '3m' ? 2 : 0);
-    final from = _fmt(DateTime(now.year, now.month - months, 1));
+    final from = _fmt(DateTime(now.year, now.month, 1));
     return 'date_from=$from&date_to=$today';
   }
 
@@ -103,8 +102,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   List<Map<String, dynamic>> _filterByRange(List<Map<String, dynamic>> rows) {
     if (_range == 'all') return rows;
     final now = DateTime.now();
-    final months = _range == '2m' ? 1 : (_range == '3m' ? 2 : 0);
-    final from = _fmt(DateTime(now.year, now.month - months, 1));
+    final from = _fmt(DateTime(now.year, now.month, 1));
     final to = _fmt(now);
     return rows.where((x) {
       final d = _date(x['happened_at']);
@@ -308,8 +306,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                 children: [
                   for (final r in const [
                     ('month', '当月'),
-                    ('2m', '最近2个月'),
-                    ('3m', '最近3个月'),
                     ('all', '全部'),
                   ])
                     ChoiceChip(

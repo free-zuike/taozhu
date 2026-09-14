@@ -9,6 +9,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/date_field.dart';
+import '../widgets/center_sheet.dart';
 import 'attachment_viewer.dart';
 import 'router.dart';
 
@@ -243,55 +244,51 @@ class _PurchasePageState extends State<PurchasePage> {
   /// 商品选择弹层：搜索 + 列表选择（也可直接输入新名称走「新增商品」）
   Future<void> _pickItem(_PRow row) async {
     final searchCtrl = TextEditingController();
-    final picked = await showModalBottomSheet<String>(
+    final picked = await showCenterSheet<String>(
       context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      maxHeightFactor: 0.8,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheet) {
           final q = searchCtrl.text.trim().toLowerCase();
           final list = q.isEmpty
               ? _items
               : _items.where((x) => '${x['name']}'.toLowerCase().contains(q)).toList();
-          return SafeArea(
-            child: SizedBox(
-              height: MediaQuery.of(ctx).size.height * 0.6,
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-                    child: TextField(
-                      controller: searchCtrl,
-                      autofocus: true,
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search, size: 20),
-                        hintText: '搜索商品名称',
-                        isDense: true,
-                      ),
-                      onChanged: (_) => setSheet(() {}),
-                    ),
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                child: TextField(
+                  controller: searchCtrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search, size: 20),
+                    hintText: '搜索商品名称',
+                    isDense: true,
                   ),
-                  Expanded(
-                    child: list.isEmpty
-                        ? Center(child: Text('没有匹配商品，可直接在上方输入新名称', style: TextStyle(color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)))
-                        : ListView(
-                            children: [
-                              for (final it in list)
-                                ListTile(
-                                  dense: true,
-                                  leading: const Icon(Icons.sell_outlined, size: 18, color: Color(0xFF67C23A)),
-                                  title: Text('${it['name']}'),
-                                  subtitle: '${it['category'] ?? ''}'.isNotEmpty
-                                      ? Text('${it['category']}', style: const TextStyle(fontSize: 11))
-                                      : null,
-                                  onTap: () => Navigator.pop(ctx, '${it['id']}'),
-                                ),
-                            ],
-                          ),
-                  ),
-                ],
+                  onChanged: (_) => setSheet(() {}),
+                ),
               ),
-            ),
+              Flexible(
+                child: list.isEmpty
+                    ? Center(child: Text('没有匹配商品，可直接在上方输入新名称', style: TextStyle(color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)))
+                    : ListView(
+                        shrinkWrap: true,
+                        children: [
+                          for (final it in list)
+                            ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.label_outline, size: 18, color: Color(0xFF67C23A)),
+                              title: Text('${it['name']}'),
+                              subtitle: '${it['category'] ?? ''}'.isNotEmpty
+                                  ? Text('${it['category']}', style: const TextStyle(fontSize: 11))
+                                  : null,
+                              onTap: () => Navigator.pop(ctx, '${it['id']}'),
+                            ),
+                        ],
+                      ),
+              ),
+            ],
           );
         },
       ),
@@ -587,13 +584,6 @@ class _PurchasePageState extends State<PurchasePage> {
       appBar: AppBar(
         title: Text(_editing ? '编辑进货单' : '进货记单'),
         actions: [
-          IconButton(
-            tooltip: '凭证附件',
-            icon: const Icon(Icons.image_outlined),
-            onPressed: _busy
-                ? null
-                : () => showAttachmentViewer(context, 'purchase', _purchaseId, '进货单凭证附件'),
-          ),
           IconButton(
             tooltip: '复制上一单',
             icon: const Icon(Icons.copy_all_outlined),

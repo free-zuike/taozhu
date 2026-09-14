@@ -49,11 +49,14 @@ class _ItemsPageState extends State<ItemsPage> {
     if (mounted) _load();
   }
 
-  /// 持久删除集合（SharedPreferences 独立存储）：本地库只读/写失败时删除标记仍跨重启保留（绕过 sembast 只读）
+  /// 持久删除集合（SharedPreferences 独立存储）：本地库只读/写失败时删除标记仍跨重启保留（绕过 sembast 只读）。
+  /// 元素格式 `id@ISO时间戳`：时间戳用于推送时固定 updated_at（LWW 幂等，同一删除不会每次产生新变更流）
   static Future<Set<String>> _persistentDeleted() async {
     try {
       final p = await SharedPreferences.getInstance();
-      return (p.getStringList(_delKey) ?? []).toSet();
+      return (p.getStringList(_delKey) ?? [])
+          .map((x) => x.split('@').first)
+          .toSet();
     } catch (_) {
       return {};
     }
@@ -63,8 +66,9 @@ class _ItemsPageState extends State<ItemsPage> {
     try {
       final p = await SharedPreferences.getInstance();
       final list = p.getStringList(_delKey) ?? [];
-      if (!list.contains(id)) {
-        list.add(id);
+      final entry = '$id@${DateTime.now().toUtc().toIso8601String()}';
+      if (!list.contains(entry)) {
+        list.add(entry);
         await p.setStringList(_delKey, list);
       }
     } catch (_) {}
