@@ -412,7 +412,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                                 suffixIcon: Icon(Icons.expand_more),
                               ),
                               child: Text(_method.isEmpty ? '点击选择账户' : _method,
-                                  style: TextStyle(color: c.textMain)),
+                                  style: TextStyle(color: _c.textMain)),
                             ),
                           ),
                           const SizedBox(height: 8),

@@ -14,6 +14,8 @@ import '../utils/money.dart';
 import '../widgets/center_sheet.dart';
 import 'router.dart';
 import 'attachment_viewer.dart';
+import 'sale_page.dart';
+import 'payments_page.dart';
 import 'sale_batch_edit_page.dart';
 import 'sale_line_edit.dart';
 
