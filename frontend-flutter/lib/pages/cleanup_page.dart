@@ -18,16 +18,20 @@ class CleanupPage extends StatefulWidget {
 class _CacheFile {
   final String name;
   final String path; // 文件路径（Android DownloadManager 返回；空=不可安装）
+  final String kind; // apk/zip/attach/avatar/dbbak/other
   int size; // 字节；0=未知
   bool selected = false;
-  _CacheFile(this.name, this.size, [this.path = '']);
+  _CacheFile(this.name, this.size, [this.path = ''])
+      : kind = _kindOf(name, path);
 
-  /// 文件类型：apk=安装包 / zip=压缩包 / attach=附件副本（本地缓存目录）/ other=其他临时文件
-  String get kind {
+  /// 文件类型：apk=安装包 / zip=压缩包 / attach=附件副本（图片文件）/ avatar=头像缓存 / dbbak=库重建备份 / other=临时文件
+  static String _kindOf(String name, String path) {
     final n = name.toLowerCase();
     if (n.endsWith('.apk')) return 'apk';
     if (n.endsWith('.zip')) return 'zip';
-    if (n.contains('/')) return 'attach'; // 附件单元名形如 sale/s1（entity/id）
+    if (n == 'avatar.jpg') return 'avatar';
+    if (n.startsWith('taozhu_ro_') && n.endsWith('.db')) return 'dbbak';
+    if (path.contains('/attachments/')) return 'attach'; // 附件文件路径形如 .../attachments/sale/s1/xxx.jpg
     return 'other';
   }
 }
@@ -47,13 +51,35 @@ class _CleanupPageState extends State<CleanupPage> {
   int get _selectedCount => _files.where((f) => f.selected).length;
   bool get _allSelected => _files.isNotEmpty && _files.every((f) => f.selected);
 
-  /// 查看附件副本单元内全部图片（本地全屏预览，黑底左右滑动）
+  /// 附件行缩略图（40×40 圆角，加载失败显示占位图标）
+  Widget _thumb(_CacheFile f) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        width: 40,
+        height: 40,
+        child: Image.file(
+          File(f.path),
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(
+            color: c.primary.withOpacity(0.08),
+            child: Icon(Icons.broken_image_outlined, size: 20, color: c.textSub),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 查看附件图片：单张查看（f.path 是该图片文件）；同单元其余图片可左右滑动
   Future<void> _viewAttach(_CacheFile f) async {
-    final dir = Directory(f.path);
-    if (!await dir.exists()) {
-      toast(context, '附件目录不存在（可能已清理）');
+    final file = File(f.path);
+    if (!await file.exists()) {
+      toast(context, '图片不存在（可能已清理）');
       return;
     }
+    // 同目录图片（同一附件单元）一并预览
+    final dir = file.parent;
     final files = dir
         .listSync(followLinks: false)
         .whereType<File>()
@@ -61,14 +87,14 @@ class _CleanupPageState extends State<CleanupPage> {
         .toList()
       ..sort((a, b) => a.path.compareTo(b.path));
     if (files.isEmpty) {
-      toast(context, '该附件单元无图片文件');
+      toast(context, '未找到图片文件');
       return;
     }
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder: (_) => _LocalPhotoViewer(files: files),
+        builder: (_) => _LocalPhotoViewer(files: files, initialPath: f.path),
       ),
     );
   }
@@ -129,7 +155,8 @@ class _CleanupPageState extends State<CleanupPage> {
         await scan(await getTemporaryDirectory());
       }
       // 附件本地副本（attachments/{entity}/{id}/ 目录）：随账号下载的图片缓存。
-      // 退出登录/切换账号会清空，但历史遗留/未清理的副本可在这里按单元删除
+      // 退出登录/切换账号会清空，但历史遗留/未清理的副本可在这里**逐张**查看与删除
+      // （每张图片单独一行，行首缩略图，不再按单元合并成"N 张"）。
       if (!kIsWeb) {
         final root = await getApplicationDocumentsDirectory();
         final att = Directory('${root.path}/attachments');
@@ -138,21 +165,31 @@ class _CleanupPageState extends State<CleanupPage> {
             if (entity is! Directory) continue;
             await for (final id in entity.list(followLinks: false)) {
               if (id is! Directory) continue;
-              var size = 0;
-              var count = 0;
               await for (final f in id.list(followLinks: false)) {
-                if (f is File) {
-                  size += await f.length();
-                  count++;
-                }
-              }
-              if (count > 0) {
-                final rel = '${entity.uri.pathSegments.last}/${id.uri.pathSegments.last}';
-                files.add(_CacheFile('$rel ($count 张)', size, id.path));
+                if (f is! File) continue;
+                final rel = '${entity.uri.pathSegments.last}/${id.uri.pathSegments.last}/${f.uri.pathSegments.last}';
+                files.add(_CacheFile(rel, await f.length(), f.path));
               }
             }
           }
         }
+        // 头像缓存（avatar.jpg，文档目录根）：退出登录会清，历史遗留可清理
+        try {
+          final avatar = File('${root.path}/avatar.jpg');
+          if (await avatar.exists()) {
+            files.add(_CacheFile('avatar.jpg', await avatar.length(), avatar.path));
+          }
+        } catch (_) {}
+        // 本地库重建备份（taozhu_ro_*.db，只读自愈时改名的旧库文件）：同步成功后纯冗余
+        try {
+          await for (final f in root.list(followLinks: false)) {
+            if (f is! File) continue;
+            final name = f.uri.pathSegments.last;
+            if (name.startsWith('taozhu_ro_') && name.endsWith('.db')) {
+              files.add(_CacheFile(name, await f.length(), f.path));
+            }
+          }
+        } catch (_) {}
       }
     } catch (e) {
       toast(context, '扫描失败：${e.toString().replaceFirst('Exception: ', '')}');
@@ -185,23 +222,32 @@ class _CleanupPageState extends State<CleanupPage> {
     if (ok != true) return;
     setState(() => _busy = true);
     try {
-      // 通用：附件副本（kind=attach）按完整目录删除（path 即 attachments/{entity}/{id}/）
-      final attachDirs = _files
-          .where((f) => f.kind == 'attach' && f.selected && f.path.isNotEmpty)
+      // 通用：附件副本（kind=attach）/ 头像缓存（avatar）/ 库重建备份（dbbak）——
+      // path 是真实文件路径，直接按文件删除（逐张独立删除）
+      final fileDeletes = _files
+          .where((f) => f.selected && (f.kind == 'attach' || f.kind == 'avatar' || f.kind == 'dbbak') && f.path.isNotEmpty)
           .map((f) => f.path)
           .toList();
-      for (final dir in attachDirs) {
+      var fileDelCount = 0;
+      for (final p in fileDeletes) {
         try {
-          final d = Directory(dir);
-          if (await d.exists()) await d.delete(recursive: true);
+          final f = File(p);
+          if (await f.exists()) {
+            await f.delete();
+            fileDelCount++;
+          }
         } catch (_) {}
       }
-      final names = _files.where((f) => f.selected && f.kind != 'attach').map((f) => f.name).toList();
-      // 全选了且仅附件 → 不再走系统下载器
+      // 安装包/压缩包/临时文件：按名删除（下载目录/临时目录）
+      final names = _files
+          .where((f) => f.selected && (f.kind == 'apk' || f.kind == 'zip' || f.kind == 'other'))
+          .map((f) => f.name)
+          .toList();
+      // 全选了且仅附件类 → 不再走系统下载器
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android && names.isNotEmpty) {
         // Android 走系统下载器：删文件 + 移除下载记录（通知栏通知一并消失）
         final n = await _dlChannel.invokeMethod<int>('deleteFiles', {'names': names}) ?? 0;
-        toast(context, attachDirs.isNotEmpty ? '已删除 ${attachDirs.length} 个附件副本 + $n 个文件' : '已删除 $n 个文件');
+        toast(context, fileDelCount > 0 ? '已删除 $fileDelCount 个附件/缓存 + $n 个文件' : '已删除 $n 个文件');
       } else if (!kIsWeb && names.isNotEmpty) {
         // 桌面：直接按名删除（下载目录/临时目录）
         var n = 0;
@@ -218,11 +264,11 @@ class _CleanupPageState extends State<CleanupPage> {
 
         await delIn(await getDownloadsDirectory());
         await delIn(await getTemporaryDirectory());
-        toast(context, '已删除 $n 个文件');
+        toast(context, fileDelCount > 0 ? '已删除 $fileDelCount 个附件/缓存 + $n 个文件' : '已删除 $n 个文件');
       }
-      // 仅选了附件副本（无 apk/zip/other）或 Web：不触发下载器/下载目录逻辑
-      if (attachDirs.isNotEmpty && names.isEmpty) {
-        toast(context, '已删除 ${attachDirs.length} 个附件副本');
+      // 仅选了附件/缓存类（无 apk/zip/other）或 Web：不触发下载器/下载目录逻辑
+      if (fileDelCount > 0 && names.isEmpty) {
+        toast(context, '已删除 $fileDelCount 个附件/缓存文件');
       }
       await _load();
     } catch (e) {
@@ -268,7 +314,7 @@ class _CleanupPageState extends State<CleanupPage> {
                   Text(
                     kIsWeb
                         ? 'Web 版无本地文件'
-                        : '更新安装包（APK/Zip）与临时文件；后续可扩展清理无效附件等',
+                        : '更新安装包（APK/Zip）、附件副本（逐张图片）、头像缓存、库重建备份与临时文件',
                     style: TextStyle(fontSize: 12, color: c.textSub),
                   ),
                 ],
@@ -296,6 +342,8 @@ class _CleanupPageState extends State<CleanupPage> {
                             ('apk', '安装包（APK）', Icons.android),
                             ('zip', '压缩包（Zip）', Icons.archive_outlined),
                             ('attach', '附件副本（本地缓存）', Icons.image_outlined),
+                            ('avatar', '头像缓存', Icons.account_circle_outlined),
+                            ('dbbak', '库重建备份', Icons.storage_outlined),
                             ('other', '临时文件', Icons.description_outlined),
                           ])
                             if (_files.any((f) => f.kind == g.$1)) ...[
@@ -324,14 +372,19 @@ class _CleanupPageState extends State<CleanupPage> {
                                       // 整行点击=勾选删除；APK 行尾独立「安装」按钮（CheckboxListTile 无 trailing，用 ListTile+Checkbox 组合）
                                       ListTile(
                                         dense: true,
-                                        leading: Icon(f.kind == 'apk' ? Icons.android : (f.kind == 'zip' ? Icons.archive_outlined : Icons.insert_drive_file_outlined),
+                                        // 附件副本：直接显示图片缩略图（不再笼统显示"N 张"）
+                                        leading: f.kind == 'attach'
+                                            ? _thumb(f)
+                                            : Icon(f.kind == 'apk' ? Icons.android : (f.kind == 'zip' ? Icons.archive_outlined : (f.kind == 'avatar' ? Icons.account_circle_outlined : (f.kind == 'dbbak' ? Icons.storage_outlined : Icons.insert_drive_file_outlined))),
                                             color: f.kind == 'apk' ? c.success : c.primary),
                                         title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
                                         subtitle: Text(
                                           switch (f.kind) {
                                             'apk' => '${_fmtSize(f.size)} · APK 安装包',
                                             'zip' => '${_fmtSize(f.size)} · 压缩包',
-                                            'attach' => '${_fmtSize(f.size)} · 附件本地副本',
+                                            'attach' => '${_fmtSize(f.size)} · 附件图片',
+                                            'avatar' => '${_fmtSize(f.size)} · 头像缓存',
+                                            'dbbak' => '${_fmtSize(f.size)} · 本地库重建备份',
                                             _ => '${_fmtSize(f.size)} · 临时文件',
                                           },
                                           style: TextStyle(fontSize: 12, color: c.textSub),
@@ -347,7 +400,7 @@ class _CleanupPageState extends State<CleanupPage> {
                                                 color: c.primary,
                                                 onPressed: () => _installFile(f),
                                               ),
-                                            // 附件副本：查看单元内图片（本地全屏预览）
+                                            // 附件副本：查看图片（本地全屏预览）
                                             if (f.kind == 'attach')
                                               IconButton(
                                                 tooltip: '查看图片',
@@ -408,15 +461,27 @@ class _CleanupPageState extends State<CleanupPage> {
 
 /// 本地附件图片全屏查看器：黑底 PageView，顶部显示 第 x/N 张，可左右滑动
 class _LocalPhotoViewer extends StatefulWidget {
-  const _LocalPhotoViewer({required this.files});
+  const _LocalPhotoViewer({required this.files, this.initialPath});
   final List<File> files;
+  final String? initialPath; // 打开时定位到该图片（可选）
   @override
   State<_LocalPhotoViewer> createState() => _LocalPhotoViewerState();
 }
 
 class _LocalPhotoViewerState extends State<_LocalPhotoViewer> {
-  int _index = 0;
-  final _pageCtrl = PageController();
+  late int _index;
+  late final PageController _pageCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = 0;
+    if (widget.initialPath != null) {
+      final i = widget.files.indexWhere((f) => f.path == widget.initialPath);
+      if (i >= 0) _index = i;
+    }
+    _pageCtrl = PageController(initialPage: _index);
+  }
 
   @override
   void dispose() {

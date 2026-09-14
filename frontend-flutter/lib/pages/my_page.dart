@@ -27,6 +27,7 @@ import 'login_page.dart';
 import 'members_page.dart';
 import 'logs_page.dart';
 import 'backup_page.dart';
+import 'payment_accounts_page.dart';
 import 'update_sources_page.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/center_sheet.dart';
@@ -252,10 +253,15 @@ class _MyPageState extends State<MyPage> {
           ? 0
           : sales.where((s) => '${s['client_id']}' == selId).length +
               pays.where((p) => '${p['client_id']}' == selId).length;
-      // 总账本结余 = Σ出货 − Σ收款（含减免=平账，与欠款口径一致）
-      final salesTotal = sales.fold<double>(0, (s, x) => s + ((x['total'] as num?)?.toDouble() ?? 0));
-      final paysTotal = pays.fold<double>(0,
-          (s, x) => s + ((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0));
+      // 店铺结余 = 当前店铺 Σ出货 − Σ收款（含减免=平账，与欠款口径一致）；
+      // 全部店铺合计结余在「统计」页查看
+      final salesTotal = sales
+          .where((s) => selId == null || '${s['client_id']}' == selId)
+          .fold<double>(0, (s, x) => s + ((x['total'] as num?)?.toDouble() ?? 0));
+      final paysTotal = pays
+          .where((p) => selId == null || '${p['client_id']}' == selId)
+          .fold<double>(0,
+              (s, x) => s + ((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0));
       setState(() {
         _bookDays = days;
         _curClientCount = curCount;
@@ -434,6 +440,12 @@ class _MyPageState extends State<MyPage> {
                     const SizedBox(height: 4),
                     Text(notes,
                         style: TextStyle(fontSize: 12, color: c.textSub, height: 1.5)),
+                  ] else ...[
+                    const SizedBox(height: 10),
+                    const Text('更新内容', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(height: 4),
+                    Text('（更新日志暂未获取到，可更新后查看版本说明）',
+                        style: TextStyle(fontSize: 12, color: c.textSub, height: 1.5)),
                   ],
                   const SizedBox(height: 10),
                   Text(
@@ -592,8 +604,9 @@ class _MyPageState extends State<MyPage> {
     }
     final base = 'https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/$apkName';
     try {
-      // 下载前并行轻量探测（HEAD Range 0-0），过滤不可达源，避免直接失败
-      final usable = await _probeSources(prefixes);
+      // 下载前并行轻量探测（HEAD Range 0-0），过滤不可达源，避免直接失败；
+      // 置顶源（用户指定镜像）可达时固定第一优先
+      final usable = await _probeSources(prefixes, pinned: forcedPrefix ?? specified);
       if (usable.isEmpty) {
         toast(context, '所有下载源均不可达，请稍后重试或从 GitHub Release 页手动下载');
         return;
@@ -670,7 +683,8 @@ class _MyPageState extends State<MyPage> {
   /// 并行轻量探测下载源可用性（HEAD + Range，Content-Length 需 ≥ 1MB 防拦截页误判），
   /// 按响应耗时升序返回（最快源优先，避免固定顺序导致"第一次不是最快的"）。
   /// 入参为下载前缀列表（'' = 官方直连），探测函数内部拼完整资产 URL。
-  Future<List<String>> _probeSources(List<String> prefixes) async {
+  /// [pinned] 非空 = 置顶源（「下载源管理」指定的镜像）：可达时固定第一位，不被耗时排序挤掉。
+  Future<List<String>> _probeSources(List<String> prefixes, {String pinned = ''}) async {
     final results = await Future.wait(prefixes.map((p) async {
       final ms = await probeDownloadSource(p);
       return ms == null ? null : (p, ms);
@@ -680,7 +694,13 @@ class _MyPageState extends State<MyPage> {
       if (r != null) usable.add(r);
     }
     usable.sort((a, b) => a.$2.compareTo(b.$2));
-    return [for (final r in usable) r.$1];
+    final list = [for (final r in usable) r.$1];
+    // 置顶源可达 → 移到第一位（用户指定镜像时优先用它下载，失败再自动换源）
+    if (pinned.isNotEmpty && list.contains(pinned)) {
+      list.remove(pinned);
+      list.insert(0, pinned);
+    }
+    return list;
   }
 
   /// 下载完成后引导安装（文件在应用下载目录，由系统 DownloadManager 写入；size 已通过 ≥1MB 校验）
@@ -871,8 +891,8 @@ class _MyPageState extends State<MyPage> {
                   () => goPage(context, const ClientsPage())),
               _item(Icons.payments_outlined, c.success, '收款结账', '登记收款、查看收款历史',
                   () => goPage(context, const PaymentsPage())),
-              _item(Icons.account_balance_wallet_outlined, c.primary, '收款账户', '收款方式预设：现金/微信/支付宝…（增删改）',
-                  () => showAccountManager(context)),
+              _item(Icons.account_balance_wallet_outlined, c.primary, '收款账户', '收款方式预设：现金/微信/支付宝…（独立页管理）',
+                  () => goPage(context, const PaymentAccountsPage())),
               _item(Icons.description_outlined, c.warning, '对账单', '按店铺+周期生成对账明细，一键复制发送',
                   () => goPage(context, const StatementPage())),
             ]),
@@ -997,7 +1017,7 @@ class _MyPageState extends State<MyPage> {
           _vsep(c),
           cell('本店交易', '$_curClientCount'),
           _vsep(c),
-          cell('总账本结余', '¥${fmtMoney(_totalBalance)}',
+          cell('店铺结余', '¥${fmtMoney(_totalBalance)}',
               color: _totalBalance >= 0 ? c.success : c.danger),
         ],
       ),

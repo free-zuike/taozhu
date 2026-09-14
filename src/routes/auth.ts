@@ -186,6 +186,10 @@ authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, 
 // 全部失败返回 latest=''，前端手动兜底。60 秒内复用成功结果（构建中→就绪切换更及时）。
 let latestCache: { at: number; latest: string; ready: boolean; building: boolean; source: 'github' | 'backup'; notes: string } | null = null;
 const LATEST_CACHE_MS = 60 * 1000;
+// 最近一次 GitHub Release 的更新日志（release body）长缓存：GitHub 探测失败走备源时，
+// 版本号来自备源、更新日志复用最近一次拿到的 notes——避免弹窗只剩"当前→最新"没有更新内容。
+let notesCache: { at: number; notes: string } | null = null;
+const NOTES_CACHE_MS = 24 * 60 * 60 * 1000; // 24h：日志随版本发布而变，一天内复用足够
 
 interface VersionProbe {
   v: string;
@@ -235,9 +239,9 @@ authRouter.get('/latest-version', async (c) => {
     }
   };
   // 备源（latest.json / jsDelivr）：无法直接确认 GitHub 安装资产，但版本号来自部署元数据/仓库主分支。
-// 有版本差异即视为"有更新可提示"（ready=true）：下载依赖前端多源探测/大小校验/换源兜底，
-// 不再因 GitHub API 探测失败而报"无法连接更新源"——修复"有新版反而检查不可达"的问题。
-// 与部署版本一致视为无更新。
+  // 有版本差异即视为"有更新可提示"（ready=true）：下载依赖前端多源探测/大小校验/换源兜底，
+  // 不再因 GitHub API 探测失败而报"无法连接更新源"——修复"有新版反而检查不可达"的问题。
+  // 与部署版本一致视为无更新。
   const probeVer = (v: string): VersionProbe | null =>
     v ? { v, ready: true, building: false, source: 'backup' } : null;
   const checkAsset = async (): Promise<VersionProbe | null> => {
@@ -265,9 +269,17 @@ authRouter.get('/latest-version', async (c) => {
   for (const check of [checkGitHub, checkAsset, checkJsDelivr]) {
     const r = await check();
     if (r) {
+      // 更新日志：GitHub 成功时缓存最新 notes（24h）；备源（latest.json/jsDelivr 无日志）回退缓存，
+      // 避免弹窗只剩"当前→最新"没有更新内容
+      let notes = r.notes ?? '';
+      if (r.source === 'github' && notes) {
+        notesCache = { at: now, notes };
+      } else if (!notes && notesCache && now - notesCache.at < NOTES_CACHE_MS) {
+        notes = notesCache.notes;
+      }
       latestCache = {
         at: now, latest: r.v, ready: r.ready, building: r.building ?? false,
-        source: r.source, notes: r.notes ?? '',
+        source: r.source, notes,
       };
       return c.json({
         current: APP_VERSION,
@@ -275,7 +287,7 @@ authRouter.get('/latest-version', async (c) => {
         ready: r.ready,
         building: r.building ?? false,
         source: r.source,
-        notes: r.notes ?? '',
+        notes,
       });
     }
   }
