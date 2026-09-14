@@ -376,7 +376,7 @@ class _LedgerPageState extends State<LedgerPage> {
     }
     // 网络值（精确，含进货/其他设备写入）优先；未加载时仅出货本地快照
     final income = _mLoaded ? _mIncome : localIncome;
-    final expense = _mLoaded ? _mExpense : 0;
+    final expense = _mLoaded ? _mExpense : 0.0;
     final balance = _mLoaded ? _mBalance : income;
     final balColor = balance >= 0 ? c.success : c.danger;
 

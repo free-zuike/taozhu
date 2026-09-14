@@ -442,6 +442,12 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                     _diffRow(c, '附件',
                         _localSynced ? _localAttachTotal : null,
                         _attachTotalLoaded ? _serverAttachTotal : null),
+                    // 总计行：7 类实体（不含附件）本地合计 vs 服务器合计，与全量同步日志"拉取 X 条"口径一致
+                    if (_localSynced && _serverStatsLoaded)
+                      _diffRow(c, '总计（不含附件）',
+                          _entities.fold<int>(0, (s, e) => s + (_localCounts[e.$1] ?? 0)),
+                          _entities.fold<int>(0, (s, e) => s + ((_serverStats[e.$1] as num?)?.toInt() ?? 0)),
+                          isTotal: true),
                   ])
                 else
                   _card(c, [
@@ -502,7 +508,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     );
   }
 
-  Widget _diffRow(TaozhuColors c, String label, int? local, int? server) {
+  Widget _diffRow(TaozhuColors c, String label, int? local, int? server,
+      {bool isTotal = false}) {
     // 未验证（本地未同步 / 服务器未拉取成功）→ 显示 —，不把 0=0 显示成"正常"
     if (local == null || server == null) {
       return Padding(
@@ -521,14 +528,29 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     }
     final same = local == server;
     final color = same ? c.success : c.warning;
-    return Padding(
+    return Container(
+      decoration: isTotal ? BoxDecoration(border: Border(top: BorderSide(color: c.divider))) : null,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         children: [
-          SizedBox(width: 90, child: Text(label, style: const TextStyle(fontSize: 13))),
-          Text('本地 $local', style: TextStyle(fontSize: 13, color: c.textMain)),
+          SizedBox(
+            width: 90,
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isTotal ? FontWeight.w700 : FontWeight.w400)),
+          ),
+          Text('本地 $local',
+              style: TextStyle(
+                  fontSize: 13,
+                  color: c.textMain,
+                  fontWeight: isTotal ? FontWeight.w700 : FontWeight.w400)),
           const SizedBox(width: 8),
-          Text('服务器 $server', style: TextStyle(fontSize: 13, color: c.textMain)),
+          Text('服务器 $server',
+              style: TextStyle(
+                  fontSize: 13,
+                  color: c.textMain,
+                  fontWeight: isTotal ? FontWeight.w700 : FontWeight.w400)),
           const Spacer(),
           Icon(same ? Icons.check_circle_outline : Icons.sync_problem, size: 18, color: color),
         ],
