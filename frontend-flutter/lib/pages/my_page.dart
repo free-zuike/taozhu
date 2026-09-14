@@ -7,6 +7,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
 import '../avatar_cache.dart';
+import '../local_accounts.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
@@ -79,6 +80,8 @@ class _MyPageState extends State<MyPage> {
     SyncService.status.addListener(_onSyncStatus);
     // 库存变更（盘点/调整/记单）后实时刷新低库存红字，无需重启 App
     SyncService.stockChanged.addListener(_onSyncChanged);
+    // 店铺切换后实时刷新统计卡（本店交易笔数），无需退出重进
+    SyncService.selectedClientChanged.addListener(_onSelectedClientChanged);
     _loadProfile();
     _loadLowStocks();
     _loadPending();
@@ -92,6 +95,7 @@ class _MyPageState extends State<MyPage> {
     SyncService.version.removeListener(_onSyncChanged);
     SyncService.status.removeListener(_onSyncStatus);
     SyncService.stockChanged.removeListener(_onSyncChanged);
+    SyncService.selectedClientChanged.removeListener(_onSelectedClientChanged);
     super.dispose();
   }
 
@@ -107,6 +111,11 @@ class _MyPageState extends State<MyPage> {
   void _onSyncChanged() {
     _loadPending();
     _loadLowStocks();
+    _loadStats();
+  }
+
+  /// 店铺切换后刷新统计卡（本店交易笔数随当前选中店铺变化）
+  void _onSelectedClientChanged() {
     _loadStats();
   }
 
@@ -862,6 +871,8 @@ class _MyPageState extends State<MyPage> {
                   () => goPage(context, const ClientsPage())),
               _item(Icons.payments_outlined, c.success, '收款结账', '登记收款、查看收款历史',
                   () => goPage(context, const PaymentsPage())),
+              _item(Icons.account_balance_wallet_outlined, c.primary, '收款账户', '收款方式预设：现金/微信/支付宝…（增删改）',
+                  () => showAccountManager(context)),
               _item(Icons.description_outlined, c.warning, '对账单', '按店铺+周期生成对账明细，一键复制发送',
                   () => goPage(context, const StatementPage())),
             ]),

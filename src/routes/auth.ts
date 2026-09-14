@@ -234,11 +234,12 @@ authRouter.get('/latest-version', async (c) => {
       return null;
     }
   };
-  // 备源（latest.json / jsDelivr）：无法直接确认 GitHub 安装资产，但版本号来自部署元数据——
-// 有新版本即提示可尝试更新（下载失败由前端大小校验/换源兜底），不再因 GitHub 探测失败提示"无法连接更新源"；
+  // 备源（latest.json / jsDelivr）：无法直接确认 GitHub 安装资产，但版本号来自部署元数据/仓库主分支。
+// 有版本差异即视为"有更新可提示"（ready=true）：下载依赖前端多源探测/大小校验/换源兜底，
+// 不再因 GitHub API 探测失败而报"无法连接更新源"——修复"有新版反而检查不可达"的问题。
 // 与部署版本一致视为无更新。
   const probeVer = (v: string): VersionProbe | null =>
-    v ? { v, ready: v !== APP_VERSION, building: false, source: 'backup' } : null;
+    v ? { v, ready: true, building: false, source: 'backup' } : null;
   const checkAsset = async (): Promise<VersionProbe | null> => {
     try {
       const r = await c.env.ASSETS.fetch(new Request(new URL('/latest.json', c.req.url)));

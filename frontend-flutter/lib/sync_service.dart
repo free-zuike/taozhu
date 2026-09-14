@@ -134,7 +134,12 @@ class SyncService {
       final p = await SharedPreferences.getInstance();
       await p.setString(_selectedClientKey, id);
     } catch (_) {}
+    // 通知监听者（如「我的」页统计卡）：店铺切换后实时刷新，无需退出重进
+    selectedClientChanged.notifyListeners();
   }
+
+  /// 当前店铺切换通知器（ledger_page 切换/新建店铺时触发）
+  static final ChangeNotifier selectedClientChanged = ChangeNotifier();
 
   /// 本地待推送变更数（local_changes 队列）
   static Future<int> pendingCount() async {

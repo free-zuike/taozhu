@@ -47,6 +47,32 @@ class _CleanupPageState extends State<CleanupPage> {
   int get _selectedCount => _files.where((f) => f.selected).length;
   bool get _allSelected => _files.isNotEmpty && _files.every((f) => f.selected);
 
+  /// 查看附件副本单元内全部图片（本地全屏预览，黑底左右滑动）
+  Future<void> _viewAttach(_CacheFile f) async {
+    final dir = Directory(f.path);
+    if (!await dir.exists()) {
+      toast(context, '附件目录不存在（可能已清理）');
+      return;
+    }
+    final files = dir
+        .listSync(followLinks: false)
+        .whereType<File>()
+        .where((x) => RegExp(r'\.(jpg|jpeg|png|webp|gif)$', caseSensitive: false).hasMatch(x.path))
+        .toList()
+      ..sort((a, b) => a.path.compareTo(b.path));
+    if (files.isEmpty) {
+      toast(context, '该附件单元无图片文件');
+      return;
+    }
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => _LocalPhotoViewer(files: files),
+      ),
+    );
+  }
+
   /// 点击安装包（Android APK）：调起系统安装器；其他文件提示
   Future<void> _installFile(_CacheFile f) async {
     final isApk = f.name.toLowerCase().endsWith('.apk');
@@ -321,6 +347,14 @@ class _CleanupPageState extends State<CleanupPage> {
                                                 color: c.primary,
                                                 onPressed: () => _installFile(f),
                                               ),
+                                            // 附件副本：查看单元内图片（本地全屏预览）
+                                            if (f.kind == 'attach')
+                                              IconButton(
+                                                tooltip: '查看图片',
+                                                icon: const Icon(Icons.photo_outlined, size: 20),
+                                                color: c.primary,
+                                                onPressed: () => _viewAttach(f),
+                                              ),
                                             Checkbox(
                                               value: f.selected,
                                               onChanged: (v) => setState(() => f.selected = v ?? false),
@@ -367,6 +401,51 @@ class _CleanupPageState extends State<CleanupPage> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// 本地附件图片全屏查看器：黑底 PageView，顶部显示 第 x/N 张，可左右滑动
+class _LocalPhotoViewer extends StatefulWidget {
+  const _LocalPhotoViewer({required this.files});
+  final List<File> files;
+  @override
+  State<_LocalPhotoViewer> createState() => _LocalPhotoViewerState();
+}
+
+class _LocalPhotoViewerState extends State<_LocalPhotoViewer> {
+  int _index = 0;
+  final _pageCtrl = PageController();
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text('${_index + 1}/${widget.files.length}',
+            style: const TextStyle(fontSize: 15)),
+      ),
+      body: PageView.builder(
+        controller: _pageCtrl,
+        itemCount: widget.files.length,
+        onPageChanged: (i) => setState(() => _index = i),
+        itemBuilder: (_, i) => Center(
+          child: Image.file(
+            widget.files[i],
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined,
+                color: Color(0xFF9CA3AF), size: 40),
+          ),
+        ),
       ),
     );
   }

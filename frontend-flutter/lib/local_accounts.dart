@@ -79,8 +79,8 @@ class LocalAccounts {
   }
 }
 
-/// 收款方式账户选择（收款登记/编辑用）：加载账户列表弹层选择，带「管理账户」入口。
-/// [current] 当前已选值；返回选中账户名（null=取消）。
+/// 收款方式账户选择（收款登记/编辑用）：加载账户列表弹层选择。
+/// [current] 当前已选值；返回选中账户名（null=取消）。管理入口在「我的 → 收款账户」。
 Future<String?> pickAccount(BuildContext context, {String current = ''}) async {
   final accounts = await LocalAccounts.load();
   if (!context.mounted) return null;
@@ -101,24 +101,15 @@ Future<String?> pickAccount(BuildContext context, {String current = ''}) async {
               ],
             ),
           ),
-        const Divider(height: 1),
-        SimpleDialogOption(
-          onPressed: () {
-            Navigator.pop(ctx);
-            _manageAccounts(ctx);
-          },
-          child: const Row(
-            children: [
-              Icon(Icons.settings_outlined, size: 18, color: Color(0xFF409EFF)),
-              SizedBox(width: 10),
-              Text('管理账户（增删改）', style: TextStyle(fontSize: 15, color: Color(0xFF409EFF))),
-            ],
-          ),
-        ),
       ],
     ),
   );
   return picked;
+}
+
+/// 账户管理弹层（入口：「我的 → 收款账户」）：列出账户，可重命名/删除/新增（保存=全量覆盖服务端）
+Future<bool?> showAccountManager(BuildContext context) {
+  return _manageAccounts(context);
 }
 
 /// 账户管理弹层：列出账户，可重命名/删除/新增（保存=全量覆盖服务端）

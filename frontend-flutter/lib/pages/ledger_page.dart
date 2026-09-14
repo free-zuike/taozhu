@@ -14,6 +14,7 @@ import '../utils/money.dart';
 import '../widgets/center_sheet.dart';
 import 'router.dart';
 import 'attachment_viewer.dart';
+import 'monthly_flow_page.dart';
 import 'sale_page.dart';
 import 'payments_page.dart';
 import 'sale_batch_edit_page.dart';
@@ -45,6 +46,11 @@ class _LedgerPageState extends State<LedgerPage> {
   Map<String, int> _payAttachCount = {};
   /// 商品 id → 分类名（出货明细行第二行显示分类，替代无实际数据的交易时间）
   Map<String, String> _itemCategory = {};
+  /// 月度结余（beecount 式三列卡）：支出=当月进货 / 收入=当月出货 / 结余=出货−进货
+  double _mIncome = 0;
+  double _mExpense = 0;
+  double _mBalance = 0;
+  bool _mLoaded = false; // 月度结余是否已加载（未加载显示占位符，不闪 0）
 
   @override
   void initState() {
@@ -56,6 +62,8 @@ class _LedgerPageState extends State<LedgerPage> {
     // 同步完成后本地库变了 → 重新从本地读（本地优先，网络静默）
     SyncService.version.addListener(_onSync);
     _load();
+    // 月度结余：页面加载即网络拉取（Web 直连；App 顺带一次静默刷新，失败保留占位不阻塞）
+    _loadMonthly();
   }
 
   @override
@@ -70,6 +78,30 @@ class _LedgerPageState extends State<LedgerPage> {
     // 同步完成后后台刷新一次云端附件数（其他设备/Web 上传的附件），
     // 不在页面加载时访问网络（本地优先：离线进交易页零网络请求）
     if (!kIsWeb) _loadAttachCounts(withCloud: true);
+  }
+
+  /// 加载当月月度结余（支出=进货 / 收入=出货 / 结余=出货−进货，全店汇总——进货不分店铺）。
+  /// 复用 /stats/monthly-flow（按年返回各月），取当前月份行；店员无统计权限跳过。
+  Future<void> _loadMonthly() async {
+    if (_isStaff) return;
+    try {
+      final now = DateTime.now();
+      final y = now.year;
+      final curMonth = '${y}-${now.month.toString().padLeft(2, '0')}';
+      final d = await Api.instance.get('/stats/monthly-flow?year=$y').timeout(const Duration(seconds: 8));
+      final months = ((d['months'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final cur = months.where((m) => '${m['month']}' == curMonth).firstOrNull;
+      if (!mounted) return;
+      setState(() {
+        _mIncome = (cur?['sales_total'] as num?)?.toDouble() ?? 0;
+        _mExpense = (cur?['purchase_total'] as num?)?.toDouble() ?? 0;
+        _mBalance = (cur?['balance'] as num?)?.toDouble() ?? (cur == null ? 0 : _mIncome - _mExpense);
+        _mLoaded = true;
+      });
+    } catch (_) {
+      // 离线/接口失败：保留上次数据（未加载过则保持占位）
+      if (mounted && !_mLoaded) setState(() => _mLoaded = true);
+    }
   }
 
   static String _fmtDate(DateTime d) =>
@@ -321,6 +353,93 @@ class _LedgerPageState extends State<LedgerPage> {
       }
       return true;
     }).toList();
+  }
+
+  /// 月度结余卡（beecount 式三列）：支出=当月进货 / 收入=当月出货 / 结余=出货−进货。
+  /// 网络值（/stats/monthly-flow 全店汇总）优先；本地兜底仅按出货口径算收入（进货在交易页无本地数据）。
+  Widget _monthlyCard(TaozhuColors c) {
+    // 本地快照（当月，全店出货）：明细日期空→单据日期
+    final now = DateTime.now();
+    final monthStart = _fmtDate(DateTime(now.year, now.month, 1));
+    final monthEnd = _fmtDate(now);
+    bool inMonth(String d) => d.isNotEmpty && d.compareTo(monthStart) >= 0 && d.compareTo(monthEnd) <= 0;
+    double localIncome = 0;
+    for (final s in _sales) {
+      final orderDate = _date('${s['happened_at'] ?? ''}');
+      final items = ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      for (final it in items) {
+        final d = _date('${it['happened_at'] ?? ''}');
+        final use = d.isNotEmpty ? d : orderDate;
+        if (!inMonth(use)) continue;
+        localIncome += ((it['amount'] as num?)?.toDouble() ?? 0);
+      }
+    }
+    // 网络值（精确，含进货/其他设备写入）优先；未加载时仅出货本地快照
+    final income = _mLoaded ? _mIncome : localIncome;
+    final expense = _mLoaded ? _mExpense : 0;
+    final balance = _mLoaded ? _mBalance : income;
+    final balColor = balance >= 0 ? c.success : c.danger;
+
+    Widget col(String label, double value, Color color) {
+      return Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: TextStyle(fontSize: 11, color: c.textSub)),
+            const SizedBox(height: 3),
+            Text('¥${fmtMoney(value)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: color)),
+          ],
+        ),
+      );
+    }
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const MonthlyFlowPage()),
+      ),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 10, 10, 12),
+        decoration: BoxDecoration(
+          color: c.card,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: c.divider),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 4,
+                  height: 14,
+                  decoration: BoxDecoration(color: c.primary, borderRadius: BorderRadius.circular(2)),
+                ),
+                const SizedBox(width: 8),
+                Text('本月结余', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.textMain)),
+                const Spacer(),
+                Text('全部月份', style: TextStyle(fontSize: 12, color: c.primary)),
+                Icon(Icons.chevron_right, size: 16, color: c.textSub),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                col('支出（进货）', expense, c.danger),
+                const SizedBox(width: 4),
+                col('收入（出货）', income, c.primary),
+                const SizedBox(width: 4),
+                col('结余', balance, balColor),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// 店选弹层：全部店铺（名称 + 交易笔数 + 欠款），底部新增店铺
@@ -751,6 +870,12 @@ class _LedgerPageState extends State<LedgerPage> {
                         ),
                       ),
                     ),
+                  // 月度结余卡（beecount 式三列：支出=进货/收入=出货/结余=出货−进货）：
+                  // 点击进入全部月份流式页；店员无统计权限不显示
+                  if (!_isStaff) ...[
+                    const SizedBox(height: 8),
+                    _monthlyCard(c),
+                  ],
                   const SizedBox(height: 8),
                   // 时间范围：当月 / 全部流水（去掉 2m/3m，简化选择；店员账号：仅当天出货）
                   // 店员账号：仅当天出货（后端强制），隐藏范围选择
