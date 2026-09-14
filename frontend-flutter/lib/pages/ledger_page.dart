@@ -31,7 +31,6 @@ class _LedgerPageState extends State<LedgerPage> {
   List<Map<String, dynamic>> _payments = [];
   List<Map<String, dynamic>> _clients = [];
   String? _clientId; // 店铺维度：必选，默认第一个；无店铺时自动建「默认店铺」
-  String _range = 'month'; // month | 2m | 3m | all
   bool _isStaff = false; // 店员账号：仅当天出货视角
   bool _loading = true;
   bool _offline = false; // 本次加载走了本地缓存（无网络）
@@ -110,7 +109,7 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
-  /// 切换月份（±1 月）后重载月度结余
+  /// 切换月份（±1 月）：月度结余 + 流水列表联动（beecount 式：选几月显示几月）
   void _shiftMonth(int delta) {
     final y = _selYear;
     final m = _selMonth + delta;
@@ -123,6 +122,7 @@ class _LedgerPageState extends State<LedgerPage> {
     } else {
       _selMonth = m;
     }
+    _load();
     _loadMonthly();
   }
 
@@ -142,21 +142,18 @@ class _LedgerPageState extends State<LedgerPage> {
       _selYear = picked.year;
       _selMonth = picked.month;
     });
+    _load();
     _loadMonthly();
   }
 
   static String _fmtDate(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  /// 时间范围 → (起始, 结束)；all 返回 null（不限日期）
+  /// 时间范围 → (起始, 结束)：跟随顶部月份选择器（beecount 式：选几月显示几月），
+  /// 列表/查询与该月联动；不再有"当月/全部"筛选。
   (String, String)? _rangeDates() {
-    final now = DateTime.now();
-    switch (_range) {
-      case 'all':
-        return null;
-      default:
-        return (_fmtDate(DateTime(now.year, now.month, 1)), _fmtDate(now));
-    }
+    return (_fmtDate(DateTime(_selYear, _selMonth, 1)),
+        _fmtDate(DateTime(_selYear, _selMonth + 1, 0)));
   }
 
   String _dateQuery() => ''; // （进货独立 tab，本页不再使用）
@@ -949,28 +946,7 @@ class _LedgerPageState extends State<LedgerPage> {
                     _monthlyCard(c),
                   ],
                   const SizedBox(height: 8),
-                  // 时间范围：当月 / 全部流水（去掉 2m/3m，简化选择；店员账号：仅当天出货）
-                  // 店员账号：仅当天出货（后端强制），隐藏范围选择
-                  if (!_isStaff)
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final r in const [
-                          ('month', '当月'),
-                          ('all', '全部流水'),
-                        ])
-                          ChoiceChip(
-                            label: Text(r.$2, style: const TextStyle(fontSize: 13)),
-                            visualDensity: VisualDensity.compact,
-                            selected: _range == r.$1,
-                            onSelected: (_) {
-                              setState(() => _range = r.$1);
-                              _load();
-                            },
-                          ),
-                      ],
-                    ),
+                  // 列表跟随顶部月份选择器（beecount 式：选几月显示几月），无独立时间筛选
                   if (_isStaff)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),

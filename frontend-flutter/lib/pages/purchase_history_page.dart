@@ -19,12 +19,16 @@ class PurchaseHistoryPage extends StatefulWidget {
 }
 
 class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
-  String _range = 'month'; // month | all
   List<Map<String, dynamic>> _purchases = [];
   bool _loading = true;
   bool _offline = false;
   /// 商品 id → 分类名（流水行分类显示：优先查询商品设置分类，明细行快照仅兜底）
   Map<String, String> _itemCategory = {};
+  /// 所选月份（beecount 式：头部月份切换器，列表联动显示该月进货）
+  int _selYear = DateTime.now().year;
+  int _selMonth = DateTime.now().month;
+  /// 当月进货总额（仅支出统计：进货页无收入/结余）
+  double _monthExpense = 0;
 
   @override
   void initState() {
@@ -44,11 +48,44 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   }
 
   String _dateQuery() {
+    final from = _fmt(DateTime(_selYear, _selMonth, 1));
+    final to = _fmt(DateTime(_selYear, _selMonth + 1, 0));
+    return 'date_from=$from&date_to=$to';
+  }
+
+  /// 切换月份（±1 月）：列表联动
+  void _shiftMonth(int delta) {
+    final y = _selYear;
+    final m = _selMonth + delta;
+    if (m < 1) {
+      _selYear = y - 1;
+      _selMonth = 12;
+    } else if (m > 12) {
+      _selYear = y + 1;
+      _selMonth = 1;
+    } else {
+      _selMonth = m;
+    }
+    _load();
+  }
+
+  /// 月份选择弹层
+  Future<void> _pickMonth() async {
     final now = DateTime.now();
-    final today = _fmt(now);
-    if (_range == 'all') return 'date_from=1970-01-01&date_to=$today';
-    final from = _fmt(DateTime(now.year, now.month, 1));
-    return 'date_from=$from&date_to=$today';
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime(_selYear, _selMonth, 1),
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year, now.month, 1),
+      initialDatePickerMode: DatePickerMode.year,
+      helpText: '选择月份',
+    );
+    if (picked == null) return;
+    setState(() {
+      _selYear = picked.year;
+      _selMonth = picked.month;
+    });
+    _load();
   }
 
   static String _fmt(DateTime d) =>
@@ -98,16 +135,18 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     }
   }
 
-  /// 本地全量镜像按当前范围过滤（与网络接口的 date_from/date_to 一致）
+  /// 本地全量镜像按所选月份过滤（与网络接口的 date_from/date_to 一致），并汇总当月支出
   List<Map<String, dynamic>> _filterByRange(List<Map<String, dynamic>> rows) {
-    if (_range == 'all') return rows;
-    final now = DateTime.now();
-    final from = _fmt(DateTime(now.year, now.month, 1));
-    final to = _fmt(now);
-    return rows.where((x) {
+    final from = _fmt(DateTime(_selYear, _selMonth, 1));
+    final to = _fmt(DateTime(_selYear, _selMonth + 1, 0));
+    final filtered = rows.where((x) {
       final d = _date(x['happened_at']);
       return d.isNotEmpty && d.compareTo(from) >= 0 && d.compareTo(to) <= 0;
     }).toList();
+    // 仅支出统计：当月进货总额（明细 amount 求和）
+    _monthExpense = filtered.fold<double>(
+        0, (s, p) => s + ((p['total'] as num?)?.toDouble() ?? 0));
+    return filtered;
   }
 
   String _date(Object? v) {
@@ -276,6 +315,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       appBar: AppBar(title: const Text('进货记录')),
       body: Column(
@@ -296,29 +336,66 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                 ],
               ),
             ),
+          // 月份切换器 + 支出统计（beecount 式：选几月显示几月，进货页仅支出无收入/结余）
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final r in const [
-                    ('month', '当月'),
-                    ('all', '全部'),
-                  ])
-                    ChoiceChip(
-                      label: Text(r.$2, style: const TextStyle(fontSize: 13)),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    IconButton(
+                      tooltip: '上一月',
                       visualDensity: VisualDensity.compact,
-                      selected: _range == r.$1,
-                      onSelected: (_) {
-                        setState(() => _range = r.$1);
-                        _load();
-                      },
+                      icon: Icon(Icons.chevron_left, size: 20, color: c.textSub),
+                      onPressed: () => _shiftMonth(-1),
                     ),
-                ],
-              ),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: _pickMonth,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                        child: Row(
+                          children: [
+                            Text('$_selYear年$_selMonth月',
+                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.textMain)),
+                            const SizedBox(width: 2),
+                            Icon(Icons.expand_more, size: 16, color: c.textSub),
+                          ],
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '下一月',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(Icons.chevron_right, size: 20, color: c.textSub),
+                      onPressed: () => _shiftMonth(1),
+                    ),
+                    const Spacer(),
+                    Text('支出=进货', style: TextStyle(fontSize: 10, color: c.textSub)),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                // 支出统计卡（仅支出：进货页无收入/结余）
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+                  decoration: BoxDecoration(
+                    color: c.card,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: c.divider),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('支出（进货）', style: TextStyle(fontSize: 11, color: c.textSub)),
+                      const SizedBox(height: 3),
+                      Text('¥${fmtMoney(_monthExpense)}',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c.danger)),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
           Expanded(

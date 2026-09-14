@@ -173,14 +173,7 @@ class _CleanupPageState extends State<CleanupPage> {
             }
           }
         }
-        // 头像缓存（avatar.jpg，文档目录根）：退出登录会清，历史遗留可清理
-        try {
-          final avatar = File('${root.path}/avatar.jpg');
-          if (await avatar.exists()) {
-            files.add(_CacheFile('avatar.jpg', await avatar.length(), avatar.path));
-          }
-        } catch (_) {}
-        // 本地库重建备份（taozhu_ro_*.db，只读自愈时改名的旧库文件）：同步成功后纯冗余
+        // 库重建备份（taozhu_ro_*.db，只读自愈时改名的旧库文件）：同步成功后纯冗余，可清理
         try {
           await for (final f in root.list(followLinks: false)) {
             if (f is! File) continue;
