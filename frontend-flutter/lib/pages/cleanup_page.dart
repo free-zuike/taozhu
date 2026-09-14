@@ -272,21 +272,24 @@ class _CleanupPageState extends State<CleanupPage> {
           }
         } catch (_) {}
       }
-      // 云端孤儿附件（R2 中无对应单据的残留图片，单据已删但云端未清）：**所有平台（含 Web）都扫描**——Web 无本地文件，云端孤儿就是清理对象
-      try {
-        final d = await Api.instance.get('/attachments/orphans').timeout(const Duration(seconds: 10));
-        final orphans = ((d['orphans'] as List?) ?? []).cast<Map<String, dynamic>>();
-        for (final o in orphans) {
-          final key = '${o['key'] ?? ''}';
-          if (key.isEmpty) continue;
-          files.add(_CacheFile(
-            key.split('/').last, // 文件名（md5.jpg）
-            ((o['size'] as num?) ?? 0).toInt(),
-            key, // path 存 key 供云端删除
-            'cloudattach',
-          ));
-        }
-      } catch (_) {};
+      // 云端孤儿附件（R2 中无对应单据的残留图片，单据已删但云端未清）：
+      // **仅 Web 端扫描**——云端附件由云端的 Web 版清理（App 只管本地副本），App/桌面不显示云端孤儿分组
+      if (kIsWeb) {
+        try {
+          final d = await Api.instance.get('/attachments/orphans').timeout(const Duration(seconds: 10));
+          final orphans = ((d['orphans'] as List?) ?? []).cast<Map<String, dynamic>>();
+          for (final o in orphans) {
+            final key = '${o['key'] ?? ''}';
+            if (key.isEmpty) continue;
+            files.add(_CacheFile(
+              key.split('/').last, // 文件名（md5.jpg）
+              ((o['size'] as num?) ?? 0).toInt(),
+              key, // path 存 key 供云端删除
+              'cloudattach',
+            ));
+          }
+        } catch (_) {};
+      }
     } catch (e) {
       toast(context, '扫描失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
@@ -470,8 +473,32 @@ class _CleanupPageState extends State<CleanupPage> {
                                     Text(g.$2, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textSub)),
                                     const Spacer(),
                                     // 本组内已选数（方便全选/删除前核对）
-                                    Text('本组 ${_files.where((f) => f.kind == g.$1 && f.selected).length} 项已选',
+                                    Text('${_files.where((f) => f.kind == g.$1).length} 项',
                                         style: TextStyle(fontSize: 11, color: c.textSub)),
+                                    const SizedBox(width: 8),
+                                    // 分组全选/取消全选（开关单组选中态，与底部「全选」互不干扰）
+                                    TextButton(
+                                      onPressed: () => setState(() {
+                                        final group = _files.where((f) => f.kind == g.$1).toList();
+                                        final all = group.isNotEmpty && group.every((f) => f.selected);
+                                        for (final f in group) {
+                                          f.selected = !all;
+                                        }
+                                      }),
+                                      style: TextButton.styleFrom(
+                                        visualDensity: VisualDensity.compact,
+                                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                                        minimumSize: const Size(0, 30),
+                                        foregroundColor: c.primary,
+                                      ),
+                                      child: Text(
+                                        _files.where((f) => f.kind == g.$1).isNotEmpty &&
+                                                _files.where((f) => f.kind == g.$1).every((f) => f.selected)
+                                            ? '取消全选'
+                                            : '全选',
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),

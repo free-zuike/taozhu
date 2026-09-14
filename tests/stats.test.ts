@@ -48,23 +48,23 @@ async function seed(db: FakeD1) {
   await db.prepare('INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price) VALUES (?, ?, ?, ?, ?)')
     .bind('p-1', 'i-1', '斤', 1, 2).run();
   // 7月：A店出货100（区间前，计入截止欠款）
-  await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-0', 'c-a', '2026-07-01T08:00:00.000Z').run();
-  await db.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind('si-0', 's-0', 'i-1', '斤', 50, 2, 1, 100).run();
+  await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-0', 'c-a', '2026-07-01').run();
+  await db.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind('si-0', 's-0', 'i-1', '斤', 50, 2, 1, 100, '2026-07-01').run();
   // 9月1日：A店出货50（毛利50）、9月2日 B店出货40
-  await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-1', 'c-a', '2026-09-01T08:00:00.000Z').run();
-  await db.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind('si-1', 's-1', 'i-1', '斤', 25, 2, 1, 50).run();
-  await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-2', 'c-b', '2026-09-02T08:00:00.000Z').run();
-  await db.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind('si-2', 's-2', 'i-1', '斤', 20, 2, 1, 40).run();
+  await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-1', 'c-a', '2026-09-01').run();
+  await db.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind('si-1', 's-1', 'i-1', '斤', 25, 2, 1, 50, '2026-09-01').run();
+  await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-2', 'c-b', '2026-09-02').run();
+  await db.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind('si-2', 's-2', 'i-1', '斤', 20, 2, 1, 40, '2026-09-02').run();
   // 9月3日：进货30
-  await db.prepare('INSERT INTO purchases (id, happened_at) VALUES (?, ?)').bind('pu-1', '2026-09-03T08:00:00.000Z').run();
-  await db.prepare('INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind('pi-1', 'pu-1', 'i-1', '斤', 30, 1, 30).run();
+  await db.prepare('INSERT INTO purchases (id, happened_at) VALUES (?, ?)').bind('pu-1', '2026-09-03').run();
+  await db.prepare('INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind('pi-1', 'pu-1', 'i-1', '斤', 30, 1, 30, '2026-09-03').run();
   // 9月4日：A店收款30
   await db.prepare('INSERT INTO payments (id, client_id, happened_at, amount) VALUES (?, ?, ?, ?)')
-    .bind('pay-1', 'c-a', '2026-09-04T08:00:00.000Z', 30).run();
+    .bind('pay-1', 'c-a', '2026-09-04', 30).run();
 }
 
 describe('统计区间', () => {
@@ -256,16 +256,16 @@ describe('按店铺分类汇总对账（美食城多档口总账）', () => {
   it('聚合分类下各档口出货/收款/期末欠款与总合计', async () => {
     const today = new Date().toISOString().slice(0, 10);
     // 1号档出货 5 斤（100 元，单价 2 → sale_items amount=10，重复两次=20）、2号档出货 10 斤=20
-    // 用直接插入保证可控金额
-    await env.DB.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-1', 'stall-1', `${today}T08:00:00.000Z`).run();
-    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind('si-1', 's-1', 'i-1', '斤', 10, 2, 1, 20).run();
-    await env.DB.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-2', 'stall-2', `${today}T09:00:00.000Z`).run();
-    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind('si-2', 's-2', 'i-1', '斤', 15, 2, 1, 30).run();
+    // 用直接插入保证可控金额（happened_at 用纯日期，与生产格式一致：YYYY-MM-DD）
+    await env.DB.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-1', 'stall-1', today).run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-1', 's-1', 'i-1', '斤', 10, 2, 1, 20, today).run();
+    await env.DB.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-2', 'stall-2', today).run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-2', 's-2', 'i-1', '斤', 15, 2, 1, 30, today).run();
     // 1号档收款 8 元（欠 12）
     await env.DB.prepare('INSERT INTO payments (id, client_id, happened_at, amount) VALUES (?, ?, ?, ?)')
-      .bind('pay-1', 'stall-1', `${today}T10:00:00.000Z`, 8).run();
+      .bind('pay-1', 'stall-1', today, 8).run();
 
     const d = (await (await call(env, 'GET', `/api/v1/stats/category-statement?category_id=cat-food&start=${today}&end=${today}`, token)).json()) as {
       category_name: string;

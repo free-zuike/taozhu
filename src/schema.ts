@@ -67,6 +67,7 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_purchase_items_date ON purchase_items (happened_at)`,
   `CREATE TABLE IF NOT EXISTS sales (
     id TEXT PRIMARY KEY,
     client_id TEXT NOT NULL REFERENCES clients(id),
@@ -94,6 +95,7 @@ const DDL: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sale_items_item ON sale_items (item_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sale_items_date ON sale_items (happened_at)`,
   `CREATE TABLE IF NOT EXISTS payments (
     id TEXT PRIMARY KEY,
     client_id TEXT NOT NULL REFERENCES clients(id),
@@ -244,6 +246,15 @@ export async function ensureSchema(db: D1Database): Promise<void> {
         await db.prepare(`ALTER TABLE ${t} ADD COLUMN happened_at TEXT`).run();
       }
     }
+    // v0.17.82.0：明细行 happened_at 为 NULL 的历史行回填单据日期（此后查询可直接走列索引，无需 COALESCE 包裹导致全表扫）
+    await db.prepare(
+      `UPDATE sale_items SET happened_at = (SELECT s.happened_at FROM sales s WHERE s.id = sale_items.sale_id)
+       WHERE happened_at IS NULL`,
+    ).run();
+    await db.prepare(
+      `UPDATE purchase_items SET happened_at = (SELECT p.happened_at FROM purchases p WHERE p.id = purchase_items.purchase_id)
+       WHERE happened_at IS NULL`,
+    ).run();
     // v0.17.68.0：明细行级备注 note（每行商品可加备注；历史行回退单据级备注）
     for (const t of ['sale_items', 'purchase_items'] as const) {
       const iCols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
@@ -284,6 +295,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     for (const marker of [
       'idx_sales_sync_key', 'idx_purchases_sync_key', 'idx_payments_sync_key',
       'idx_purchases_date', 'idx_payments_date', 'idx_sale_items_item',
+      'idx_sale_items_date', 'idx_purchase_items_date',
     ]) {
       const i = DDL.findIndex((s) => s.includes(marker));
       if (i >= 0) await db.prepare(DDL[i]).run();

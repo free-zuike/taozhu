@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -69,16 +70,25 @@ class _LedgerPageState extends State<LedgerPage> {
 
   @override
   void dispose() {
+    _syncDebounce?.cancel();
     SyncService.version.removeListener(_onSync);
     super.dispose();
   }
 
+  /// 同步通知防抖：WS 推送/多端操作可能连续触发 version 通知，
+  /// 合并 500ms 内的多次通知为一次 _load（Web 端每次刷新要拉 6+ 个接口，不防抖会"一直刷新"）
+  Timer? _syncDebounce;
+
   void _onSync() {
     if (!mounted) return;
-    _load();
-    // 同步完成后后台刷新一次云端附件数（其他设备/Web 上传的附件），
-    // 不在页面加载时访问网络（本地优先：离线进交易页零网络请求）
-    if (!kIsWeb) _loadAttachCounts(withCloud: true);
+    _syncDebounce?.cancel();
+    _syncDebounce = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      _load();
+      // 同步完成后后台刷新一次云端附件数（其他设备/Web 上传的附件），
+      // 不在页面加载时访问网络（本地优先：离线进交易页零网络请求）
+      if (!kIsWeb) _loadAttachCounts(withCloud: true);
+    });
   }
 
   /// 加载所选月份的月度结余：
@@ -176,13 +186,25 @@ class _LedgerPageState extends State<LedgerPage> {
     return params.isEmpty ? '' : '?${params.join('&')}';
   }
 
-  /// Web 端商品目录（分类映射用）：拉 /items/summary（含 category），失败返回空
+  /// Web 端商品目录（分类映射用）：拉 /items/summary（含 category），失败返回空。
+  /// 结果缓存 60s——WS 频繁通知时页面每次刷新都调 _load，商品目录不常变，反复全量拉会拖慢 Web 交易页
+  static List<Map<String, dynamic>>? _webItemsCache;
+  static DateTime _webItemsCacheAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const _webItemsCacheTtl = Duration(seconds: 60);
+
   Future<List<Map<String, dynamic>>> _webItems() async {
+    if (kIsWeb &&
+        _webItemsCache != null &&
+        DateTime.now().difference(_webItemsCacheAt) < _webItemsCacheTtl) {
+      return _webItemsCache!;
+    }
     try {
       final d = await Api.instance.get('/items/summary');
-      return ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      _webItemsCache = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      _webItemsCacheAt = DateTime.now();
+      return _webItemsCache!;
     } catch (_) {
-      return [];
+      return _webItemsCache ?? [];
     }
   }
 
