@@ -6,6 +6,7 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../widgets/year_month_picker.dart';
 import 'router.dart';
 import 'purchase_page.dart';
 import 'purchase_line_edit.dart';
@@ -70,16 +71,12 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     _load();
   }
 
-  /// 月份选择弹层
+  /// 月份选择弹层（只选年月，无需选日）
   Future<void> _pickMonth() async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime(_selYear, _selMonth, 1),
-      firstDate: DateTime(now.year - 5),
-      lastDate: DateTime(now.year, now.month, 1),
-      initialDatePickerMode: DatePickerMode.year,
-      helpText: '选择月份',
+    final picked = await showYearMonthPicker(
+      context,
+      year: _selYear,
+      month: _selMonth,
     );
     if (picked == null) return;
     setState(() {

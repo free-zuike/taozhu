@@ -530,7 +530,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string };
-    expect(d.current).toBe('0.17.92');
+    expect(d.current).toBe('0.17.93');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
@@ -734,7 +734,7 @@ describe('全库备份导出 /backup', () => {
     token = await loginAdmin(env);
   });
 
-  it('老板导出全部业务表数据', async () => {
+  it('老板导出全部业务表数据（含新表 payment_accounts/attachment_refs）', async () => {
     const res = await call(env, 'GET', '/api/v1/backup', token);
     expect(res.status).toBe(200);
     const d = (await res.json()) as { exported_at: string; data: Record<string, unknown[]> };
@@ -743,6 +743,25 @@ describe('全库备份导出 /backup', () => {
     expect(d.data).toHaveProperty('sales');
     expect(d.data).toHaveProperty('stocks');
     expect(Array.isArray(d.data.payments)).toBe(true);
+    // v0.17.68/84 新增同步实体必须纳入备份（否则导出存档缺收款账户/附件引用）
+    expect(Array.isArray(d.data.payment_accounts)).toBe(true);
+    expect(Array.isArray(d.data.attachment_refs)).toBe(true);
+  });
+
+  it('导入备份：payment_accounts/attachment_refs 同样合并（新表纳入恢复范围）', async () => {
+    // 造一个含新表的备份 JSON
+    await call(env, 'PUT', '/api/v1/payment-accounts', token, {
+      accounts: [{ name: '现金' }, { name: '花呗', bank_name: '网商银行', card_last_four: '8888' }],
+    });
+    const exp = await call(env, 'GET', '/api/v1/backup', token);
+    const ed = (await exp.json()) as { data: Record<string, unknown[]> };
+    // 清掉一表后从备份合并恢复
+    await env.DB.prepare('DELETE FROM payment_accounts').run();
+    const imp = await call(env, 'POST', '/api/v1/backup/import', token, { data: ed.data });
+    expect(imp.status).toBe(200);
+    const rows = await env.DB.prepare('SELECT id, name, bank_name, card_last_four FROM payment_accounts ORDER BY sort').all<{ id: string; name: string; bank_name: string; card_last_four: string }>();
+    expect(rows.results.map((r) => r.name)).toEqual(expect.arrayContaining(['现金', '花呗']));
+    expect(rows.results.find((r) => r.name === '花呗')?.bank_name).toBe('网商银行');
   });
 
   it('店员无权限导出 → 403', async () => {

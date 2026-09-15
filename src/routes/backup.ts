@@ -10,12 +10,14 @@ backupRouter.use('*', authMiddleware(), adminOnly());
 const TABLES = [
   'clients', 'items', 'item_prices', 'purchases', 'purchase_items',
   'sales', 'sale_items', 'payments', 'categories', 'settings', 'stocks',
+  'payment_accounts', 'attachment_refs',
 ] as const;
 
 /// 导入顺序：先父表再子表（弱外键，避免引用表尚未插入）
 const IMPORT_ORDER = [
   'categories', 'clients', 'items', 'item_prices', 'stocks',
   'sales', 'sale_items', 'purchases', 'purchase_items', 'payments', 'settings',
+  'payment_accounts', 'attachment_refs',
 ] as const;
 
 // GET /backup — 全部数据 JSON
