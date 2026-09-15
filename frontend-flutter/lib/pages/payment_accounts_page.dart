@@ -6,6 +6,7 @@ import '../local_accounts.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import 'payment_account_detail_page.dart';
 import 'router.dart';
 
 /// 收款账户页（参考账户页形态）：顶部总览卡（账户数/常用账户）+ 账户列表。
@@ -174,15 +175,156 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
     return (Icons.account_balance_wallet_outlined, const Color(0xFF409EFF));
   }
 
-  /// 账户行副标题：进账统计（累计/本月）+ 开户行/尾号（有卡号信息才拼接）
-  String _subtitleOf(_AccountRow a) {
-    var s = '进账 ¥${fmtMoney(a.income)} · ${a.count} 笔 · 本月 ¥${fmtMoney(a.monthIncome)}';
-    final extra = [
-      if (a.bankName.isNotEmpty) a.bankName,
-      if (a.cardLastFour.isNotEmpty) '尾号${a.cardLastFour}',
-    ];
-    if (extra.isNotEmpty) s += ' · ${extra.join(' ')}';
-    return s;
+  /// 账户归类（与 _iconOf 同一套子串判定，用于分组）：现金/微信/支付宝/银行卡/转账/其他
+  String _groupOf(String name) {
+    final n = name.trim();
+    if (n.contains('现金')) return '现金';
+    if (n.contains('微信')) return '微信';
+    if (n.contains('支付宝')) return '支付宝';
+    if (n.contains('银行卡') || n.contains('银行') || n.contains('卡')) return '银行卡';
+    if (n.contains('转账') || n.contains('转')) return '转账';
+    return '其他';
+  }
+
+  /// 分组展示顺序（现金/微信/支付宝/银行卡/转账/其他）
+  static const _groupOrder = ['现金', '微信', '支付宝', '银行卡', '转账', '其他'];
+
+  /// 渐变账户卡片（对标参考项目 _AccountCard）：
+  /// 类型色渐变底 + 圆图标 + 名称/开户行尾号 + 三格统计（进账/笔数/本月），点卡片进详情、右上编辑/删除
+  Widget _accountCard(_AccountRow a) {
+    final c = _c;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final (icon, color) = _iconOf(a.name);
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => PaymentAccountDetailPage(accountName: a.name))),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: dark
+                ? [color.withValues(alpha: 0.25), color.withValues(alpha: 0.12)]
+                : [color, color.withValues(alpha: 0.8)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: dark
+              ? null
+              : [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.15),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 顶部行：圆图标 + 名称(+卡号) + 编辑/删除
+                Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(child: Icon(icon, size: 18, color: Colors.white)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(a.name,
+                              style: const TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          if (a.bankName.isNotEmpty || a.cardLastFour.isNotEmpty)
+                            Text(
+                              [
+                                if (a.bankName.isNotEmpty) a.bankName,
+                                if (a.cardLastFour.isNotEmpty) '尾号${a.cardLastFour}',
+                              ].join(' · '),
+                              style: TextStyle(
+                                  fontSize: 11, color: Colors.white.withValues(alpha: 0.85)),
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                            ),
+                        ],
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () => _rename(a),
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.edit, color: Colors.white, size: 14),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    GestureDetector(
+                      onTap: () => _remove(a),
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.delete_outline, color: Colors.white, size: 14),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // 三格统计：进账 / 笔数 / 本月进账
+                Row(
+                  children: [
+                    Expanded(
+                      child: _cardStat('进账', '¥${fmtMoney(a.income)}'),
+                    ),
+                    Container(width: 1, height: 26, color: Colors.white.withValues(alpha: 0.2)),
+                    Expanded(
+                      child: _cardStat('笔数', '${a.count}'),
+                    ),
+                    Container(width: 1, height: 26, color: Colors.white.withValues(alpha: 0.2)),
+                    Expanded(
+                      child: _cardStat('本月进账', '¥${fmtMoney(a.monthIncome)}'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 卡片内单格统计（label 小字 + value 大字，白色系）
+  Widget _cardStat(String label, String value) {
+    return Column(
+      children: [
+        Text(label,
+            style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.85))),
+        const SizedBox(height: 2),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(value,
+              style: const TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+        ),
+      ],
+    );
   }
 
   Future<void> _add() async {
@@ -341,7 +483,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
                           width: 44,
                           height: 44,
                           decoration: BoxDecoration(
-                            color: c.primary.withOpacity(0.12),
+                            color: c.primary.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Icon(Icons.account_balance_wallet_outlined, color: c.primary, size: 24),
@@ -363,50 +505,42 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  // 账户列表（图标 + 名称 + 进账统计 + 笔数）
-                  Container(
-                    decoration: BoxDecoration(
-                      color: c.card,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Column(
-                      children: [
-                        for (final (i, a) in _accounts.indexed) ...[
-                          if (i > 0) Divider(height: 1, indent: 56, color: c.divider),
-                          ListTile(
-                            leading: Container(
-                              width: 36,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                color: _iconOf(a.name).$2.withOpacity(0.12),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Icon(_iconOf(a.name).$1, size: 20, color: _iconOf(a.name).$2),
+                  // 账户分组卡片（对标参考项目资产分类：类型标题 + 渐变卡 + 三格统计）
+                  for (final g in _groupOrder)
+                    if (_accounts.any((a) => _groupOf(a.name) == g)) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4, right: 4, top: 6, bottom: 6),
+                        child: Row(
+                          children: [
+                            Icon(_iconOf(g == '银行卡' ? '银行卡' : g).$1,
+                                size: 15, color: _iconOf(g).$2),
+                            const SizedBox(width: 6),
+                            Text(g,
+                                style: const TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w700)),
+                            const Spacer(),
+                            Text(
+                              '进账 ¥${fmtMoney(_accounts.where((a) => _groupOf(a.name) == g).fold<double>(0, (s, a) => s + a.income))}',
+                              style: TextStyle(fontSize: 12, color: c.textSub),
                             ),
-                            title: Text(a.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                            subtitle: Text(_subtitleOf(a), style: TextStyle(fontSize: 12, color: c.textSub)),
-                            onTap: () => _rename(a),
-                            trailing: IconButton(
-                              icon: Icon(Icons.delete_outline, size: 20, color: c.danger),
-                              tooltip: '删除',
-                              onPressed: () => _remove(a),
-                            ),
-                          ),
+                          ],
+                        ),
+                      ),
+                      for (final a in _accounts.where((x) => _groupOf(x.name) == g))
+                        _accountCard(a),
+                      const SizedBox(height: 6),
+                    ],
+                  if (_accounts.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Column(
+                        children: [
+                          Icon(Icons.account_balance_wallet_outlined, size: 40, color: c.textSub.withValues(alpha: 0.4)),
+                          const SizedBox(height: 10),
+                          Text('暂无账户，点右上角 ＋ 添加', style: TextStyle(color: c.textSub)),
                         ],
-                        if (_accounts.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.all(32),
-                            child: Column(
-                              children: [
-                                Icon(Icons.account_balance_wallet_outlined, size: 40, color: c.textSub.withOpacity(0.4)),
-                                const SizedBox(height: 10),
-                                Text('暂无账户，点右上角 ＋ 添加', style: TextStyle(color: c.textSub)),
-                              ],
-                            ),
-                          ),
-                      ],
+                      ),
                     ),
-                  ),
                   const SizedBox(height: 12),
                   Text('收款账户为服务器同步数据：App/Web/小程序共用，改后在收款页下拉中生效。',
                       style: TextStyle(fontSize: 11, color: c.textSub)),

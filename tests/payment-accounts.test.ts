@@ -130,6 +130,24 @@ describe('收款账户（payment_accounts）', () => {
     expect(res.status).toBe(401);
   });
 
+  it('GET /payments?method= 按收款方式过滤（账户详情页流水）', async () => {
+    // 建店铺 + 两笔不同方式收款
+    const c1 = await call(env, 'POST', '/api/v1/clients', token, { name: '过滤店' });
+    const client = (await c1.json()) as { id: string };
+    await call(env, 'POST', '/api/v1/payments', token, { client_id: client.id, amount: 30, method: '微信' });
+    await call(env, 'POST', '/api/v1/payments', token, { client_id: client.id, amount: 7, method: '支付宝' });
+    const res = await call(env, 'GET', '/api/v1/payments?method=%E5%BE%AE%E4%BF%A1', token); // 微信 URL 编码
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { total: number; payments: Array<{ method: string; amount: number }> };
+    expect(d.total).toBe(1);
+    expect(d.payments[0].method).toBe('微信');
+    expect(d.payments[0].amount).toBe(30);
+    // 无匹配方式返回空
+    const none = await call(env, 'GET', '/api/v1/payments?method=%E7%8E%B0%E9%87%91', token); // 现金
+    const nd = (await none.json()) as { total: number };
+    expect(nd.total).toBe(0);
+  });
+
   it('PUT 支持开户行/卡号后四位：保存读回 + 同步 payload 含新字段', async () => {
     const res = await call(env, 'PUT', '/api/v1/payment-accounts', token, {
       accounts: [

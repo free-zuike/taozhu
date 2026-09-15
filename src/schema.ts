@@ -172,11 +172,41 @@ const DDL: string[] = [
 ];
 
 let schemaReady = false;
+/** 进程内互斥：同一 Worker isolate 并发请求同时触发冷启动迁移时串行化（多 isolate 场景靠 ensureColumn 幂等兜底） */
+let schemaLock: Promise<void> = Promise.resolve();
+
+function withSchemaLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = schemaLock.then(fn, fn);
+  schemaLock = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+/**
+ * 幂等加列：SQLite 无 ADD COLUMN IF NOT EXISTS，需 PRAGMA 查列。
+ * 并发冷启动（多 isolate 同库同时触发迁移）时第二个 ALTER 会抛 "duplicate column name"——
+ * 已存在即忽略（返回 false=本次未加），避免整个 ensureSchema 抛错导致同刻全部 API 请求 500。
+ */
+async function ensureColumn(
+  db: D1Database, table: string, column: string, ddl: string,
+): Promise<boolean> {
+  try {
+    const cols = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+    if (cols.results.some((x) => x.name === column)) return false;
+    await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`).run();
+    return true;
+  } catch (e) {
+    // 并发下其他 isolate 已先加上该列：忽略（幂等），只重抛非并发错误
+    if (`${e}`.includes('duplicate column')) return false;
+    throw e;
+  }
+}
 
 /** 首次调用时建表；失败不置标志，下次重试 */
 export async function ensureSchema(db: D1Database): Promise<void> {
   if (schemaReady) return;
-  try {
+  return withSchemaLock(async () => {
+    if (schemaReady) return;
+    try {
     const exists = await db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'",
     ).first<{ name: string }>();
@@ -236,14 +266,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       await db.batch([db.prepare(DDL[i])]);
     }
     // v0.17.90.0：payment_accounts 加开户行 bank_name + 卡号后四位 card_last_four
-    // （多张同类型卡靠卡号区分；老表无列 → ALTER 补齐，新表 DDL 已含）
-    const paCols = await db.prepare('PRAGMA table_info(payment_accounts)').all<{ name: string }>();
-    if (!paCols.results.some((x) => x.name === 'bank_name')) {
-      await db.prepare('ALTER TABLE payment_accounts ADD COLUMN bank_name TEXT DEFAULT \'\'').run();
-    }
-    if (!paCols.results.some((x) => x.name === 'card_last_four')) {
-      await db.prepare('ALTER TABLE payment_accounts ADD COLUMN card_last_four TEXT DEFAULT \'\'').run();
-    }
+    // （多张同类型卡靠卡号区分；老表无列 → ALTER 补齐，新表 DDL 已含；ensureColumn 并发幂等）
+    await ensureColumn(db, 'payment_accounts', 'bank_name', "TEXT DEFAULT ''");
+    await ensureColumn(db, 'payment_accounts', 'card_last_four', "TEXT DEFAULT ''");
     // 首次使用（空表）自动写入默认账户（现金/微信/支付宝/银行卡/转账），用户可后续增删改；
     // 空表才插，避免覆盖用户已自定义的列表
     const paCount = await db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>();
@@ -252,23 +277,13 @@ export async function ensureSchema(db: D1Database): Promise<void> {
         .bind('acct_cash', '现金', 0, 'acct_wechat', '微信', 1, 'acct_alipay', '支付宝', 2, 'acct_bank', '银行卡', 3, 'acct_transfer', '转账', 4).run();
     }
     // v0.17.17.0：users 账号列（头像 / 两步验证 TOTP）
-    const uCols = await db.prepare('PRAGMA table_info(users)').all<{ name: string }>();
-    if (!uCols.results.some((x) => x.name === 'avatar')) {
-      await db.prepare('ALTER TABLE users ADD COLUMN avatar TEXT').run();
-    }
+    await ensureColumn(db, 'users', 'avatar', 'TEXT');
     // 头像版本号（对齐参考架构 profile 体系）：每次上传 +1，客户端按版本比对决定是否重下载（省流量/防脏缓存）
-    if (!uCols.results.some((x) => x.name === 'avatar_version')) {
-      await db.prepare('ALTER TABLE users ADD COLUMN avatar_version INTEGER NOT NULL DEFAULT 0').run();
-    }
-    if (!uCols.results.some((x) => x.name === 'totp_secret')) {
-      await db.prepare('ALTER TABLE users ADD COLUMN totp_secret TEXT').run();
-    }
-    if (!uCols.results.some((x) => x.name === 'totp_enabled')) {
-      await db.prepare('ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0').run();
-    }
+    await ensureColumn(db, 'users', 'avatar_version', 'INTEGER NOT NULL DEFAULT 0');
+    await ensureColumn(db, 'users', 'totp_secret', 'TEXT');
+    await ensureColumn(db, 'users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
     // v0.17.18.0：users 显示名 display_name（登录账号不可改，用户名=显示名可改；默认取登录账号 @ 前部分）
-    if (!uCols.results.some((x) => x.name === 'display_name')) {
-      await db.prepare('ALTER TABLE users ADD COLUMN display_name TEXT').run();
+    if (await ensureColumn(db, 'users', 'display_name', 'TEXT')) {
       await db.prepare(
         `UPDATE users SET display_name = CASE
           WHEN instr(username, '@') > 0 THEN substr(username, 1, instr(username, '@') - 1)
@@ -278,10 +293,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     // v0.17.24.0：单据明细行独立日期 happened_at（每行商品可有自己的日期；历史行回退用单据日期）
     for (const t of ['sale_items', 'purchase_items'] as const) {
-      const iCols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
-      if (!iCols.results.some((x) => x.name === 'happened_at')) {
-        await db.prepare(`ALTER TABLE ${t} ADD COLUMN happened_at TEXT`).run();
-      }
+      await ensureColumn(db, t, 'happened_at', 'TEXT');
     }
     // v0.17.82.0：明细行 happened_at 为 NULL 的历史行回填单据日期（此后查询可直接走列索引，无需 COALESCE 包裹导致全表扫）
     await db.prepare(
@@ -294,39 +306,20 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     ).run();
     // v0.17.68.0：明细行级备注 note（每行商品可加备注；历史行回退单据级备注）
     for (const t of ['sale_items', 'purchase_items'] as const) {
-      const iCols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
-      if (!iCols.results.some((x) => x.name === 'note')) {
-        await db.prepare(`ALTER TABLE ${t} ADD COLUMN note TEXT DEFAULT ''`).run();
-      }
+      await ensureColumn(db, t, 'note', "TEXT DEFAULT ''");
     }
     for (const t of ['clients', 'items'] as const) {
-      const cols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
-      if (!cols.results.some((x) => x.name === 'category_id')) {
-        await db.prepare(`ALTER TABLE ${t} ADD COLUMN category_id TEXT`).run();
-      }
+      await ensureColumn(db, t, 'category_id', 'TEXT');
     }
     // clients 另有：记账开始/结束日期（结账周期起止）+ 每月起始日（1-28，1=自然月）
-    const cCols = await db.prepare('PRAGMA table_info(clients)').all<{ name: string }>();
-    if (!cCols.results.some((x) => x.name === 'start_date')) {
-      await db.prepare('ALTER TABLE clients ADD COLUMN start_date TEXT').run();
-    }
-    if (!cCols.results.some((x) => x.name === 'end_date')) {
-      await db.prepare('ALTER TABLE clients ADD COLUMN end_date TEXT').run();
-    }
-    if (!cCols.results.some((x) => x.name === 'month_start_day')) {
-      await db.prepare('ALTER TABLE clients ADD COLUMN month_start_day INTEGER NOT NULL DEFAULT 1').run();
-    }
+    await ensureColumn(db, 'clients', 'start_date', 'TEXT');
+    await ensureColumn(db, 'clients', 'end_date', 'TEXT');
+    await ensureColumn(db, 'clients', 'month_start_day', 'INTEGER NOT NULL DEFAULT 1');
     // payments 平账减免列（waived：欠款 = Σsales − Σ(amount+waived)）
-    const payCols = await db.prepare('PRAGMA table_info(payments)').all<{ name: string }>();
-    if (!payCols.results.some((x) => x.name === 'waived')) {
-      await db.prepare('ALTER TABLE payments ADD COLUMN waived REAL NOT NULL DEFAULT 0').run();
-    }
+    await ensureColumn(db, 'payments', 'waived', 'REAL NOT NULL DEFAULT 0');
     // v0.16.26.0：单据表幂等键 sync_key（离线重放/多端不重复建单）+ 查询索引
     for (const t of ['sales', 'purchases', 'payments'] as const) {
-      const cols = await db.prepare(`PRAGMA table_info(${t})`).all<{ name: string }>();
-      if (!cols.results.some((x) => x.name === 'sync_key')) {
-        await db.prepare(`ALTER TABLE ${t} ADD COLUMN sync_key TEXT`).run();
-      }
+      await ensureColumn(db, t, 'sync_key', 'TEXT');
     }
     // CREATE INDEX IF NOT EXISTS 幂等：已存在时 no-op（不耗 D1 写配额），新库补齐索引
     for (const marker of [
@@ -338,10 +331,11 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       if (i >= 0) await db.prepare(DDL[i]).run();
     }
     schemaReady = true;
-  } catch (err) {
-    console.error('[taozhu] ensureSchema failed:', err);
-    throw err;
-  }
+    } catch (err) {
+      console.error('[taozhu] ensureSchema failed:', err);
+      throw err;
+    }
+  });
 }
 
 /** 仅供测试：重置建表缓存（每个用例用独立内存库时需要） */

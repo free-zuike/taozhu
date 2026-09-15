@@ -65,4 +65,25 @@ describe('schema.sql 完整建表与幂等', () => {
     ).first<{ cnt: number }>();
     expect(row?.cnt).toBe(2);
   });
+
+  it('并发冷启动迁移幂等：同一库并发 ensureSchema 不抛 duplicate column（回归 v0.17.90 500）', async () => {
+    // 先完整迁移一次建出全部表（schema.sql 落后不含 payment_accounts，直接走 ensureSchema），
+    // 再把 payment_accounts 还原成老结构（缺 bank_name/card_last_four）制造"缺列"场景
+    const db = await createFakeD1();
+    resetSchemaState();
+    await ensureSchema(db as never);
+    await db.prepare('DROP TABLE payment_accounts').run();
+    await db.prepare('CREATE TABLE payment_accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0)').run();
+    resetSchemaState();
+    // 同一库并发触发两次迁移：若 ALTER 竞争未被锁/幂等兜底，第二个会抛 duplicate column name
+    await expect(Promise.all([
+      ensureSchema(db as never),
+      ensureSchema(db as never),
+    ])).resolves.toBeDefined();
+    // 迁移后列存在且数据可写读
+    const cols = await db.prepare('PRAGMA table_info(payment_accounts)').all<{ name: string }>();
+    expect(cols.results.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['bank_name', 'card_last_four']),
+    );
+  });
 });

@@ -43,9 +43,11 @@ paymentsRouter.post('/', adminOnly(), async (c) => {
   return c.json({ id, client_id: clientId, happened_at: happenedAt, amount: Math.round(amount * 100) / 100, waived: Math.round(waived * 100) / 100, method: body?.method?.trim() ?? '', note: body?.note?.trim() ?? '' }, 201);
 });
 
-// GET /payments?client_id=&date_from=&date_to=&limit=&offset=
+// GET /payments?client_id=&method=&date_from=&date_to=&limit=&offset=
+// method=收款方式（账户详情页按账户拉流水用）
 paymentsRouter.get('/', async (c) => {
   const clientId = c.req.query('client_id')?.trim();
+  const method = c.req.query('method')?.trim();
   const dateFrom = c.req.query('date_from')?.trim();
   const dateTo = c.req.query('date_to')?.trim();
   const { limit, offset } = parsePage(c.req.query('limit'), c.req.query('offset'));
@@ -53,6 +55,7 @@ paymentsRouter.get('/', async (c) => {
   let where = ' WHERE 1=1';
   const params: string[] = [];
   if (clientId) { where += ' AND p.client_id = ?'; params.push(clientId); }
+  if (method) { where += ' AND p.method = ?'; params.push(method); }
   if (dateFrom) { where += ' AND p.happened_at >= ?'; params.push(dateFrom); }
   if (dateTo) { where += ' AND p.happened_at <= ?'; params.push(dateTo); }
 
