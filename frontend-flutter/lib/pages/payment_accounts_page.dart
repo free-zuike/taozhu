@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
@@ -18,7 +19,11 @@ class PaymentAccountsPage extends StatefulWidget {
 class _AccountRow {
   final String id;
   final String name;
-  _AccountRow(this.id, this.name);
+  /// 该账户进账总额（全部历史，按收款方式聚合，含平账减免）
+  final double income;
+  /// 该账户收款笔数
+  final int count;
+  _AccountRow(this.id, this.name, {this.income = 0, this.count = 0});
 }
 
 class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
@@ -44,6 +49,40 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
     if (mounted) _load();
   }
 
+  /// 收款方式 → (进账总额, 笔数)：原生从本地 payments 镜像聚合（零网络），Web 直连 stats
+  Future<Map<String, (double, int)>> _incomeStats() async {
+    if (kIsWeb) {
+      try {
+        final d = await Api.instance.get('/payment-accounts/stats');
+        return {
+          for (final s in ((d['stats'] as List?) ?? []).cast<Map<String, dynamic>>())
+            '${s['method'] ?? ''}': (
+              (s['total'] as num?)?.toDouble() ?? 0,
+              (s['count'] as num?)?.toInt() ?? 0,
+            ),
+        };
+      } catch (_) {
+        return {};
+      }
+    }
+    try {
+      final pays = await LocalDb.getAll('payments');
+      final m = <String, (double, int)>{};
+      for (final p in pays) {
+        final method = '${p['method'] ?? ''}'.trim();
+        if (method.isEmpty) continue;
+        final (amt, cnt) = m[method] ?? (0.0, 0);
+        m[method] = (
+          amt + ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0),
+          cnt + 1,
+        );
+      }
+      return m;
+    } catch (_) {
+      return {};
+    }
+  }
+
   Future<void> _load() async {
     // 本地镜像秒开；服务器同步由 SyncService 增量驱动
     try {
@@ -51,23 +90,37 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
       if (local.isNotEmpty && mounted) {
         local.sort((a, b) =>
             ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
+        final stats = await _incomeStats();
         setState(() {
-          _accounts = [for (final a in local) _AccountRow('${a['id']}', '${a['name'] ?? ''}')];
+          _accounts = [
+            for (final a in local)
+              _AccountRow(
+                '${a['id']}', '${a['name'] ?? ''}',
+                income: stats['${a['name'] ?? ''}']?.$1 ?? 0,
+                count: stats['${a['name'] ?? ''}']?.$2 ?? 0,
+              ),
+          ];
           _loading = false;
         });
       } else {
         // 无本地镜像：直连服务器（首装/Web）
         final d = await Api.instance.get('/payment-accounts');
         final rows = ((d['accounts'] as List?) ?? [])
-            .cast<Map<String, dynamic>>()
-            .map((a) => _AccountRow('${a['id']}', '${a['name'] ?? ''}'))
-            .toList();
+            .cast<Map<String, dynamic>>();
+        final stats = await _incomeStats();
         await LocalDb.putAll('payment_accounts', [
-          for (final r in rows) {'id': r.id, 'name': r.name, 'sort': 0},
+          for (final r in rows) {'id': r['id'], 'name': r['name'], 'sort': 0},
         ]);
         if (mounted) {
           setState(() {
-            _accounts = rows;
+            _accounts = [
+              for (final r in rows)
+                _AccountRow(
+                  '${r['id']}', '${r['name'] ?? ''}',
+                  income: stats['${r['name'] ?? ''}']?.$1 ?? 0,
+                  count: stats['${r['name'] ?? ''}']?.$2 ?? 0,
+                ),
+            ];
             _loading = false;
           });
         }
@@ -86,17 +139,6 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
     if (n.contains('银行卡') || n.contains('银行') || n.contains('卡')) return (Icons.credit_card_outlined, const Color(0xFFF59A23));
     if (n.contains('转账') || n.contains('转')) return (Icons.swap_horiz_outlined, const Color(0xFF9B59B6));
     return (Icons.account_balance_wallet_outlined, const Color(0xFF409EFF));
-  }
-
-  /// 账户用途说明（每账户一行说明）
-  String _hintOf(String name) {
-    final n = name.trim();
-    if (n.contains('现金')) return '线下现金收款';
-    if (n.contains('微信')) return '微信扫码 / 转账';
-    if (n.contains('支付宝')) return '支付宝收款';
-    if (n.contains('银行卡') || n.contains('银行')) return '银行转账 / 对公';
-    if (n.contains('转账')) return '其他转账方式';
-    return '自定义收款方式';
   }
 
   Future<void> _add() async {
@@ -203,7 +245,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                 children: [
-                  // 总览卡：账户数 + 提示（顶部汇总）
+                  // 总览卡：账户数 + 全部账户累计进账
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -226,8 +268,8 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('${_accounts.length} 个收款账户',
-                                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                              Text('${_accounts.length} 个收款账户 · 累计进账 ¥${fmtMoney(_accounts.fold<double>(0, (s, a) => s + a.income))}',
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                               const SizedBox(height: 2),
                               Text('登记收款时下拉选择；点账户可改名，右侧删除',
                                   style: TextStyle(fontSize: 12, color: c.textSub)),
@@ -238,7 +280,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  // 账户列表（图标 + 名称 + 说明）
+                  // 账户列表（图标 + 名称 + 进账统计 + 笔数）
                   Container(
                     decoration: BoxDecoration(
                       color: c.card,
@@ -259,7 +301,10 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
                               child: Icon(_iconOf(a.name).$1, size: 20, color: _iconOf(a.name).$2),
                             ),
                             title: Text(a.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                            subtitle: Text(_hintOf(a.name), style: TextStyle(fontSize: 12, color: c.textSub)),
+                            subtitle: Text(
+                              '进账 ¥${fmtMoney(a.income)} · ${a.count} 笔',
+                              style: TextStyle(fontSize: 12, color: c.textSub),
+                            ),
                             onTap: () => _rename(a),
                             trailing: IconButton(
                               icon: Icon(Icons.delete_outline, size: 20, color: c.danger),

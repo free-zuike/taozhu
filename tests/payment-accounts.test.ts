@@ -96,4 +96,27 @@ describe('收款账户（payment_accounts）', () => {
     const sd = (await stats.json()) as { payment_accounts: number };
     expect(sd.payment_accounts).toBeGreaterThanOrEqual(5);
   });
+
+  it('GET /stats 按收款方式聚合进账总额与笔数（全部历史）', async () => {
+    // 建店铺 → 登记 3 笔收款：现金 100 / 微信 50 / 微信 25
+    const c1 = await call(env, 'POST', '/api/v1/clients', token, { name: '测试店' });
+    const client = (await c1.json()) as { id: string };
+    await call(env, 'POST', '/api/v1/payments', token, { client_id: client.id, amount: 100, method: '现金' });
+    await call(env, 'POST', '/api/v1/payments', token, { client_id: client.id, amount: 50, method: '微信' });
+    await call(env, 'POST', '/api/v1/payments', token, { client_id: client.id, amount: 25, waived: 0, method: '微信' });
+
+    const res = await call(env, 'GET', '/api/v1/payment-accounts/stats', token);
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { stats: Array<{ method: string; count: number; total: number }> };
+    const byMethod = new Map(d.stats.map((s) => [s.method, s]));
+    expect(byMethod.get('现金')?.count).toBe(1);
+    expect(byMethod.get('现金')?.total).toBe(100);
+    expect(byMethod.get('微信')?.count).toBe(2);
+    expect(byMethod.get('微信')?.total).toBe(75);
+  });
+
+  it('GET /stats 未认证返回 401', async () => {
+    const res = await call(env, 'GET', '/api/v1/payment-accounts/stats');
+    expect(res.status).toBe(401);
+  });
 });

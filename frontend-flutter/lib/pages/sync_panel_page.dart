@@ -326,7 +326,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   }
 
   /// 重新全量同步：重置增量游标后强制 fullSync 拉全量（修复"清除数据后增量拉取拉不全"的缺口）。
-  /// 下拉整个页面触发（无右上角按钮）。
+  /// 下拉整个页面触发（无右上角按钮）。sync() 内部各步吞异常（不抛），
+  /// 成败看 SyncService.lastSyncFailed——否则没网也会 toast"已重新全量同步"误导。
   Future<void> _fullSyncNow() async {
     if (_syncing) return;
     setState(() => _syncing = true);
@@ -338,7 +339,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       if (!mounted) return;
       setState(() => _syncing = false);
       _load();
-      toast(context, '已重新全量同步');
+      toast(context, SyncService.lastSyncFailed ? '同步失败（网络或服务器异常）' : '已重新全量同步');
     }
   }
 

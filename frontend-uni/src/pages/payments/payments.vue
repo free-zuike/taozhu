@@ -61,7 +61,10 @@
       <view class="sheet" @click.stop>
         <view class="sheet-title">管理收款账户</view>
         <view v-for="(a, i) in accounts" :key="i" class="acct-row">
-          <text class="acct-name">{{ a }}</text>
+          <view class="acct-info">
+            <text class="acct-name">{{ a }}</text>
+            <text class="acct-stats">进账 ¥{{ fmt(acctStats[a]?.total ?? 0) }} · {{ acctStats[a]?.count ?? 0 }} 笔</text>
+          </view>
           <text class="acct-edit" @click="renameAccount(i)">改名</text>
           <text class="acct-del" @click="removeAccount(i)">删除</text>
         </view>
@@ -94,6 +97,8 @@ const saving = ref(false);
 const payments = ref<Array<{ id: string; client_name: string; happened_at: string; amount: number; waived?: number; method: string; note: string }>>([]);
 // 收款方式账户：服务器同步实体（云端直连读取，非小程序本地存储）
 const accounts = ref<string[]>(['现金', '微信', '支付宝', '银行卡', '转账']);
+// 每账户进账统计：method → { total, count }（GET /payment-accounts/stats）
+const acctStats = ref<Record<string, { total: number; count: number }>>({});
 const showAccountMgr = ref(false);
 const mgrName = ref('');
 const payForm = ref<{
@@ -118,6 +123,15 @@ async function loadAccounts() {
   } catch (e) {
     // 服务器暂不可达：保留默认预设兜底（登记时仍可手填历史方式）
     accounts.value = ['现金', '微信', '支付宝', '银行卡', '转账'];
+  }
+  // 进账统计：失败静默（弹层仅显示数字，无统计也不影响登记）
+  try {
+    const s = await request<{ stats: Array<{ method: string; total: number; count: number }> }>(ACC_API + '/stats', 'GET');
+    acctStats.value = Object.fromEntries(
+      (s.stats || []).map((x) => [x.method, { total: x.total, count: x.count }]),
+    );
+  } catch {
+    acctStats.value = {};
   }
 }
 // 全量覆盖保存（与 App 端一致：PUT /payment-accounts 整表提交）
@@ -342,7 +356,9 @@ async function remove(id: string) {
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .acct-link { color: #409eff; font-size: 24rpx; text-align: center; margin-top: 10rpx; }
 .acct-row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid #f0f0f0; }
-.acct-name { flex: 1; font-size: 28rpx; }
+.acct-info { flex: 1; display: flex; flex-direction: column; }
+.acct-name { font-size: 28rpx; }
+.acct-stats { font-size: 22rpx; color: #999; margin-top: 4rpx; }
 .acct-edit { color: #409eff; font-size: 24rpx; margin-right: 24rpx; }
 .acct-del { color: #f56c6c; font-size: 24rpx; }
 .acct-add-row { display: flex; align-items: center; margin-top: 16rpx; }

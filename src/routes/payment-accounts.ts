@@ -18,6 +18,22 @@ paymentAccountsRouter.get('/', async (c) => {
   return c.json({ accounts: rows.results });
 });
 
+// GET /payment-accounts/stats — 每账户进账统计（按 method 聚合全部历史收款；无支出口径，账户仅收款用）
+paymentAccountsRouter.get('/stats', async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT method, COUNT(*) AS cnt, SUM(amount + waived) AS total
+     FROM payments WHERE method IS NOT NULL AND method != ''
+     GROUP BY method ORDER BY total DESC`,
+  ).all<{ method: string; cnt: number; total: number }>();
+  return c.json({
+    stats: rows.results.map((r) => ({
+      method: r.method,
+      count: r.cnt,
+      total: Math.round(Number(r.total || 0) * 100) / 100,
+    })),
+  });
+});
+
 // PUT /payment-accounts — 全量覆盖账户列表（body: { accounts: [{name}] }，admin）
 // 词义：改名 = 旧账户删除 + 新账户新增（历史收款的 method 是文本快照，无引用问题）。
 // 每处变更入同步流（LWW 决胜），pull 端按 upsert/delete 合并本地镜像。

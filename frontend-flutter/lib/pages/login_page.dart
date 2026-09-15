@@ -153,14 +153,26 @@ class _LoginPageState extends State<LoginPage> {
                     _field(_baseCtrl, Icons.dns_outlined, '服务器地址', '您的服务器地址，如 https://xxx.com'),
                     const SizedBox(height: 14),
                   ],
-                  _field(_userCtrl, Icons.person_outline, '邮箱 / 账号', null),
-                  const SizedBox(height: 14),
-                  TextField(
-                    controller: _passCtrl,
-                    obscureText: true,
-                    style: TextStyle(color: c.textMain),
-                    decoration: _dec(Icons.lock_outline, '密码', null),
-                    onSubmitted: (_) => _submit(),
+                  AutofillGroup(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _field(_userCtrl, Icons.person_outline, '邮箱 / 账号', null,
+                            autofill: const [AutofillHints.username]),
+                        const SizedBox(height: 14),
+                        TextField(
+                          controller: _passCtrl,
+                          obscureText: true,
+                          enableSuggestions: false,
+                          autocorrect: false,
+                          // 密码管理器（Bitwarden 等）依赖 autocomplete 识别可填充字段
+                          autofillHints: const [AutofillHints.password],
+                          style: TextStyle(color: c.textMain),
+                          decoration: _dec(Icons.lock_outline, '密码', null),
+                          onSubmitted: (_) => _submit(),
+                        ),
+                      ],
+                    ),
                   ),
                   if (_needTotp) ...[
                     const SizedBox(height: 14),
@@ -168,6 +180,7 @@ class _LoginPageState extends State<LoginPage> {
                       controller: _codeCtrl,
                       keyboardType: TextInputType.number,
                       maxLength: 6,
+                      autofillHints: const [AutofillHints.oneTimeCode],
                       style: TextStyle(color: c.textMain),
                       decoration: _dec(Icons.security_outlined, '两步验证码', '验证器 App 里的 6 位数字'),
                       onSubmitted: (_) => _submit(),
@@ -231,10 +244,12 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  Widget _field(TextEditingController ctrl, IconData icon, String label, String? hint) {
+  Widget _field(TextEditingController ctrl, IconData icon, String label, String? hint,
+      {List<String>? autofill}) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return TextField(
       controller: ctrl,
+      autofillHints: autofill,
       style: TextStyle(color: c.textMain),
       decoration: _dec(icon, label, hint),
     );
