@@ -1,5 +1,17 @@
 <template>
   <view class="page">
+    <!-- 筛选栏：月份切换 + 店铺筛选 -->
+    <view class="filter-bar">
+      <view class="month-nav">
+        <text class="nav-btn" @click="shiftMonth(-1)">‹</text>
+        <text class="month-label" @click="pickMonth">{{ selYear }}年{{ selMonth }}月</text>
+        <text class="nav-btn" @click="shiftMonth(1)">›</text>
+      </view>
+      <picker class="client-picker" mode="selector" :range="clientNames" @change="onClientFilter">
+        <view class="client-btn">{{ filterClientId ? filterClientName : '全部店铺' }} ▾</view>
+      </picker>
+    </view>
+
     <view class="seg">
       <view :class="['seg-item', { active: tab === 'sales' }]" @click="switchTab('sales')">出货</view>
       <view :class="['seg-item', { active: tab === 'purchases' }]" @click="switchTab('purchases')">进货</view>
@@ -14,6 +26,7 @@
         </view>
         <view class="sub">{{ s.happened_at }} · {{ (s.items || []).length }} 项</view>
         <view class="ops">
+          <text class="op" @click="showAttach('sale', s.id)">凭证</text>
           <text class="op" @click="editSale(s)">编辑</text>
           <text class="del" @click="removeSale(s)">删除</text>
         </view>
@@ -29,6 +42,7 @@
         </view>
         <view class="sub">{{ (p.items || []).length }} 项</view>
         <view class="ops">
+          <text class="op" @click="showAttach('purchase', p.id)">凭证</text>
           <text class="op" @click="editPurchase(p)">编辑</text>
           <text class="del" @click="removePurchase(p)">删除</text>
         </view>
@@ -44,11 +58,30 @@
         </view>
         <view class="sub">{{ p.happened_at }}<text v-if="p.method"> · {{ p.method }}</text></view>
         <view class="ops">
+          <text class="op" @click="showAttach('payment', p.id)">凭证</text>
           <text class="op" @click="editPayment(p)">编辑</text>
           <text class="del" @click="removePayment(p)">删除</text>
         </view>
       </view>
       <view v-if="payments.length === 0" class="empty">暂无收款记录</view>
+    </view>
+
+    <!-- 附件弹层：查看/上传/删除凭证图片 -->
+    <view v-if="attach.show" class="mask" @click="attach.show = false">
+      <view class="sheet" @click.stop>
+        <view class="sheet-title">凭证附件</view>
+        <scroll-view scroll-y class="attach-scroll">
+          <view v-for="(a, i) in attach.list" :key="a.key" class="attach-item">
+            <image class="attach-img" :src="attachmentUrl(a.key)" mode="aspectFill" @click="previewAttach(i)" />
+            <text class="attach-del" @click="removeAttach(a.key)">删除</text>
+          </view>
+          <view v-if="attach.list.length === 0" class="empty">暂无凭证，点下方添加</view>
+        </scroll-view>
+        <view class="attach-actions">
+          <button class="btn-sub" @click="uploadAttach">+ 添加凭证（拍照/相册）</button>
+          <button class="btn-save" @click="attach.show = false">完成</button>
+        </view>
+      </view>
     </view>
 
     <!-- 收款编辑弹层 -->
@@ -73,7 +106,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { request, getToken } from '../../api';
+import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 
 const tab = ref<'sales' | 'purchases' | 'payments'>('sales');
 const sales = ref<Array<Record<string, any>>>([]);
@@ -86,14 +119,125 @@ const payForm = ref<{
   show: boolean; id: string; amount: string; date: string; method: string; methodIdx: number; note: string;
 }>({ show: false, id: '', amount: '', date: '', method: '', methodIdx: 0, note: '' });
 
+// ── 附件凭证 ──
+const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({
+  show: false, entity: '', id: '', list: [],
+});
+
+async function showAttach(entity: string, id: string) {
+  attach.value = { show: true, entity, id, list: [] };
+  try {
+    const d = await getAttachments(entity, id);
+    attach.value.list = d.attachments || [];
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '加载凭证失败', icon: 'none' });
+  }
+}
+
+function previewAttach(i: number) {
+  const urls = attach.value.list.map((a) => attachmentUrl(a.key));
+  uni.previewImage({ urls, current: urls[i] });
+}
+
+function uploadAttach() {
+  uni.chooseImage({
+    count: 1,
+    sourceType: ['camera', 'album'],
+    success: async (res) => {
+      const path = res.tempFilePaths?.[0];
+      if (!path) return;
+      try {
+        const d = await uploadAttachment(attach.value.entity, attach.value.id, path);
+        attach.value.list.push({ key: d.key });
+        uni.showToast({ title: '已添加', icon: 'success' });
+      } catch (e) {
+        uni.showToast({ title: (e as Error).message || '上传失败', icon: 'none' });
+      }
+    },
+  });
+}
+
+async function removeAttach(key: string) {
+  if (!(await confirm('删除凭证', '确定删除这张凭证图片吗？'))) return;
+  try {
+    await deleteAttachment(key);
+    attach.value.list = attach.value.list.filter((a) => a.key !== key);
+    uni.showToast({ title: '已删除', icon: 'success' });
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
+  }
+}
+
+// ── 月份/店铺筛选 ──
+const selYear = ref(new Date().getFullYear());
+const selMonth = ref(new Date().getMonth() + 1);
+const clients = ref<Array<{ id: string; name: string }>>([]);
+const clientNames = ref<string[]>([]);
+const filterClientId = ref('');
+const filterClientName = ref('');
+
+function monthRange(): { from: string; to: string } {
+  const y = selYear.value;
+  const m = selMonth.value;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const from = `${y}-${pad(m)}-01`;
+  const to = m === 12 ? `${y + 1}-01-31` : `${y}-${pad(m + 1)}-00`;
+  return { from, to };
+}
+function shiftMonth(delta: number) {
+  let y = selYear.value;
+  let m = selMonth.value + delta;
+  if (m < 1) { y--; m = 12; }
+  if (m > 12) { y++; m = 1; }
+  selYear.value = y;
+  selMonth.value = m;
+  load();
+}
+function pickMonth() {
+  uni.showActionSheet({
+    itemList: ['上一月', '下一月', '回到本月'],
+    success: (r) => {
+      if (r.tapIndex === 0) shiftMonth(-1);
+      else if (r.tapIndex === 1) shiftMonth(1);
+      else if (r.tapIndex === 2) {
+        selYear.value = new Date().getFullYear();
+        selMonth.value = new Date().getMonth() + 1;
+        load();
+      }
+    },
+  });
+}
+function onClientFilter(e: { detail: { value: number } }) {
+  const c = clients.value[e.detail.value];
+  if (c) {
+    filterClientId.value = c.id;
+    filterClientName.value = c.name;
+  } else {
+    filterClientId.value = '';
+    filterClientName.value = '';
+  }
+  load();
+}
+
 onShow(async () => {
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
   }
   await loadAccounts();
+  await loadClients();
   await load();
 });
+
+async function loadClients() {
+  try {
+    const d = await request<{ clients: Array<{ id: string; name: string }> }>('/clients', 'GET');
+    clients.value = d.clients || [];
+    clientNames.value = ['全部店铺', ...clients.value.map((x) => x.name)];
+  } catch (e) {
+    clientNames.value = ['全部店铺'];
+  }
+}
 
 async function loadAccounts() {
   try {
@@ -112,10 +256,13 @@ function onEditMethod(e: { detail: { value: number } }) {
 
 async function load() {
   try {
+    const { from, to } = monthRange();
+    const cq = filterClientId.value ? `&client_id=${filterClientId.value}` : '';
     const results = await Promise.all([
-      request<{ sales: any[] }>('/sales?limit=200', 'GET'),
-      request<{ purchases: any[] }>('/purchases?limit=200', 'GET'),
-      request<{ payments: any[] }>('/payments?limit=200', 'GET'),
+      request<{ sales: any[] }>(`/sales?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
+      // 进货不分店（全店通用，与 App 端一致）：仅按月份过滤
+      request<{ purchases: any[] }>(`/purchases?date_from=${from}&date_to=${to}&limit=200`, 'GET'),
+      request<{ payments: any[] }>(`/payments?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
     ]);
     sales.value = results[0].sales;
     purchases.value = results[1].purchases;
@@ -213,6 +360,11 @@ async function removePayment(p: Record<string, any>) {
 
 <style>
 .page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
+.filter-bar { display: flex; justify-content: space-between; align-items: center; background: #fff; border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; }
+.month-nav { display: flex; align-items: center; }
+.nav-btn { font-size: 40rpx; color: #409eff; padding: 0 16rpx; }
+.month-label { font-size: 28rpx; font-weight: bold; }
+.client-btn { font-size: 26rpx; color: #409eff; border: 1rpx solid #409eff; border-radius: 8rpx; padding: 6rpx 16rpx; }
 .seg { display: flex; background: #fff; border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: #909399; }
 .seg-item.active { color: #409eff; font-weight: bold; background: #ecf5ff; }
@@ -235,4 +387,12 @@ async function removePayment(p: Record<string, any>) {
 .value { color: #303133; font-size: 28rpx; }
 .placeholder { color: #c0c4cc; }
 .btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; }
+/* 附件弹层 */
+.attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
+.attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid #f0f0f0; }
+.attach-img { width: 120rpx; height: 120rpx; border-radius: 8rpx; flex-shrink: 0; }
+.attach-del { color: #f56c6c; font-size: 26rpx; margin-left: auto; }
+.attach-actions { display: flex; gap: 16rpx; }
+.attach-actions .btn-sub { flex: 1; }
+.attach-actions .btn-save { flex: 1; }
 </style>

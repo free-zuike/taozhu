@@ -67,3 +67,43 @@ export const post = <T = any>(path: string, data?: unknown) => request<T>(path, 
 export const put = <T = any>(path: string, data?: unknown) => request<T>(path, 'PUT', data);
 export const patch = <T = any>(path: string, data?: unknown) => request<T>(path, 'PATCH', data);
 export const del = <T = any>(path: string) => request<T>(path, 'DELETE');
+
+/** 附件列表：GET /attachments?entity=&id= → { attachments: [{key,url,size}] } */
+export function getAttachments(entity: string, id: string): Promise<{ attachments: Array<{ key: string; url: string; size: number }> }> {
+  return request(`/attachments?entity=${entity}&id=${encodeURIComponent(id)}`, 'GET');
+}
+
+/** 附件代理读取 URL（需带 token；小程序 image 组件需拼接 token 参数） */
+export function attachmentUrl(key: string): string {
+  return `${getApiBase()}/api/v1/attachments/${key}?token=${encodeURIComponent(getToken() || '')}`;
+}
+
+/** 上传附件：uni.uploadFile 走 multipart，成功返回 {key,url} */
+export function uploadAttachment(entity: string, id: string, filePath: string): Promise<{ key: string; url: string }> {
+  return new Promise((resolve, reject) => {
+    uni.uploadFile({
+      url: `${getApiBase()}/api/v1/attachments?entity=${entity}&id=${encodeURIComponent(id)}`,
+      filePath,
+      name: 'photo',
+      header: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
+      success: (res) => {
+        try {
+          const d = JSON.parse(res.data) as { key?: string; url?: string; error?: string };
+          if (res.statusCode >= 200 && res.statusCode < 300 && d.key) {
+            resolve(d as { key: string; url: string });
+          } else {
+            reject(new Error(d?.error || `上传失败(${res.statusCode})`));
+          }
+        } catch (e) {
+          reject(new Error('上传响应解析失败'));
+        }
+      },
+      fail: (err) => reject(new Error((err && (err as { errMsg?: string }).errMsg) || '上传失败')),
+    });
+  });
+}
+
+/** 删除附件：DELETE /attachments?key= */
+export function deleteAttachment(key: string): Promise<unknown> {
+  return request(`/attachments?key=${encodeURIComponent(key)}`, 'DELETE');
+}

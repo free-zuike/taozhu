@@ -2,6 +2,7 @@
  *  entity ∈ sale|purchase|payment（单据级）| sale_item|purchase_item（明细行级）；零 D1 写。 */
 import { Hono } from 'hono';
 import { authMiddleware, adminOnly } from '../middleware/auth';
+import { verifyToken } from '../lib/jwt';
 import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
 import { imageKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from '../lib/image-key';
@@ -9,7 +10,23 @@ import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
 export const attachmentsRouter = new Hono<{ Bindings: Env; Variables: V }>();
-attachmentsRouter.use('*', authMiddleware());
+// 非读取路由（上传/删除/列表/统计）严格鉴权；读取路由在下方单独处理（支持 query token，小程序 image 组件无法带请求头）
+attachmentsRouter.use('*', async (c, next) => {
+  if (c.req.method === 'GET' && c.req.path.includes('/attachments/')) {
+    // 读取附件：允许 header token 或 query token（小程序 <image> 只能拼 URL）
+    const qToken = c.req.query('token');
+    if (qToken) {
+      const payload = await verifyToken(c.env.JWT_SECRET, qToken);
+      if (payload) {
+        c.set('user', { id: payload.sub, username: payload.username, role: payload.role });
+        return next();
+      }
+      return c.json({ error: '登录已过期，请重新登录' }, 401);
+    }
+    return authMiddleware()(c, next);
+  }
+  return authMiddleware()(c, next);
+});
 
 const VALID_ENTITY = ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'];
 /** 单据级实体（counts 支持按店铺汇总；行级无店铺维度，仅按 ids） */

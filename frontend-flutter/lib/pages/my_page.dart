@@ -89,7 +89,6 @@ class _MyPageState extends State<MyPage> {
     _loadLowStocks();
     _loadPending();
     _loadStats();
-    _autoSync();
     if (kIsWeb) _checkWebSync();
   }
 
@@ -203,15 +202,6 @@ class _MyPageState extends State<MyPage> {
       });
     } catch (_) {
       if (mounted) setState(() {});
-    }
-  }
-
-  /// 自动同步离线待同步单据（静默：成功不打扰，失败留队列下次再试）
-  Future<void> _autoSync() async {
-    await Api.instance.syncPending();
-    if (mounted) {
-      _loadPending();
-      _loadLowStocks();
     }
   }
 

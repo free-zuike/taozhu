@@ -7,13 +7,9 @@ type V = { user: AuthUser };
 export const statsRouter = new Hono<{ Bindings: Env; Variables: V }>();
 
 statsRouter.use('*', authMiddleware());
-// 店员无统计权限：经营数据（出货金额/毛利/欠款等）仅老板可见
-statsRouter.use('*', async (c, next) => {
-  if (c.get('user').role === 'staff') {
-    return c.json({ error: '无权限查看统计' }, 403);
-  }
-  await next();
-});
+// 店员可见统计但隐藏毛利：各接口已按 can_see_profit（admin 才 true）把 gross_profit 归零，
+// 出货/收款/欠款对店员可见（送货视角需要）。不再全局 403（小程序工作台/统计页店员需能看）。
+// 历史 v0.16.21 曾全挡 staff → 403，导致小程序店员「统计页没有权限查看」。
 
 const nowIso = () => new Date().toISOString();
 

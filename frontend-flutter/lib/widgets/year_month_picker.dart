@@ -31,10 +31,16 @@ class _YearMonthPickerState extends State<YearMonthPicker> {
   late FixedExtentScrollController _yearCtrl;
   late FixedExtentScrollController _monthCtrl;
 
-  /// 可选年份范围：最早 2015，最晚明年（防止误选太远）
+  /// 可选年份范围：最早 2015，最晚当前年（日期不能选未来）
   int get _minYear => 2015;
-  int get _maxYear => DateTime.now().year + 1;
+  int get _maxYear => DateTime.now().year;
+  /// 当前年月（选到当前年时月份不能超过当前月）
+  int get _nowMonth => DateTime.now().month;
   List<int> get _years => [for (var y = _minYear; y <= _maxYear; y++) y];
+
+  /// 某年的可选月份：过去年份 1-12，当前年限到当前月
+  List<int> _monthsOf(int year) =>
+      [for (var m = 1; m <= (year == _maxYear ? _nowMonth : 12); m++) m];
 
   @override
   void initState() {
@@ -89,7 +95,19 @@ class _YearMonthPickerState extends State<YearMonthPicker> {
                   child: CupertinoPicker(
                     scrollController: _yearCtrl,
                     itemExtent: 44,
-                    onSelectedItemChanged: (i) => setState(() => _year = _years[i]),
+                    onSelectedItemChanged: (i) {
+                      final y = _years[i];
+                      final months = _monthsOf(y);
+                      // 切到当前年后，月滚轮不能超过当前月
+                      final clamped = _month > months.last ? months.last : _month;
+                      setState(() {
+                        _year = y;
+                        _month = clamped;
+                      });
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _monthCtrl.jumpToItem(months.indexOf(clamped));
+                      });
+                    },
                     children: [
                       for (final y in _years)
                         Center(
@@ -103,9 +121,9 @@ class _YearMonthPickerState extends State<YearMonthPicker> {
                   child: CupertinoPicker(
                     scrollController: _monthCtrl,
                     itemExtent: 44,
-                    onSelectedItemChanged: (i) => setState(() => _month = i + 1),
+                    onSelectedItemChanged: (i) => setState(() => _month = _monthsOf(_year)[i]),
                     children: [
-                      for (var m = 1; m <= 12; m++)
+                      for (final m in _monthsOf(_year))
                         Center(
                           child: Text('$m 月',
                               style: TextStyle(fontSize: 17, color: _month == m ? c.primary : c.textMain)),

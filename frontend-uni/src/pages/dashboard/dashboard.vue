@@ -10,18 +10,18 @@
       <view class="card"><text class="cl">饭店数</text><text class="cv">{{ totals.client_count }}</text></view>
     </view>
 
-    <!-- 功能入口 -->
+    <!-- 功能入口（九宫格图标卡片） -->
     <view class="entries">
-      <button class="btn" @click="go('/pages/items/items')">商品管理</button>
-      <button class="btn" @click="go('/pages/clients/clients')">饭店管理</button>
-      <button class="btn" @click="go('/pages/categories/categories')">分类管理</button>
-      <button class="btn" @click="go('/pages/ledger/ledger')">交易</button>
-      <button class="btn" @click="go('/pages/payments/payments')">收款结账</button>
-      <button class="btn" @click="go('/pages/statement/statement')">对账单</button>
-      <button class="btn" @click="go('/pages/stocks/stocks')">库存</button>
-      <button class="btn" @click="go('/pages/stats/stats')">统计</button>
-      <button class="btn" @click="go('/pages/users/users')">账号管理</button>
-      <button class="btn" @click="openServer">服务器设置</button>
+      <view class="entry" @click="go('/pages/items/items')"><text class="e-ic e-blue">📦</text><text class="e-tx">商品管理</text></view>
+      <view class="entry" @click="go('/pages/clients/clients')"><text class="e-ic e-orange">🏪</text><text class="e-tx">饭店管理</text></view>
+      <view class="entry" @click="go('/pages/categories/categories')"><text class="e-ic e-purple">🗂️</text><text class="e-tx">分类管理</text></view>
+      <view class="entry" @click="go('/pages/ledger/ledger')"><text class="e-ic e-blue">📋</text><text class="e-tx">交易</text></view>
+      <view class="entry" @click="go('/pages/payments/payments')"><text class="e-ic e-green">💰</text><text class="e-tx">收款结账</text></view>
+      <view class="entry" @click="go('/pages/statement/statement')"><text class="e-ic e-cyan">📄</text><text class="e-tx">对账单</text></view>
+      <view class="entry" @click="go('/pages/stocks/stocks')"><text class="e-ic e-amber">📊</text><text class="e-tx">库存</text></view>
+      <view class="entry" @click="go('/pages/stats/stats')"><text class="e-ic e-red">📈</text><text class="e-tx">统计</text></view>
+      <view class="entry" @click="go('/pages/users/users')"><text class="e-ic e-gray">👥</text><text class="e-tx">账号管理</text></view>
+      <view class="entry" @click="openServer"><text class="e-ic e-gray">⚙️</text><text class="e-tx">服务器设置</text></view>
     </view>
 
     <!-- 服务器设置弹层：切换域名（保存后清 token 回登录页重新登录，与切账号语义一致） -->
@@ -124,7 +124,12 @@ function go(url: string) {
 .green { color: #67c23a; }
 .red { color: #f56c6c; }
 .entries { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
-.btn { width: 48%; margin: 0 0 16rpx; background: #fff; border-radius: 12rpx; font-size: 28rpx; }
+.entry { width: 30%; background: #fff; border-radius: 16rpx; padding: 24rpx 0 20rpx; margin-bottom: 16rpx; display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
+.e-ic { font-size: 44rpx; line-height: 1; }
+.e-tx { font-size: 24rpx; color: #303133; }
+.e-blue { color: #409eff; } .e-green { color: #67c23a; } .e-orange { color: #e6a23c; }
+.e-purple { color: #9b59b6; } .e-red { color: #f56c6c; } .e-cyan { color: #17a2b8; }
+.e-amber { color: #f39c12; } .e-gray { color: #909399; }
 .list { background: #fff; border-radius: 12rpx; padding: 24rpx; }
 .list-title { font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .list-row { display: flex; justify-content: space-between; padding: 16rpx 0; border-bottom: 1rpx solid #f0f0f0; }

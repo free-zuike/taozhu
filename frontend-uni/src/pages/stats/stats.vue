@@ -6,7 +6,7 @@
       <view v-for="c in byClient" :key="c.id" class="row">
         <view class="left">
           <text class="name">{{ c.name }}</text>
-          <text class="meta">出货 ¥{{ fmt(c.sales_total) }} · 收款 ¥{{ fmt(c.paid_total) }} · 毛利 ¥{{ fmt(c.gross_profit) }}</text>
+          <text class="meta">出货 ¥{{ fmt(c.sales_total) }} · 收款 ¥{{ fmt(c.paid_total) }}<template v-if="canSeeProfit"> · 毛利 ¥{{ fmt(c.gross_profit) }}</template></text>
         </view>
         <text class="debt red">欠 ¥{{ fmt(c.debt) }}</text>
       </view>
@@ -24,7 +24,7 @@
       <view v-for="m in monthly" :key="m.month" class="row">
         <view class="left">
           <text class="name">{{ monthLabel(m.month) }}</text>
-          <text class="meta">出货 ¥{{ fmt(m.sales_total) }} · 毛利 ¥{{ fmt(m.gross_profit) }}</text>
+          <text class="meta">出货 ¥{{ fmt(m.sales_total) }}<template v-if="canSeeProfit"> · 毛利 ¥{{ fmt(m.gross_profit) }}</template></text>
         </view>
         <text class="pay green">收 ¥{{ fmt(m.paid_total) }}</text>
       </view>
@@ -46,6 +46,7 @@ const monthly = ref<Monthly[]>([]);
 const years = ref<number[]>([]);
 const yearLabels = ref<string[]>([]);
 const year = ref(new Date().getFullYear());
+const canSeeProfit = ref(true); // 店员看不到毛利（后端 can_see_profit=false 时隐藏毛利列）
 const fmt = (n: number) => Number(n || 0).toFixed(2);
 const monthLabel = (m: string) => (m && m.length >= 7 ? `${Number(m.slice(5, 7))}月` : m);
 
@@ -61,11 +62,12 @@ async function load() {
   try {
     const [c, m, y] = await Promise.all([
       request<{ clients: ByClient[] }>('/stats/clients', 'GET'),
-      request<{ months: Monthly[] }>('/stats/monthly', 'GET', { year: year.value }),
+      request<{ months: Monthly[]; can_see_profit?: boolean }>('/stats/monthly', 'GET', { year: year.value }),
       request<{ years: number[] }>('/stats/years', 'GET'),
     ]);
     byClient.value = c.clients;
     monthly.value = m.months;
+    canSeeProfit.value = m.can_see_profit !== false;
     const list = (y.years || []).filter((n) => n <= new Date().getFullYear());
     if (list.length) {
       years.value = list;

@@ -116,6 +116,14 @@ describe('交易附件（R2）', () => {
     expect(read.status).toBe(200);
     expect(new Uint8Array(await read.arrayBuffer())).toEqual(new Uint8Array([0xff, 0xd8, 0xff, 0x00]));
 
+    // 小程序 <image> 组件无法带 Authorization 头：读取需支持 ?token= 查询参数（对齐 WS 鉴权方式）
+    const qRead = await call(env, 'GET', `/api/v1/attachments/${key}?token=${token}`, undefined);
+    expect(qRead.status).toBe(200);
+    expect(new Uint8Array(await qRead.arrayBuffer())).toEqual(new Uint8Array([0xff, 0xd8, 0xff, 0x00]));
+    // 错误 token → 401
+    const badRead = await call(env, 'GET', `/api/v1/attachments/${key}?token=bad.token.here`, undefined);
+    expect(badRead.status).toBe(401);
+
     const del = await call(env, 'DELETE', `/api/v1/attachments?key=${key}`, token);
     expect(del.status).toBe(204);
     const after = await (await call(env, 'GET', '/api/v1/attachments?entity=sale&id=s1', token)).json() as {

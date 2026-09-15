@@ -1,11 +1,14 @@
 <template>
   <view class="page">
-    <picker class="field" mode="date" :value="date" @change="onDate">
-      <view class="field-inner">
-        <text class="label">日期</text>
-        <text class="value">{{ date }}</text>
-      </view>
-    </picker>
+    <view class="head-row">
+      <picker class="field" mode="date" :value="date" @change="onDate">
+        <view class="field-inner">
+          <text class="label">日期</text>
+          <text class="value">{{ date }}</text>
+        </view>
+      </picker>
+      <button class="copy-btn" :disabled="loading" @click="copyLast">复制上一笔</button>
+    </view>
 
     <view v-for="(row, i) in rows" :key="i" class="row">
       <picker class="picker" mode="selector" :range="itemNames" @change="(e) => onItem(i, e.detail.value)">
@@ -46,6 +49,7 @@ const itemNames = ref<string[]>([]);
 const date = ref('');
 const rows = ref<Row[]>([]);
 const saving = ref(false);
+const loading = ref(false);
 const editId = ref(''); // 非空 = 编辑已有进货单（账本进入，提交走 PATCH）
 
 onLoad((options) => {
@@ -106,6 +110,38 @@ function todayLocal(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/// 复制上一笔进货单：读最近一单预填日期/明细（可修改后提交）
+async function copyLast() {
+  if (loading.value) return;
+  loading.value = true;
+  try {
+    const d = await request<{ purchases: Array<{ happened_at: string; items: Array<Record<string, any>> }> }>('/purchases?limit=1', 'GET');
+    const last = d.purchases?.[0];
+    if (!last) {
+      uni.showToast({ title: '暂无历史进货单', icon: 'none' });
+      return;
+    }
+    date.value = String(last.happened_at || '').slice(0, 10);
+    rows.value = [];
+    for (const it of last.items || []) {
+      const item = items.value.find((x) => x.id === it.item_id);
+      const price = item?.prices.find((p) => p.unit === it.unit);
+      if (!item || !price) continue;
+      rows.value.push({
+        itemId: item.id, itemName: item.name, prices: item.prices,
+        priceId: price.id, priceLabel: `${price.unit}（¥${price.purchase_price}·库存${(price as any).stock ?? 0}）`, unit: price.unit,
+        quantity: String(it.quantity), purchasePrice: String(it.purchase_price),
+      });
+    }
+    if (rows.value.length === 0) addRow();
+    uni.showToast({ title: '已复制上一笔，可修改后提交', icon: 'none' });
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '复制失败', icon: 'none' });
+  } finally {
+    loading.value = false;
+  }
+}
+
 function onDate(e: { detail: { value: string } }) {
   date.value = e.detail.value;
 }
@@ -164,6 +200,10 @@ async function submit() {
 
 <style>
 .page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
+.head-row { display: flex; gap: 12rpx; align-items: flex-start; margin-bottom: 16rpx; }
+.head-row .field { flex: 1; background: #fff; border-radius: 12rpx; padding: 24rpx; }
+.head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }
+.copy-btn { flex-shrink: 0; background: #fff; color: #409eff; border: 1rpx solid #409eff; border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
 .field { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .field-inner { display: flex; justify-content: space-between; }
 .label { color: #909399; }

@@ -47,11 +47,13 @@ class _LedgerPageState extends State<LedgerPage> {
   Map<String, int> _payAttachCount = {};
   /// 商品 id → 分类名（出货明细行第二行显示分类，替代无实际数据的交易时间）
   Map<String, String> _itemCategory = {};
-  /// 月度结余（四列式卡片）
+  /// 月度结余（五列式卡片）
   double _mIncome = 0; // 收入 = 收款（实收，未收为 0）
   double _mExpense = 0; // 支出 = 进货（全店通用）
   double _mSold = 0; // 售出 = 出货（当前店铺）
-  double _mBalance = 0; // 结余 = 收入 − 支出 = 收款 − 进货（收款后的盈利）
+  double _mGross = 0; // 毛利 = 售出 − 成本（当前店铺）
+  double _mDebt = 0; // 未回款 = 应收欠款（截止 end 累计出货 − 累计收款）
+  double _mBalance = 0; // 结余 = 毛利 − 进货 + 回款（去掉成本且回款了的盈利）
   bool _mLoaded = false; // 月度结余是否已加载（未加载显示占位符，不闪 0）
   int _selYear = DateTime.now().year; // 月度结余所选年份（头部月份切换）
   int _selMonth = DateTime.now().month; // 所选月份
@@ -94,10 +96,8 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   /// 加载所选月份的月度结余：
-  /// 售出=当前店铺出货（/stats/summary 带 client_id 的 sales_total），
-  /// 支出=进货（全店通用 purchase_total），
-  /// 收入=收款（带 client_id 的 paid_total，未收为 0），
-  /// 结余=收入−支出=收款−进货（收款后的盈利）。
+  /// 售出=当前店铺出货、支出=进货（全店通用）、收入=收款、毛利=售出−成本（当前店铺）、
+  /// 未回款=应收欠款（截止 end 累计出货−累计收款）、结余=毛利−进货+回款（去掉成本且回款了的盈利）。
   /// 店员无统计权限跳过；离线保留上次值。
   Future<void> _loadMonthly() async {
     if (_isStaff) return;
@@ -114,11 +114,15 @@ class _LedgerPageState extends State<LedgerPage> {
       final sold = (d['sales_total'] as num?)?.toDouble() ?? 0;
       final expense = (d['purchase_total'] as num?)?.toDouble() ?? 0;
       final paid = (d['paid_total'] as num?)?.toDouble() ?? 0;
+      final gross = (d['gross_profit'] as num?)?.toDouble() ?? 0;
+      final debt = (d['debt'] as num?)?.toDouble() ?? 0;
       setState(() {
         _mSold = sold;
         _mExpense = expense;
         _mIncome = paid;
-        _mBalance = paid - expense;
+        _mGross = gross;
+        _mDebt = debt;
+        _mBalance = gross - expense + paid;
         _mLoaded = true;
       });
     } catch (_) {
@@ -221,7 +225,7 @@ class _LedgerPageState extends State<LedgerPage> {
     _itemCategory = {
       for (final it in items) '${it['id']}': '${it['category'] ?? ''}',
     };
-    // 店铺选择弹层的笔数/欠款用本地全量汇总（与后端口径一致：笔数=出货单数+收款单数，欠款=Σ出货-Σ收款）
+    // 店铺选择弹层的笔数/欠款用本地全量汇总（与后端口径一致：笔数=出货单数，欠款=Σ出货-Σ收款）
     _clientStat = _localStats(allSales, allPays);
     var sales = allSales;
     var payments = allPays;
@@ -376,23 +380,23 @@ class _LedgerPageState extends State<LedgerPage> {
       saleCnt[id] = (saleCnt[id] ?? 0) + 1;
     }
     final paySum = <String, double>{};
-    final payCnt = <String, int>{};
     for (final p in pays) {
       final id = '${p['client_id']}';
       paySum[id] = (paySum[id] ?? 0) + ((p['amount'] as num?)?.toDouble() ?? 0);
-      payCnt[id] = (payCnt[id] ?? 0) + 1;
     }
+    // 笔数 = 出货单数（收款只是出货的一部分，不计入——与「我的」页本店交易口径一致）；
+    // 欠款 = Σ出货 − Σ收款
     return {
       for (final id in {...saleSum.keys, ...paySum.keys})
-        id: (count: (saleCnt[id] ?? 0) + (payCnt[id] ?? 0),
+        id: (count: (saleCnt[id] ?? 0),
             debt: ((saleSum[id] ?? 0) - (paySum[id] ?? 0)).toDouble()),
     };
   }
 
-  /// 店铺选择弹层的笔数（服务端字段优先，本地镜像缺失时用本地汇总兜底）
+  /// 店铺选择弹层的笔数（= 出货笔数；收款只是出货的一部分，不计入——与「我的」页本店交易口径一致）
   String _statCount(Map<String, dynamic> c) {
     final v = (c['sale_count'] as num?)?.toInt();
-    if (v != null) return '${v + ((c['payment_count'] as num?)?.toInt() ?? 0)}';
+    if (v != null) return '$v';
     return '${_clientStat['${c['id']}']?.count ?? 0}';
   }
 
@@ -451,11 +455,27 @@ class _LedgerPageState extends State<LedgerPage> {
       if (!inMonth(d)) continue;
       localPaid += ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0);
     }
+    // 本地毛利兜底：售出 − 成本（明细行 sale_price/cost_price）
+    double localGross = 0;
+    for (final s in _sales) {
+      if (_clientId != null && '${s['client_id']}' != _clientId) continue;
+      final orderDate = _date('${s['happened_at'] ?? ''}');
+      final items = ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      for (final it in items) {
+        final d = _date('${it['happened_at'] ?? ''}');
+        final use = d.isNotEmpty ? d : orderDate;
+        if (!inMonth(use)) continue;
+        final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+        localGross += (((it['sale_price'] as num?)?.toDouble() ?? 0) - ((it['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+      }
+    }
     // 网络值（精确，含进货/其他设备写入）优先；未加载时本地快照兜底
     final sold = _mLoaded ? _mSold : localSold;
     final expense = _mLoaded ? _mExpense : 0.0;
     final income = _mLoaded ? _mIncome : localPaid;
-    final balance = _mLoaded ? _mBalance : (income - expense);
+    final gross = _mLoaded ? _mGross : localGross;
+    final debt = _mLoaded ? _mDebt : (localSold - localPaid);
+    final balance = _mLoaded ? _mBalance : (localGross - 0.0 + localPaid);
 
     Widget col(String label, double value, Color color) {
       return Expanded(
@@ -526,6 +546,8 @@ class _LedgerPageState extends State<LedgerPage> {
               const SizedBox(width: 3),
               col('收入（收款）', income, income > 0 ? c.success : c.warning),
               const SizedBox(width: 3),
+              col('未回款', debt, debt > 0 ? c.warning : c.textSub),
+              const SizedBox(width: 3),
               col('结余', balance, balance >= 0 ? c.success : c.danger),
             ],
           ),
@@ -550,20 +572,7 @@ class _LedgerPageState extends State<LedgerPage> {
             child: ListView(
               shrinkWrap: true,
               children: [
-                // 显式「全部店铺」选项：当前为全部（_clientId 为空）时高亮；选中后查看全店流水
-                ListTile(
-                  leading: CircleAvatar(
-                    radius: 18,
-                    backgroundColor: const Color(0xFF409EFF).withOpacity(0.12),
-                    child: const Icon(Icons.store_mall_directory_outlined, size: 18, color: Color(0xFF409EFF)),
-                  ),
-                  title: const Text('全部店铺', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                  trailing: _clientId == null
-                      ? const Icon(Icons.check_circle, color: Color(0xFF409EFF), size: 20)
-                      : null,
-                  onTap: () => Navigator.pop(ctx, ''),
-                ),
-                // 按店铺分类分组（食堂/档口等）：分类标题 + 组内店铺
+                // 按店铺分类分组（食堂/档口等）：分类标题 + 组内店铺（店铺管理在「我的」页，这里只选店）
                 ..._clientGroups().entries.map((g) => [
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
@@ -580,16 +589,6 @@ class _LedgerPageState extends State<LedgerPage> {
               ],
             ),
           ),
-          const Divider(height: 1),
-          ListTile(
-            leading: const Icon(Icons.add_business_outlined, color: Color(0xFF409EFF)),
-            title: const Text('新增店铺'),
-            onTap: () {
-              Navigator.pop(ctx);
-              _addClientQuick();
-            },
-          ),
-          const SizedBox(height: 8),
         ],
       ),
     );

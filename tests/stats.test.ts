@@ -214,19 +214,29 @@ describe('店员权限：统计接口拒绝访问（403，经营数据仅老板�
     staffToken = ((await login.json()) as { token: string }).token;
   });
 
-  it('店员 overview → 403', async () => {
+  it('店员 overview → 200 且毛利不可见（can_see_profit=false）', async () => {
     const res = await call(env, 'GET', '/api/v1/stats/overview', staffToken);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { can_see_profit: boolean; today: { gross_profit: number } };
+    expect(d.can_see_profit).toBe(false);
+    expect(d.today.gross_profit).toBe(0);
   });
 
-  it('店员 summary/monthly/clients/daily 全部 403', async () => {
+  it('店员 summary/monthly/clients/daily 可见出货收款欠款，毛利归零', async () => {
     const results = await Promise.all([
       call(env, 'GET', '/api/v1/stats/summary?start=2026-09-01&end=2026-09-30', staffToken),
       call(env, 'GET', '/api/v1/stats/monthly?year=2026', staffToken),
       call(env, 'GET', '/api/v1/stats/clients', staffToken),
       call(env, 'GET', '/api/v1/stats/daily?start=2026-09-01&end=2026-09-30', staffToken),
     ]);
-    for (const res of results) expect(res.status).toBe(403);
+    for (const res of results) {
+      expect(res.status).toBe(200);
+      const d = (await res.json()) as { can_see_profit: boolean };
+      expect(d.can_see_profit).toBe(false);
+    }
+    // summary 的 gross_profit 归零
+    const sum = (await (await call(env, 'GET', '/api/v1/stats/summary?start=2026-09-01&end=2026-09-30', staffToken)).json()) as { gross_profit: number };
+    expect(sum.gross_profit).toBe(0);
   });
 
   it('老板正常访问统计（毛利可见）', async () => {
@@ -282,12 +292,15 @@ describe('按店铺分类汇总对账（美食城多档口总账）', () => {
     expect(stall1?.debt).toBe(12);
   });
 
-  it('店员无权限查看分类总账（403）', async () => {
+  it('店员可查看分类总账（出货/收款/欠款，无毛利字段）', async () => {
     await env.DB.prepare('INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)')
       .bind(randomId(), 'staff1', await hashPassword('staff123'), 'staff').run();
     const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });
     const staffToken = ((await login.json()) as { token: string }).token;
     const res = await call(env, 'GET', '/api/v1/stats/category-statement?category_id=cat-food&start=2026-09-01&end=2026-09-30', staffToken);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { category_name: string; clients: unknown[] };
+    expect(d.category_name).toBe('美食城');
+    expect(Array.isArray(d.clients)).toBe(true);
   });
 });
