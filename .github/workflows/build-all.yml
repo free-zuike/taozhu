@@ -1,0 +1,581 @@
+name: Build All Platforms
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:                    # 前端/小程序相关改动才构建（后端改动由 deploy 门禁测试后部署）
+      - 'frontend-flutter/**'
+      - 'frontend-uni/**'
+      - '.github/workflows/build-all.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  # ── 统一测试门禁：任一平台构建都依赖本 job 通过（needs: test），测试失败全部自动跳过 ──
+  test:
+    runs-on: ubuntu-latest
+    name: Test（vitest + typecheck）
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install backend deps
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+  # ── Android APK（正式签名，按 ABI 拆包 + universal 兜底）────────────────────────────
+  apk:
+    needs: test
+    runs-on: ubuntu-latest
+    name: Android APK
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+          if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
+          git fetch --tags --quiet || true
+          if git rev-parse -q --verify "refs/tags/taozhu-v${VERSION}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "taozhu-v${VERSION}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::版本号未 bump：taozhu-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号（src/version.ts + frontend-flutter/lib/version.dart + frontend-uni/src/manifest.json + tests/api.test.ts 断言），否则产物会覆盖旧 release。"
+              exit 1
+            fi
+          fi
+          echo "版本守卫通过：v${VERSION}"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Flutter version (Gradle 缓存键)
+        id: fver
+        working-directory: frontend-flutter
+        run: echo "ver=$(flutter --version 2>/dev/null | sed -n 's/^Flutter \([0-9.]*\).*/\1/p')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Gradle dependencies (Android 构建提速)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ steps.fver.outputs.ver }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Generate platforms (android/web/...)
+        working-directory: frontend-flutter
+        run: flutter create --org com.taozhu --project-name taozhu_app .
+
+      - name: Build APK (release, 正式签名)
+        working-directory: frontend-flutter
+        env:
+          ANDROID_KEYSTORE_STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_STORE_PASS }}
+          ANDROID_KEYSTORE_KEY_PASS: ${{ secrets.ANDROID_KEYSTORE_KEY_PASS }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+        run: |
+          # ① Android 版本与应用版本号同步：versionName=三位版本号；versionCode=三位加权拼成正整数（单调递增，覆盖升级稳定）。
+          #    不用改写 pubspec version：pub 的 version 格式只支持 x.y.z[+build]，四段 0.8.1.0 会判非法导致构建失败。
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" lib/version.dart || exit 1)
+          BUILD_NUM=$(echo "$VERSION" | awk -F. '{print ($1*1000000)+($2*10000)+($3*100)}')
+          # ② 包名统一 com.taozhu.app（与「陶朱」一致：避免两个应用并存、可覆盖升级）
+          sed -i 's|namespace = ".*"|namespace = "com.taozhu.app"|; s|applicationId = ".*"|applicationId = "com.taozhu.app"|' android/app/build.gradle.kts
+          # ②b MainActivity 类包与 applicationId 对齐——只改 namespace 不改类路径会 ClassNotFoundException 启动即崩
+          if [ -f android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt ]; then
+            sed -i 's|package com.taozhu.taozhu_app|package com.taozhu.app|' android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt
+            mkdir -p android/app/src/main/kotlin/com/taozhu/app
+            mv android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt
+          fi
+          # ②c 主 manifest 加 INTERNET 权限：Flutter 模板只在 debug/profile 清单有，release 无此权限=全部网络请求(DNS/连接)被拒→登录必失败
+          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/><application|' android/app/src/main/AndroidManifest.xml
+          # ②d 应用内更新：允许安装未知来源 APK（检查更新→下载→open_filex 触发安装器）
+          sed -i 's|<application|<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/><application|' android/app/src/main/AndroidManifest.xml
+          # ②e 最小权限：依赖库（image_picker 等）合并进来的媒体读取权限全部移除
+          #     —— image_picker 1.1.x 用系统 Photo Picker / GET_CONTENT 选图，拍照走系统相机 Intent，均无需存储权限；
+          #     tools:node="remove" 对不存在的权限是 no-op，未来依赖升级也安全。
+          sed -i 's|<manifest xmlns:android="http://schemas.android.com/apk/res/android">|<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove"/><uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/><uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/><application|' android/app/src/main/AndroidManifest.xml
+          # 应用内更新 = 系统下载器（DownloadManager）：重写 MainActivity，注入 MethodChannel taozhu/download
+          #     后台下载 + 通知栏（下滑栏）实时进度 + 下载完成回调状态，应用退到后台/被杀仍继续下载。
+          #     源码在仓库 frontend-flutter/android-patch/MainActivity.kt（不 base64 内联，便于维护）
+          #     注意：本步骤 working-directory=frontend-flutter，仓库根需用 ../ 前缀
+          mkdir -p android/app/src/main/kotlin/com/taozhu/app
+          cp ../frontend-flutter/android-patch/MainActivity.kt android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt
+          grep -q "DownloadManager" android/app/src/main/kotlin/com/taozhu/app/MainActivity.kt && echo "MainActivity 注入 OK"
+          # ③ 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
+          sed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml || true
+          # ④ 正式签名（复用与「陶朱」相同的 keystore）+ 关 R8（规避 release 闪退）
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/taozhu-release.keystore
+          cat android-sign.gradle.kts >> android/app/build.gradle.kts
+          # ⑤ 按 ABI 拆包构建（体积：universal ~62MB → arm64 单包 ~25MB；手机基本都是 arm64，下载减半以上）
+          flutter build apk --release --split-per-abi --build-name="$VERSION" --build-number="$BUILD_NUM"
+          # ⑤b 同时保留 universal 包（taozhu-app-{v}.apk）：ABI 查询失败的兜底与桌面/模拟器兼容
+          flutter build apk --release --build-name="$VERSION" --build-number="$BUILD_NUM"
+
+      - name: Package & upload to single Release (taozhu-app)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
+          # 统一产物命名：taozhu-app-{v}.apk（universal）+ taozhu-app-{v}-{abi}.apk（拆包）
+          cp frontend-flutter/build/app/outputs/flutter-apk/app-release.apk "/tmp/taozhu-app-${VERSION}.apk"
+          # 按 ABI 重命名并上传（app-arm64-v8a-release.apk / app-armeabi-v7a-release.apk / app-x86_64-release.apk）
+          for APK in frontend-flutter/build/app/outputs/flutter-apk/app-*-release.apk; do
+            ABI=$(basename "$APK" | sed 's/^app-//; s/-release\.apk$//')
+            cp "$APK" "/tmp/taozhu-app-${VERSION}-${ABI}.apk"
+          done
+          # 更新说明：上个版本 tag 以来的提交摘要
+          git fetch --tags --quiet || true
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK（按 ABI 拆包）/ Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          REL="taozhu-v${VERSION}"
+          # 等待 release 创建（deploy 创建，最多 5 分钟）
+          for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # 兜底：deploy 未建（如后端未改动仅前端 push）时本 job 自行创建
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
+              --title "陶朱 v${VERSION}" --notes "$NOTES" \
+              --published-at "$(git log -1 --format=%cI)" || true
+          fi
+          for APK in /tmp/taozhu-app-${VERSION}*.apk; do
+            # upload 重试（GitHub 端瞬时 500/竞态；重试 5 次后再进入完整性校验）
+            for _c in 1 2 3 4 5; do
+              gh release upload "$REL" "$APK" --repo "$GITHUB_REPOSITORY" --clobber && break
+              echo "upload 重试 $_c/5 ($(basename "$APK"))"
+              sleep 5
+            done
+          done
+          # 完整性校验：本发布产物必须全部上传成功；缺失 → 删除整个 release 并失败（不留不全的 release，
+          # 与版本守卫一致：开发者看到失败后递增版本号重新构建）
+          MISSING=""
+          for APK in /tmp/taozhu-app-${VERSION}*.apk; do
+            FN=$(basename "$APK")
+            if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "$FN"; then
+              MISSING="$MISSING $FN"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::release $REL 资产不完整（缺:$MISSING），按发版规则删除整个 release。请递增版本号重新构建（不得保留不全产物）"
+            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes || true
+            exit 1
+          fi
+          echo "uploaded taozhu-app (universal+split ABIs) ${VERSION}"
+
+  # ── Linux 桌面 ─────────────────────────────────────────────────────────────────────
+  linux:
+    needs: test
+    runs-on: ubuntu-latest
+    name: Linux 桌面
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+          if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
+          git fetch --tags --quiet || true
+          if git rev-parse -q --verify "refs/tags/taozhu-v${VERSION}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "taozhu-v${VERSION}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::版本号未 bump：taozhu-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号，否则产物会覆盖旧 release。"
+              exit 1
+            fi
+          fi
+          echo "版本守卫通过：v${VERSION}"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - name: Generate platforms & build Linux
+        working-directory: frontend-flutter
+        run: |
+          flutter create --org com.taozhu --project-name taozhu_app .
+          flutter build linux --release
+
+      - name: Package & upload Linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
+          cd frontend-flutter/build/linux/x64/release/bundle && zip -qr "/tmp/taozhu-linux-${VERSION}.zip" . && cd -
+          # 更新说明：上个版本 tag 以来的提交摘要
+          git fetch --tags --quiet || true
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          REL="taozhu-v${VERSION}"
+          # 等待 release 创建（apk job 或并发先到者创建，最多 5 分钟）
+          for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" \
+              --published-at "$(git log -1 --format=%cI)" || true
+          fi
+          for _c in 1 2 3 4 5; do
+            gh release upload "$REL" "/tmp/taozhu-linux-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
+            echo "upload 重试 $_c/5 (taozhu-linux-${VERSION}.zip)"
+            sleep 5
+          done
+          # 完整性校验：产物必须上传成功，缺失 → 删除整个 release 并失败（不留不全的 release，请递增版本号重建）
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "taozhu-linux-${VERSION}.zip"; then
+            echo "::error::release $REL 资产不完整，按发版规则删除整个 release，请递增版本号重新构建"
+            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes || true
+            exit 1
+          fi
+          echo "uploaded taozhu-linux-${VERSION}.zip"
+
+      - name: 失败即清理不完整 release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
+          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+
+  # ── Windows 桌面 ────────────────────────────────────────────────────────────────────
+  windows:
+    needs: test
+    runs-on: windows-latest
+    name: Windows 桌面
+    env:
+      PUB_CACHE: ${{ github.workspace }}\.pub-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
+        shell: bash
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+          if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
+          git fetch --tags --quiet || true
+          if git rev-parse -q --verify "refs/tags/taozhu-v${VERSION}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "taozhu-v${VERSION}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::版本号未 bump：taozhu-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号，否则产物会覆盖旧 release。"
+              exit 1
+            fi
+          fi
+          echo "版本守卫通过：v${VERSION}"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Cache Flutter pub dependencies (Windows)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PUB_CACHE }}
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Generate platforms & build Windows exe
+        working-directory: frontend-flutter
+        run: |
+          flutter create --org com.taozhu --project-name taozhu_app .
+          flutter build windows --release
+
+      - name: Package & upload Windows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $VERSION = (Select-String -Path "frontend-flutter/lib/version.dart" -Pattern "APP_VERSION = '([^']+)'").Matches[0].Groups[1].Value
+          if (-not $VERSION) { Write-Error "版本提取失败"; exit 1 }
+          Compress-Archive -Path "frontend-flutter/build/windows/x64/runner/Release/*" -DestinationPath "$env:TEMP/taozhu-windows-${VERSION}.zip"
+          git fetch --tags --quiet 2>$null
+          $prev = (git tag --sort=-version:refname | Where-Object { $_ -ne "taozhu-v$VERSION" } | Select-Object -First 1)
+          if ($prev) { $log = git log --format='- %s' --no-merges "$prev..HEAD" } else { $log = git log --format='- %s' --no-merges -8 }
+          if (-not $log) { $log = "- 同步版本 $VERSION" }
+          $notes = "陶朱 v$VERSION 更新内容：`n$log`n`n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。"
+          $REL = "taozhu-v$VERSION"
+          for ($_i = 0; $_i -lt 60; $_i++) { gh release view $REL 2>$null; if ($?) { break }; Start-Sleep -Seconds 5 }
+          gh release view $REL 2>$null; if (-not $?) {
+            gh release create $REL --title "陶朱 v$VERSION" --notes $notes --published-at "$(git log -1 --format=%cI)" 2>$null
+          }
+          for ($_c = 1; $_c -le 5; $_c++) { gh release upload $REL "$env:TEMP/taozhu-windows-${VERSION}.zip" --clobber; if ($?) { break }; Write-Output "upload 重试 $_c/5 (taozhu-windows-${VERSION}.zip)"; Start-Sleep -Seconds 5 }
+          echo "uploaded taozhu-windows-${VERSION}.zip"
+
+      - name: 失败即清理不完整 release
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
+          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+
+  # ── macOS ──────────────────────────────────────────────────────────────────────────
+  macos:
+    needs: test
+    runs-on: macos-latest
+    name: macOS
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+          if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
+          git fetch --tags --quiet || true
+          if git rev-parse -q --verify "refs/tags/taozhu-v${VERSION}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "taozhu-v${VERSION}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::版本号未 bump：taozhu-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号，否则产物会覆盖旧 release。"
+              exit 1
+            fi
+          fi
+          echo "版本守卫通过：v${VERSION}"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Generate platforms & build macOS
+        working-directory: frontend-flutter
+        run: |
+          flutter create --org com.taozhu --project-name taozhu_app .
+          flutter build macos --release
+
+      - name: Package & upload macOS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1 || exit 1)
+          cd frontend-flutter/build/macos/Build/Products/Release && zip -qr "/tmp/taozhu-macos-${VERSION}.zip" taozhu_app.app && cd -
+          git fetch --tags --quiet || true
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          REL="taozhu-v${VERSION}"
+          for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" \
+              --published-at "$(git log -1 --format=%cI)" || true
+          fi
+          for _c in 1 2 3 4 5; do
+            gh release upload "$REL" "/tmp/taozhu-macos-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
+            echo "upload 重试 $_c/5 (taozhu-macos-${VERSION}.zip)"
+            sleep 5
+          done
+          echo "uploaded taozhu-macos-${VERSION}.zip"
+
+      - name: 失败即清理不完整 release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
+          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+
+  # ── iOS（未签名）──────────────────────────────────────────────────────────────────
+  ios:
+    needs: test
+    runs-on: macos-latest
+    name: iOS（未签名）
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+          if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
+          git fetch --tags --quiet || true
+          if git rev-parse -q --verify "refs/tags/taozhu-v${VERSION}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "taozhu-v${VERSION}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::error::版本号未 bump：taozhu-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号，否则产物会覆盖旧 release。"
+              exit 1
+            fi
+          fi
+          echo "版本守卫通过：v${VERSION}"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Generate platforms & build iOS (unsigned)
+        working-directory: frontend-flutter
+        run: |
+          flutter create --org com.taozhu --project-name taozhu_app .
+          # image_picker 需相机/相册用途说明（缺失时真机调用即崩溃）；flutter create 每次全新生成，直接 Add
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string '拍摄出货/进货/收款凭证'" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string '选择出货/进货/收款凭证'" ios/Runner/Info.plist
+          flutter build ios --no-codesign
+
+      - name: Package & upload iOS (unsigned)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1 || exit 1)
+          cd frontend-flutter/build/ios/iphoneos && zip -qr "/tmp/taozhu-ios-${VERSION}-unsigned.zip" Runner.app && cd -
+          git fetch --tags --quiet || true
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          REL="taozhu-v${VERSION}"
+          for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
+          if ! gh release view "$REL" >/dev/null 2>&1; then
+            gh release create "$REL" --title "陶朱 v${VERSION}" --notes "$NOTES" \
+              --published-at "$(git log -1 --format=%cI)" || true
+          fi
+          for _c in 1 2 3 4 5; do
+            gh release upload "$REL" "/tmp/taozhu-ios-${VERSION}-unsigned.zip" --clobber && break
+            echo "upload 重试 $_c/5 (taozhu-ios-${VERSION}-unsigned.zip)"
+            sleep 5
+          done
+          echo "uploaded taozhu-ios-${VERSION}-unsigned.zip（未签名，安装需 Apple 开发者证书）"
+
+      - name: 失败即清理不完整 release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
+          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+
+  # ── 微信小程序（uni-app）──────────────────────────────────────────────────────────
+  miniprogram:
+    needs: test
+    runs-on: ubuntu-latest
+    name: 微信小程序
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend-uni/package-lock.json
+
+      - name: Install & build mp-weixin
+        working-directory: frontend-uni
+        run: |
+          npm ci
+          npm run build:mp-weixin
+
+      - name: Upload to WeChat platform (miniprogram-ci)
+        # 仅在配了密钥时上传；未配则跳过（只打 zip 留底）
+        if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' }}
+        env:
+          WX_APPID: ${{ secrets.WX_APPID }}
+          WX_PRIVATE_KEY: ${{ secrets.WX_PRIVATE_KEY }}
+        run: |
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || echo "0.0.0")
+          # 微信版本号要求 x.y.z（三段），截版本前三段
+          MP_VER=$(echo "$VERSION" | cut -d. -f1-3)
+          echo "$WX_PRIVATE_KEY" | base64 -d > /tmp/private.key
+          npx miniprogram-ci@latest upload \
+            --pp frontend-uni/dist/build/mp-weixin \
+            --pkp /tmp/private.key \
+            --appid "$WX_APPID" \
+            --upload-version "$MP_VER" \
+            --upload-message "陶朱 v$VERSION 自动上传" \
+            -r 1 \
+            || echo "::warning::微信上传失败（密钥/网络/白名单），详见日志；zip 产物已留底"
+          rm -f /tmp/private.key
+
+      - name: Package & upload to version Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || exit 1)
+          cd frontend-uni/dist/build/mp-weixin && zip -qr "/tmp/taozhu-miniprogram-${VERSION}.zip" . && cd -
+          git fetch --tags --quiet || true
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
+          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          REL="taozhu-v${VERSION}"
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
+              --title "陶朱 v${VERSION}" --notes "$NOTES"
+          fi
+          for _c in 1 2 3 4 5; do
+            gh release upload "$REL" "/tmp/taozhu-miniprogram-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
+            echo "upload 重试 $_c/5 (taozhu-miniprogram-${VERSION}.zip)"
+            sleep 5
+          done
+          # 完整性校验：产物必须上传成功，缺失 → 删除整个 release 并失败（不留不全的 release）
+          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "taozhu-miniprogram-${VERSION}.zip"; then
+            echo "::error::release $REL 资产不完整，按发版规则删除整个 release，请递增版本号重新构建"
+            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes || true
+            exit 1
+          fi
+          echo "uploaded taozhu-miniprogram-${VERSION}.zip"
+
+      - name: 失败即清理不完整 release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || true)
+          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true

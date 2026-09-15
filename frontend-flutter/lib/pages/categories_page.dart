@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
@@ -90,9 +91,23 @@ class _CategoriesPageState extends State<CategoriesPage> {
       return;
     }
     try {
-      await Api.instance.post('/categories', {'type': _type, 'name': name, 'parent_id': parentId});
-      toast(context, '已添加');
-      _load(network: true);
+      if (kIsWeb) {
+        // Web 无本地库/同步队列：直连服务端
+        await Api.instance.post('/categories', {'type': _type, 'name': name, 'parent_id': parentId});
+        toast(context, '已添加');
+        _load(network: true);
+        return;
+      }
+      // 原生本地优先：本地写 + 队列推送（分类是同步实体，离线可用）
+      final id = 'cat${DateTime.now().microsecondsSinceEpoch}';
+      final payload = {
+        'id': id, 'type': _type, 'name': name,
+        'parent_id': parentId ?? null, 'sort': 0,
+      };
+      await LocalDb.upsertOne('categories', payload);
+      await SyncService.enqueueChange(entityType: 'category', entitySyncId: id, payload: payload);
+      toast(context, '已添加，正在同步');
+      _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -115,9 +130,20 @@ class _CategoriesPageState extends State<CategoriesPage> {
     final name = ctrl.text.trim();
     if (name.isEmpty || name == c['name']) return;
     try {
-      await Api.instance.patch('/categories/${c['id']}', {'name': name});
-      toast(context, '已保存');
-      _load(network: true);
+      if (kIsWeb) {
+        // Web 无本地库/同步队列：直连服务端
+        await Api.instance.patch('/categories/${c['id']}', {'name': name});
+        toast(context, '已保存');
+        _load(network: true);
+        return;
+      }
+      // 原生本地优先：本地镜像更新 + 队列推送
+      final payload = Map<String, dynamic>.from(c);
+      payload['name'] = name;
+      await LocalDb.upsertOne('categories', payload);
+      await SyncService.enqueueChange(entityType: 'category', entitySyncId: '${c['id']}', payload: payload);
+      toast(context, '已保存，正在同步');
+      _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -141,9 +167,21 @@ class _CategoriesPageState extends State<CategoriesPage> {
     );
     if (ok != true) return;
     try {
-      await Api.instance.delete('/categories/${c['id']}');
-      toast(context, '已删除');
-      _load(network: true);
+      if (kIsWeb) {
+        // Web 无本地库/同步队列：直连服务端
+        await Api.instance.delete('/categories/${c['id']}');
+        toast(context, '已删除');
+        _load(network: true);
+        return;
+      }
+      // 原生本地优先：本地删行 + 队列推送 delete + 立即推送（删除即时生效，防复活）
+      await LocalDb.deleteOne('categories', '${c['id']}');
+      await SyncService.enqueueChange(
+          entityType: 'category', entitySyncId: '${c['id']}',
+          action: 'delete', payload: {});
+      unawaited(SyncService.pushPending());
+      toast(context, '已删除，正在同步');
+      _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }

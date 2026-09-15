@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -666,16 +667,33 @@ class _LedgerPageState extends State<LedgerPage> {
       return;
     }
     try {
-      final d = await Api.instance.post('/clients', {'name': name});
-      final id = '${d['id'] ?? ''}';
-      if (mounted) {
-        if (id.isNotEmpty) {
+      if (kIsWeb) {
+        // Web 无本地库/同步队列：直连服务端
+        final d = await Api.instance.post('/clients', {'name': name});
+        final id = '${d['id'] ?? ''}';
+        if (mounted && id.isNotEmpty) {
           _clientId = id;
           SyncService.saveSelectedClientId(id);
         }
         toast(context, '已创建店铺「$name」');
         _load();
+        return;
       }
+      // 原生本地优先：本地建档 + 队列推送（店铺是同步实体，离线可用）
+      final id = 'c${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+      final payload = {
+        'id': id, 'name': name, 'contact': '', 'phone': '', 'note': '',
+        'start_date': '', 'end_date': '', 'month_start_day': 1,
+        'category_id': '', 'deleted_at': null,
+      };
+      await LocalDb.upsertOne('clients', payload);
+      await SyncService.enqueueChange(entityType: 'client', entitySyncId: id, payload: payload);
+      if (mounted) {
+        _clientId = id;
+        SyncService.saveSelectedClientId(id);
+      }
+      toast(context, '已创建店铺「$name」，正在同步');
+      _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -812,14 +830,28 @@ class _LedgerPageState extends State<LedgerPage> {
       return;
     }
     try {
-      await Api.instance.patch('/payments/${p['id']}', {
-        'client_id': clientId,
-        'amount': amount,
-        'happened_at': dateCtrl.text.trim(),
-        'method': method,
-        'note': noteCtrl.text.trim(),
-      });
-      toast(context, '已保存');
+      if (kIsWeb) {
+        await Api.instance.patch('/payments/${p['id']}', {
+          'client_id': clientId,
+          'amount': amount,
+          'happened_at': dateCtrl.text.trim(),
+          'method': method,
+          'note': noteCtrl.text.trim(),
+        });
+        toast(context, '已保存');
+        _load();
+        return;
+      }
+      // 原生本地优先：本地镜像更新 + 队列推送（保留原字段，避免丢 waived 等）
+      final payload = Map<String, dynamic>.from(p)
+        ..['client_id'] = clientId
+        ..['amount'] = amount
+        ..['happened_at'] = dateCtrl.text.trim()
+        ..['method'] = method
+        ..['note'] = noteCtrl.text.trim();
+      await LocalDb.upsertOne('payments', payload);
+      await SyncService.enqueueChange(entityType: 'payment', entitySyncId: '${p['id']}', payload: payload);
+      toast(context, '已保存，正在同步');
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -831,10 +863,16 @@ class _LedgerPageState extends State<LedgerPage> {
       return;
     }
     try {
-      await Api.instance.delete('/payments/${p['id']}');
-      // 同步删本地库镜像行（否则残留 → 下次打开"删不掉"，本地与 Web 不一致）
-      await LocalDb.deleteOne('payments', '${p['id']}');
-      toast(context, '已撤销');
+      if (kIsWeb) {
+        await Api.instance.delete('/payments/${p['id']}');
+      } else {
+        // 原生本地优先：本地删行 + 队列推送 delete + 立即推送（删除即时生效，防复活）
+        await LocalDb.deleteOne('payments', '${p['id']}');
+        await SyncService.enqueueChange(
+            entityType: 'payment', entitySyncId: '${p['id']}', action: 'delete', payload: {});
+        unawaited(SyncService.pushPending());
+      }
+      toast(context, '已撤销，正在同步');
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -1357,9 +1395,20 @@ class _LedgerPageState extends State<LedgerPage> {
                               borderRadius: BorderRadius.circular(6),
                               onTap: () async {
                                 await showAttachmentViewer(
-                                    context, lineId.isEmpty ? 'sale' : 'sale_item',
-                                    lineId.isEmpty ? '${order['id']}' : lineId,
-                                    lineId.isEmpty ? '出货单附件' : '出货明细行附件');
+                                  context,
+                                  lineId.isEmpty ? 'sale' : 'sale_item',
+                                  lineId.isEmpty ? '${order['id']}' : lineId,
+                                  lineId.isEmpty ? '出货单附件' : '出货明细行附件',
+                                  // 整单凭证入口：批量挂到该单全部明细行（每行一份）
+                                  lineIds: lineId.isEmpty
+                                      ? [
+                                          for (final it
+                                              in ((order['items'] as List?) ?? []))
+                                            if (it is Map)
+                                              '${it['id'] ?? ''}'
+                                        ]
+                                      : const [],
+                                );
                                 // 附件增删后立即刷新计数，避免图标残留/缺失（无需手动下拉）
                                 _loadAttachCounts();
                               },

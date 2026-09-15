@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
@@ -190,9 +191,15 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     );
     if (ok != true) return;
     try {
-      await Api.instance.delete('/purchases/${p['id']}');
-      // 同步删本地库镜像行（否则残留 → 下次打开"删不掉"，本地与 Web 不一致）
-      await LocalDb.deleteOne('purchases', '${p['id']}');
+      if (kIsWeb) {
+        await Api.instance.delete('/purchases/${p['id']}');
+      } else {
+        // 原生本地优先：本地删行 + 队列推送 delete + 立即推送（删除即时生效，防复活）
+        await LocalDb.deleteOne('purchases', '${p['id']}');
+        await SyncService.enqueueChange(
+            entityType: 'purchase', entitySyncId: '${p['id']}', action: 'delete', payload: {});
+        unawaited(SyncService.pushPending());
+      }
       toast(context, '已删除，库存已回滚');
       _load();
     } catch (e) {
@@ -286,9 +293,19 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                         borderRadius: BorderRadius.circular(6),
                         onTap: () async {
                           await showAttachmentViewer(
-                              context, rowId.isEmpty ? 'purchase' : 'purchase_item',
+                              context,
+                              rowId.isEmpty ? 'purchase' : 'purchase_item',
                               rowId.isEmpty ? '${order['id']}' : rowId,
-                              rowId.isEmpty ? '进货单附件' : '进货明细行附件');
+                              rowId.isEmpty ? '进货单附件' : '进货明细行附件',
+                              // 整单凭证入口：批量挂到该单全部明细行（每行一份）
+                              lineIds: rowId.isEmpty
+                                  ? [
+                                      for (final it
+                                          in ((order['items'] as List?) ?? []))
+                                        if (it is Map) '${it['id'] ?? ''}'
+                                    ]
+                                  : const [],
+                            );
                         },
                         child: Padding(
                           padding: const EdgeInsets.all(2),

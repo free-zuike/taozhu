@@ -137,6 +137,8 @@ class SyncService {
     try {
       final root = await getApplicationDocumentsDirectory();
       var downloaded = 0;
+      // 多行引用同一文件（整单凭证=每行一行同内容引用）：同 key 只拉一次，各目录复用字节
+      final bytesCache = <String, List<int>>{};
       Future<bool> one(Map<String, dynamic> a) async {
         final entity = '${a['entity'] ?? ''}';
         final id = '${a['id'] ?? ''}';
@@ -146,11 +148,14 @@ class SyncService {
         final dir = Directory('${root.path}/attachments/$entity/$id');
         final target = File('${dir.path}/$file');
         if (target.existsSync()) return false; // 已有副本
+        final key = a['key'] ?? '$entity/$id/$file';
         Object? lastError;
         for (var attempt = 0; attempt < 3; attempt++) {
           try {
-            final bytes = await Api.instance.getRaw('/attachments/${a['key'] ?? '$entity/$id/$file'}').timeout(const Duration(seconds: 12));
+            final bytes = bytesCache[key] ??
+                await Api.instance.getRaw('/attachments/$key').timeout(const Duration(seconds: 12));
             if (bytes.isNotEmpty) {
+              bytesCache[key] = bytes;
               if (!dir.existsSync()) dir.createSync(recursive: true);
               await target.writeAsBytes(bytes);
               return true;

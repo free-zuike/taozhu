@@ -94,10 +94,35 @@ attachmentsRouter.post('/counts', async (c) => {
   await Promise.all(ids.map(async (id) => {
     const prefixes = [prefixOf(entity, id), ...legacyPrefixesOf(entity, id)];
     const groups = await Promise.all(prefixes.map((p) => store.list(p)));
-    const byKey = new Map<string, unknown>();
-    for (const group of groups) for (const o of group.objects) byKey.set(o.key, o);
-    counts[id] = byKey.size;
+    const seen = new Set<string>();
+    for (const group of groups) for (const o of group.objects) seen.add(o.key);
+    counts[id] = seen.size;
   }));
+  // 单据级（sale/purchase）统计：计入该单全部明细行前缀的附件——
+  // 整单凭证入口上传的图实际批量存入各明细行（行级引用），单据图标/面板口径需含行级。
+  if (entity === 'sale' || entity === 'purchase') {
+    const lineEntity = entity === 'sale' ? 'sale_item' : 'purchase_item';
+    const rows = await c.env.DB.prepare(
+      `SELECT id, ${entity}_id AS order_id FROM ${lineEntity}s WHERE ${entity}_id IN (${ids.map(() => '?').join(',')})`,
+    ).bind(...ids).all<{ id: string; order_id: string }>();
+    const lineIdsByOrder = new Map<string, string[]>();
+    for (const r of rows.results) {
+      const list = lineIdsByOrder.get(r.order_id) ?? [];
+      list.push(r.id);
+      lineIdsByOrder.set(r.order_id, list);
+    }
+    await Promise.all([...lineIdsByOrder.entries()].map(async ([orderId, lineIds]) => {
+      let n = 0;
+      for (const lid of lineIds) {
+        const prefixes = [prefixOf(lineEntity, lid), ...legacyPrefixesOf(lineEntity, lid)];
+        const groups = await Promise.all(prefixes.map((p) => store.list(p)));
+        const seen = new Set<string>();
+        for (const group of groups) for (const o of group.objects) seen.add(o.key);
+        n += seen.size;
+      }
+      if (n > 0) counts[orderId] = (counts[orderId] ?? 0) + n;
+    }));
+  }
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return c.json({ counts, total, ids });
 });

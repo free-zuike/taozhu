@@ -1,4 +1,4 @@
-﻿name: Deploy to Cloudflare Workers
+name: Deploy to Cloudflare Workers
 
 on:
   push:
@@ -35,6 +35,13 @@ jobs:
 
       - name: Install backend deps
         run: npm install
+
+      # 部署门禁：后端/前端改动上线前必须测试全绿（含 sql.js 内存库端到端用例）
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
 
       # Web = Flutter Web（组合 B：一套 Dart 管 Web+App+桌面，功能与 App 同步）
       # 注入生产 API_BASE → Web 端登录地址留空即连生产；App/个人部署不注入 → 地址必填

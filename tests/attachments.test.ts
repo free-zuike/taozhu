@@ -280,6 +280,45 @@ describe('交易附件（R2）', () => {
     expect(afterSale?.n ?? 0).toBe(0);
   });
 
+  it('counts 单据级统计计入明细行前缀（整单凭证=批量存入各行的行级图）', async () => {
+    // 建真实单据（1 明细行，取出行 id）
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-10',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const lineRows = await (env.DB as FakeD1).prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(saleId).all<{ id: string }>();
+    const lineId = lineRows.results[0].id;
+
+    // 只有行级图（整单凭证批量存入各行的形态）：单据级 counts 应计 1
+    await call(env, 'POST', `/api/v1/attachments?entity=sale_item&id=${lineId}`, token, photoForm(), true);
+    const c1 = await (await call(env, 'POST', '/api/v1/attachments/counts', token, {
+      entity: 'sale', ids: [saleId],
+    })).json() as { counts: Record<string, number> };
+    expect(c1.counts[saleId]).toBe(1);
+
+    // 单据级历史份 + 行级份 = 2（客户端整单图标=单据份+行份合计）
+    await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true);
+    const c2 = await (await call(env, 'POST', '/api/v1/attachments/counts', token, {
+      entity: 'sale', ids: [saleId],
+    })).json() as { counts: Record<string, number> };
+    expect(c2.counts[saleId]).toBe(2);
+
+    // 行级 counts 不受影响：只计该行自身前缀
+    const cl = await (await call(env, 'POST', '/api/v1/attachments/counts', token, {
+      entity: 'sale_item', ids: [lineId],
+    })).json() as { counts: Record<string, number> };
+    expect(cl.counts[lineId]).toBe(1);
+  });
+
   it('删除孤儿：仅删无引用的附件，在用附件不动；非 admin 拒绝', async () => {
     // 塞孤儿 + 在用
     await call(env, 'POST', '/api/v1/clients', token, { name: '店B' });

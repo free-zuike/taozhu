@@ -144,13 +144,18 @@ class _PurchasePageState extends State<PurchasePage> {
       final list = await LocalDb.getAll('purchases');
       d = list.where((s) => '${s['id']}' == widget.editId).firstOrNull;
     } catch (_) {}
-    if (d == null) {
+    if (d == null && kIsWeb) {
       try {
         d = await Api.instance.get('/purchases/${widget.editId}');
       } catch (_) {
         // 无网络且本地无缓存：错误已记日志，表单留空由用户重新填写
         return;
       }
+    }
+    if (d == null) {
+      // 页面零网络铁律：原生不直连服务端；本地无副本提示先同步，不再网络兜底
+      toast(context, '本地无该单据，请先在「同步状态」同步后编辑');
+      return;
     }
     if (!mounted || d == null) return;
     final data = d;
@@ -185,7 +190,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..qtyCtrl.text = qty.toString()
           ..priceCtrl.text = pp.toStringAsFixed(2));
       }
-      if (_rows.isEmpty) _rows.add(_PRow());
+      if (_rows.isEmpty) _rows.add(_newPRow());
       if (skipped > 0) {
         toast(context, '原单 $skipped 条商品已删除或价格停用，保存后将移除');
       }
@@ -299,27 +304,62 @@ class _PurchasePageState extends State<PurchasePage> {
     setState(() {});
   }
 
-  /// 创建商品（在线；老板可建，店员被后端 403）：成功加入本地目录并返回 id
+  /// 创建商品：Web 直连 POST /items；原生本地生成 id 落库+入队（离线可用，队列推送跨端生效）
   Future<String?> _createItem(String name, {String unit = '', double price = 0, String category = ''}) async {
     final u = unit.isEmpty ? '件' : unit;
     try {
-      final d = await Api.instance.post('/items', {
-        'name': name,
-        'category': category,
-        'prices': [
-          {'unit': u, 'purchase_price': price > 0 ? price : 0, 'sale_price': 0},
-        ],
-      });
-      final id = '${d['id'] ?? ''}';
-      if (id.isEmpty) return null;
-      // 后端 POST /items 返回 prices 为价格 ID 字符串数组（如 ["pr…"]），取第一个作为新价格组合 id
-      final pid = '${(d['prices'] as List?)?.firstOrNull ?? ''}';
+      String id, pid;
+      if (kIsWeb) {
+        final d = await Api.instance.post('/items', {
+          'name': name,
+          'category': category,
+          'prices': [
+            {'unit': u, 'purchase_price': price > 0 ? price : 0, 'sale_price': 0},
+          ],
+        });
+        id = '${d['id'] ?? ''}';
+        if (id.isEmpty) return null;
+        // 后端 POST /items 返回 prices 为价格 ID 字符串数组（如 ["pr…"]），取第一个作为新价格组合 id
+        pid = '${(d['prices'] as List?)?.firstOrNull ?? ''}';
+        _items.add({
+          'id': id,
+          'name': name,
+          'category': category,
+          'prices': [
+            {'id': pid, 'unit': u, 'purchase_price': price > 0 ? price : 0, 'sale_price': 0, 'active': 1},
+          ],
+        });
+        return id;
+      }
+      // 原生本地优先：本地生成 id → 内存目录 + 落库 + 入队（等不到 pull 时记单/改分类也能立即用）
+      id = 'it${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+      pid = 'pr${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
       _items.add({
         'id': id,
         'name': name,
         'category': category,
         'prices': [
           {'id': pid, 'unit': u, 'purchase_price': price > 0 ? price : 0, 'sale_price': 0, 'active': 1},
+        ],
+      });
+      await LocalDb.upsertOne('items', {
+        'id': id,
+        'name': name,
+        'category': category,
+        'category_id': null,
+        'deleted_at': null,
+        'prices': [
+          {'id': pid, 'item_id': id, 'unit': u, 'purchase_price': price > 0 ? price : 0, 'sale_price': 0, 'active': 1},
+        ],
+      });
+      await SyncService.enqueueChange(entityType: 'item', entitySyncId: id, payload: {
+        'id': id,
+        'name': name,
+        'category': category,
+        'category_id': null,
+        'deleted_at': null,
+        'prices': [
+          {'id': pid, 'item_id': id, 'unit': u, 'purchase_price': price > 0 ? price : 0, 'sale_price': 0, 'active': 1},
         ],
       });
       return id;
@@ -469,7 +509,7 @@ class _PurchasePageState extends State<PurchasePage> {
       final amount = (r.quantity * r.purchasePrice * 100).round() / 100;
       totalCalc += amount;
       itemsPayload.add({
-        'id': 'pi${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}',
+        'id': r.rowId, // 复用预生成的行级 id（顶栏整单凭证批量挂行依赖行 id 一致）
         'purchase_id': purchaseId,
         'item_id': r.itemId,
         'item_name': opt?['name'] ?? r.nameCtrl.text.trim(),
@@ -535,16 +575,28 @@ class _PurchasePageState extends State<PurchasePage> {
     if (mounted) setState(() => _busy = false);
   }
 
-  /// 复制上一笔进货单：预填明细，可修改后提交
+  /// 新建一行：预生成行级 id（保存时 itemsPayload 复用同一 id——
+  /// 顶栏整单凭证批量挂行依赖它与保存入库的明细行一致）
+  _PRow _newPRow() => _PRow()
+    ..rowId = 'pi${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+
+  /// 复制上一笔进货单：预填明细，可修改后提交。
+  /// Web 直连 /purchases?limit=1；原生零网络——读本地镜像按 happened_at 取最近一笔
   Future<void> _copyLast() async {
     try {
-      final d = await Api.instance.get('/purchases?limit=1');
-      final list = ((d['purchases'] as List?) ?? []);
-      if (list.isEmpty) {
+      Map<String, dynamic>? last;
+      if (kIsWeb) {
+        final d = await Api.instance.get('/purchases?limit=1');
+        last = ((d['purchases'] as List?) ?? []).cast<Map<String, dynamic>>().firstOrNull;
+      } else {
+        final list = await LocalDb.getAll('purchases');
+        list.sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+        last = list.firstOrNull;
+      }
+      if (last == null) {
         toast(context, '暂无历史进货单');
         return;
       }
-      final last = list.first as Map<String, dynamic>;
       final items = ((last['items'] as List?) ?? []).cast<Map<String, dynamic>>();
       setState(() {
         _rows.clear();
@@ -557,7 +609,7 @@ class _PurchasePageState extends State<PurchasePage> {
           if (match == null || price == null) continue;
           final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
           final pp = (it['purchase_price'] as num?)?.toDouble() ?? 0;
-          final row = _PRow()
+          final row = _newPRow()
             ..itemId = itemId
             ..priceId = price['id'] as String?
             ..quantity = qty
@@ -569,7 +621,7 @@ class _PurchasePageState extends State<PurchasePage> {
             ..priceCtrl.text = pp.toStringAsFixed(2);
           _rows.add(row);
         }
-        if (_rows.isEmpty) _rows.add(_PRow());
+        if (_rows.isEmpty) _rows.add(_newPRow());
       });
       toast(context, '已复制上一笔进货单，可修改后提交');
     } catch (e) {
@@ -606,7 +658,7 @@ class _PurchasePageState extends State<PurchasePage> {
           // 添加商品（提交栏固定在底部悬浮）
           OutlinedButton.icon(
             onPressed: () => setState(
-                () => _rows.add(_PRow()..happenedAt = _dateCtrl.text.trim())),
+                () => _rows.add(_newPRow()..happenedAt = _dateCtrl.text.trim())),
             icon: const Icon(Icons.add, size: 18),
             label: const Text('添加商品'),
             style: OutlinedButton.styleFrom(
@@ -738,10 +790,15 @@ class _PurchasePageState extends State<PurchasePage> {
               dense: true,
               visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
               leading: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF67C23A)),
-              title: const Text('整单附件（通用凭证）', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              subtitle: const Text('点击查看/添加整单共用附件', style: TextStyle(fontSize: 11)),
+              title: const Text('整单凭证（自动关联全部商品）', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              subtitle: const Text('上传一张凭证自动存到该单每个商品行', style: TextStyle(fontSize: 11)),
               trailing: const Icon(Icons.chevron_right, size: 20),
-              onTap: () => showAttachmentViewer(context, 'purchase', _purchaseId, '进货单附件'),
+              onTap: () => showAttachmentViewer(
+                  context, 'purchase', _purchaseId, '进货单附件',
+                  lineIds: [
+                    for (final r in _rows)
+                      if (r.rowId.isNotEmpty) r.rowId,
+                  ]),
             ),
           ),
         ],

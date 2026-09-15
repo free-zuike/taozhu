@@ -4,6 +4,7 @@
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import initSqlJs from 'sql.js/dist/sql-asm.js';
+import { afterAll } from 'vitest';
 
 type Row = Record<string, unknown>;
 
@@ -16,7 +17,45 @@ type SqliteLike = {
     free(): void;
   };
   run(sql: string): void;
+  close(): void;
 };
+
+// initSqlJs 是重量级模块（asm.js ~几十 MB 编译产物），模块级单例避免每个库重复加载触发 OOM
+const SQL_PROMISE = initSqlJs() as unknown as Promise<{
+  Database: new () => SqliteLike;
+}>;
+
+// 登记所有尚未关闭的库，控制 asm 堆上活跃库数量：
+// 测试是「每用例一库、串行替换」模式，前一个库在下一个 beforeEach 必然被替换 —
+// FIFO 保留最近 4 个（留足并发余量），超限即关闭最旧的，避免几十个库同时驻留 asm 堆触发 Aborted(OOM)
+const openDbs = new Set<SqliteLike>();
+const MAX_OPEN_DBS = 4;
+function track(db: SqliteLike) {
+  openDbs.add(db);
+  if (openDbs.size > MAX_OPEN_DBS) {
+    const oldest = openDbs.values().next().value;
+    if (oldest) {
+      try {
+        oldest.close();
+      } catch {
+        // 已关闭的库重复 close 会抛错；忽略即可
+      }
+      openDbs.delete(oldest);
+    }
+  }
+}
+
+// 文件级兜底：全部用例结束后关闭仍存活的库（防用例间模式变化漏回收）
+afterAll(() => {
+  for (const db of openDbs) {
+    try {
+      db.close();
+    } catch {
+      // 同上
+    }
+  }
+  openDbs.clear();
+});
 
 export class FakeStatement {
   private params: unknown[] = [];
@@ -82,11 +121,12 @@ export class FakeD1 {
   }
 }
 
-/** 创建内存 SQLite 库（开启外键以支持 ON DELETE CASCADE） */
+/** 创建内存 SQLite 库（开启外键以支持 ON DELETE CASCADE）；文件测试结束时由 afterAll 统一关闭 */
 export async function createFakeD1(): Promise<FakeD1> {
-  const SQL = await initSqlJs() as unknown as { Database: new () => SqliteLike & { close(): void } };
+  const SQL = await SQL_PROMISE;
   const db = new SQL.Database();
   db.run('PRAGMA foreign_keys = ON');
+  track(db);
   return new FakeD1(db);
 }
 

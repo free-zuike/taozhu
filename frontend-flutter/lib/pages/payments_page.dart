@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -267,14 +268,28 @@ class _PaymentsPageState extends State<PaymentsPage> {
       return;
     }
     try {
-      await Api.instance.patch('/payments/${p['id']}', {
-        'amount': amount,
-        'waived': waived,
-        'happened_at': dateCtrl.text.trim(),
-        'method': method,
-        'note': noteCtrl.text.trim(),
-      });
-      toast(context, '已保存');
+      if (kIsWeb) {
+        await Api.instance.patch('/payments/${p['id']}', {
+          'amount': amount,
+          'waived': waived,
+          'happened_at': dateCtrl.text.trim(),
+          'method': method,
+          'note': noteCtrl.text.trim(),
+        });
+        toast(context, '已保存');
+        _load();
+        return;
+      }
+      // 原生本地优先：本地镜像更新 + 队列推送（保留原字段）
+      final payload = Map<String, dynamic>.from(p)
+        ..['amount'] = amount
+        ..['waived'] = waived
+        ..['happened_at'] = dateCtrl.text.trim()
+        ..['method'] = method
+        ..['note'] = noteCtrl.text.trim();
+      await LocalDb.upsertOne('payments', payload);
+      await SyncService.enqueueChange(entityType: 'payment', entitySyncId: '${p['id']}', payload: payload);
+      toast(context, '已保存，正在同步');
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -299,10 +314,16 @@ class _PaymentsPageState extends State<PaymentsPage> {
     );
     if (ok != true) return;
     try {
-      await Api.instance.delete('/payments/${p['id']}');
-      // 同步删本地库镜像行（否则残留 → 下次打开"删不掉"，本地与 Web 不一致）
-      await LocalDb.deleteOne('payments', '${p['id']}');
-      toast(context, '已撤销');
+      if (kIsWeb) {
+        await Api.instance.delete('/payments/${p['id']}');
+      } else {
+        // 原生本地优先：本地删行 + 队列推送 delete + 立即推送（删除即时生效，防复活）
+        await LocalDb.deleteOne('payments', '${p['id']}');
+        await SyncService.enqueueChange(
+            entityType: 'payment', entitySyncId: '${p['id']}', action: 'delete', payload: {});
+        unawaited(SyncService.pushPending());
+      }
+      toast(context, '已撤销，正在同步');
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
