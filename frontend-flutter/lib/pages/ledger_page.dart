@@ -858,8 +858,17 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
+  /// 收款记录所属店铺名：同步 payload 不含 client_name（本地镜像无此字段），用本地店铺镜像反查
+  String _clientNameOf(Map<String, dynamic> p) {
+    final direct = '${p['client_name'] ?? ''}'.trim();
+    if (direct.isNotEmpty) return direct;
+    final id = '${p['client_id'] ?? ''}';
+    if (id.isEmpty) return '';
+    return _clients.where((c) => '${c['id']}' == id).firstOrNull?['name'] as String? ?? '';
+  }
+
   Future<void> _deletePayment(Map<String, dynamic> p) async {
-    if (!await _confirm('撤销收款', '确定撤销 ${_date(p['happened_at'])} ${p['client_name']} 的收款（¥${p['amount']}）吗？')) {
+    if (!await _confirm('撤销收款', '确定撤销 ${_date('${p['happened_at']}')} ${_clientNameOf(p)} 的收款（¥${p['amount']}）吗？')) {
       return;
     }
     try {
@@ -1476,7 +1485,7 @@ class _LedgerPageState extends State<LedgerPage> {
             const SizedBox(width: 8),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${p['client_name']}',
+                Text(_clientNameOf(p),
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: c.textMain)),
                 if (meta.isNotEmpty)
                   Text(meta,

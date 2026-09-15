@@ -327,24 +327,40 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
     );
   }
 
+  /// 账户类型选项（选择不同账户类型，不同类型显示不同字段：仅银行卡有开户行/卡号）
+  static const _typeOptions = ['现金', '微信', '支付宝', '银行卡', '转账', '其他'];
+
   Future<void> _add() async {
     final nameCtrl = TextEditingController();
     final bankCtrl = TextEditingController();
     final cardCtrl = TextEditingController();
+    var selType = '现金';
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('新增收款账户'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: '账户名称（现金/微信/支付宝/银行卡…）')),
-            const SizedBox(height: 10),
-            TextField(controller: bankCtrl, decoration: const InputDecoration(labelText: '开户行（银行卡填，可留空）')),
-            const SizedBox(height: 10),
-            TextField(controller: cardCtrl, keyboardType: TextInputType.number, maxLength: 4,
-                decoration: const InputDecoration(labelText: '卡号后四位（同类型多卡用于区分，可留空）', counterText: '')),
-          ],
+        content: StatefulBuilder(
+          builder: (ctx, setDlg) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: selType,
+                decoration: const InputDecoration(labelText: '账户类型'),
+                items: [for (final t in _typeOptions) DropdownMenuItem(value: t, child: Text(t))],
+                onChanged: (v) => setDlg(() => selType = v ?? selType),
+              ),
+              const SizedBox(height: 10),
+              TextField(controller: nameCtrl, autofocus: true,
+                  decoration: const InputDecoration(labelText: '账户名称（如 现金/微信/支付宝…）')),
+              if (selType == '银行卡') ...[
+                const SizedBox(height: 10),
+                TextField(controller: bankCtrl, decoration: const InputDecoration(labelText: '开户行（必填）')),
+                const SizedBox(height: 10),
+                TextField(controller: cardCtrl, keyboardType: TextInputType.number, maxLength: 4,
+                    decoration: const InputDecoration(labelText: '卡号后四位（可留空）', counterText: '')),
+              ],
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
@@ -362,6 +378,10 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
       toast(context, '该账户已存在');
       return;
     }
+    if (selType == '银行卡' && bankCtrl.text.trim().isEmpty) {
+      toast(context, '银行卡需填写开户行');
+      return;
+    }
     await _save([
       for (final a in _accounts) {'name': a.name, 'bank_name': a.bankName, 'card_last_four': a.cardLastFour},
       {'name': name, 'bank_name': bankCtrl.text.trim(), 'card_last_four': cardCtrl.text.trim()},
@@ -372,20 +392,32 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
     final nameCtrl = TextEditingController(text: row.name);
     final bankCtrl = TextEditingController(text: row.bankName);
     final cardCtrl = TextEditingController(text: row.cardLastFour);
+    var selType = _groupOf(row.name);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('编辑账户'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: '账户名称')),
-            const SizedBox(height: 10),
-            TextField(controller: bankCtrl, decoration: const InputDecoration(labelText: '开户行（银行卡填，可留空）')),
-            const SizedBox(height: 10),
-            TextField(controller: cardCtrl, keyboardType: TextInputType.number, maxLength: 4,
-                decoration: const InputDecoration(labelText: '卡号后四位（可留空）', counterText: '')),
-          ],
+        content: StatefulBuilder(
+          builder: (ctx, setDlg) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: selType,
+                decoration: const InputDecoration(labelText: '账户类型'),
+                items: [for (final t in _typeOptions) DropdownMenuItem(value: t, child: Text(t))],
+                onChanged: (v) => setDlg(() => selType = v ?? selType),
+              ),
+              const SizedBox(height: 10),
+              TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: '账户名称')),
+              if (selType == '银行卡') ...[
+                const SizedBox(height: 10),
+                TextField(controller: bankCtrl, decoration: const InputDecoration(labelText: '开户行')),
+                const SizedBox(height: 10),
+                TextField(controller: cardCtrl, keyboardType: TextInputType.number, maxLength: 4,
+                    decoration: const InputDecoration(labelText: '卡号后四位', counterText: '')),
+              ],
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),

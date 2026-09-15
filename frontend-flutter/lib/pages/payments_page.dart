@@ -24,7 +24,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
   Map<String, double> _clientDebt = {};
   String? _clientId;
   double _selDebt = 0; // 当前选中店铺的应收（欠款）
-  bool _waivedAuto = true; // 平账模式：true=自动（减免=应收-实收），false=手动输入减免
+  bool _waivedAuto = false; // 平账模式：false=手动（默认，不填减免=只记实收金额），true=自动（减免=应收-实收）
   final _amountCtrl = TextEditingController();
   final _waivedCtrl = TextEditingController(); // 平账减免（实收+减免=账面已收）
   final _dateCtrl = TextEditingController(text: _today());
@@ -335,6 +335,15 @@ class _PaymentsPageState extends State<PaymentsPage> {
     return iso.substring(0, 10);
   }
 
+  /// 收款记录所属店铺名：同步 payload 不含 client_name（本地镜像无此字段），用本地店铺镜像反查
+  String _clientNameOf(Map<String, dynamic> p) {
+    final direct = '${p['client_name'] ?? ''}'.trim();
+    if (direct.isNotEmpty) return direct;
+    final id = '${p['client_id'] ?? ''}';
+    if (id.isEmpty) return '';
+    return _clients.where((c) => '${c['id']}' == id).firstOrNull?['name'] as String? ?? '';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -456,7 +465,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                       child: ListTile(
                         dense: true,
                         leading: Icon(Icons.check_circle_outline, color: _c.success),
-                        title: Text('${p['client_name']}'),
+                        title: Text(_clientNameOf(p)),
                         subtitle: Text([
                           _date(p['happened_at']),
                           if (((p['waived'] as num?) ?? 0) > 0) '平账 ¥${p['waived']}',

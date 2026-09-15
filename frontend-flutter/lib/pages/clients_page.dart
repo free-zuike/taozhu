@@ -115,6 +115,25 @@ class _ClientsPageState extends State<ClientsPage> {
     }
     // 原生：列表页刷新只读本地库（同步只由「我的」页/进应用自动同步驱动）；搜索也搜本地镜像
     final local = await LocalDb.getAllByName('clients');
+    // 本地计算各店欠款（Σ出货 − Σ收款，与服务端口径一致）：同步 payload 不含 sales_total/paid_total，
+    // 列表行欠款若直接读这两个字段恒为 0
+    if (!kIsWeb) {
+      final s = <String, double>{};
+      final p = <String, double>{};
+      try {
+        for (final x in await LocalDb.getAll('sales')) {
+          final id = '${x['client_id']}';
+          s[id] = (s[id] ?? 0) + ((x['total'] as num?)?.toDouble() ?? 0);
+        }
+        for (final x in await LocalDb.getAll('payments')) {
+          final id = '${x['client_id']}';
+          p[id] = (p[id] ?? 0) + ((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0);
+        }
+      } catch (_) {}
+      _clientDebt = {
+        for (final id in {...s.keys, ...p.keys}) id: (s[id] ?? 0) - (p[id] ?? 0),
+      };
+    }
     if (mounted) {
       setState(() {
         _clients = searching ? local.where((x) => '${x['name'] ?? ''}'.contains(q)).toList() : local;
@@ -123,8 +142,13 @@ class _ClientsPageState extends State<ClientsPage> {
     }
   }
 
-  double _debt(Map<String, dynamic> c) =>
-      ((c['sales_total'] as num?)?.toDouble() ?? 0) - ((c['paid_total'] as num?)?.toDouble() ?? 0);
+  /// 各店欠款（原生本地计算 map；Web 直接用服务端字段）
+  Map<String, double> _clientDebt = {};
+
+  double _debt(Map<String, dynamic> c) {
+    final server = ((c['sales_total'] as num?)?.toDouble() ?? 0) - ((c['paid_total'] as num?)?.toDouble() ?? 0);
+    return _clientDebt['${c['id']}'] ?? server;
+  }
 
   /// 记账天数（今天 − 第一笔记账日期 + 1）
   int _bookDays(String firstDate) {

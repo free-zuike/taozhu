@@ -37,7 +37,25 @@ class _PaymentAccountDetailPageState extends State<PaymentAccountDetailPage> {
     if (mounted) _load();
   }
 
+  /// 本地店铺镜像：client_id → name（同步 payload 不带 client_name，原生本地反查）
+  final Map<String, String> _clientNames = {};
+
+  Future<void> _loadClients() async {
+    try {
+      for (final c in await LocalDb.getAllByName('clients')) {
+        _clientNames['${c['id']}'] = '${c['name'] ?? ''}';
+      }
+    } catch (_) {}
+  }
+
+  String _clientNameOf(Map<String, dynamic> p) {
+    final direct = '${p['client_name'] ?? ''}'.trim();
+    if (direct.isNotEmpty) return direct;
+    return _clientNames['${p['client_id'] ?? ''}'] ?? '';
+  }
+
   Future<void> _load() async {
+    await _loadClients();
     try {
       List<Map<String, dynamic>> rows;
       if (kIsWeb) {
@@ -150,7 +168,7 @@ class _PaymentAccountDetailPageState extends State<PaymentAccountDetailPage> {
                                 ),
                                 child: Icon(Icons.south_west, size: 16, color: c.success),
                               ),
-                              title: Text('${p['client_name'] ?? ''}',
+                              title: Text(_clientNameOf(p),
                                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                                   maxLines: 1, overflow: TextOverflow.ellipsis),
                               subtitle: Text(

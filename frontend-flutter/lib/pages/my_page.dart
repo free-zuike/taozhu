@@ -271,12 +271,11 @@ class _MyPageState extends State<MyPage> {
             1;
         if (days < 1) days = 1;
       }
-      // 当前店铺总笔数（选中店铺 sales+payments）
+      // 当前店铺本店交易笔数 = 出货笔数（交易是出货，收款只是出货的一部分——不含收款）
       final selId = await SyncService.selectedClientId();
       final curCount = (selId == null || selId.isEmpty)
           ? 0
-          : sales.where((s) => '${s['client_id']}' == selId).length +
-              pays.where((p) => '${p['client_id']}' == selId).length;
+          : sales.where((s) => '${s['client_id']}' == selId).length;
       // 店铺结余 = 当前店铺收款（含减免=平账） − 进货（全店通用）＝结账后的盈利
       final paidTotal = pays
           .where((p) => selId == null || '${p['client_id']}' == selId)
