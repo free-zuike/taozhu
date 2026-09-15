@@ -126,7 +126,7 @@ statsRouter.get('/monthly', async (c) => {
   });
 });
 
-// GET /stats/monthly-flow?year=2026 — 按月流式结余（类似 beecount 首页卡片）：
+// GET /stats/monthly-flow?year=2026 — 按月流式结余（类似参考首页卡片）：
 // 支出 = 当月全部进货额，收入 = 当月全部出货额，结余 = 出货 − 进货。
 // 进货不分店铺（全局），故本口径为全店汇总；供「月度结余」页流式展示。
 statsRouter.get('/monthly-flow', async (c) => {

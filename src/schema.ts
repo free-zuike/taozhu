@@ -213,7 +213,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS sync_changes'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
     }
-    // v0.17.84.0：附件引用表 attachment_refs（beecount 式：文件被哪些实体引用 → 孤儿=零引用）
+    // v0.17.84.0：附件引用表 attachment_refs（引用驱动：文件被哪些实体引用 → 孤儿=零引用）
     const aRefTable = await db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attachment_refs'",
     ).first<{ name: string }>();

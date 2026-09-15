@@ -7,7 +7,7 @@ import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
 
-/// 收款账户页（参考 beecount 账户页）：顶部总览卡（账户数/常用账户）+ 账户列表。
+/// 收款账户页（参考账户页形态）：顶部总览卡（账户数/常用账户）+ 账户列表。
 /// 每个账户带类型图标与说明，点击编辑、长按/按钮删除、底部新增。数据服务端同步实体。
 class PaymentAccountsPage extends StatefulWidget {
   const PaymentAccountsPage({super.key});
@@ -88,7 +88,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
     return (Icons.account_balance_wallet_outlined, const Color(0xFF409EFF));
   }
 
-  /// 账户用途说明（参考 beecount：每账户一行说明）
+  /// 账户用途说明（每账户一行说明）
   String _hintOf(String name) {
     final n = name.trim();
     if (n.contains('现金')) return '线下现金收款';
@@ -203,7 +203,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                 children: [
-                  // 总览卡：账户数 + 提示（参考 beecount 顶部汇总）
+                  // 总览卡：账户数 + 提示（顶部汇总）
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -238,7 +238,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  // 账户列表（beecount 式：图标 + 名称 + 说明）
+                  // 账户列表（图标 + 名称 + 说明）
                   Container(
                     decoration: BoxDecoration(
                       color: c.card,

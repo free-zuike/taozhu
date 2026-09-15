@@ -242,7 +242,7 @@ class _CleanupPageState extends State<CleanupPage> {
             addUse('payment', '${(p as Map)['id'] ?? ''}');
           }
         } catch (_) {}
-        // ③ 服务器在用附件（beecount 同款的"引用"判定：交易引用的附件文件 = 在用）：
+        // ③ 服务器在用附件（引用判定：交易引用的附件文件 = 在用）：
         // /attachments/in-use 返回规范化三元组 {entity,id,file}（后端 attachment_refs 引用表为权威
         // + R2 扫描兜底历史存量）。主扫描按"目录 entity/id"与"文件级三元组"双重比对——
         // 交易引用过的附件副本绝不出现在可清理列表。这里直接用三元组构建 entity→id 集合

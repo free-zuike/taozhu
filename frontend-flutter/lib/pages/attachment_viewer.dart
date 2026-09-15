@@ -164,17 +164,27 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         return;
       }
     }
-    toast(context, '上传中…');
+    toast(context, kIsWeb ? '上传中…' : '添加中…');
     try {
-      await Api.instance.uploadPhoto(
-        '/attachments?entity=${widget.entity}&id=${widget.id}',
-        bytes,
-        'photo.jpg',
-      );
-      if (dir != null) {
-        await File('${dir.path}/$h.jpg').writeAsBytes(bytes);
+      if (kIsWeb) {
+        // Web 无本地副本/同步队列：直传云端（Web 固有形态）
+        await Api.instance.uploadPhoto(
+          '/attachments?entity=${widget.entity}&id=${widget.id}',
+          bytes,
+          'photo.jpg',
+        );
+        toast(context, '已添加附件');
+      } else {
+        // 本地优先：先落本地副本 + 登记待上传——附件上传是同步流程一部分，
+        // 页面不直连云端；联网后由「同步状态」同步动作统一上传（失败自动重试）
+        if (dir != null) {
+          await File('${dir.path}/$h.jpg').writeAsBytes(bytes);
+        }
+        await SyncService.enqueueAttachmentUpload(
+          entity: widget.entity, id: widget.id, fileName: '$h.jpg',
+        );
+        toast(context, '已添加附件（联网后自动上传）');
       }
-      toast(context, '已添加附件');
       await _load();
       if (mounted && _items.isNotEmpty) {
         _index = _items.length - 1;
@@ -206,8 +216,8 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       ),
     );
     if (ok != true) return;
-    // 附件删除走变更流（beecount 式：本地删副本 → enqueueChange attachment 删除 → push → 云端删引用+GC → 其他端 pull 同步删副本）：
-    // 不再 App 直连删云端。Web 无本地副本，删云端走同一条变更（入本地队列后 push）。
+    // 附件删除走变更流（引用变更流驱动：本地删副本 → enqueueChange attachment 删除 → push → 云端删引用+GC → 其他端 pull 同步删副本）：
+    // Web 无本地库/同步队列 → 直连云端删除（Web 固有形态，enqueueChange 在 kIsWeb 是 no-op 会导致删不掉）。
     var localDeleted = false;
     final lp = it.localPath;
     if (lp != null) {
@@ -224,20 +234,32 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     if (!cloudKey.startsWith('taozhu/')) {
       cloudKey = 'taozhu/images/attachments/${widget.entity}/${widget.id}/${cloudKey}';
     }
-    try {
-      await SyncService.enqueueChange(
-        entityType: 'attachment',
-        entitySyncId: cloudKey,
-        action: 'delete',
-        payload: {'file_key': cloudKey},
-      );
-    } catch (_) {
-      // 入队失败（本地只读等）：Web 直连兜底删除云端；其余交由同步流程重试
+    if (kIsWeb) {
       try {
         await Api.instance.delete('/attachments?key=$cloudKey');
-      } catch (_) {}
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+        return;
+      }
+    } else {
+      try {
+        await SyncService.enqueueChange(
+          entityType: 'attachment',
+          entitySyncId: cloudKey,
+          action: 'delete',
+          // entity/id 随变更下发：其他端 pull 时优先用三元组定位本地副本，兼容历史 key 前缀
+          payload: {'file_key': cloudKey, 'entity': widget.entity, 'id': widget.id},
+        );
+      } catch (_) {
+        // 入队失败（本地只读等）：直连兜底删除云端；其余交由同步流程重试
+        try {
+          await Api.instance.delete('/attachments?key=$cloudKey');
+        } catch (_) {}
+      }
     }
-    toast(context, localDeleted ? '已删除（稍后同步删除云端）' : '已删除（本地无副本）');
+    toast(context, kIsWeb
+        ? '已删除'
+        : (localDeleted ? '已删除（稍后同步删除云端）' : '已删除（本地无副本）'));
     final prev = _index;
     await _load();
     if (mounted && _items.isNotEmpty) {

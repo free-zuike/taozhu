@@ -8,6 +8,7 @@ import { stockDelta } from './stock';
 import { randomId } from './password';
 import { notifyClients } from '../services/sync-hub';
 import { createStorage } from '../services/storage';
+import { parseAttachmentKey } from './image-key';
 import type { Env } from '../types';
 
 export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'sale', 'purchase', 'payment', 'attachment'] as const;
@@ -98,7 +99,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       const detail = await db.prepare(
         `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`,
       ).bind(id).all();
-      // beecount 式附件引用：该实体（单据+明细行）引用的全部附件 key，随实体 payload 同步
+      // 引用驱动附件引用：该实体（单据+明细行）引用的全部附件 key，随实体 payload 同步
       const refs = await db.prepare(
         "SELECT entity, entity_id, file_key FROM attachment_refs WHERE (entity = 'sale' AND entity_id = ?) OR (entity = 'sale_item' AND entity_id IN (SELECT id FROM sale_items WHERE sale_id = ?))",
       ).bind(id, id).all<{ entity: string; entity_id: string; file_key: string }>();
@@ -211,10 +212,11 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
   await db.batch(batch);
 }
 
-/** 单据级实体 upsert 后：附件引用差集对齐（beecount 式——payload.attachments 为期望引用全集）：
+/** 单据级实体 upsert 后：附件引用差集对齐（引用差集驱动——payload.attachments 为期望引用全集）：
  *  将 attachment_refs 中属于该单据（含明细行）但不在 payload.attachments 的引用删除；
  *  删除后若某 file_key 无任何引用（其他单据也不再用）→ 物理删除 R2 文件（GC）。
- *  新增引用在 POST /attachments 上传时已写入 refs，此处只做"删除侧"收敛。 */
+ *  新增引用在 POST /attachments 上传时已写入 refs，此处只做"删除侧"收敛。
+ *  删除按引用行主键（entity:entity_id:file_key）精确删本实体范围——共用文件的其他实体引用不受影响。 */
 async function syncAttachRefsAfterUpsert(
   env: Env,
   entityType: 'sale' | 'purchase' | 'payment',
@@ -222,34 +224,35 @@ async function syncAttachRefsAfterUpsert(
   wantKeys: Set<string>,
 ): Promise<void> {
   const db = env.DB;
-  let refs: Array<{ file_key: string }>;
+  let refs: Array<{ id: string; file_key: string }>;
   if (entityType === 'sale') {
     refs = (await db.prepare(
-      `SELECT r.file_key FROM attachment_refs r
+      `SELECT r.id, r.file_key FROM attachment_refs r
        WHERE (r.entity = 'sale' AND r.entity_id = ?)
           OR (r.entity = 'sale_item' AND r.entity_id IN (SELECT id FROM sale_items WHERE sale_id = ?))`,
-    ).bind(id, id).all<{ file_key: string }>()).results;
+    ).bind(id, id).all<{ id: string; file_key: string }>()).results;
   } else if (entityType === 'purchase') {
     refs = (await db.prepare(
-      `SELECT r.file_key FROM attachment_refs r
+      `SELECT r.id, r.file_key FROM attachment_refs r
        WHERE (r.entity = 'purchase' AND r.entity_id = ?)
           OR (r.entity = 'purchase_item' AND r.entity_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?))`,
-    ).bind(id, id).all<{ file_key: string }>()).results;
+    ).bind(id, id).all<{ id: string; file_key: string }>()).results;
   } else {
     refs = (await db.prepare(
-      "SELECT file_key FROM attachment_refs WHERE entity = 'payment' AND entity_id = ?",
-    ).bind(id).all<{ file_key: string }>()).results;
+      "SELECT id, file_key FROM attachment_refs WHERE entity = 'payment' AND entity_id = ?",
+    ).bind(id).all<{ id: string; file_key: string }>()).results;
   }
   if (refs.length === 0) return;
-  const remove = refs.filter((r) => !wantKeys.has(r.file_key)).map((r) => r.file_key);
+  const remove = refs.filter((r) => !wantKeys.has(r.file_key));
   if (remove.length === 0) return;
   const store = createStorage(env);
-  for (const key of remove) {
-    // 全局引用计数：其他实体是否仍引用该文件
-    const cnt = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(key).first<{ n: number }>();
-    await db.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run();
-    if ((cnt?.n ?? 0) <= 1) {
-      try { await store.delete(key); } catch (_) {}
+  for (const r of remove) {
+    // 只删本实体引用行（主键精确删），共用文件的其他实体引用保留
+    await db.prepare('DELETE FROM attachment_refs WHERE id = ?').bind(r.id).run();
+    // 删除后该文件是否零引用 → 才物理删 R2（删除以引用差集驱动）
+    const cnt = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(r.file_key).first<{ n: number }>();
+    if ((cnt?.n ?? 0) === 0) {
+      try { await store.delete(r.file_key); } catch (_) {}
     }
   }
 }
@@ -326,7 +329,7 @@ export async function applyChange(
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, it.quantity));
           bt.push(db.prepare('DELETE FROM sales WHERE id = ?').bind(id));
           await db.batch(bt);
-          // 删除单据：级联清附件引用 + 无引用文件 GC（对齐 beecount 实体删除语义）
+          // 删除单据：级联清附件引用 + 无引用文件 GC（实体删除级联引用语义）
           await db.prepare(
             "DELETE FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
           ).bind(id).run();
@@ -335,8 +338,11 @@ export async function applyChange(
           ).bind(id).run();
         } else {
           await applySaleUpsert(db, id, p);
-          // 附件引用差集：payload.attachments 为期望全集，收敛被移除的引用与无引用文件（beecount 删除=实体变更驱动）
-          await syncAttachRefsAfterUpsert(env, 'sale', id, new Set((p.attachments as string[] ?? [])));
+          // 附件引用差集：仅当 payload 显式提供 attachments 数组才收敛（payload 为期望全集）。
+          // 未提供（历史客户端/页面保存快照不含附件字段）→ 跳过收敛，保留现有引用（防误删已挂图单据）
+          if (Array.isArray(p.attachments)) {
+            await syncAttachRefsAfterUpsert(env, 'sale', id, new Set((p.attachments as string[]).map(String)));
+          }
         }
         break;
       case 'purchase':
@@ -354,7 +360,9 @@ export async function applyChange(
           ).bind(id).run();
         } else {
           await applyPurchaseUpsert(db, id, p);
-          await syncAttachRefsAfterUpsert(env, 'purchase', id, new Set((p.attachments as string[] ?? [])));
+          if (Array.isArray(p.attachments)) {
+            await syncAttachRefsAfterUpsert(env, 'purchase', id, new Set((p.attachments as string[]).map(String)));
+          }
         }
         break;
       case 'payment':
@@ -370,20 +378,36 @@ export async function applyChange(
                amount = excluded.amount, waived = excluded.waived, method = excluded.method, note = excluded.note`,
           ).bind(id, p.client_id ?? '', p.happened_at ?? '', Number(p.amount) || 0, Number(p.waived) || 0,
             p.method ?? '', p.note ?? '').run();
-          await syncAttachRefsAfterUpsert(env, 'payment', id, new Set((p.attachments as string[] ?? [])));
+          if (Array.isArray(p.attachments)) {
+            await syncAttachRefsAfterUpsert(env, 'payment', id, new Set((p.attachments as string[]).map(String)));
+          }
         }
         break;
       case 'attachment':
-        // 附件删除变更：客户端已删本地副本 → 推送 → 云端删 attachment_refs 引用，
-        // 无其他引用则物理删除 R2 文件（beecount 同款：删除以引用差集驱动，不直连删云端）
+        // 附件删除变更：客户端已删本地副本 → 推送 → 云端删该实体的 attachment_refs 引用，
+        // 该文件无其他实体引用（共用图保护）才物理删除 R2（删除以引用差集驱动，不直连删云端）
         if (action !== 'delete') break;
         {
           const key = String(p?.file_key ?? p?.key ?? '').trim();
           if (!key) return { ok: false, error: 'attachment 删除需 file_key' };
+          // 实体级引用删除：payload 优先带 entity/entity_id（新客户端），否则从 key 解析（兼容历史）
+          let entity = String(p?.entity ?? '').trim();
+          let entityId = String(p?.entity_id ?? '').trim();
+          if (!entity || !entityId) {
+            const parsed = parseAttachmentKey(key);
+            if (parsed) { entity = parsed.entity; entityId = parsed.id; }
+          }
+          if (entity && entityId) {
+            await db.prepare(
+              'DELETE FROM attachment_refs WHERE file_key = ? AND entity = ? AND entity_id = ?',
+            ).bind(key, entity, entityId).run();
+          } else {
+            // 解析不出实体（脏 key）→ 兜底删全部该 key 引用（历史行为）
+            await db.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run();
+          }
+          // 删除后该文件仍被其他实体引用（共用图）→ 不删 R2；零引用才物理删
           const cnt = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(key).first<{ n: number }>();
-          await db.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run();
-          // 该文件仍被其他实体引用（共用图）→ 不删 R2；零引用才物理删
-          if ((cnt?.n ?? 0) <= 1) {
+          if ((cnt?.n ?? 0) === 0) {
             try { await createStorage(env).delete(key); } catch (_) {}
           }
         }

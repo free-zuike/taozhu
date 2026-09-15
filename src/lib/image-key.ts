@@ -21,8 +21,21 @@ export function attachmentPrefixesOf(entity: string, id: string): string[] {
   ];
 }
 
+/** 附件 key → {entity, id}（三前缀兼容：当前规范 taozhu/images/attachments/、
+ *  历史 taozhu/attachments/、根级裸前缀 {entity}/{id}/{file}）。解析不出返回 null。
+ *  引用驱动：实体级引用删除/孤儿判定共用同一解析，避免各处正则不一致 */
+export function parseAttachmentKey(key: string): { entity: string; id: string } | null {
+  let m = /^taozhu\/images\/attachments\/([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
+  if (m) return { entity: m[1], id: m[2] };
+  m = /^(?:taozhu\/attachments\/)?([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
+  if (m && ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'].includes(m[1])) {
+    return { entity: m[1], id: m[2] };
+  }
+  return null;
+}
+
 /** 删除某交易的全部附件对象（分页列 + 逐个删；删除交易后调用，避免 R2 残留孤儿文件）。
- *  同时删除 attachment_refs 引用行（beecount 式：实体删除 → 引用删除 → 文件由孤儿清理兜底） */
+ *  同时删除 attachment_refs 引用行（实体删除 → 引用删除 → 文件由孤儿清理兜底） */
 export async function deleteEntityAttachments(env: Env, entity: string, id: string): Promise<void> {
   const store: AttachmentStorage = createStorage(env);
   for (const prefix of attachmentPrefixesOf(entity, id)) {

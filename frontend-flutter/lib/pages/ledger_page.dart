@@ -45,13 +45,13 @@ class _LedgerPageState extends State<LedgerPage> {
   Map<String, int> _payAttachCount = {};
   /// 商品 id → 分类名（出货明细行第二行显示分类，替代无实际数据的交易时间）
   Map<String, String> _itemCategory = {};
-  /// 月度结余（beecount 式四列卡）
+  /// 月度结余（四列式卡片）
   double _mIncome = 0; // 收入 = 收款（实收，未收为 0）
   double _mExpense = 0; // 支出 = 进货（全店通用）
   double _mSold = 0; // 售出 = 出货（当前店铺）
   double _mBalance = 0; // 结余 = 收入 − 支出 = 收款 − 进货（收款后的盈利）
   bool _mLoaded = false; // 月度结余是否已加载（未加载显示占位符，不闪 0）
-  int _selYear = DateTime.now().year; // 月度结余所选年份（beecount 式头部月份切换）
+  int _selYear = DateTime.now().year; // 月度结余所选年份（头部月份切换）
   int _selMonth = DateTime.now().month; // 所选月份
 
   @override
@@ -125,7 +125,7 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
-  /// 切换月份（±1 月）：月度结余 + 流水列表联动（beecount 式：选几月显示几月）
+  /// 切换月份（±1 月）：月度结余 + 流水列表联动（选几月显示几月）
   void _shiftMonth(int delta) {
     final y = _selYear;
     final m = _selMonth + delta;
@@ -142,7 +142,7 @@ class _LedgerPageState extends State<LedgerPage> {
     _loadMonthly();
   }
 
-  /// 月份选择弹层（beecount 式：点标题切换年月）
+  /// 月份选择弹层（点标题切换年月）
   Future<void> _pickMonth() async {
     final now = DateTime.now();
     final picked = await showDatePicker(
@@ -165,7 +165,7 @@ class _LedgerPageState extends State<LedgerPage> {
   static String _fmtDate(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  /// 时间范围 → (起始, 结束)：跟随顶部月份选择器（beecount 式：选几月显示几月），
+  /// 时间范围 → (起始, 结束)：跟随顶部月份选择器（选几月显示几月），
   /// 列表/查询与该月联动；不再有"当月/全部"筛选。
   (String, String)? _rangeDates() {
     return (_fmtDate(DateTime(_selYear, _selMonth, 1)),
@@ -424,7 +424,7 @@ class _LedgerPageState extends State<LedgerPage> {
     }).toList();
   }
 
-  /// 月度结余卡（beecount 式四列 + 月份切换）：
+  /// 月度结余卡（四列 + 月份切换）：
   /// 支出=进货（全店）/ 售出=出货（当前店铺）/ 收入=收款（实收，未收为 0）/ 结余=收入−支出（收款后的盈利）。
   /// 头部月份可直接切换（← 年月 →）；网络值优先，本地兜底按所选月份+当前店铺算售出/收款。
   Widget _monthlyCard(TaozhuColors c) {
@@ -486,7 +486,7 @@ class _LedgerPageState extends State<LedgerPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 头部：月份切换（beecount 式）——左右箭头切月，点年月弹选择器
+          // 头部：月份切换——左右箭头切月，点年月弹选择器
           Row(
             children: [
               IconButton(
@@ -979,14 +979,14 @@ class _LedgerPageState extends State<LedgerPage> {
                         ),
                       ),
                     ),
-                  // 月度结余卡（beecount 式三列：支出=进货/收入=出货/结余=出货−进货）：
+                  // 月度结余卡（三列：支出=进货/收入=出货/结余=出货−进货）：
                   // 点击进入全部月份流式页；店员无统计权限不显示
                   if (!_isStaff) ...[
                     const SizedBox(height: 8),
                     _monthlyCard(c),
                   ],
                   const SizedBox(height: 8),
-                  // 列表跟随顶部月份选择器（beecount 式：选几月显示几月），无独立时间筛选
+                  // 列表跟随顶部月份选择器（选几月显示几月），无独立时间筛选
                   if (_isStaff)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),

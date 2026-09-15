@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
-import { imageKey, LEGACY_IMAGE_PREFIXES } from '../lib/image-key';
+import { imageKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from '../lib/image-key';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -58,7 +58,7 @@ attachmentsRouter.post('/', async (c) => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const key = imageKey('attachments', [entity, id], bytes);
   await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
-  // 附件引用表（beecount 式）：记录"哪个实体引用了哪个文件"。幂等：同 entity+entity_id+key 已存在则跳过，
+  // 附件引用表（引用驱动）：记录"哪个实体引用了哪个文件"。幂等：同 entity+entity_id+key 已存在则跳过，
   // 不同实体引用同一内容（同 md5 不同 key）各自一行——多单共用不互相影响
   await c.env.DB.prepare(
     'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
@@ -126,7 +126,7 @@ attachmentsRouter.get('/total', async (c) => {
 });
 
 // GET /attachments/in-use — 列出云端"在用"附件（与 orphans 对称）：
-// ① attachment_refs 引用表（beecount 式权威：上传即写引用行，实体删除即级联清引用，有引用行=在用）
+// ① attachment_refs 引用表（引用表权威：上传即写引用行，实体删除即级联清引用，有引用行=在用）
 // ② 兼容历史：R2 中尚未写引用行但仍有对应单据的 key（v0.17.84 之前上传的存量附件）
 // 返回规范化三元组 {key, entity, id, file} —— 前端同步下载/清理页在用判定直接用三元组，
 // 不再各自用正则解析 key（此前前后端正则不一致：历史根级前缀 sale/s1/a.jpg 前端匹配失败，
@@ -166,22 +166,13 @@ attachmentsRouter.get('/in-use', async (c) => {
   purchases.results.forEach((r) => add('purchase', r.id));
   purchaseItems.results.forEach((r) => add('purchase_item', r.id));
   payments.results.forEach((r) => add('payment', r.id));
-  const parseKey = (key: string): { entity: string; id: string } | null => {
-    let m = /^taozhu\/images\/attachments\/([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
-    if (m) return { entity: m[1], id: m[2] };
-    m = /^(?:taozhu\/attachments\/)?([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
-    if (m && ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'].includes(m[1])) {
-      return { entity: m[1], id: m[2] };
-    }
-    return null;
-  };
   for (const prefix of ['taozhu/images/attachments/', 'taozhu/attachments/', '']) {
     let cursor: string | undefined;
     do {
       const r = await store.list(prefix, cursor);
       for (const o of r.objects) {
         if (seen.has(o.key)) continue; // 引用表已列
-        const parsed = parseKey(o.key);
+        const parsed = parseAttachmentKey(o.key);
         if (!parsed) continue;
         if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) {
           seen.add(o.key);
@@ -203,7 +194,7 @@ attachmentsRouter.get('/in-use', async (c) => {
   });
 });
 
-// GET /attachments/orphans — 扫描云端孤儿附件（参考 beecount-cloud 原版 B1/B3）：
+// GET /attachments/orphans — 扫描云端孤儿附件（参考原版实现 B1/B3）：
 // R2 中所有附件 key 对照 D1 在用的单据/明细行 id —— 无对应单据的 = 孤儿（单据已删但 R2 残留）。
 // 返回孤儿列表（key/entity/id/size），供清理页展示与删除；只读扫描不改数据。
 attachmentsRouter.get('/orphans', async (c) => {
@@ -229,25 +220,13 @@ attachmentsRouter.get('/orphans', async (c) => {
   purchases.results.forEach((r) => add('purchase', r.id));
   purchaseItems.results.forEach((r) => add('purchase_item', r.id));
   payments.results.forEach((r) => add('payment', r.id));
-  // 解析 R2 key → (entity, id)；支持 当前规范 + 历史前缀
-  const parseKey = (key: string): { entity: string; id: string } | null => {
-    // 规范: taozhu/images/attachments/{entity}/{id}/{md5}.jpg
-    let m = /^taozhu\/images\/attachments\/([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
-    if (m) return { entity: m[1], id: m[2] };
-    // 历史: taozhu/attachments/{entity}/{id}/{md5}.jpg 或 {entity}/{id}/{md5}.jpg
-    m = /^(?:taozhu\/attachments\/)?([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
-    if (m && ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'].includes(m[1])) {
-      return { entity: m[1], id: m[2] };
-    }
-    return null;
-  };
   const orphans: Array<{ key: string; entity: string; id: string; size: number }> = [];
   for (const prefix of ['taozhu/images/attachments/', 'taozhu/attachments/', '']) {
     let cursor: string | undefined;
     do {
       const r = await store.list(prefix, cursor);
       for (const o of r.objects) {
-        const parsed = parseKey(o.key);
+        const parsed = parseAttachmentKey(o.key);
         if (!parsed) continue;
         if (!(inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) {
           orphans.push({ key: o.key, entity: parsed.entity, id: parsed.id, size: o.size });
@@ -264,7 +243,7 @@ attachmentsRouter.get('/orphans', async (c) => {
 });
 
 // DELETE /attachments/orphans — 批量删除云端孤儿附件（body: { keys: string[] }）
-// 参考 beecount-cloud 原版 cleaner：删无引用的附件文件（孤儿）。best-effort 逐个删。
+// 参考原版 cleaner：删无引用的附件文件（孤儿）。best-effort 逐个删。
 attachmentsRouter.delete('/orphans', adminOnly(), async (c) => {
   const body = await c.req.json().catch(() => null) as { keys?: string[] } | null;
   const keys = (body?.keys ?? []).filter((k) => typeof k === 'string' && k);
@@ -291,18 +270,9 @@ attachmentsRouter.delete('/orphans', adminOnly(), async (c) => {
   purchases.results.forEach((r) => add('purchase', r.id));
   purchaseItems.results.forEach((r) => add('purchase_item', r.id));
   payments.results.forEach((r) => add('payment', r.id));
-  const parseKey = (key: string): { entity: string; id: string } | null => {
-    let m = /^taozhu\/images\/attachments\/([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
-    if (m) return { entity: m[1], id: m[2] };
-    m = /^(?:taozhu\/attachments\/)?([a-z_]+)\/([^/]+)\/[^/]+$/.exec(key);
-    if (m && ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'].includes(m[1])) {
-      return { entity: m[1], id: m[2] };
-    }
-    return null;
-  };
   let deleted = 0;
   for (const key of keys) {
-    const parsed = parseKey(key);
+    const parsed = parseAttachmentKey(key);
     if (!parsed) continue;
     if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) continue; // 在用防误删
     try {
@@ -326,14 +296,26 @@ attachmentsRouter.get('/:key{.+}', async (c) => {
   return new Response(obj.body, { headers });
 });
 
-// DELETE /attachments?key= — 删除附件（文件 + 引用行一起删）
+// DELETE /attachments?key= — 删除附件（Web/直连路径：删该实体的引用行；共用文件被其他实体引用则保留 R2）
 attachmentsRouter.delete('/', async (c) => {
   const key = c.req.query('key');
   if (!key) return c.json({ error: 'key 必填' }, 400);
-  await createStorage(c.env).delete(key);
-  try {
-    await c.env.DB.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run();
-  } catch (_) {}
+  const store = createStorage(c.env);
+  const db = c.env.DB;
+  // 实体级引用删除：只删该 key 对应实体的引用行（共用图不误删其他实体引用）
+  const parsed = parseAttachmentKey(key);
+  if (parsed) {
+    await db.prepare(
+      'DELETE FROM attachment_refs WHERE file_key = ? AND entity = ? AND entity_id = ?',
+    ).bind(key, parsed.entity, parsed.id).run();
+  } else {
+    try { await db.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run(); } catch (_) {}
+  }
+  // 该文件仍被其他实体引用（共用图）→ 保留 R2；零引用才物理删
+  const cnt = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(key).first<{ n: number }>();
+  if ((cnt?.n ?? 0) === 0) {
+    await store.delete(key);
+  }
   await notifyClients();
   return c.body(null, 204);
 });

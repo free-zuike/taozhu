@@ -314,7 +314,7 @@ describe('交易附件（R2）', () => {
   });
 });
 
-describe('附件删除走同步变更流（beecount 式：本地删 → push → 云端删引用+GC → 其他端 pull 同步删）', () => {
+describe('附件删除走同步变更流（引用变更流驱动：本地删 → push → 云端删引用+GC → 其他端 pull 同步删）', () => {
   let env: Env;
   let token: string;
 
@@ -375,7 +375,7 @@ describe('附件删除走同步变更流（beecount 式：本地删 → push →
     expect(inUse.attachments.some((a) => a.key === up2.key)).toBe(true);
   });
 
-  it('一图多单共用：删除一个实体的引用，文件仍被其他实体引用 → R2 不删', async () => {
+  it('一图多单共用：删除一个实体的引用，文件与其他实体的引用行都保留', async () => {
     // 建两个单据，同一内容（同 md5）各传一次（不同 entity_id → 两个 key）
     await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
     const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
@@ -392,7 +392,7 @@ describe('附件删除走同步变更流（beecount 式：本地删 → push →
     const saleId = ((await sale.json()) as { id: string }).id;
     const upA = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
 
-    // 删除该引用：文件被其他引用保护（这里造一个残留引用模拟共用场景）
+    // 另一实体也引用同一文件（共用图场景）
     await (env.DB as FakeD1).prepare(
       "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', 'other-sale', ?, 'deadbeef')",
     ).bind('ref-other', upA.key).run();
@@ -404,8 +404,126 @@ describe('附件删除走同步变更流（beecount 式：本地删 → push →
       }],
     });
     expect(((await delPush.json()) as { accepted: number }).accepted).toBe(1);
-    // 仍有其他引用 → 文件保留
+    // 文件保留，且其他实体的引用行也保留（实体级删除，不伤共用引用）
     expect(await env.BUCKET.get(upA.key)).not.toBeNull();
+    const refs = await (env.DB as FakeD1).prepare('SELECT id, entity, entity_id FROM attachment_refs').all<{ id: string; entity: string; entity_id: string }>();
+    expect(refs.results).toHaveLength(1);
+    expect(refs.results[0].id).toBe('ref-other');
+  });
+
+  it('attachment delete 带 entity/id：只删该实体引用，共用文件与其他实体引用保留', async () => {
+    // 同一文件被两个实体引用（共用图），从一端删除（payload 带 entity/id，新客户端）
+    await (env.DB as FakeD1).prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', 's-a', 'taozhu/images/attachments/sale/s-a/f.jpg', 'm1')",
+    ).bind('r1').run();
+    await (env.DB as FakeD1).prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', 's-b', 'taozhu/images/attachments/sale/s-a/f.jpg', 'm1')",
+    ).bind('r2').run();
+    await env.BUCKET.put('taozhu/images/attachments/sale/s-a/f.jpg', new Uint8Array([1]));
+    const delPush = await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'dev-d',
+      changes: [{
+        entity_type: 'attachment', entity_sync_id: 'taozhu/images/attachments/sale/s-a/f.jpg', action: 'delete',
+        updated_at: new Date().toISOString(),
+        payload: { file_key: 'taozhu/images/attachments/sale/s-a/f.jpg', entity: 'sale', id: 's-a' },
+      }],
+    });
+    expect(((await delPush.json()) as { accepted: number }).accepted).toBe(1);
+    // 只删了 s-a 的引用；s-b 引用行与 R2 文件都保留
+    const refs = await (env.DB as FakeD1).prepare('SELECT id FROM attachment_refs').all<{ id: string }>();
+    expect(refs.results.map((r) => r.id)).toEqual(['r2']);
+    expect(await env.BUCKET.get('taozhu/images/attachments/sale/s-a/f.jpg')).not.toBeNull();
+  });
+
+  it('DELETE /attachments?key= 共用图：只删本实体引用行，文件与其他实体引用保留', async () => {
+    await (env.DB as FakeD1).prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', 's-a', 'taozhu/images/attachments/sale/s-a/f.jpg', 'm1')",
+    ).bind('ra').run();
+    await (env.DB as FakeD1).prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', 's-b', 'taozhu/images/attachments/sale/s-a/f.jpg', 'm1')",
+    ).bind('rb').run();
+    await env.BUCKET.put('taozhu/images/attachments/sale/s-a/f.jpg', new Uint8Array([1]));
+    const del = await call(env, 'DELETE', '/api/v1/attachments?key=taozhu/images/attachments/sale/s-a/f.jpg', token);
+    expect(del.status).toBe(204);
+    const refs = await (env.DB as FakeD1).prepare('SELECT id FROM attachment_refs').all<{ id: string }>();
+    expect(refs.results.map((r) => r.id)).toEqual(['rb']);
+    expect(await env.BUCKET.get('taozhu/images/attachments/sale/s-a/f.jpg')).not.toBeNull();
+  });
+
+  it('单据 upsert 不带 attachments 字段 → 现有附件引用保留（不收敛不误删）', async () => {
+    // 建单据 + 上传附件（引用行在）
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-08',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+    // push 单据 upsert（payload 无 attachments 字段——历史/页面保存快照形态）
+    const ts = new Date().toISOString();
+    const push = await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'dev-e',
+      changes: [{
+        entity_type: 'sale', entity_sync_id: saleId, action: 'upsert',
+        updated_at: ts,
+        payload: { id: saleId, client_id: clients.clients[0].id, happened_at: '2026-01-08', note: '', items: [] },
+      }],
+    });
+    expect(((await push.json()) as { accepted: number }).accepted).toBe(1);
+    // 引用保留、文件保留、in-use 仍列出（附件不被误删）
+    const refs = await (env.DB as FakeD1).prepare("SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?").bind(saleId).first<{ n: number }>();
+    expect(refs?.n ?? 0).toBe(1);
+    expect(await env.BUCKET.get(up.key)).not.toBeNull();
+  });
+
+  it('单据 upsert 带 attachments 差集 → 只删本单据移出的引用；共用文件被其他实体引用则保留', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-09',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    // 挂两张附件（不同内容 → 不同 key）
+    const up1 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+    const fd2 = new FormData();
+    fd2.append('photo', new File([new Uint8Array([0xff, 0xd8, 0xff, 0x02])], 'photo2.jpg', { type: 'image/jpeg' }));
+    const up2 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, fd2, true)).json()) as { key: string };
+    // 共用场景：up1 也被另一实体引用（保护文件）
+    await (env.DB as FakeD1).prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', 'shared-x', ?, 'm2')",
+    ).bind('ref-shared', up1.key).run();
+    // push 单据 upsert：attachments 只保留 up2（up1 被移出）→ 只删本单据 up1 引用；文件因共用保留
+    const ts = new Date().toISOString();
+    const push = await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'dev-f',
+      changes: [{
+        entity_type: 'sale', entity_sync_id: saleId, action: 'upsert',
+        updated_at: ts,
+        payload: { id: saleId, client_id: clients.clients[0].id, happened_at: '2026-01-09', note: '', items: [], attachments: [up2.key] },
+      }],
+    });
+    expect(((await push.json()) as { accepted: number }).accepted).toBe(1);
+    // 本单据只剩 up2 引用；共用引用 ref-shared 保留；up1 文件保留
+    const refs = await (env.DB as FakeD1).prepare("SELECT id, file_key FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?").bind(saleId).all<{ id: string; file_key: string }>();
+    expect(refs.results.map((r) => r.file_key)).toEqual([up2.key]);
+    const shared = await (env.DB as FakeD1).prepare("SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?").bind(up1.key).first<{ n: number }>();
+    expect(shared?.n ?? 0).toBe(1); // 只剩 shared-x 的引用
+    expect(await env.BUCKET.get(up1.key)).not.toBeNull();
+    expect(await env.BUCKET.get(up2.key)).not.toBeNull();
   });
 });
 

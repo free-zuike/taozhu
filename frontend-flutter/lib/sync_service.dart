@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
@@ -12,6 +13,14 @@ import 'log.dart';
 /// 商品持久删除集合 key（SharedPreferences 独立存储）：本地库只读/写失败时删除标记跨重启保留，
 /// 且 pushPending 合并该集合推送服务端（绕过只读队列）。与 items_page 共用。
 const kDeletedItemsKey = 'taozhu_deleted_items';
+
+/// 待上传附件队列 key（SharedPreferences JSON 数组 [{entity,id,fileName}]）：
+/// 页面添加附件先落本地副本再入队，sync() 编排统一上传（附件上传是同步引擎一部分）。
+const kPendingUploadsKey = 'taozhu_pending_uploads';
+
+/// pull apply 失败记录 key（SharedPreferences JSON 数组，上限 50 条）：
+/// 单条 apply 失败不阻塞整页游标——记录错误跳过，后续同实体 apply 成功自动清除（对齐 SyncErrorStore）。
+const kPullErrorsKey = 'taozhu_pull_errors';
 
 /// 同步服务（增量式）：本地库增量 upsert/delete + 变更队列批量推送。
 ///
@@ -114,7 +123,7 @@ class SyncService {
   /// 全量/增量同步完成后：补齐"在用"附件的本地副本（附件不走 sync_changes，同步只拉实体不拉图；
   /// 本地副本被清理后离线不可见——违背本地优先。从 /attachments/in-use 拿服务器在用引用的规范化三元组
   /// {entity,id,file}（后端以 attachment_refs 引用表为权威 + R2 扫描兜底），逐张下载。
-  /// 已存在跳过；静默失败不阻塞同步主流程，下次同步再补。
+  /// 已存在跳过；并发 4 + 指数退避重试 3 次；单张失败静默跳过（下次同步再补），不阻塞同步主流程。
   static Future<void> downloadInUseAttachments() async {
     if (kIsWeb) return;
     List<Map<String, dynamic>> inUse;
@@ -128,23 +137,40 @@ class SyncService {
     try {
       final root = await getApplicationDocumentsDirectory();
       var downloaded = 0;
-      for (final a in inUse) {
+      Future<bool> one(Map<String, dynamic> a) async {
         final entity = '${a['entity'] ?? ''}';
         final id = '${a['id'] ?? ''}';
         final file = '${a['file'] ?? ''}';
         // 后端已规范化三元组，此处不再做 key 正则解析（此前前后端正则不一致会产生 // 空段路径）
-        if (entity.isEmpty || id.isEmpty || file.isEmpty) continue;
+        if (entity.isEmpty || id.isEmpty || file.isEmpty) return false;
         final dir = Directory('${root.path}/attachments/$entity/$id');
         final target = File('${dir.path}/$file');
-        if (target.existsSync()) continue; // 已有副本
-        try {
-          final bytes = await Api.instance.getRaw('/attachments/${a['key'] ?? '$entity/$id/$file'}').timeout(const Duration(seconds: 12));
-          if (bytes.isNotEmpty && !dir.existsSync()) dir.createSync(recursive: true);
-          await target.writeAsBytes(bytes);
-          downloaded++;
-        } catch (_) {
-          // 单张失败跳过：下次同步再补
+        if (target.existsSync()) return false; // 已有副本
+        Object? lastError;
+        for (var attempt = 0; attempt < 3; attempt++) {
+          try {
+            final bytes = await Api.instance.getRaw('/attachments/${a['key'] ?? '$entity/$id/$file'}').timeout(const Duration(seconds: 12));
+            if (bytes.isNotEmpty) {
+              if (!dir.existsSync()) dir.createSync(recursive: true);
+              await target.writeAsBytes(bytes);
+              return true;
+            }
+          } catch (e) {
+            lastError = e;
+            if (attempt < 2) await Future.delayed(Duration(seconds: 1 << attempt));
+          }
         }
+        // 单张失败跳过：下次同步再补
+        appLog('sync', '附件下载失败 $entity/$id/$file: $lastError', level: 'error');
+        return false;
+      }
+      // 并发 4 分批下载（对齐参考同步引擎下载策略）
+      var idx = 0;
+      while (idx < inUse.length) {
+        final batch = inUse.skip(idx).take(4).toList();
+        final results = await Future.wait(batch.map(one));
+        downloaded += results.where((r) => r).length;
+        idx += 4;
       }
       if (downloaded > 0) {
         appLog('sync', '已补齐在用附件本地副本 $downloaded 张', level: 'info');
@@ -152,6 +178,92 @@ class SyncService {
         version.notifyListeners();
       }
     } catch (_) {}
+  }
+
+  /// 附件上传入队：页面添加附件后先落本地副本，再登记待上传（联网后由 sync() 编排统一上传）。
+  /// 上传是同步引擎一部分，页面不直连云端；失败条目保留队列，下次同步自动重试。
+  static Future<void> enqueueAttachmentUpload({
+    required String entity,
+    required String id,
+    required String fileName,
+  }) async {
+    if (kIsWeb) return; // Web 无本地副本，页面直传云端
+    try {
+      final p = await SharedPreferences.getInstance();
+      final list = p.getStringList(kPendingUploadsKey) ?? [];
+      final entry = jsonEncode({'entity': entity, 'id': id, 'fileName': fileName});
+      if (list.contains(entry)) return;
+      list.add(entry);
+      await p.setStringList(kPendingUploadsKey, list);
+    } catch (_) {}
+  }
+
+  /// 同步编排第一步：上传待传附件（对齐参考 sync()：push 前先传附件，引用先写云端）。
+  /// 并发 4 + 指数退避重试 3 次；单张失败静默保留队列，下次同步再传；不阻塞主流程。
+  static Future<int> uploadPendingAttachments() async {
+    if (kIsWeb) return 0;
+    List<String> entries;
+    try {
+      final p = await SharedPreferences.getInstance();
+      entries = p.getStringList(kPendingUploadsKey) ?? [];
+    } catch (_) {
+      return 0;
+    }
+    if (entries.isEmpty) return 0;
+    var uploaded = 0;
+    final failed = <String>[];
+    Future<void> one(String entry) async {
+      Map<String, dynamic> item;
+      try {
+        item = jsonDecode(entry) as Map<String, dynamic>;
+      } catch (_) {
+        return; // 脏条目直接丢弃
+      }
+      final entity = '${item['entity'] ?? ''}';
+      final id = '${item['id'] ?? ''}';
+      final fileName = '${item['fileName'] ?? ''}';
+      if (entity.isEmpty || id.isEmpty || fileName.isEmpty) return;
+      try {
+        final root = await getApplicationDocumentsDirectory();
+        final f = File('${root.path}/attachments/$entity/$id/$fileName');
+        if (!f.existsSync()) return; // 本地副本已删（图随单据删除）→ 无需上传
+        final bytes = await f.readAsBytes();
+        Object? lastError;
+        for (var attempt = 0; attempt < 3; attempt++) {
+          try {
+            await Api.instance
+                .uploadPhoto('/attachments?entity=$entity&id=$id', bytes, fileName)
+                .timeout(const Duration(seconds: 20));
+            uploaded++;
+            return;
+          } catch (e) {
+            lastError = e;
+            if (attempt < 2) await Future.delayed(Duration(seconds: 1 << attempt));
+          }
+        }
+        failed.add(entry);
+        appLog('sync', '附件上传失败 $entity/$id/$fileName: $lastError', level: 'error');
+      } catch (_) {
+        failed.add(entry);
+      }
+    }
+    // 并发 4 分批上传
+    var idx = 0;
+    while (idx < entries.length) {
+      final batch = entries.skip(idx).take(4).toList();
+      await Future.wait(batch.map(one));
+      idx += 4;
+    }
+    try {
+      final p = await SharedPreferences.getInstance();
+      if (failed.isEmpty) {
+        await p.remove(kPendingUploadsKey);
+      } else {
+        await p.setStringList(kPendingUploadsKey, failed);
+      }
+    } catch (_) {}
+    if (uploaded > 0) appLog('sync', '已上传附件 $uploaded 张', level: 'info');
+    return uploaded;
   }
 
   /// 上次成功同步时间（null=从未同步过）
@@ -282,42 +394,61 @@ class SyncService {
           final id = '${ch['entity_sync_id'] ?? ''}';
           final action = '${ch['action'] ?? 'upsert'}';
           final payload = ch['payload'] as Map<String, dynamic>? ?? {};
-          // 附件删除变更：其他端删了附件 → 本地同步删对应副本（beecount 式：引用变更流驱动跨端删除）
-          if (entityType == 'attachment' && action == 'delete') {
-            try {
+          var applied = false;
+          try {
+            // 附件删除变更：其他端删了附件 → 本地同步删对应副本（引用变更流驱动跨端删除）
+            if (entityType == 'attachment' && action == 'delete') {
               final root = await getApplicationDocumentsDirectory();
-              final key = '${payload['file_key'] ?? ''}';
+              final key = '${payload['file_key'] ?? payload['key'] ?? ''}';
               if (key.isNotEmpty) {
-                final m = RegExp(r'attachments/([a-z_]+)/([^/]+)/([^/]+)$').firstMatch(key);
-                if (m != null) {
-                  final f = File('${root.path}/attachments/${m.group(1)}/${m.group(2)}/${m.group(3)}');
+                // 优先用 payload 携带的 entity/id（新客户端），否则三前缀解析 key（兼容历史根级前缀）
+                final entity = '${payload['entity'] ?? ''}';
+                final eid = '${payload['id'] ?? ''}';
+                final parsed = (entity.isNotEmpty && eid.isNotEmpty)
+                    ? {'entity': entity, 'id': eid}
+                    : _parseAttachmentKey(key);
+                if (parsed != null) {
+                  final f = File('${root.path}/attachments/${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
                   if (f.existsSync()) f.deleteSync();
                 }
               }
-            } catch (_) {}
-            total++;
-            continue;
-          }
-          final store = _storeOf(entityType);
-          if (store.isEmpty) continue;
-          if (action == 'delete') {
-            await LocalDb.deleteOne(store, id);
-          } else {
-            // 软删（client/item deleted_at 非空）→ 本地删行（历史单据有快照不丢）
-            final deletedAt = payload['deleted_at'];
-            if (deletedAt != null && '$deletedAt'.isNotEmpty) {
-              await LocalDb.deleteOne(store, id);
+              applied = true;
             } else {
-              // 本地已软删但推送尚未落地：跳过 upsert，保留本地删除状态
-              if (await (await pendingOf(entityType)).contains(id)) continue;
-              // 本地删除兜底：本地已有该实体且已软删（tombstone），服务端活跃记录不得覆盖——
-              // 本地删除是权威，即使服务端删除未生效（推送被拒/后端旧版），重启也不复活
-              final local = await LocalDb.getOne(store, id);
-              if (local != null && '${local['deleted_at'] ?? ''}'.isNotEmpty) continue;
-              await LocalDb.upsertOne(store, payload);
+              final store = _storeOf(entityType);
+              if (store.isEmpty) continue;
+              if (action == 'delete') {
+                await LocalDb.deleteOne(store, id);
+                // 单据类实体删除：顺带清理本地附件副本（单据级 + 明细行级目录），
+                // 对齐参考 pull 删除路径的本地磁盘清理（引用变更流驱动跨端删除）
+                await _cleanupLocalAttachmentsOf(entityType, id);
+                applied = true;
+              } else {
+                // 软删（client/item deleted_at 非空）→ 本地删行（历史单据有快照不丢）
+                final deletedAt = payload['deleted_at'];
+                if (deletedAt != null && '$deletedAt'.isNotEmpty) {
+                  await LocalDb.deleteOne(store, id);
+                  applied = true;
+                } else {
+                  // 本地已软删但推送尚未落地：跳过 upsert，保留本地删除状态
+                  if (await (await pendingOf(entityType)).contains(id)) continue;
+                  // 本地删除兜底：本地已有该实体且已软删（tombstone），服务端活跃记录不得覆盖——
+                  // 本地删除是权威，即使服务端删除未生效（推送被拒/后端旧版），重启也不复活
+                  final local = await LocalDb.getOne(store, id);
+                  if (local != null && '${local['deleted_at'] ?? ''}'.isNotEmpty) continue;
+                  await LocalDb.upsertOne(store, payload);
+                  applied = true;
+                }
+              }
             }
+            if (applied) {
+              total++;
+              // 同实体此前 apply 失败记录自动清除（对齐参考 SyncErrorStore：新 change 应用成功即 resolve）
+              await _clearPullError(entityType, id);
+            }
+          } catch (e) {
+            // 单条 apply 失败不阻塞整页：记录错误并跳过，游标照常推进（对齐参考 SyncErrorStore）
+            await _recordPullError(entityType, id, e);
           }
-          total++;
         }
         final newCursor = d['server_cursor'] as int? ?? since;
         // 推进本地游标再拉下一页；游标无进展立即退出，防止服务端异常导致死循环
@@ -487,8 +618,9 @@ class SyncService {
 
   /// 启动/回前台同步：首次 full，后续增量 pull + 推送待发（静默）。
   /// 同步中会通知 status 监听者（「我的」页实时显示 同步中/已同步/同步失败）。
-  /// 编排对齐 beecount sync()：实体 pull/push 完成后统一补齐在用附件本地副本
-  /// （upload 由页面落库时直接调云端接口上传；download 在此处补本地缺失副本）。
+  /// 编排对齐参考 sync()：①先上传待传附件（引用先写云端，push 单据时服务端才能带上附件）
+  /// ②push 本地变更（LWW 先落服务端，避免 pull 把旧值覆盖本地排队编辑的镜像）
+  /// ③全量/增量拉取 ④下载在用附件本地副本 ⑤资料同步。
   static Future<void> sync() async {
     if (kIsWeb) return;
     _lastSyncFailed = false;
@@ -496,22 +628,25 @@ class SyncService {
     var pulled = 0;
     var pushed = 0;
     try {
-      final done = await isFullDone();
-      // 自动判定全量/增量：未全量过、或本地库全空（数据被清但游标残留）→ 强制全量拉齐，
+      // ① 上传待传附件（失败不阻塞主流程，单张静默保留队列下次再传）
+      await uploadPendingAttachments();
+      // ② push 本地变更（内部成功后顺带拉取一次其他设备变更）
+      pushed = await pushPending();
+      // ③ 全量/增量拉取：未全量过、或本地库全空（数据被清但游标残留）→ 强制全量拉齐，
       // 无需用户手动干预
+      final done = await isFullDone();
       final localEmpty = done ? (await LocalDb.getAllByName('items')).isEmpty : false;
       if (!done || localEmpty) {
         pulled = await fullSync();
       } else {
         pulled = await pullChanges();
       }
-      pushed = await pushPending();
       appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条', level: 'info');
-      // 同步完成后补齐在用附件本地副本（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）：
-      // **await 等待附件下载完，同步中的动画/状态行才消失**（用户：完全同步之后再消失）；
+      // ④ 在用附件本地副本补齐（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）：
+      // **await 等待附件下载完，同步中的动画/状态行才消失**（完全同步之后再消失）；
       // 单张失败内部静默跳过，下次同步自动重补，不阻塞主流程
       await downloadInUseAttachments();
-      // 资料（显示名/头像版本）同步对齐参考架构 sync() 编排：实体+附件完成后统一 syncMyProfile
+      // ⑤ 资料（显示名/头像版本）同步对齐参考 sync() 编排：实体+附件完成后统一 syncMyProfile
       await syncMyProfile();
     } catch (e) {
       _lastSyncFailed = true;
@@ -534,5 +669,86 @@ class SyncService {
       case 'payment': return 'payments';
       default: return '';
     }
+  }
+
+  /// 附件 key → {entity,id}（三前缀兼容，与后端 parseAttachmentKey 同款）：
+  /// taozhu/images/attachments/{entity}/{id}/{file} | taozhu/attachments/... | {entity}/{id}/{file}
+  /// 历史根级前缀（如 sale/s1/a.jpg）不再匹配失败导致本地副本删不掉。
+  static Map<String, String>? _parseAttachmentKey(String key) {
+    final m1 = RegExp(r'^taozhu/images/attachments/([a-z_]+)/([^/]+)/[^/]+$').firstMatch(key);
+    if (m1 != null) return {'entity': m1.group(1)!, 'id': m1.group(2)!};
+    final m2 = RegExp(r'^(?:taozhu/attachments/)?([a-z_]+)/([^/]+)/[^/]+$').firstMatch(key);
+    if (m2 != null && const ['sale', 'purchase', 'payment', 'sale_item', 'purchase_item'].contains(m2.group(1))) {
+      return {'entity': m2.group(1)!, 'id': m2.group(2)!};
+    }
+    return null;
+  }
+
+  /// pull 删除单据类实体后：清理本地附件副本（单据级目录 + 明细行级目录）。
+  /// 本地副本按 attachments/{entity}/{id}/ 组织；行级 = attachments/sale_item|purchase_item/{lineId}/。
+  /// 对齐参考 pull 删除路径的本地磁盘清理（删除以引用变更流驱动，不留本地孤儿）。
+  static Future<void> _cleanupLocalAttachmentsOf(String entityType, String id) async {
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final base = Directory('${root.path}/attachments');
+      if (!base.existsSync()) return;
+      // 单据级目录
+      final orderDir = Directory('${base.path}/$entityType/$id');
+      if (orderDir.existsSync()) {
+        try { orderDir.deleteSync(recursive: true); } catch (_) {}
+      }
+      // 行级目录：从本地镜像读取明细行 id（删除前的快照）
+      final store = _storeOf(entityType);
+      if (store == 'sales' || store == 'purchases') {
+        final lineEntity = store == 'sales' ? 'sale_item' : 'purchase_item';
+        final local = await LocalDb.getOne(store, id);
+        final items = (local?['items'] as List?) ?? [];
+        for (final it in items) {
+          if (it is! Map) continue;
+          final lineId = '${it['id'] ?? ''}';
+          if (lineId.isEmpty) continue;
+          final lineDir = Directory('${base.path}/$lineEntity/$lineId');
+          if (lineDir.existsSync()) {
+            try { lineDir.deleteSync(recursive: true); } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// pull 单条 apply 失败记录（持久化，UI 可追溯）：不阻塞整页游标（对齐参考 SyncErrorStore 语义）。
+  static const int _maxPullErrors = 50;
+
+  static Future<void> _recordPullError(String entityType, String id, Object e) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final list = p.getStringList(kPullErrorsKey) ?? [];
+      list.add(jsonEncode({
+        'entity_type': entityType,
+        'entity_sync_id': id,
+        'error': e.toString().split('\n').first,
+        'ts': DateTime.now().toIso8601String(),
+      }));
+      if (list.length > _maxPullErrors) list.removeRange(0, list.length - _maxPullErrors);
+      await p.setStringList(kPullErrorsKey, list);
+    } catch (_) {}
+    appLog('sync', 'pull apply 失败 $entityType/$id: ${e.toString().split('\n').first}', level: 'error');
+  }
+
+  /// 同实体后续 apply 成功 → 清除历史失败记录（对齐参考 SyncErrorStore：新 change 应用成功即 resolve）。
+  static Future<void> _clearPullError(String entityType, String id) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final list = p.getStringList(kPullErrorsKey) ?? [];
+      final kept = list.where((x) {
+        try {
+          final m = jsonDecode(x) as Map<String, dynamic>;
+          return '${m['entity_type']}' != entityType || '${m['entity_sync_id']}' != id;
+        } catch (_) {
+          return true;
+        }
+      }).toList();
+      if (kept.length != list.length) await p.setStringList(kPullErrorsKey, kept);
+    } catch (_) {}
   }
 }

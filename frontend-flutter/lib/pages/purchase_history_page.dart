@@ -24,7 +24,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   bool _offline = false;
   /// 商品 id → 分类名（流水行分类显示：优先查询商品设置分类，明细行快照仅兜底）
   Map<String, String> _itemCategory = {};
-  /// 所选月份（beecount 式：头部月份切换器，列表联动显示该月进货）
+  /// 所选月份（头部月份切换器，列表联动显示该月进货）
   int _selYear = DateTime.now().year;
   int _selMonth = DateTime.now().month;
   /// 当月进货总额（仅支出统计：进货页无收入/结余）
@@ -336,7 +336,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                 ],
               ),
             ),
-          // 月份切换器 + 支出统计（beecount 式：选几月显示几月，进货页仅支出无收入/结余）
+          // 月份切换器 + 支出统计（选几月显示几月，进货页仅支出无收入/结余）
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: Column(
