@@ -21,6 +21,18 @@
       <button class="btn" @click="go('/pages/stocks/stocks')">库存</button>
       <button class="btn" @click="go('/pages/stats/stats')">统计</button>
       <button class="btn" @click="go('/pages/users/users')">账号管理</button>
+      <button class="btn" @click="openServer">服务器设置</button>
+    </view>
+
+    <!-- 服务器设置弹层：切换域名（保存后清 token 回登录页重新登录，与切账号语义一致） -->
+    <view v-if="showServer" class="mask" @click="showServer = false">
+      <view class="sheet" @click.stop>
+        <view class="sheet-title">服务器设置</view>
+        <view class="server-cur">当前服务器：{{ curBase || '未设置' }}</view>
+        <input class="ipt" v-model="serverInput" placeholder="https://你的服务器域名" />
+        <button class="btn-save" :disabled="saving" @click="saveServer">{{ saving ? '保存中…' : '保存并重新登录' }}</button>
+        <button class="btn-cancel" @click="showServer = false">取消</button>
+      </view>
     </view>
 
     <!-- 欠款排行 -->
@@ -38,13 +50,45 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { request, getToken } from '../../api';
+import { request, getToken, getApiBase, setApiBase, clearToken } from '../../api';
 
 const today = ref({ sales_total: 0, gross_profit: 0, paid_total: 0, purchase_total: 0, sales_count: 0 });
 const totals = ref({ debt: 0, client_count: 0, all_sales: 0, all_paid: 0, item_count: 0 });
 const topDebt = ref<Array<{ id: string; name: string; debt: number }>>([]);
 const canSeeProfit = ref(true); // 店员看不到毛利（后端 can_see_profit=false 时隐藏）
 const fmt = (n: number) => Number(n || 0).toFixed(2);
+
+// 服务器设置：切换域名（小程序无本地库，切服务器=清 token 回登录页重新登录）
+const showServer = ref(false);
+const saving = ref(false);
+const curBase = ref(getApiBase());
+const serverInput = ref(getApiBase());
+
+function openServer() {
+  curBase.value = getApiBase();
+  serverInput.value = getApiBase();
+  showServer.value = true;
+}
+
+async function saveServer() {
+  const url = serverInput.value.trim().replace(/\/+$/, '');
+  if (!url) {
+    uni.showToast({ title: '请输入服务器地址（https://...）', icon: 'none' });
+    return;
+  }
+  saving.value = true;
+  try {
+    setApiBase(url);
+    // 切换服务器后原 token 属于旧服务器，清掉回登录页重新填账号密码
+    clearToken();
+    uni.showToast({ title: '服务器已切换，请重新登录', icon: 'none' });
+    setTimeout(() => uni.reLaunch({ url: '/pages/login/login' }), 600);
+  } catch (e) {
+    uni.showToast({ title: '保存失败', icon: 'none' });
+  } finally {
+    saving.value = false;
+  }
+}
 
 onShow(async () => {
   if (!getToken()) {
@@ -87,4 +131,11 @@ function go(url: string) {
 .lr-name { font-size: 28rpx; }
 .lr-debt { font-size: 28rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 30rpx 0; font-size: 26rpx; }
+.mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
+.sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
+.sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
+.server-cur { font-size: 24rpx; color: #909399; margin-bottom: 16rpx; word-break: break-all; }
+.ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
+.btn-cancel { background: #f5f7fa; color: #909399; border-radius: 12rpx; font-size: 30rpx; }
 </style>

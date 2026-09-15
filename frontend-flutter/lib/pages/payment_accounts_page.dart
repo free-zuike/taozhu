@@ -19,11 +19,27 @@ class PaymentAccountsPage extends StatefulWidget {
 class _AccountRow {
   final String id;
   final String name;
+  /// 开户行（银行卡等；可空）
+  final String bankName;
+  /// 卡号后四位（可空；同类型多卡靠它区分）
+  final String cardLastFour;
   /// 该账户进账总额（全部历史，按收款方式聚合，含平账减免）
   final double income;
   /// 该账户收款笔数
   final int count;
-  _AccountRow(this.id, this.name, {this.income = 0, this.count = 0});
+  /// 该账户本月进账/笔数（当月 happened_at）
+  final double monthIncome;
+  final int monthCount;
+  _AccountRow(
+    this.id,
+    this.name, {
+    this.bankName = '',
+    this.cardLastFour = '',
+    this.income = 0,
+    this.count = 0,
+    this.monthIncome = 0,
+    this.monthCount = 0,
+  });
 }
 
 class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
@@ -49,8 +65,8 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
     if (mounted) _load();
   }
 
-  /// 收款方式 → (进账总额, 笔数)：原生从本地 payments 镜像聚合（零网络），Web 直连 stats
-  Future<Map<String, (double, int)>> _incomeStats() async {
+  /// 收款方式 → (进账总额, 笔数, 本月进账, 本月笔数)：原生从本地 payments 镜像聚合（零网络），Web 直连 stats
+  Future<Map<String, (double, int, double, int)>> _incomeStats() async {
     if (kIsWeb) {
       try {
         final d = await Api.instance.get('/payment-accounts/stats');
@@ -59,6 +75,8 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
             '${s['method'] ?? ''}': (
               (s['total'] as num?)?.toDouble() ?? 0,
               (s['count'] as num?)?.toInt() ?? 0,
+              (s['month_total'] as num?)?.toDouble() ?? 0,
+              (s['month_count'] as num?)?.toInt() ?? 0,
             ),
         };
       } catch (_) {
@@ -66,15 +84,21 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
       }
     }
     try {
+      final now = DateTime.now();
+      final ym = '${now.year}-${now.month.toString().padLeft(2, '0')}';
       final pays = await LocalDb.getAll('payments');
-      final m = <String, (double, int)>{};
+      final m = <String, (double, int, double, int)>{};
       for (final p in pays) {
         final method = '${p['method'] ?? ''}'.trim();
         if (method.isEmpty) continue;
-        final (amt, cnt) = m[method] ?? (0.0, 0);
+        final (amt, cnt, mAmt, mCnt) = m[method] ?? (0.0, 0, 0.0, 0);
+        final amt2 = ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0);
+        final isMonth = '${p['happened_at'] ?? ''}'.startsWith(ym);
         m[method] = (
-          amt + ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0),
+          amt + amt2,
           cnt + 1,
+          mAmt + (isMonth ? amt2 : 0),
+          mCnt + (isMonth ? 1 : 0),
         );
       }
       return m;
@@ -96,8 +120,12 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
             for (final a in local)
               _AccountRow(
                 '${a['id']}', '${a['name'] ?? ''}',
+                bankName: '${a['bank_name'] ?? ''}',
+                cardLastFour: '${a['card_last_four'] ?? ''}',
                 income: stats['${a['name'] ?? ''}']?.$1 ?? 0,
                 count: stats['${a['name'] ?? ''}']?.$2 ?? 0,
+                monthIncome: stats['${a['name'] ?? ''}']?.$3 ?? 0,
+                monthCount: stats['${a['name'] ?? ''}']?.$4 ?? 0,
               ),
           ];
           _loading = false;
@@ -109,7 +137,8 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
             .cast<Map<String, dynamic>>();
         final stats = await _incomeStats();
         await LocalDb.putAll('payment_accounts', [
-          for (final r in rows) {'id': r['id'], 'name': r['name'], 'sort': 0},
+          for (final r in rows)
+            {'id': r['id'], 'name': r['name'], 'bank_name': r['bank_name'] ?? '', 'card_last_four': r['card_last_four'] ?? '', 'sort': 0},
         ]);
         if (mounted) {
           setState(() {
@@ -117,8 +146,12 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
               for (final r in rows)
                 _AccountRow(
                   '${r['id']}', '${r['name'] ?? ''}',
+                  bankName: '${r['bank_name'] ?? ''}',
+                  cardLastFour: '${r['card_last_four'] ?? ''}',
                   income: stats['${r['name'] ?? ''}']?.$1 ?? 0,
                   count: stats['${r['name'] ?? ''}']?.$2 ?? 0,
+                  monthIncome: stats['${r['name'] ?? ''}']?.$3 ?? 0,
+                  monthCount: stats['${r['name'] ?? ''}']?.$4 ?? 0,
                 ),
             ];
             _loading = false;
@@ -141,13 +174,36 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
     return (Icons.account_balance_wallet_outlined, const Color(0xFF409EFF));
   }
 
+  /// 账户行副标题：进账统计（累计/本月）+ 开户行/尾号（有卡号信息才拼接）
+  String _subtitleOf(_AccountRow a) {
+    var s = '进账 ¥${fmtMoney(a.income)} · ${a.count} 笔 · 本月 ¥${fmtMoney(a.monthIncome)}';
+    final extra = [
+      if (a.bankName.isNotEmpty) a.bankName,
+      if (a.cardLastFour.isNotEmpty) '尾号${a.cardLastFour}',
+    ];
+    if (extra.isNotEmpty) s += ' · ${extra.join(' ')}';
+    return s;
+  }
+
   Future<void> _add() async {
-    final ctrl = TextEditingController();
+    final nameCtrl = TextEditingController();
+    final bankCtrl = TextEditingController();
+    final cardCtrl = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('新增收款账户'),
-        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: '账户名称（如 现金/微信/支付宝…）')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: '账户名称（现金/微信/支付宝/银行卡…）')),
+            const SizedBox(height: 10),
+            TextField(controller: bankCtrl, decoration: const InputDecoration(labelText: '开户行（银行卡填，可留空）')),
+            const SizedBox(height: 10),
+            TextField(controller: cardCtrl, keyboardType: TextInputType.number, maxLength: 4,
+                decoration: const InputDecoration(labelText: '卡号后四位（同类型多卡用于区分，可留空）', counterText: '')),
+          ],
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('添加')),
@@ -155,7 +211,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
       ),
     );
     if (ok != true) return;
-    final name = ctrl.text.trim();
+    final name = nameCtrl.text.trim();
     if (name.isEmpty) {
       toast(context, '请输入账户名称');
       return;
@@ -164,16 +220,31 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
       toast(context, '该账户已存在');
       return;
     }
-    await _save([..._accounts.map((a) => a.name), name]);
+    await _save([
+      for (final a in _accounts) {'name': a.name, 'bank_name': a.bankName, 'card_last_four': a.cardLastFour},
+      {'name': name, 'bank_name': bankCtrl.text.trim(), 'card_last_four': cardCtrl.text.trim()},
+    ]);
   }
 
   Future<void> _rename(_AccountRow row) async {
-    final ctrl = TextEditingController(text: row.name);
+    final nameCtrl = TextEditingController(text: row.name);
+    final bankCtrl = TextEditingController(text: row.bankName);
+    final cardCtrl = TextEditingController(text: row.cardLastFour);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('重命名账户'),
-        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: '账户名称')),
+        title: const Text('编辑账户'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: '账户名称')),
+            const SizedBox(height: 10),
+            TextField(controller: bankCtrl, decoration: const InputDecoration(labelText: '开户行（银行卡填，可留空）')),
+            const SizedBox(height: 10),
+            TextField(controller: cardCtrl, keyboardType: TextInputType.number, maxLength: 4,
+                decoration: const InputDecoration(labelText: '卡号后四位（可留空）', counterText: '')),
+          ],
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
@@ -181,13 +252,22 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
       ),
     );
     if (ok != true) return;
-    final name = ctrl.text.trim();
-    if (name.isEmpty || name == row.name) return;
-    if (_accounts.any((a) => a.name == name)) {
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) {
+      toast(context, '请输入账户名称');
+      return;
+    }
+    if (name != row.name && _accounts.any((a) => a.name == name)) {
       toast(context, '该账户已存在');
       return;
     }
-    await _save([for (final a in _accounts) a.name == row.name ? name : a.name]);
+    await _save([
+      for (final a in _accounts)
+        if (a.id == row.id)
+          {'name': name, 'bank_name': bankCtrl.text.trim(), 'card_last_four': cardCtrl.text.trim()}
+        else
+          {'name': a.name, 'bank_name': a.bankName, 'card_last_four': a.cardLastFour},
+    ]);
   }
 
   Future<void> _remove(_AccountRow row) async {
@@ -207,18 +287,21 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
       ),
     );
     if (ok != true) return;
-    await _save([for (final a in _accounts) if (a.id != row.id) a.name]);
+    await _save([
+      for (final a in _accounts)
+        if (a.id != row.id) {'name': a.name, 'bank_name': a.bankName, 'card_last_four': a.cardLastFour},
+    ]);
   }
 
-  /// 全量覆盖服务端账户列表，成功后刷新镜像
-  Future<void> _save(List<String> names) async {
-    if (names.isEmpty) {
+  /// 全量覆盖服务端账户列表（含开户行/卡号），成功后刷新镜像
+  Future<void> _save(List<Map<String, dynamic>> items) async {
+    if (items.isEmpty) {
       toast(context, '至少保留一个账户');
       return;
     }
     setState(() => _busy = true);
     try {
-      await LocalAccounts.save(names);
+      await LocalAccounts.save(items);
       await _load();
       toast(context, '已保存，正在同步');
     } catch (e) {
@@ -301,10 +384,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
                               child: Icon(_iconOf(a.name).$1, size: 20, color: _iconOf(a.name).$2),
                             ),
                             title: Text(a.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                            subtitle: Text(
-                              '进账 ¥${fmtMoney(a.income)} · ${a.count} 笔',
-                              style: TextStyle(fontSize: 12, color: c.textSub),
-                            ),
+                            subtitle: Text(_subtitleOf(a), style: TextStyle(fontSize: 12, color: c.textSub)),
                             onTap: () => _rename(a),
                             trailing: IconButton(
                               icon: Icon(Icons.delete_outline, size: 20, color: c.danger),

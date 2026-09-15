@@ -127,6 +127,8 @@ const DDL: string[] = [
   `CREATE TABLE IF NOT EXISTS payment_accounts (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    bank_name TEXT DEFAULT '',
+    card_last_four TEXT DEFAULT '',
     sort INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
@@ -232,6 +234,15 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!paTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS payment_accounts'));
       await db.batch([db.prepare(DDL[i])]);
+    }
+    // v0.17.90.0：payment_accounts 加开户行 bank_name + 卡号后四位 card_last_four
+    // （多张同类型卡靠卡号区分；老表无列 → ALTER 补齐，新表 DDL 已含）
+    const paCols = await db.prepare('PRAGMA table_info(payment_accounts)').all<{ name: string }>();
+    if (!paCols.results.some((x) => x.name === 'bank_name')) {
+      await db.prepare('ALTER TABLE payment_accounts ADD COLUMN bank_name TEXT DEFAULT \'\'').run();
+    }
+    if (!paCols.results.some((x) => x.name === 'card_last_four')) {
+      await db.prepare('ALTER TABLE payment_accounts ADD COLUMN card_last_four TEXT DEFAULT \'\'').run();
     }
     // 首次使用（空表）自动写入默认账户（现金/微信/支付宝/银行卡/转账），用户可后续增删改；
     // 空表才插，避免覆盖用户已自定义的列表

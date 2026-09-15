@@ -165,7 +165,7 @@ syncRouter.get('/full', async (c) => {
   const catRows = await db.prepare('SELECT id, type, name, parent_id, sort FROM categories ORDER BY sort, name').all();
   const categories = catRows.results.map((x) => ({ ...(x as Record<string, unknown>) }));
 
-  const paRows = await db.prepare('SELECT id, name, sort FROM payment_accounts ORDER BY sort, name').all();
+  const paRows = await db.prepare('SELECT id, name, bank_name, card_last_four, sort FROM payment_accounts ORDER BY sort, name').all();
   const payment_accounts = paRows.results.map((x) => ({ ...(x as Record<string, unknown>) }));
 
   // 收支单据：id/店铺/日期/备注/总额 + 明细（分页全量，数据量通常有限）

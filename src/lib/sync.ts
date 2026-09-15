@@ -87,7 +87,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
     case 'payment_account': {
       const r = await db.prepare('SELECT * FROM payment_accounts WHERE id = ?').bind(id).first<Record<string, unknown>>();
       if (!r) return null;
-      return { id: r.id, name: r.name, sort: r.sort ?? 0 };
+      return { id: r.id, name: r.name, bank_name: r.bank_name ?? '', card_last_four: r.card_last_four ?? '', sort: r.sort ?? 0 };
     }
     case 'sale': {
       const r = await db.prepare(
@@ -317,9 +317,10 @@ export async function applyChange(
           await db.prepare('DELETE FROM payment_accounts WHERE id = ?').bind(id).run();
         } else {
           await db.prepare(
-            `INSERT INTO payment_accounts (id, name, sort) VALUES (?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort = excluded.sort`,
-          ).bind(id, p.name ?? '', Number(p.sort) || 0).run();
+            `INSERT INTO payment_accounts (id, name, bank_name, card_last_four, sort) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, bank_name = excluded.bank_name,
+               card_last_four = excluded.card_last_four, sort = excluded.sort`,
+          ).bind(id, p.name ?? '', p.bank_name ?? '', p.card_last_four ?? '', Number(p.sort) || 0).run();
         }
         break;
       case 'sale':

@@ -97,26 +97,77 @@ describe('收款账户（payment_accounts）', () => {
     expect(sd.payment_accounts).toBeGreaterThanOrEqual(5);
   });
 
-  it('GET /stats 按收款方式聚合进账总额与笔数（全部历史）', async () => {
-    // 建店铺 → 登记 3 笔收款：现金 100 / 微信 50 / 微信 25
+  it('GET /stats 按收款方式聚合进账总额与笔数（全部历史 + 本月）', async () => {
+    // 建店铺 → 登记 3 笔收款：现金 100 / 微信 50 / 微信 25（默认当天，属本月）
     const c1 = await call(env, 'POST', '/api/v1/clients', token, { name: '测试店' });
     const client = (await c1.json()) as { id: string };
     await call(env, 'POST', '/api/v1/payments', token, { client_id: client.id, amount: 100, method: '现金' });
     await call(env, 'POST', '/api/v1/payments', token, { client_id: client.id, amount: 50, method: '微信' });
     await call(env, 'POST', '/api/v1/payments', token, { client_id: client.id, amount: 25, waived: 0, method: '微信' });
+    // 上月一笔：本月统计不应包含
+    const now = new Date();
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 15);
+    await call(env, 'POST', '/api/v1/payments', token, {
+      client_id: client.id, amount: 999, method: '现金',
+      happened_at: `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, '0')}-15`,
+    });
 
     const res = await call(env, 'GET', '/api/v1/payment-accounts/stats', token);
     expect(res.status).toBe(200);
-    const d = (await res.json()) as { stats: Array<{ method: string; count: number; total: number }> };
+    const d = (await res.json()) as { stats: Array<{ method: string; count: number; total: number; month_total: number; month_count: number }> };
     const byMethod = new Map(d.stats.map((s) => [s.method, s]));
-    expect(byMethod.get('现金')?.count).toBe(1);
-    expect(byMethod.get('现金')?.total).toBe(100);
+    expect(byMethod.get('现金')?.count).toBe(2); // 本月1 + 上月1
+    expect(byMethod.get('现金')?.total).toBe(1099);
+    expect(byMethod.get('现金')?.month_count).toBe(1);
+    expect(byMethod.get('现金')?.month_total).toBe(100);
     expect(byMethod.get('微信')?.count).toBe(2);
     expect(byMethod.get('微信')?.total).toBe(75);
+    expect(byMethod.get('微信')?.month_total).toBe(75);
   });
 
   it('GET /stats 未认证返回 401', async () => {
     const res = await call(env, 'GET', '/api/v1/payment-accounts/stats');
     expect(res.status).toBe(401);
+  });
+
+  it('PUT 支持开户行/卡号后四位：保存读回 + 同步 payload 含新字段', async () => {
+    const res = await call(env, 'PUT', '/api/v1/payment-accounts', token, {
+      accounts: [
+        { name: '现金' },
+        { name: '银行卡', bank_name: '工商银行', card_last_four: '1234' },
+        { name: '支付宝' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { accounts: Array<{ name: string; bank_name?: string; card_last_four?: string }> };
+    const bank = d.accounts.find((a) => a.name === '银行卡');
+    expect(bank?.bank_name).toBe('工商银行');
+    expect(bank?.card_last_four).toBe('1234');
+    // GET 读回一致
+    const again = (await (await call(env, 'GET', '/api/v1/payment-accounts', token)).json()) as {
+      accounts: Array<{ name: string; bank_name?: string; card_last_four?: string }>;
+    };
+    expect(again.accounts.find((a) => a.name === '银行卡')?.bank_name).toBe('工商银行');
+    // 同步 payload 含新字段（pull 合并后本地镜像可还原卡号）
+    const changes = await env.DB.prepare(
+      "SELECT payload_json FROM sync_changes WHERE entity_type = 'payment_account' AND action = 'upsert'",
+    ).all<{ payload_json: string }>();
+    const payloads = changes.results.map((r) => JSON.parse(r.payload_json)) as Array<{ name?: string; bank_name?: string; card_last_four?: string }>;
+    // 按名字找到银行卡的 payload（id 动态生成，用 name 匹配）
+    const bankPayload = payloads.find((p) => p.name === '银行卡');
+    expect(bankPayload).toBeTruthy();
+    expect(bankPayload?.bank_name).toBe('工商银行');
+    expect(bankPayload?.card_last_four).toBe('1234');
+  });
+
+  it('同步 full 返回包含开户行/卡号', async () => {
+    await call(env, 'PUT', '/api/v1/payment-accounts', token, {
+      accounts: [{ name: '银行卡', bank_name: '建设银行', card_last_four: '8888' }],
+    });
+    const full = await call(env, 'GET', '/api/v1/sync/full', token);
+    const fd = (await full.json()) as { payment_accounts: Array<{ name: string; bank_name?: string; card_last_four?: string }> };
+    const bank = fd.payment_accounts.find((a) => a.name === '银行卡');
+    expect(bank?.bank_name).toBe('建设银行');
+    expect(bank?.card_last_four).toBe('8888');
   });
 });
