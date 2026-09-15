@@ -189,10 +189,15 @@ jobs:
           done
           echo "uploaded: web-${VERSION}.zip"
 
-      - name: 失败即清理不完整 release（本 workflow 统一创建 release，任一失败 → 删除整个 release，防止留下空壳/半成品）
+      - name: 失败即清理不完整 release（仅空壳：本 workflow 创建 release 后未来得及传资产才删；已有资产则保留，由各构建 job 做完整性校验）
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || true)
-          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+          [ -n "$VERSION" ] || exit 0
+          # 已有任何资产（其他平台已上传）→ 保留 release 不删，避免连带删除已上传的 APK/zip
+          ASSETS=$(gh release view "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets | length' 2>/dev/null || echo 0)
+          if [ "$ASSETS" -eq 0 ]; then
+            gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+          fi

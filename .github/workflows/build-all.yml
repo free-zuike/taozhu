@@ -522,8 +522,9 @@ jobs:
           [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
 
   # ── 微信小程序（uni-app）──────────────────────────────────────────────────────────
+  # 依赖全部平台成功：任一 Flutter 端失败则小程序不构建/不上传（全通过或全不通过）
   miniprogram:
-    needs: test
+    needs: [test, apk, linux, windows, macos, ios]
     runs-on: ubuntu-latest
     name: 微信小程序
     steps:

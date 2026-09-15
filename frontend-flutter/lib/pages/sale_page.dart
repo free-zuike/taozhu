@@ -749,9 +749,10 @@ class _SalePageState extends State<SalePage> {
         toast(context, '暂无历史出货单');
         return;
       }
-      final items = ((last['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final order = last!; // 已判空，安全解包（闭包内可空提升失效）
+      final items = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
       setState(() {
-        _clientId = last['client_id'] as String?;
+        _clientId = order['client_id'] as String?;
         _rows.clear();
         for (final it in items) {
           final itemId = '${it['item_id']}';
