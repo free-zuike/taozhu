@@ -103,7 +103,8 @@ describe('用户级下载源与服务器探测（/me）', () => {
     const d = (await res.json()) as { ok: boolean; ms: number; status: number; size: number };
     expect(typeof d.ok).toBe('boolean');
     expect(typeof d.ms).toBe('number');
-  });
+    // 末尾第三个参数=用例超时：服务器端真实探测 GitHub 资产（本地无代理时 fetch 卡到 10s 超时），默认 5s 不够
+  }, 30000);
 });
 
 describe('认证', () => {
