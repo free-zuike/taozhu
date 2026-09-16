@@ -739,15 +739,74 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   /// 点明细行 → 只编辑当前商品（数量/售价/单位/日期，弹窗即时保存）；
-  /// 无明细的占位行（备注行）没有可编辑的商品，回退整单编辑。
+  /// item_id 空（无明细占位/旧数据未带行 id）不再静默跳整单——按商品名从单内定位编辑。
   Future<void> _editSaleLine(Map<String, dynamic> l) async {
     final order = l['order'] as Map<String, dynamic>;
     if ('${l['item_id'] ?? ''}'.isEmpty) {
+      // 尝试按商品名在单内定位明细行 id（旧数据兜底）；定位不到才回退整单编辑
+      final name = '${l['item_name'] ?? ''}';
+      String? found;
+      for (final it in ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+        if ('${it['item_name']}' == name) {
+          found = '${it['id'] ?? ''}';
+          if (found.isNotEmpty) break;
+        }
+      }
+      if (found != null && found.isNotEmpty) {
+        final copy = Map<String, dynamic>.from(l)..['item_id'] = found;
+        await editSaleLine(context, copy);
+        _load();
+        return;
+      }
       _editSale(order);
       return;
     }
     await editSaleLine(context, l);
     _load();
+  }
+
+  /// 删除单条出货商品行（长按商品行触发）：Web 直连 DELETE /sales/items/:id；
+  /// 原生 = 本地镜像删该行 + 整单快照 upsert 入队（服务端整体替换，库存/日期重算）。
+  /// 只有无明细（备注占位行）才回退整单删除。
+  Future<void> _deleteSaleLine(Map<String, dynamic> l) async {
+    final order = l['order'] as Map<String, dynamic>;
+    final itemId = '${l['item_id'] ?? ''}';
+    final name = '${l['item_name'] ?? ''}'.isNotEmpty ? '「${l['item_name']}」' : '该商品';
+    if (itemId.isEmpty) {
+      await _deleteSaleOrder(order);
+      return;
+    }
+    final ok = await _confirm('删除商品', '确定删除出货单中的 $name 这一行吗？仅删除该商品，单内其他商品保留；库存自动回滚。');
+    if (!ok) return;
+    try {
+      if (kIsWeb) {
+        await Api.instance.delete('/sales/items/$itemId');
+      } else {
+        // 原生：本地镜像 items 移除该行 → 整单快照 upsert（服务端整体替换，等价于行级删除）
+        final items = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        final updatedItems = items.where((it) => '${it['id']}' != itemId).toList();
+        final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
+        payload['total'] = updatedItems.fold<double>(
+            0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
+        final dates = [
+          for (final it in updatedItems)
+            '${it['happened_at'] ?? ''}'.isNotEmpty
+                ? '${it['happened_at']}'
+                : '${payload['happened_at'] ?? ''}',
+        ];
+        if (dates.isNotEmpty) {
+          final maxD = dates.reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
+          if (maxD.isNotEmpty) payload['happened_at'] = maxD;
+        }
+        await LocalDb.upsertOne('sales', payload);
+        await SyncService.enqueueChange(
+            entityType: 'sale', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
+      }
+      toast(context, '已删除该商品');
+      _load();
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
   }
 
   /// 日期栏 → 该日出货单列表（点单进出货记单页编辑该单全部商品明细）
@@ -1353,10 +1412,9 @@ class _LedgerPageState extends State<LedgerPage> {
     if (qty.isNotEmpty) priceLine.write(' · ×$qty$unit');
     return InkWell(
       borderRadius: BorderRadius.circular(10),
-      // 点行 = 只编辑当前商品（数量/售价/单位/日期）；长按 = 删除整单
+      // 点行 = 只编辑当前商品（数量/售价/单位/日期）；长按 = 删除该商品行（不是整单）
       onTap: () => _editSaleLine(l),
-      // 长按 = 删除整单（弹确认框；确认删除，取消返回）
-      onLongPress: () => _deleteSaleOrder(order),
+      onLongPress: () => _deleteSaleLine(l),
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 2),
         clipBehavior: Clip.antiAlias,

@@ -204,6 +204,65 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     }
   }
 
+  /// 删除单条进货商品行（长按商品行触发）：Web 直连 DELETE /purchases/items/:id；
+  /// 原生 = 本地镜像删该行 + 整单快照 upsert 入队（服务端整体替换，库存/日期重算）。
+  /// 只有无明细（备注占位行）才回退整单删除。
+  Future<void> _deletePurchaseLine(Map<String, dynamic> l) async {
+    final order = l['order'] as Map<String, dynamic>;
+    final rowId = '${l['row_id'] ?? ''}';
+    final name = '${l['item_name'] ?? ''}'.isNotEmpty ? '「${l['item_name']}」' : '该商品';
+    if (rowId.isEmpty) {
+      await _deletePurchase(order);
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除商品'),
+        content: Text('确定删除进货单中的 $name 这一行吗？仅删除该商品，单内其他商品保留；库存自动回滚。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      if (kIsWeb) {
+        await Api.instance.delete('/purchases/items/$rowId');
+      } else {
+        // 原生：本地镜像 items 移除该行 → 整单快照 upsert（服务端整体替换，等价于行级删除）
+        final items = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        final updatedItems = items.where((it) => '${it['id']}' != rowId).toList();
+        final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
+        payload['total'] = updatedItems.fold<double>(
+            0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
+        final dates = [
+          for (final it in updatedItems)
+            '${it['happened_at'] ?? ''}'.isNotEmpty
+                ? '${it['happened_at']}'
+                : '${payload['happened_at'] ?? ''}',
+        ];
+        if (dates.isNotEmpty) {
+          final maxD = dates.reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
+          if (maxD.isNotEmpty) payload['happened_at'] = maxD;
+        }
+        await LocalDb.upsertOne('purchases', payload);
+        await SyncService.enqueueChange(
+            entityType: 'purchase', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
+        unawaited(SyncService.pushPending());
+      }
+      toast(context, '已删除该商品');
+      _load();
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   String _weekday(String date) {
     final d = DateTime.tryParse(date);
     if (d == null) return date;
@@ -226,7 +285,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     priceLine.write('数量 ×$qty$unit');
     return InkWell(
       borderRadius: BorderRadius.circular(10),
-      // 点行 = 只编辑当前商品（数量/进价/单位/日期）；长按 = 删除整单
+      // 点行 = 只编辑当前商品（数量/进价/单位/日期）；长按 = 删除该商品行（不是整单）
       onTap: () {
         final line = Map<String, dynamic>.from(l)..['id'] = rowId;
         if (rowId.isEmpty) {
@@ -235,7 +294,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
           _editPurchaseLine(order, line);
         }
       },
-      onLongPress: () => _deletePurchase(order),
+      onLongPress: () => _deletePurchaseLine(l),
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 2),
         padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),

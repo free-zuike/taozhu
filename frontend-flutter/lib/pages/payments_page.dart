@@ -471,23 +471,11 @@ class _PaymentsPageState extends State<PaymentsPage> {
                           if (((p['waived'] as num?) ?? 0) > 0) '平账 ¥${p['waived']}',
                           if (p['note'] != null && '${p['note']}'.isNotEmpty) '${p['note']}',
                         ].join(' · ')),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('¥${p['amount']}',
-                                style: TextStyle(fontWeight: FontWeight.w700, color: _c.success)),
-                            IconButton(
-                              icon: Icon(Icons.edit_outlined, size: 18, color: _c.primary),
-                              tooltip: '编辑',
-                              onPressed: () => _edit(p),
-                            ),
-                            IconButton(
-                              icon: Icon(Icons.undo, size: 18, color: _c.textSub),
-                              tooltip: '撤销',
-                              onPressed: () => _revoke(p),
-                            ),
-                          ],
-                        ),
+                        trailing: Text('¥${p['amount']}',
+                            style: TextStyle(fontWeight: FontWeight.w700, color: _c.success)),
+                        // 交互与出货统一：点击=编辑、长按=撤销（不再放三个点菜单）
+                        onTap: () => _edit(p),
+                        onLongPress: () => _revoke(p),
                       ),
                     ),
                   if (_payments.isEmpty)
