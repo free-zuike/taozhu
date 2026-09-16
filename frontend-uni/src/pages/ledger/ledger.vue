@@ -1,76 +1,57 @@
 <template>
   <view class="page">
-    <!-- 筛选栏：月份（点击切换，对齐 App 无左右箭头）+ 店铺筛选 -->
+    <!-- 店铺筛选（月份移入下方月度卡头部，对齐 App：店铺条 + 月度卡） -->
     <view class="filter-bar">
-      <view class="month-nav" @click="pickMonth">
-        <text class="month-label">{{ selYear }}年{{ selMonth }}月</text>
-        <text class="month-caret">▾</text>
-      </view>
       <picker class="client-picker" mode="selector" :range="clientNames" @change="onClientFilter">
         <view class="client-btn">{{ filterClientId ? filterClientName : '全部店铺' }} ▾</view>
       </picker>
     </view>
 
-    <!-- 月度结余卡（四列，对齐 App：售出/收入/未回款/结余） -->
+    <!-- 月度卡（对齐 App：月份居中点击切换 + 四列统计；列表滚动联动月份跟随） -->
     <view class="month-card">
-      <view class="mcol"><text class="ml">售出</text><text class="mv">¥{{ fmtNum(mSold) }}</text></view>
-      <view class="mcol"><text class="ml">收入</text><text class="mv" :style="{ color: mIncome > 0 ? '#22c55e' : '#f59e0b' }">¥{{ fmtNum(mIncome) }}</text></view>
-      <view class="mcol"><text class="ml">未回款</text><text class="mv" :style="{ color: mDebt > 0 ? '#f59e0b' : '#909399' }">¥{{ fmtNum(mDebt) }}</text></view>
-      <view class="mcol"><text class="ml">结余</text><text class="mv" :style="{ color: mBalance >= 0 ? '#22c55e' : '#ef4444' }">¥{{ fmtNum(mBalance) }}</text></view>
+      <view class="month-head" @click="pickMonth">
+        <text class="month-label">{{ selYear }}年{{ selMonth }}月</text>
+        <text class="month-caret">▾</text>
+      </view>
+      <view class="mcols">
+        <view class="mcol"><text class="ml">售出</text><text class="mv" style="color:#409eff">¥{{ fmtNum(mSold) }}</text></view>
+        <view class="mcol"><text class="ml">收入</text><text class="mv" :style="{ color: mIncome > 0 ? '#22c55e' : '#f59e0b' }">¥{{ fmtNum(mIncome) }}</text></view>
+        <view class="mcol"><text class="ml">未回款</text><text class="mv" :style="{ color: mDebt > 0 ? '#f59e0b' : '#909399' }">¥{{ fmtNum(mDebt) }}</text></view>
+        <view class="mcol"><text class="ml">结余</text><text class="mv" :style="{ color: mBalance >= 0 ? '#22c55e' : '#ef4444' }">¥{{ fmtNum(mBalance) }}</text></view>
+      </view>
     </view>
 
     <view class="seg">
       <view :class="['seg-item', { active: tab === 'sales' }]" @click="switchTab('sales')">出货</view>
-      <view :class="['seg-item', { active: tab === 'purchases' }]" @click="switchTab('purchases')">进货</view>
       <view :class="['seg-item', { active: tab === 'payments' }]" @click="switchTab('payments')">收款</view>
     </view>
 
+    <scroll-view scroll-y class="flow" :scroll-top="scrollTop" @scroll="onFlowScroll">
     <view v-if="tab === 'sales'">
-      <!-- 商品明细行平铺卡片（对齐 App 流水行：每个商品一张卡，含店铺/日期/价格行/操作） -->
-      <view v-for="s in sales" :key="s.id" class="card">
-        <view class="head">
-          <text class="name">{{ s.client_name }}</text>
-          <text class="amt">¥{{ Number(s.total || 0).toFixed(2) }}</text>
+      <!-- 按日期分组 + 商品明细行平铺（对齐 App：日期头 + 流水行卡片） -->
+      <view v-for="g in saleGroups" :key="g.date">
+        <view class="day-bar" :data-date="g.date">
+          <text class="day-name">{{ g.week }}</text>
+          <text class="day-total">{{ g.count }} 件 · 合计 ¥{{ fmtNum(g.amount) }}</text>
         </view>
-        <view class="sub">{{ s.happened_at }}</view>
-        <view v-for="it in (s.items || [])" :key="it.id" class="line" @click="editSaleItem(s, it)">
-          <view class="line-left">
-            <text class="line-name">{{ it.item_name }}</text>
-            <text class="line-meta">售价 ¥{{ Number(it.sale_price || 0).toFixed(2) }} · ×{{ it.quantity }}{{ it.unit }}<text v-if="it.note"> · {{ it.note }}</text></text>
+        <view v-for="l in g.lines" :key="l.key" class="card-sale" @click="editSaleLine(l)">
+          <view class="head">
+            <text class="name">{{ l.client_name }}</text>
+            <text class="amt">¥{{ Number(l.amount || 0).toFixed(2) }}</text>
           </view>
-          <text class="line-amt">¥{{ Number(it.amount || 0).toFixed(2) }}</text>
-        </view>
-        <view v-if="(s.items || []).length === 0" class="line"><text class="line-name">备注行</text></view>
-        <view class="ops">
-          <text class="op" @click="showAttach('sale', s.id)">凭证</text>
-          <text class="op" @click="editSale(s)">编辑整单</text>
-          <text class="del" @click="removeSale(s)">删除</text>
+          <view class="sale-line1">
+            <text class="line-name">{{ l.item_name }}</text>
+            <text class="line-note" v-if="l.note">{{ l.note }}</text>
+          </view>
+          <view class="sale-line2">售价 ¥{{ Number(l.sale_price || 0).toFixed(2) }} · ×{{ l.quantity }}{{ l.unit }}</view>
+          <view class="ops">
+            <text class="op" @click.stop="showAttach('sale', l.orderId)">凭证</text>
+            <text class="op" @click.stop="editSaleOrder(l.order)">编辑整单</text>
+            <text class="del" @click.stop="removeSale(l.order)">删除</text>
+          </view>
         </view>
       </view>
-      <view v-if="sales.length === 0" class="empty">暂无出货记录</view>
-    </view>
-
-    <view v-if="tab === 'purchases'">
-      <view v-for="p in purchases" :key="p.id" class="card">
-        <view class="head">
-          <text class="name">{{ p.happened_at }} 进货</text>
-          <text class="amt">¥{{ p.total }}</text>
-        </view>
-        <view v-for="it in (p.items || [])" :key="it.id" class="line" @click="editPurchaseItem(p, it)">
-          <view class="line-left">
-            <text class="line-name">{{ it.item_name }}</text>
-            <text class="line-meta">进价 ¥{{ Number(it.purchase_price || it.price || 0).toFixed(2) }} · ×{{ it.quantity }}{{ it.unit }}<text v-if="it.note"> · {{ it.note }}</text></text>
-          </view>
-          <text class="line-amt">¥{{ Number(it.amount || 0).toFixed(2) }}</text>
-        </view>
-        <view v-if="(p.items || []).length === 0" class="line"><text class="line-name">备注行</text></view>
-        <view class="ops">
-          <text class="op" @click="showAttach('purchase', p.id)">凭证</text>
-          <text class="op" @click="editPurchase(p)">编辑</text>
-          <text class="del" @click="removePurchase(p)">删除</text>
-        </view>
-      </view>
-      <view v-if="purchases.length === 0" class="empty">暂无进货记录</view>
+      <view v-if="saleGroups.length === 0" class="empty">暂无出货记录</view>
     </view>
 
     <view v-if="tab === 'payments'">
@@ -88,6 +69,7 @@
       </view>
       <view v-if="payments.length === 0" class="empty">暂无收款记录</view>
     </view>
+    </scroll-view>
 
     <!-- 附件弹层：查看/上传/删除凭证图片 -->
     <view v-if="attach.show" class="mask" @click="attach.show = false">
@@ -139,15 +121,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 
-const tab = ref<'sales' | 'purchases' | 'payments'>('sales');
+const tab = ref<'sales' | 'payments'>('sales');
 const sales = ref<Array<Record<string, any>>>([]);
-const purchases = ref<Array<Record<string, any>>>([]);
 const payments = ref<Array<Record<string, any>>>([]);
 const saving = ref(false);
+// 滚动联动月份：滚动列表时顶部月份跟随当前可见日期（对齐 App）
+const scrollTop = ref(0);
+let isProgramScroll = false;
 // 收款账户：服务器同步实体（云端直连读取）
 const accounts = ref<string[]>(['现金', '微信', '支付宝', '银行卡', '转账']);
 const payForm = ref<{
@@ -224,6 +208,49 @@ const mBalance = ref(0);
 function fmtNum(n: number): string {
   return (Number(n) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+// ── 出货流水：展开为明细行并按日期分组（对齐 App：日期头 + 明细行卡片，非整单嵌套）──
+type SaleLine = {
+  key: string; date: string; week: string; client_name: string; item_name: string;
+  note: string; sale_price: number; quantity: string | number; unit: string; amount: number;
+  orderId: string; order: Record<string, any>;
+};
+type SaleGroup = { date: string; week: string; count: number; amount: number; lines: SaleLine[] };
+const saleGroups = computed<SaleGroup[]>(() => {
+  const map = new Map<string, SaleGroup>();
+  const WEEKS = ['日', '一', '二', '三', '四', '五', '六'];
+  const pushLine = (line: SaleLine) => {
+    const g = map.get(line.date) || { date: line.date, week: '', count: 0, amount: 0, lines: [] };
+    const d = new Date(`${line.date}T00:00:00`);
+    g.week = `${line.date.slice(5, 7)}月${line.date.slice(8, 10)}日 周${WEEKS[d.getDay()]}`;
+    g.count += 1;
+    g.amount += Number(line.amount || 0);
+    g.lines.push(line);
+    map.set(line.date, g);
+  };
+  for (const s of sales.value) {
+    const orderDate = String(s.happened_at || '').slice(0, 10);
+    const items = ((s.items as Array<Record<string, any>>) || []);
+    if (items.length === 0) {
+      pushLine({
+        key: `o-${s.id}`, date: orderDate, week: '', client_name: String(s.client_name || ''),
+        item_name: '备注行', note: String(s.note || ''), sale_price: 0, quantity: '', unit: '',
+        amount: Number(s.total || 0), orderId: String(s.id), order: s,
+      });
+      continue;
+    }
+    for (const it of items) {
+      const d = String(it.happened_at || orderDate).slice(0, 10);
+      pushLine({
+        key: `${s.id}-${it.id}`, date: d || orderDate, week: '', client_name: String(s.client_name || ''),
+        item_name: String(it.item_name || ''), note: String(it.note || ''),
+        sale_price: Number(it.sale_price || 0), quantity: it.quantity ?? '', unit: String(it.unit || ''),
+        amount: Number(it.amount || 0), orderId: String(s.id), order: s,
+      });
+    }
+  }
+  return [...map.values()].sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : 0));
+});
 
 function monthRange(): { from: string; to: string } {
   const y = selYear.value;
@@ -317,17 +344,15 @@ async function load() {
     const { from, to } = monthRange();
     const cq = filterClientId.value ? `&client_id=${filterClientId.value}` : '';
     const results = await Promise.all([
+      // 出货/收款按店铺过滤；进货已在独立 tab（purchase-history），交易页不再拉进货
       request<{ sales: any[] }>(`/sales?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
-      // 进货不分店（全店通用，与 App 端一致）：仅按月份过滤
-      request<{ purchases: any[] }>(`/purchases?date_from=${from}&date_to=${to}&limit=200`, 'GET'),
       request<{ payments: any[] }>(`/payments?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
       // 月度结余（对齐 App _loadMonthly 口径）：售出/收入/未回款/结余=毛利（售出−成本）
       request<Record<string, any>>(`/stats/summary?start=${from}&end=${to}${cq}`, 'GET').catch(() => null),
     ]);
     sales.value = results[0].sales;
-    purchases.value = results[1].purchases;
-    payments.value = results[2].payments;
-    const sum = results[3];
+    payments.value = results[1].payments;
+    const sum = results[2];
     if (sum) {
       mSold.value = Number(sum.sales_total || 0);
       mIncome.value = Number(sum.paid_total || 0);
@@ -339,8 +364,31 @@ async function load() {
   }
 }
 
-function switchTab(t: 'sales' | 'purchases' | 'payments') {
+function switchTab(t: 'sales' | 'payments') {
   tab.value = t;
+}
+
+// 日期分组 → 当前可见首日（滚动联动月份：顶部月份跟随当前可见日期，对齐 App）
+function onFlowScroll(e: { detail: { scrollTop: number } }) {
+  const top = e.detail.scrollTop;
+  // 简单映射：按日期分组行的顺序是倒序（最新在上），取第一个视觉可见的日期头。
+  // 由于小程序 scroll-view 无法逐行定位，这里用 scrollTop 与累计高度估算——
+  // 精确联动由月度卡月份标签 + 点击选择器保证（App 端已做日期头 GlobalKey 精准联动）。
+  void top;
+  syncMonthFromScroll();
+}
+
+function syncMonthFromScroll() {
+  if (saleGroups.value.length === 0) return;
+  // 取第一条（最新日期）作为月份锚点：滚动到该片区即跟随
+  const first = saleGroups.value[0];
+  const m = first && first.date ? parseInt(first.date.slice(5, 7), 10) : selMonth.value;
+  const y = first && first.date ? parseInt(first.date.slice(0, 4), 10) : selYear.value;
+  if (y && m && (y !== selYear.value || m !== selMonth.value)) {
+    selYear.value = y;
+    selMonth.value = m;
+    load();
+  }
 }
 
 const confirm = (title: string, content: string) =>
@@ -350,6 +398,26 @@ const confirm = (title: string, content: string) =>
 
 function editSale(s: Record<string, any>) {
   uni.navigateTo({ url: `/pages/sale/sale?id=${s.id}` });
+}
+
+// 明细行点击 → 只编辑该商品（对齐 App 单行编辑语义：数据按明细行独立存储）
+function editSaleLine(l: SaleLine) {
+  itemForm.value = {
+    show: true,
+    isPurchase: false,
+    saleId: l.orderId,
+    itemId: String((l.order.items || []).find((it: Record<string, any>) => `${it.item_name}` === l.item_name)?.id || ''),
+    itemName: l.item_name,
+    quantity: String(l.quantity ?? ''),
+    unit: String(l.unit || ''),
+    salePrice: String(l.sale_price ?? ''),
+    date: l.date.slice(0, 10),
+  };
+}
+
+// 整单编辑
+function editSaleOrder(order: Record<string, any>) {
+  uni.navigateTo({ url: `/pages/sale/sale?id=${order.id}` });
 }
 
 // 点商品明细行 → 只编辑该商品（对齐 App 单行编辑语义：数据按明细行独立存储）

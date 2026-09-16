@@ -7,9 +7,33 @@
 			}
 		},
 		{
-			"path": "pages/dashboard/dashboard",
+			"path": "pages/ledger/ledger",
 			"style": {
-				"navigationBarTitleText": "工作台"
+				"navigationBarTitleText": "交易"
+			}
+		},
+		{
+			"path": "pages/stats/stats",
+			"style": {
+				"navigationBarTitleText": "统计"
+			}
+		},
+		{
+			"path": "pages/quick/quick",
+			"style": {
+				"navigationBarTitleText": "记单"
+			}
+		},
+		{
+			"path": "pages/purchase-history/purchase-history",
+			"style": {
+				"navigationBarTitleText": "进货"
+			}
+		},
+		{
+			"path": "pages/my/my",
+			"style": {
+				"navigationBarTitleText": "我的"
 			}
 		},
 		{
@@ -37,12 +61,6 @@
 			}
 		},
 		{
-			"path": "pages/ledger/ledger",
-			"style": {
-				"navigationBarTitleText": "交易"
-			}
-		},
-		{
 			"path": "pages/statement/statement",
 			"style": {
 				"navigationBarTitleText": "对账单"
@@ -67,12 +85,6 @@
 			}
 		},
 		{
-			"path": "pages/stats/stats",
-			"style": {
-				"navigationBarTitleText": "统计"
-			}
-		},
-		{
 			"path": "pages/stocks/stocks",
 			"style": {
 				"navigationBarTitleText": "库存"
@@ -84,9 +96,11 @@
 		"selectedColor": "#409EFF",
 		"backgroundColor": "#ffffff",
 		"list": [
-			{ "pagePath": "pages/dashboard/dashboard", "text": "工作台" },
 			{ "pagePath": "pages/ledger/ledger", "text": "交易" },
-			{ "pagePath": "pages/payments/payments", "text": "收款" }
+			{ "pagePath": "pages/stats/stats", "text": "统计" },
+			{ "pagePath": "pages/quick/quick", "text": "记单" },
+			{ "pagePath": "pages/purchase-history/purchase-history", "text": "进货" },
+			{ "pagePath": "pages/my/my", "text": "我的" }
 		]
 	},
 	"globalStyle": {

@@ -28,9 +28,9 @@ const initialized = ref(true);
 const needTotp = ref(false); // 该账号已开启两步验证，等待输入验证码
 
 onLoad(async () => {
-  // 已有 token：直接进入工作台（免每次重输账号密码）；失效由 api 401 统一踢回登录页
+  // 已有 token：直接进入交易 tab（对齐 App 首项即交易页）；失效由 api 401 统一踢回登录页
   if (getToken()) {
-    uni.switchTab({ url: '/pages/dashboard/dashboard' });
+    uni.switchTab({ url: '/pages/ledger/ledger' });
     return;
   }
   try {
@@ -65,12 +65,15 @@ async function submit() {
       }
       setToken((d as { token: string }).token);
       setRole((d.user?.role as string) || '');
+      uni.setStorageSync('taozhu_username', username.value.trim());
     } else {
       const d = await request<{ token: string; user?: { role?: string } }>('/auth/bootstrap', 'POST', body);
       setToken(d.token);
       setRole((d.user?.role as string) || '');
+      uni.setStorageSync('taozhu_username', username.value.trim());
     }
-    uni.switchTab({ url: '/pages/dashboard/dashboard' });
+    // 对齐 App 底部导航：登录后进「交易」tab（App 首项即交易页）
+    uni.switchTab({ url: '/pages/ledger/ledger' });
   } catch (e) {
     const msg = (e as Error).message || '登录失败';
     uni.showToast({ title: msg, icon: 'none' });
