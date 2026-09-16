@@ -1,15 +1,22 @@
 <template>
   <view class="page">
-    <!-- 筛选栏：月份切换 + 店铺筛选 -->
+    <!-- 筛选栏：月份（点击切换，对齐 App 无左右箭头）+ 店铺筛选 -->
     <view class="filter-bar">
-      <view class="month-nav">
-        <text class="nav-btn" @click="shiftMonth(-1)">‹</text>
-        <text class="month-label" @click="pickMonth">{{ selYear }}年{{ selMonth }}月</text>
-        <text class="nav-btn" @click="shiftMonth(1)">›</text>
+      <view class="month-nav" @click="pickMonth">
+        <text class="month-label">{{ selYear }}年{{ selMonth }}月</text>
+        <text class="month-caret">▾</text>
       </view>
       <picker class="client-picker" mode="selector" :range="clientNames" @change="onClientFilter">
         <view class="client-btn">{{ filterClientId ? filterClientName : '全部店铺' }} ▾</view>
       </picker>
+    </view>
+
+    <!-- 月度结余卡（四列，对齐 App：售出/收入/未回款/结余） -->
+    <view class="month-card">
+      <view class="mcol"><text class="ml">售出</text><text class="mv">¥{{ fmtNum(mSold) }}</text></view>
+      <view class="mcol"><text class="ml">收入</text><text class="mv" :style="{ color: mIncome > 0 ? '#22c55e' : '#f59e0b' }">¥{{ fmtNum(mIncome) }}</text></view>
+      <view class="mcol"><text class="ml">未回款</text><text class="mv" :style="{ color: mDebt > 0 ? '#f59e0b' : '#909399' }">¥{{ fmtNum(mDebt) }}</text></view>
+      <view class="mcol"><text class="ml">结余</text><text class="mv" :style="{ color: mBalance >= 0 ? '#22c55e' : '#ef4444' }">¥{{ fmtNum(mBalance) }}</text></view>
     </view>
 
     <view class="seg">
@@ -19,24 +26,24 @@
     </view>
 
     <view v-if="tab === 'sales'">
+      <!-- 商品明细行平铺卡片（对齐 App 流水行：每个商品一张卡，含店铺/日期/价格行/操作） -->
       <view v-for="s in sales" :key="s.id" class="card">
         <view class="head">
           <text class="name">{{ s.client_name }}</text>
-          <text class="amt">¥{{ s.total }}</text>
+          <text class="amt">¥{{ Number(s.total || 0).toFixed(2) }}</text>
         </view>
         <view class="sub">{{ s.happened_at }}</view>
-        <!-- 商品明细行（对齐 App 交易页：每行一个商品；点击 = 编辑该商品） -->
         <view v-for="it in (s.items || [])" :key="it.id" class="line" @click="editSaleItem(s, it)">
           <view class="line-left">
             <text class="line-name">{{ it.item_name }}</text>
-            <text class="line-meta">{{ it.unit }} · {{ it.quantity }}<text v-if="it.note"> · {{ it.note }}</text></text>
+            <text class="line-meta">售价 ¥{{ Number(it.sale_price || 0).toFixed(2) }} · ×{{ it.quantity }}{{ it.unit }}<text v-if="it.note"> · {{ it.note }}</text></text>
           </view>
           <text class="line-amt">¥{{ Number(it.amount || 0).toFixed(2) }}</text>
         </view>
         <view v-if="(s.items || []).length === 0" class="line"><text class="line-name">备注行</text></view>
         <view class="ops">
           <text class="op" @click="showAttach('sale', s.id)">凭证</text>
-          <text class="op" @click="editSale(s)">编辑</text>
+          <text class="op" @click="editSale(s)">编辑整单</text>
           <text class="del" @click="removeSale(s)">删除</text>
         </view>
       </view>
@@ -49,10 +56,10 @@
           <text class="name">{{ p.happened_at }} 进货</text>
           <text class="amt">¥{{ p.total }}</text>
         </view>
-        <view v-for="it in (p.items || [])" :key="it.id" class="line">
+        <view v-for="it in (p.items || [])" :key="it.id" class="line" @click="editPurchaseItem(p, it)">
           <view class="line-left">
             <text class="line-name">{{ it.item_name }}</text>
-            <text class="line-meta">{{ it.unit }} · {{ it.quantity }}<text v-if="it.note"> · {{ it.note }}</text></text>
+            <text class="line-meta">进价 ¥{{ Number(it.purchase_price || it.price || 0).toFixed(2) }} · ×{{ it.quantity }}{{ it.unit }}<text v-if="it.note"> · {{ it.note }}</text></text>
           </view>
           <text class="line-amt">¥{{ Number(it.amount || 0).toFixed(2) }}</text>
         </view>
@@ -123,9 +130,9 @@
         <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
         <input class="ipt" v-model="itemForm.quantity" type="digit" placeholder="数量" />
         <input class="ipt" v-model="itemForm.unit" placeholder="单位（斤/件/箱…）" />
-        <input class="ipt" v-model="itemForm.salePrice" type="digit" placeholder="售价（元）" />
+        <input class="ipt" v-model="itemForm.salePrice" type="digit" :placeholder="itemForm.isPurchase ? '进价（元）' : '售价（元）'" />
         <input class="ipt" v-model="itemForm.date" placeholder="日期 YYYY-MM-DD" />
-        <button class="btn-save" :disabled="saving" @click="saveSaleItem">{{ saving ? '保存中…' : '保存' }}</button>
+        <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
       </view>
     </view>
   </view>
@@ -149,9 +156,9 @@ const payForm = ref<{
 
 // 单商品编辑（明细行级）：只改该商品数量/售价/单位/日期——数据本就是按明细行独立存储
 const itemForm = ref<{
-  show: boolean; saleId: string; itemId: string; itemName: string;
+  show: boolean; isPurchase: boolean; saleId: string; itemId: string; itemName: string;
   quantity: string; unit: string; salePrice: string; date: string;
-}>({ show: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', date: '' });
+}>({ show: false, isPurchase: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', date: '' });
 
 // ── 附件凭证 ──
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({
@@ -209,6 +216,14 @@ const clients = ref<Array<{ id: string; name: string }>>([]);
 const clientNames = ref<string[]>([]);
 const filterClientId = ref('');
 const filterClientName = ref('');
+// 月度结余（四列，对齐 App _loadMonthly：售出/收入/未回款/结余=毛利）
+const mSold = ref(0);
+const mIncome = ref(0);
+const mDebt = ref(0);
+const mBalance = ref(0);
+function fmtNum(n: number): string {
+  return (Number(n) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 function monthRange(): { from: string; to: string } {
   const y = selYear.value;
@@ -306,10 +321,19 @@ async function load() {
       // 进货不分店（全店通用，与 App 端一致）：仅按月份过滤
       request<{ purchases: any[] }>(`/purchases?date_from=${from}&date_to=${to}&limit=200`, 'GET'),
       request<{ payments: any[] }>(`/payments?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
+      // 月度结余（对齐 App _loadMonthly 口径）：售出/收入/未回款/结余=毛利（售出−成本）
+      request<Record<string, any>>(`/stats/summary?start=${from}&end=${to}${cq}`, 'GET').catch(() => null),
     ]);
     sales.value = results[0].sales;
     purchases.value = results[1].purchases;
     payments.value = results[2].payments;
+    const sum = results[3];
+    if (sum) {
+      mSold.value = Number(sum.sales_total || 0);
+      mIncome.value = Number(sum.paid_total || 0);
+      mDebt.value = Number(sum.debt || 0);
+      mBalance.value = Number(sum.gross_profit || 0);
+    }
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
@@ -332,6 +356,7 @@ function editSale(s: Record<string, any>) {
 function editSaleItem(s: Record<string, any>, it: Record<string, any>) {
   itemForm.value = {
     show: true,
+    isPurchase: false,
     saleId: String(s.id),
     itemId: String(it.id || ''),
     itemName: String(it.item_name || ''),
@@ -342,7 +367,22 @@ function editSaleItem(s: Record<string, any>, it: Record<string, any>) {
   };
 }
 
-async function saveSaleItem() {
+// 点进货明细行 → 只编辑该商品（进价/数量/单位/日期）
+function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
+  itemForm.value = {
+    show: true,
+    isPurchase: true,
+    saleId: String(p.id),
+    itemId: String(it.id || ''),
+    itemName: String(it.item_name || ''),
+    quantity: String(it.quantity ?? ''),
+    unit: String(it.unit || ''),
+    salePrice: String(it.purchase_price ?? it.price ?? ''),
+    date: String(it.happened_at || p.happened_at || '').slice(0, 10),
+  };
+}
+
+async function saveItem() {
   const qty = Number(itemForm.value.quantity);
   if (!qty || qty <= 0) {
     uni.showToast({ title: '请输入有效数量', icon: 'none' });
@@ -354,12 +394,21 @@ async function saveSaleItem() {
   }
   saving.value = true;
   try {
-    await request(`/sales/items/${itemForm.value.itemId}`, 'PATCH', {
-      quantity: qty,
-      unit: itemForm.value.unit,
-      sale_price: Number(itemForm.value.salePrice) || 0,
-      happened_at: itemForm.value.date,
-    });
+    if (itemForm.value.isPurchase) {
+      await request(`/purchases/items/${itemForm.value.itemId}`, 'PATCH', {
+        quantity: qty,
+        unit: itemForm.value.unit,
+        purchase_price: Number(itemForm.value.salePrice) || 0,
+        happened_at: itemForm.value.date,
+      });
+    } else {
+      await request(`/sales/items/${itemForm.value.itemId}`, 'PATCH', {
+        quantity: qty,
+        unit: itemForm.value.unit,
+        sale_price: Number(itemForm.value.salePrice) || 0,
+        happened_at: itemForm.value.date,
+      });
+    }
     uni.showToast({ title: '已保存', icon: 'success' });
     itemForm.value.show = false;
     load();
@@ -447,8 +496,13 @@ async function removePayment(p: Record<string, any>) {
 .page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
 .filter-bar { display: flex; justify-content: space-between; align-items: center; background: #fff; border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; }
 .month-nav { display: flex; align-items: center; }
-.nav-btn { font-size: 40rpx; color: #409eff; padding: 0 16rpx; }
 .month-label { font-size: 28rpx; font-weight: bold; }
+.month-caret { font-size: 22rpx; color: #909399; margin-left: 6rpx; }
+/* 月度结余四列卡（对齐 App 月度卡） */
+.month-card { display: flex; background: #fff; border-radius: 12rpx; padding: 20rpx 16rpx; margin-bottom: 16rpx; border: 1rpx solid #ebeef5; }
+.mcol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6rpx; }
+.ml { font-size: 22rpx; color: #909399; }
+.mv { font-size: 30rpx; font-weight: bold; color: #303133; }
 .client-btn { font-size: 26rpx; color: #409eff; border: 1rpx solid #409eff; border-radius: 8rpx; padding: 6rpx 16rpx; }
 .seg { display: flex; background: #fff; border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: #909399; }

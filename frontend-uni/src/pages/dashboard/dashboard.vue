@@ -120,7 +120,12 @@ onShow(async () => {
 });
 
 function go(url: string) {
-  uni.navigateTo({ url });
+  // tabBar 页必须用 switchTab（navigateTo 跳 tabBar 静默失败）；其余普通页用 navigateTo
+  if (url === '/pages/ledger/ledger' || url === '/pages/payments/payments') {
+    uni.switchTab({ url });
+  } else {
+    uni.navigateTo({ url });
+  }
 }
 </script>
 

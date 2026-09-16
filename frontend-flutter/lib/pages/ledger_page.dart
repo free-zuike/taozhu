@@ -128,29 +128,6 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
-  /// 切换月份（±1 月）：月度结余 + 流水列表联动（选几月显示几月）
-  void _shiftMonth(int delta) {
-    final y = _selYear;
-    final m = _selMonth + delta;
-    if (m < 1) {
-      _selYear = y - 1;
-      _selMonth = 12;
-    } else if (m > 12) {
-      _selYear = y + 1;
-      _selMonth = 1;
-    } else {
-      _selMonth = m;
-    }
-    // 不能滑到未来月份：当前年时月份上限=当前月（数据不会在未来产生）
-    final now = DateTime.now();
-    if (_selYear > now.year || (_selYear == now.year && _selMonth > now.month)) {
-      _selYear = now.year;
-      _selMonth = now.month;
-    }
-    _load();
-    _loadMonthly();
-  }
-
   /// 月份选择弹层（点标题切换年月：只选年月，无需选日）
   Future<void> _pickMonth() async {
     final picked = await showYearMonthPicker(
@@ -493,22 +470,19 @@ class _LedgerPageState extends State<LedgerPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 头部：月份切换——左右箭头切月，点年月弹选择器
+          // 头部：月份切换——点击年月弹选择器（对齐参考项目：无左右箭头，点选切换）
           Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              IconButton(
-                tooltip: '上一月',
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.chevron_left, size: 20, color: c.textSub),
-                onPressed: () => _shiftMonth(-1),
-              ),
               InkWell(
                 borderRadius: BorderRadius.circular(8),
                 onTap: _pickMonth,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   child: Row(
                     children: [
+                      Icon(Icons.calendar_month_outlined, size: 16, color: c.primary),
+                      const SizedBox(width: 4),
                       Text('$y年$m月',
                           style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.textMain)),
                       const SizedBox(width: 2),
@@ -516,12 +490,6 @@ class _LedgerPageState extends State<LedgerPage> {
                     ],
                   ),
                 ),
-              ),
-              IconButton(
-                tooltip: '下一月',
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.chevron_right, size: 20, color: c.textSub),
-                onPressed: () => _shiftMonth(1),
               ),
               const Spacer(),
             ],
