@@ -56,10 +56,18 @@ class _LedgerPageState extends State<LedgerPage> {
   bool _mLoaded = false; // 月度结余是否已加载（未加载显示占位符，不闪 0）
   int _selYear = DateTime.now().year; // 月度结余所选年份（头部月份切换）
   int _selMonth = DateTime.now().month; // 所选月份
+  /// 列表滚动联动：顶部月份跟随当前可见日期（对齐参考实现的日期头可见性 → 月份标签切换）。
+  /// 每个日期分组头一个 GlobalKey，滚动时取视口内最顶部可见的日期头 → 解析年月 → 更新 _selYear/_selMonth。
+  final Map<String, GlobalKey> _dateHeaderKeys = {};
+  ScrollController? _flowCtrl;
+  Timer? _scrollMonthDebounce;
+  bool _scrollPicking = false; // 编程滚动中选择月份（别让滚动回调又改回）
 
   @override
   void initState() {
     super.initState();
+    // 列表滚动联动月份：对齐参考实现的"日期头可见性 → 顶部月份标签跟随切换"
+    _flowCtrl = ScrollController()..addListener(_onFlowScroll);
     // 店员账号：仅当天出货视角（后端强制当天）
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _isStaff = r == 'staff');
@@ -74,6 +82,9 @@ class _LedgerPageState extends State<LedgerPage> {
   @override
   void dispose() {
     _syncDebounce?.cancel();
+    _flowCtrl?.removeListener(_onFlowScroll);
+    _flowCtrl?.dispose();
+    _scrollMonthDebounce?.cancel();
     SyncService.version.removeListener(_onSync);
     super.dispose();
   }
@@ -136,11 +147,63 @@ class _LedgerPageState extends State<LedgerPage> {
       month: _selMonth,
     );
     if (picked == null) return;
+    // 编程切换到选中月份后，滚动列表定位到该月首日（滚动联动月份随选中同步）
+    _scrollPicking = true;
     setState(() {
       _selYear = picked.year;
       _selMonth = picked.month;
     });
-    _load();
+    _loadMonthly(); // 月度结余卡数据跟随选中月份
+    _scrollToMonth(picked.year, picked.month);
+    Future.delayed(const Duration(milliseconds: 600), () => _scrollPicking = false);
+  }
+
+  /// 选中月份后：滚动列表到该月第一条（精确滚动到日期头）
+  void _scrollToMonth(int year, int month) {
+    final prefix = '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}';
+    final key = _dateHeaderKeys.entries
+        .where((e) => e.key.startsWith(prefix))
+        .map((e) => e.value)
+        .firstOrNull;
+    final ctx = key?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 400), alignment: 0.0);
+    }
+  }
+
+  /// 列表滚动 → 顶部月份跟随当前可见日期（对齐参考实现的日期头可见性联动）：
+  /// 遍历日期头 keys，取最顶部可见（视口内 dy 最小且已滚过顶）的日期头 → 更新月份标签。
+  void _onFlowScroll() {
+    if (_scrollPicking) return; // 编程滚动选择月份时不联动（防回跳）
+    _scrollMonthDebounce?.cancel();
+    _scrollMonthDebounce = Timer(const Duration(milliseconds: 100), _syncMonthFromScroll);
+  }
+
+  void _syncMonthFromScroll() {
+    if (!mounted || _scrollPicking) return;
+    // 找视口内最顶部的日期头：dy 最小且位于列表区域（取已挂载的 key 中 dy 最小者）
+    double? bestDy;
+    String? bestDate;
+    for (final e in _dateHeaderKeys.entries) {
+      final ctx = e.value.currentContext;
+      final ro = ctx?.findRenderObject();
+      if (ro is! RenderBox || !ro.attached) continue;
+      final dy = ro.localToGlobal(Offset.zero).dy;
+      if (bestDy == null || dy < bestDy) {
+        bestDy = dy;
+        bestDate = e.key;
+      }
+    }
+    if (bestDate == null || bestDate.length < 7) return;
+    final y = int.tryParse(bestDate.substring(0, 4));
+    final m = int.tryParse(bestDate.substring(5, 7));
+    if (y == null || m == null) return;
+    if (y == _selYear && m == _selMonth) return;
+    setState(() {
+      _selYear = y;
+      _selMonth = m;
+    });
+    // 月份变化 → 月度结余卡数据跟随所选月份（静默刷新，失败保留占位）
     _loadMonthly();
   }
 
@@ -1214,29 +1277,34 @@ class _LedgerPageState extends State<LedgerPage> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
+        controller: _flowCtrl,
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
         children: [
           for (final e in grouped.entries) ...[
             // 日期栏 = 该日全部明细的编辑入口（点行编辑对应商品；不跨日期改期）
-            InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: () => _openBatchEdit(e.key, e.value),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(4, 12, 4, 2),
-                child: Row(
-                  children: [
-                    Icon(Icons.edit_calendar_outlined, size: 15, color: c.primary),
-                    const SizedBox(width: 4),
-                    Text(_weekday(e.key),
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.textMain)),
-                    const Spacer(),
-                    Text(
-                      '${e.value.length} 件 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + ((l['amount'] as num?)?.toDouble() ?? 0)))}',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSub),
-                    ),
-                    const SizedBox(width: 2),
-                    Icon(Icons.chevron_right, size: 16, color: c.textSub),
-                  ],
+            // GlobalKey：滚动联动月份（取视口内最顶部日期头 → 顶部月份跟随切换）
+            KeyedSubtree(
+              key: _dateHeaderKeys.putIfAbsent(e.key, GlobalKey.new),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => _openBatchEdit(e.key, e.value),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 12, 4, 2),
+                  child: Row(
+                    children: [
+                      Icon(Icons.edit_calendar_outlined, size: 15, color: c.primary),
+                      const SizedBox(width: 4),
+                      Text(_weekday(e.key),
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.textMain)),
+                      const Spacer(),
+                      Text(
+                        '${e.value.length} 件 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + ((l['amount'] as num?)?.toDouble() ?? 0)))}',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSub),
+                      ),
+                      const SizedBox(width: 2),
+                      Icon(Icons.chevron_right, size: 16, color: c.textSub),
+                    ],
+                  ),
                 ),
               ),
             ),
