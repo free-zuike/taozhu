@@ -603,6 +603,7 @@ async function removePayment(p: Record<string, any>) {
 .ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
 .op { color: #409eff; font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
+.tip-longpress { color: #c0c4cc; font-size: 22rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }

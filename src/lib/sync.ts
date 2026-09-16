@@ -184,7 +184,7 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
     const qty = Number(it.quantity) || 0;
     const itemId = String(it.item_id ?? '').trim();
     // 行级校验：数量 ≤0 或 item_id 为空（客户端坏行/脏数据）→ 跳过不插入，防 JOIN items 失败产出"无明细/未分类/价0"脏行
-    if (qty <= 0 || itemId.isEmpty) continue;
+    if (qty <= 0 || itemId === '') continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.sale_price) || 0) * 100) / 100;
     batch.push(db.prepare(
       'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -214,7 +214,7 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
     const qty = Number(it.quantity) || 0;
     const itemId = String(it.item_id ?? '').trim();
     // 行级校验：数量 ≤0 或 item_id 为空（客户端坏行/脏数据）→ 跳过不插入，防 JOIN items 失败产出"无明细/未分类/价0"脏行
-    if (qty <= 0 || itemId.isEmpty) continue;
+    if (qty <= 0 || itemId === '') continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.purchase_price) || 0) * 100) / 100;
     batch.push(db.prepare(
       'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',

@@ -179,6 +179,22 @@ function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
   };
 }
 
+// 明细行长按 → 只删除该商品行（与出货侧对称；不再整单删除）
+async function deletePurchaseLine(p: Record<string, any>, it: Record<string, any>) {
+  if (!it.id) {
+    uni.showToast({ title: '该行无独立明细，无法单独删除', icon: 'none' });
+    return;
+  }
+  if (!(await confirm('删除商品', `确定删除「${it.item_name}」这一行吗？仅删除该商品，库存自动回滚。`))) return;
+  try {
+    await request(`/purchases/items/${it.id}`, 'DELETE');
+    uni.showToast({ title: '已删除该商品', icon: 'success' });
+    load();
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
+  }
+}
+
 async function saveItem() {
   const qty = Number(itemForm.value.quantity);
   if (!qty || qty <= 0) {
@@ -274,6 +290,7 @@ async function removeAttach(key: string) {
 .ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
 .op { color: #409eff; font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
+.tip-longpress { color: #c0c4cc; font-size: 22rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
