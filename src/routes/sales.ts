@@ -144,6 +144,21 @@ salesRouter.get('/', async (c) => {
     list.push(d);
     bySale.set(saleId2, list);
   }
+  // 行级主记录数组（去单据化：每条商品一行，自带店铺/日期/备注/金额——客户端主读数）
+  const saleItemRows = saleIds.length > 0
+    ? await c.env.DB.prepare(
+        `SELECT si.id, si.sale_id, si.client_id, c.name AS client_name, si.item_id, i.name AS item_name,
+                i.category AS item_category, si.unit, si.quantity, si.sale_price, si.cost_price, si.amount,
+                COALESCE(si.happened_at, s.happened_at) AS happened_at,
+                COALESCE(NULLIF(si.note, ''), s.note) AS note, si.created_by
+         FROM sale_items si
+         LEFT JOIN sales s ON s.id = si.sale_id
+         LEFT JOIN clients c ON c.id = si.client_id
+         LEFT JOIN items i ON i.id = si.item_id
+         WHERE si.sale_id IN (${placeholders})
+         ORDER BY si.created_at`,
+      ).bind(...saleIds).all()
+    : { results: [] as unknown[] };
   return c.json({
     total: countRow?.cnt ?? 0,
     sales: rows.results.map((r) => {
@@ -153,6 +168,11 @@ salesRouter.get('/', async (c) => {
         happened_at: row.happened_at, note: row.note ?? '', total: row.total,
         items: bySale.get(row.id) ?? [],
       };
+    }),
+    // 去单据化主结构：行级商品记录（新客户端优先读，整单 sales 字段兼容保留）
+    sale_items: saleItemRows.results.map((x) => {
+      const r = x as Record<string, unknown>;
+      return user.role === 'staff' ? { ...r, cost_price: 0 } : r;
     }),
   });
 });

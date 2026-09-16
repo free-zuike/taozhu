@@ -54,16 +54,15 @@
     </view>
 
     <view v-if="tab === 'payments'">
-      <view v-for="p in payments" :key="p.id" class="card">
+      <view v-for="p in payments" :key="p.id" class="card" @click="editPayment(p)" @longpress="removePayment(p)">
         <view class="head">
           <text class="name">{{ p.client_name }}</text>
           <text class="amt" style="color:#67c23a">¥{{ p.amount }}</text>
         </view>
         <view class="sub">{{ p.happened_at }}<text v-if="p.method"> · {{ p.method }}</text></view>
         <view class="ops">
-          <text class="op" @click="showAttach('payment', p.id)">凭证</text>
-          <text class="op" @click="editPayment(p)">编辑</text>
-          <text class="del" @click="removePayment(p)">删除</text>
+          <text class="op" @click.stop="showAttach('payment', p.id)">凭证</text>
+          <text class="tip-longpress" @click.stop>长按撤销该收款</text>
         </view>
       </view>
       <view v-if="payments.length === 0" class="empty">暂无收款记录</view>

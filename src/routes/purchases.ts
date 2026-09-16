@@ -88,6 +88,7 @@ purchasesRouter.post('/', async (c) => {
 
 // GET /purchases?date_from=&date_to=&limit=&offset=
 purchasesRouter.get('/', async (c) => {
+  const user = c.get('user');
   const dateFrom = c.req.query('date_from')?.trim();
   const dateTo = c.req.query('date_to')?.trim();
   const { limit, offset } = parsePage(c.req.query('limit'), c.req.query('offset'));
@@ -118,11 +119,30 @@ purchasesRouter.get('/', async (c) => {
     list.push(d);
     byId.set(pid, list);
   }
+  // 行级主记录数组（去单据化：每条商品一行，自带日期/备注/金额——客户端主读数）
+  const purchaseItemRows = ids.length > 0
+    ? await c.env.DB.prepare(
+        `SELECT pi.id, pi.purchase_id, pi.item_id, i.name AS item_name, i.category AS item_category,
+                pi.unit, pi.quantity, pi.purchase_price, pi.amount,
+                COALESCE(pi.happened_at, p.happened_at) AS happened_at,
+                COALESCE(NULLIF(pi.note, ''), p.note) AS note, pi.created_by
+         FROM purchase_items pi
+         LEFT JOIN purchases p ON p.id = pi.purchase_id
+         LEFT JOIN items i ON i.id = pi.item_id
+         WHERE pi.purchase_id IN (${ph})
+         ORDER BY pi.created_at`,
+      ).bind(...ids).all()
+    : { results: [] as unknown[] };
   return c.json({
     total: countRow?.cnt ?? 0,
     purchases: rows.results.map((r) => {
       const row = r as unknown as { id: string; happened_at: string; note: string; total: number };
       return { id: row.id, happened_at: row.happened_at, note: row.note ?? '', total: row.total, items: byId.get(row.id) ?? [] };
+    }),
+    // 去单据化主结构：行级商品记录（新客户端优先读，整单 purchases 字段兼容保留）
+    purchase_items: purchaseItemRows.results.map((x) => {
+      const r = x as Record<string, unknown>;
+      return user.role === 'staff' ? { ...r, purchase_price: 0 } : r;
     }),
   });
 });
