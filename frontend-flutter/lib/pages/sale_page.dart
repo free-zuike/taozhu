@@ -770,11 +770,50 @@ class _SalePageState extends State<SalePage> {
       Map<String, dynamic>? last;
       if (kIsWeb) {
         final d = await Api.instance.get('/sales?limit=1');
-        last = ((d['sales'] as List?) ?? []).cast<Map<String, dynamic>>().firstOrNull;
+        // 去单据化主结构：优先行级 sale_items（组装最近一笔），否则整单嵌套兼容
+        final rows = (d['sale_items'] as List?) ?? [];
+        if (rows is List && rows.isNotEmpty) {
+          final grouped = <String, List<Map<String, dynamic>>>{};
+          for (final r in rows.cast<Map<String, dynamic>>()) {
+            final oid = '${r['sale_id'] ?? ''}';
+            if (oid.isEmpty) continue;
+            (grouped[oid] ??= []).add(r);
+          }
+          if (grouped.isNotEmpty) {
+            final lastOid = grouped.keys.last;
+            final items = grouped[lastOid]!;
+            last = {
+              'id': lastOid, 'client_id': items.first['client_id'] ?? '',
+              'client_name': items.first['client_name'] ?? '',
+              'happened_at': items.first['happened_at'] ?? '',
+              'note': items.first['note'] ?? '',
+              'items': items,
+            };
+          }
+        }
+        last ??= ((d['sales'] as List?) ?? []).cast<Map<String, dynamic>>().firstOrNull;
       } else {
-        final sales = await LocalDb.getAll('sales');
-        sales.sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
-        last = sales.firstOrNull;
+        // 本地行级主记录优先组装最近一笔；整单镜像兜底
+        final rowSales = await LocalDb.getAll('sale_items');
+        if (rowSales.isNotEmpty) {
+          rowSales.sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+          final lastOid = '${rowSales.first['sale_id'] ?? ''}';
+          if (lastOid.isNotEmpty) {
+            final items = rowSales.where((r) => '${r['sale_id']}' == lastOid).toList();
+            last = {
+              'id': lastOid, 'client_id': items.first['client_id'] ?? '',
+              'client_name': items.first['client_name'] ?? '',
+              'happened_at': items.first['happened_at'] ?? '',
+              'note': items.first['note'] ?? '',
+              'items': items,
+            };
+          }
+        }
+        last ??= await (() async {
+          final sales = await LocalDb.getAll('sales');
+          sales.sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+          return sales.firstOrNull;
+        })();
       }
       if (last == null) {
         toast(context, '暂无历史出货单');
