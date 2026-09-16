@@ -819,6 +819,8 @@ class _LedgerPageState extends State<LedgerPage> {
         final updatedItems = items.where((it) => '${it['id']}' != itemId).toList();
         if (updatedItems.isEmpty) {
           // 删的是该条记录最后一商品 → 整条记录删除（不留空壳单，与 Web 级联语义一致）
+          await SyncService.cleanupLocalAttachmentsOf('sale_item', itemId);
+          await SyncService.cleanupLocalAttachmentsOf('sale', '${order['id']}');
           await LocalDb.deleteOne('sales', '${order['id']}');
           await SyncService.enqueueChange(
               entityType: 'sale', entitySyncId: '${order['id']}', action: 'delete', payload: {});
@@ -826,6 +828,8 @@ class _LedgerPageState extends State<LedgerPage> {
           _load();
           return;
         }
+        // 非末行：该行凭证附件副本一并清（attachments/sale_item/{itemId}/），再镜像移除该行
+        await SyncService.cleanupLocalAttachmentsOf('sale_item', itemId);
         final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
         payload['total'] = updatedItems.fold<double>(
             0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
@@ -870,7 +874,8 @@ class _LedgerPageState extends State<LedgerPage> {
       if (kIsWeb) {
         await Api.instance.delete('/sales/$orderId');
       } else {
-        // 原生：先删本地行（立即生效），再入同步队列（其他设备 pull 到 delete 后同步删除）
+        // 原生：先清附件副本（需镜像 items 定位行级目录）再删本地行（立即生效），再入同步队列
+        await SyncService.cleanupLocalAttachmentsOf('sale', orderId);
         await LocalDb.deleteOne('sales', orderId);
         await SyncService.enqueueChange(
             entityType: 'sale', entitySyncId: orderId, action: 'delete', payload: {});
@@ -992,7 +997,8 @@ class _LedgerPageState extends State<LedgerPage> {
       if (kIsWeb) {
         await Api.instance.delete('/payments/${p['id']}');
       } else {
-        // 原生本地优先：本地删行 + 队列推送 delete + 立即推送（删除即时生效，防复活）
+        // 原生本地优先：先清附件副本再本地删行 + 队列推送 delete + 立即推送（删除即时生效，防复活）
+        await SyncService.cleanupLocalAttachmentsOf('payment', '${p['id']}');
         await LocalDb.deleteOne('payments', '${p['id']}');
         await SyncService.enqueueChange(
             entityType: 'payment', entitySyncId: '${p['id']}', action: 'delete', payload: {});

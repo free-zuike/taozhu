@@ -501,7 +501,7 @@ class SyncService {
               } else if (action == 'delete') {
                 // 先清本地附件副本再删镜像：行级目录清理需读镜像 items 拿明细行 id，
                 // 镜像先删则读不到 → attachments/sale_item/{lineId}/ 漏删残留孤儿副本
-                await _cleanupLocalAttachmentsOf(entityType, id);
+                await cleanupLocalAttachmentsOf(entityType, id);
                 await LocalDb.deleteOne(store, id);
                 applied = true;
               } else {
@@ -769,10 +769,11 @@ class SyncService {
     return null;
   }
 
-  /// pull 删除单据类实体后：清理本地附件副本（单据级目录 + 明细行级目录）。
+  /// 清理本地附件副本（单据级目录 + 明细行级目录）：
   /// 本地副本按 attachments/{entity}/{id}/ 组织；行级 = attachments/sale_item|purchase_item/{lineId}/。
-  /// 对齐参考 pull 删除路径的本地磁盘清理（删除以引用变更流驱动，不留本地孤儿）。
-  static Future<void> _cleanupLocalAttachmentsOf(String entityType, String id) async {
+  /// **必须在本地镜像删除之前调用**——明细行级目录定位依赖镜像 items 里的行 id
+  /// （sale/purchase 的镜像一旦删除就读不到行）。删除引用流驱动：服务端删 → 其他端 pull 删；本端删 → 删镜像前清副本。
+  static Future<void> cleanupLocalAttachmentsOf(String entityType, String id) async {
     try {
       final root = await getApplicationDocumentsDirectory();
       final base = Directory('${root.path}/attachments');

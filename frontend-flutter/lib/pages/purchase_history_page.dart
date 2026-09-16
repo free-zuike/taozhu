@@ -214,7 +214,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       if (kIsWeb) {
         await Api.instance.delete('/purchases/${p['id']}');
       } else {
-        // 原生本地优先：本地删行 + 队列推送 delete + 立即推送（删除即时生效，防复活）
+        // 原生本地优先：先清附件副本（需镜像 items 定位行级目录）再本地删行 + 队列推送
+        await SyncService.cleanupLocalAttachmentsOf('purchase', '${p['id']}');
         await LocalDb.deleteOne('purchases', '${p['id']}');
         await SyncService.enqueueChange(
             entityType: 'purchase', entitySyncId: '${p['id']}', action: 'delete', payload: {});
@@ -269,6 +270,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         final updatedItems = items.where((it) => '${it['id']}' != rowId).toList();
         if (updatedItems.isEmpty) {
           // 删的是该条记录最后一商品 → 整条记录删除（不留空壳，与 Web 级联语义一致）
+          await SyncService.cleanupLocalAttachmentsOf('purchase_item', rowId);
+          await SyncService.cleanupLocalAttachmentsOf('purchase', '${order['id']}');
           await LocalDb.deleteOne('purchases', '${order['id']}');
           await SyncService.enqueueChange(
               entityType: 'purchase', entitySyncId: '${order['id']}', action: 'delete', payload: {});
@@ -276,6 +279,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
           _load();
           return;
         }
+        // 非末行：该行凭证附件副本一并清（attachments/purchase_item/{rowId}/），再镜像移除该行
+        await SyncService.cleanupLocalAttachmentsOf('purchase_item', rowId);
         final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
         payload['total'] = updatedItems.fold<double>(
             0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
