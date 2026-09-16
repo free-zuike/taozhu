@@ -269,6 +269,9 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
   const batch: D1PreparedStatement[] = [
     c.env.DB.prepare('UPDATE sales SET client_id = ?, happened_at = ?, note = ? WHERE id = ?')
       .bind(clientId, happenedAt, note, id),
+    // 换店铺：该记录全部商品行同步迁移店铺（商品行自带 client_id，与头保持一致）
+    c.env.DB.prepare('UPDATE sale_items SET client_id = ? WHERE sale_id = ?')
+      .bind(clientId, id),
   ];
   let total: number;
   if (body?.items !== undefined) {

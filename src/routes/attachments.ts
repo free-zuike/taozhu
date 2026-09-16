@@ -98,9 +98,9 @@ attachmentsRouter.post('/counts', async (c) => {
     const rows = await c.env.DB.prepare(`SELECT id FROM ${entity}s WHERE client_id = ?`).bind(clientId).all<{ id: string }>();
     ids = rows.results.map((r) => r.id);
   } else if (clientId && entity === 'sale_item') {
-    // 行级附件按店铺聚合：JOIN sales 取该店全部出货单的明细行 id
+    // 行级附件按店铺聚合：商品行自带 client_id，不再 JOIN sales 头表
     const rows = await c.env.DB.prepare(
-      `SELECT si.id FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.client_id = ?`,
+      `SELECT id FROM sale_items WHERE client_id = ?`,
     ).bind(clientId).all<{ id: string }>();
     ids = rows.results.map((r) => r.id);
   } else {

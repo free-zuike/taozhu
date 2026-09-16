@@ -33,11 +33,11 @@ stocksRouter.get('/', async (c) => {
     const ph = new Set(keys);
     const itemIds = [...ph].map((k) => k.split('\u0000')[0]);
     const units = [...ph].map((k) => k.split('\u0000')[1]);
-    // 按 商品+单位 近 30 天出货行均值（避免跨单位混算）
+    // 按 商品+单位 近 30 天出货行均值（避免跨单位混算；商品行自带日期，不再 JOIN 单据头）
     const avgRows = await c.env.DB.prepare(
       `SELECT si.item_id, si.unit, AVG(si.quantity) AS avg_qty
-       FROM sale_items si JOIN sales s ON s.id = si.sale_id
-       WHERE s.happened_at >= date('now','-30 day')
+       FROM sale_items si
+       WHERE si.happened_at >= date('now','-30 day')
          AND si.item_id IN (${itemIds.map(() => '?').join(',')})
        GROUP BY si.item_id, si.unit`,
     ).bind(...itemIds).all<{ item_id: string; unit: string; avg_qty: number }>();

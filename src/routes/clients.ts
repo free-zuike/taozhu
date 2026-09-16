@@ -20,13 +20,13 @@ async function categoryErr(db: D1Database, categoryId: string | null | undefined
 }
 
 // GET /clients?q= — 列表（含欠款余额、分类名）
-const SALES_TOTAL_SUB = '(SELECT sa.client_id, SUM(si.amount) AS total FROM sale_items si JOIN sales sa ON sa.id = si.sale_id GROUP BY sa.client_id)';
+const SALES_TOTAL_SUB = '(SELECT client_id, SUM(amount) AS total FROM sale_items GROUP BY client_id)';
 clientsRouter.get('/', async (c) => {
   const q = c.req.query('q')?.trim() ?? '';
   const sql = `SELECT c.*, cat.name AS category_name, COALESCE(s.total, 0) AS sales_total, COALESCE(p.total, 0) AS paid_total,
-      (SELECT COUNT(*) FROM sales s2 WHERE s2.client_id = c.id) AS sale_count,
+      (SELECT COUNT(*) FROM sale_items si2 WHERE si2.client_id = c.id) AS sale_count,
       (SELECT COUNT(*) FROM payments p2 WHERE p2.client_id = c.id) AS payment_count,
-      (SELECT MIN(substr(s2.happened_at, 1, 10)) FROM sales s2 WHERE s2.client_id = c.id) AS first_book_date
+      (SELECT MIN(substr(si3.happened_at, 1, 10)) FROM sale_items si3 WHERE si3.client_id = c.id) AS first_book_date
       FROM clients c LEFT JOIN categories cat ON cat.id = c.category_id LEFT JOIN ${SALES_TOTAL_SUB} s ON s.client_id = c.id LEFT JOIN (SELECT client_id, SUM(amount + waived) AS total FROM payments GROUP BY client_id) p ON p.client_id = c.id WHERE c.deleted_at IS NULL`;
   const rows = q
     ? await c.env.DB.prepare(`${sql} AND c.name LIKE ? ORDER BY c.name`).bind(`%${q}%`).all()

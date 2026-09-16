@@ -249,11 +249,9 @@ syncRouter.get('/stats', async (c) => {
     db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'item'").first<{ n: number }>(),
     db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'client'").first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>(),
-    // 出货/进货按商品明细行数统计（不是单据数：一张单多商品 = 多明细行）
+    // 出货/进货按商品明细行数统计（不是单据数：一张单多商品 = 多明细行；商品行自带 client_id）
     clientId
-      ? db.prepare(
-          'SELECT COUNT(*) AS n FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.client_id = ?',
-        ).bind(clientId).first<{ n: number }>()
+      ? db.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE client_id = ?').bind(clientId).first<{ n: number }>()
       : db.prepare('SELECT COUNT(*) AS n FROM sale_items').first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM purchase_items').first<{ n: number }>(),
     // 进货不分店铺
