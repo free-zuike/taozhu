@@ -257,8 +257,11 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         payload['total'] = updatedItems.fold<double>(
             0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
         await LocalDb.upsertOne('purchases', payload);
+        // 去单据化：删除走行级 purchase_item delete（服务端删行 + 空则级联整条）
         await SyncService.enqueueChange(
-            entityType: 'purchase', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
+            entityType: 'purchase_item', entitySyncId: rowId, action: 'delete', payload: {
+          'id': rowId, 'purchase_id': '${order['id']}',
+        });
         unawaited(SyncService.pushPending());
       }
       toast(context, '已删除该商品');

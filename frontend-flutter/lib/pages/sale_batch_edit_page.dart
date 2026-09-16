@@ -155,8 +155,11 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
         payload['total'] = updatedItems.fold<double>(
             0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
         await LocalDb.upsertOne('sales', payload);
+        // 去单据化：删除走行级 sale_item delete（服务端删行 + 空则级联整条）
         await SyncService.enqueueChange(
-            entityType: 'sale', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
+            entityType: 'sale_item', entitySyncId: itemId, action: 'delete', payload: {
+          'id': itemId, 'sale_id': '${order['id']}', 'client_id': '${order['client_id'] ?? ''}',
+        });
         unawaited(SyncService.pushPending());
       }
       toast(context, '已删除该商品');

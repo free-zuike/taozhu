@@ -766,7 +766,7 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   /// 删除单条出货商品行（长按商品行触发）：Web 直连 DELETE /sales/items/:id；
-  /// 原生 = 本地镜像删该行 + 整单快照 upsert 入队（服务端整体替换，库存/日期重算）。
+  /// 原生 = 本地镜像删该行 + 行级 delete 入队（去单据化：同步实体是 sale_item 商品行，不再推整单快照）。
   /// 只有无明细（备注占位行）才回退整单删除。
   Future<void> _deleteSaleLine(Map<String, dynamic> l) async {
     final order = l['order'] as Map<String, dynamic>;
@@ -776,7 +776,7 @@ class _LedgerPageState extends State<LedgerPage> {
       await _deleteSaleOrder(order);
       return;
     }
-    final ok = await _confirm('删除商品', '确定删除出货单中的 $name 这一行吗？仅删除该商品，单内其他商品保留；库存自动回滚。');
+    final ok = await _confirm('删除商品', '确定删除 $name 这一行吗？仅删除该商品，其他商品保留；库存自动回滚。');
     if (!ok) return;
     try {
       if (kIsWeb) {
@@ -814,8 +814,11 @@ class _LedgerPageState extends State<LedgerPage> {
           if (maxD.isNotEmpty) payload['happened_at'] = maxD;
         }
         await LocalDb.upsertOne('sales', payload);
+        // 去单据化：删除走行级 sale_item delete（服务端删行 + 空则级联整条）
         await SyncService.enqueueChange(
-            entityType: 'sale', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
+            entityType: 'sale_item', entitySyncId: itemId, action: 'delete', payload: {
+          'id': itemId, 'sale_id': '${order['id']}', 'client_id': '${order['client_id'] ?? ''}',
+        });
       }
       toast(context, '已删除该商品');
       _load();
