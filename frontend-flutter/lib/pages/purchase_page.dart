@@ -52,6 +52,9 @@ class _PurchasePageState extends State<PurchasePage> {
 
   bool get _editing => widget.editId != null;
 
+  /// 编辑模式原单行 id 集合（保存时对被删行发 purchase_item delete，防"删的行服务端复活"）
+  Set<String> _origItemIds = {};
+
   /// 新建模式表单默认日期：优先 initDate（如进货记录日期栏补录当天），否则今天；编辑模式忽略
   String _initDate() {
     if (!_editing) {
@@ -168,6 +171,7 @@ class _PurchasePageState extends State<PurchasePage> {
       _noteCtrl.text = '${data['note'] ?? ''}';
       final items = ((data['items'] as List?) ?? []).cast<Map<String, dynamic>>();
       _rows.clear();
+      _origItemIds = items.map((it) => '${it['id'] ?? ''}').where((x) => x.isNotEmpty).toSet();
       var skipped = 0;
       for (final it in items) {
         final itemId = '${it['item_id']}';
@@ -571,14 +575,26 @@ class _PurchasePageState extends State<PurchasePage> {
     }
     // 本地优先：整单落库（列表立即展示）→ 逐商品行入队（去单据化：同步实体是 purchase_item 商品行）
     await LocalDb.upsertOne('purchases', payload);
+    final keptIds = <String>{};
     for (final r in valid) {
       final rowPayload = Map<String, dynamic>.from(r.itemsPayload ?? {});
-      if (rowPayload.isNotEmpty) {
+      if (rowPayload.isNotEmpty && r.rowId.isNotEmpty) {
+        keptIds.add(r.rowId);
         await SyncService.enqueueChange(
           entityType: 'purchase_item',
-          entitySyncId: '${r.rowId}',
+          entitySyncId: r.rowId,
           action: 'upsert',
           payload: rowPayload,
+        );
+      }
+    }
+    // 编辑模式：原单行被删除的行 → 行级 delete（防"删的行服务端复活"）
+    if (_editing) {
+      final removedIds = _origItemIds.difference(keptIds);
+      for (final rid in removedIds) {
+        await SyncService.enqueueChange(
+          entityType: 'purchase_item', entitySyncId: rid, action: 'delete',
+          payload: {'id': rid, 'purchase_id': purchaseId},
         );
       }
     }

@@ -61,6 +61,8 @@ class _SalePageState extends State<SalePage> {
   final _noteCtrl = TextEditingController();
   bool _busy = false;
   Map<String, double> _lastQty = {}; // price_id → 上次数量（选单位自动带出）
+  /// 编辑模式原单行 id 集合（保存时对被删行发 sale_item delete，防"删除的行服务端复活"）
+  Set<String> _origItemIds = {};
 
   bool get _editing => widget.editId != null;
 
@@ -213,6 +215,7 @@ class _SalePageState extends State<SalePage> {
       _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
       final items = ((data['items'] as List?) ?? []).cast<Map<String, dynamic>>();
       _rows.clear();
+      _origItemIds = items.map((it) => '${it['id'] ?? ''}').where((x) => x.isNotEmpty).toSet();
       var skipped = 0;
       for (final it in items) {
         final itemId = '${it['item_id']}';
@@ -721,14 +724,26 @@ class _SalePageState extends State<SalePage> {
     // 先写本地库（列表/账本立即可见，不卡网络）
     await LocalDb.upsertOne('sales', payload);
     // 入待推送队列：按商品行逐行入队（去单据化——同步实体是 sale_item 商品行，不再有"整单"）
+    final keptIds = <String>{};
     for (final r in valid) {
       final rowPayload = Map<String, dynamic>.from(r.itemsPayload ?? {});
-      if (rowPayload.isNotEmpty) {
+      if (rowPayload.isNotEmpty && r.rowId.isNotEmpty) {
+        keptIds.add(r.rowId);
         await SyncService.enqueueChange(
           entityType: 'sale_item',
-          entitySyncId: '${r.rowId}',
+          entitySyncId: r.rowId,
           action: 'upsert',
           payload: rowPayload,
+        );
+      }
+    }
+    // 编辑模式：原单行被删除的行 → 行级 delete（防"删的行服务端复活"）
+    if (_editing) {
+      final removedIds = _origItemIds.difference(keptIds);
+      for (final rid in removedIds) {
+        await SyncService.enqueueChange(
+          entityType: 'sale_item', entitySyncId: rid, action: 'delete',
+          payload: {'id': rid, 'sale_id': saleId, 'client_id': _clientId ?? ''},
         );
       }
     }
