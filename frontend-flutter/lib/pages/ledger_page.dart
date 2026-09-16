@@ -254,6 +254,8 @@ class _LedgerPageState extends State<LedgerPage> {
   /// ③ Web 无本地库，仍直连服务器读取。
   Future<void> _load() async {
     final firstLocal = await LocalDb.getAllByName('clients');
+    // 页面展示层仍按"整单镜像"渲染（fullSync 双写整单+行级 store）；行级同步实体在 write/delete 层生效，
+    // 物理删表（页面层全面切换行记录）待后续改造完成后再推进
     final allSales = await LocalDb.getAll('sales');
     final allPays = await LocalDb.getAll('payments');
     // 商品分类映射（明细行第二行显示分类）：原生读本地库镜像，Web 拉简化目录

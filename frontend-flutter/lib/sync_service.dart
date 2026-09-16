@@ -356,13 +356,19 @@ class SyncService {
       final sales = (d['sales'] as List?) ?? [];
       final purchases = (d['purchases'] as List?) ?? [];
       final payments = (d['payments'] as List?) ?? [];
+      // 去单据化主结构：行级商品记录（每条商品=一条主记录）
+      final saleItemRows = (d['sale_items'] as List?) ?? [];
+      final purchaseItemRows = (d['purchase_items'] as List?) ?? [];
       await LocalDb.putAll('clients', clients.cast<Map<String, dynamic>>());
       await LocalDb.putAll('items', items.cast<Map<String, dynamic>>());
       await LocalDb.putAll('categories', categories.cast<Map<String, dynamic>>());
       await LocalDb.putAll('payment_accounts', accounts.cast<Map<String, dynamic>>());
+      // 整单镜像仍写（历史/展示兼容），行级主记录另存，页面按行读取
       await LocalDb.putAll('sales', sales.cast<Map<String, dynamic>>());
       await LocalDb.putAll('purchases', purchases.cast<Map<String, dynamic>>());
       await LocalDb.putAll('payments', payments.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('sale_items', saleItemRows.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('purchase_items', purchaseItemRows.cast<Map<String, dynamic>>());
       // 合并回写：本地未推送的 upsert（服务器没有/旧值）以本地版本覆盖，离线录入不丢
       for (final e in pendingLocal.entries) {
         if (e.value.isEmpty) continue;

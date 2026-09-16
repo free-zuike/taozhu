@@ -302,6 +302,21 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       `UPDATE sale_items SET client_id = (SELECT s.client_id FROM sales s WHERE s.id = sale_items.sale_id)
        WHERE client_id IS NULL OR client_id = ''`,
     ).run();
+    // v0.17.104.0 彻底去单据化：商品行升级为独立主记录，头表字段（创建人/幂等键）全部并入行
+    for (const t of ['sale_items', 'purchase_items'] as const) {
+      await ensureColumn(db, t, 'created_by', 'TEXT');
+    }
+    for (const t of ['sale_items', 'purchase_items'] as const) {
+      await ensureColumn(db, t, 'sync_key', 'TEXT');
+    }
+    await db.prepare(
+      `UPDATE sale_items SET created_by = (SELECT s.created_by FROM sales s WHERE s.id = sale_items.sale_id)
+       WHERE created_by IS NULL OR created_by = ''`,
+    ).run();
+    await db.prepare(
+      `UPDATE purchase_items SET created_by = (SELECT p.created_by FROM purchases p WHERE p.id = purchase_items.purchase_id)
+       WHERE created_by IS NULL OR created_by = ''`,
+    ).run();
     // v0.17.82.0：明细行 happened_at 为 NULL 的历史行回填单据日期（此后查询可直接走列索引，无需 COALESCE 包裹导致全表扫）
     await db.prepare(
       `UPDATE sale_items SET happened_at = (SELECT s.happened_at FROM sales s WHERE s.id = sale_items.sale_id)

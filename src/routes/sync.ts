@@ -168,25 +168,39 @@ syncRouter.get('/full', async (c) => {
   const paRows = await db.prepare('SELECT id, name, bank_name, card_last_four, sort FROM payment_accounts ORDER BY sort, name').all();
   const payment_accounts = paRows.results.map((x) => ({ ...(x as Record<string, unknown>) }));
 
-  // 收支单据：id/店铺/日期/备注/总额 + 明细（分页全量，数据量通常有限）
-  const saleRows = await db.prepare(
+  // 收支单据：行级下发（去单据化——每条商品即主记录，自带店铺/日期/备注）
+  // 旧字段 sales/purchases（整单嵌套）仅作兼容，新客户端优先读 sale_items/purchase_items 行数组
+  const saleItems = await db.prepare(
+    `SELECT si.id, si.sale_id, si.client_id, c.name AS client_name, si.item_id, i.name AS item_name,
+            i.category AS item_category, si.unit, si.quantity, si.sale_price, si.cost_price, si.amount,
+            COALESCE(si.happened_at, s.happened_at) AS happened_at,
+            COALESCE(NULLIF(si.note, ''), s.note) AS note,
+            si.created_by, si.sync_key
+     FROM sale_items si
+     JOIN items i ON i.id = si.item_id
+     LEFT JOIN sales s ON s.id = si.sale_id
+     LEFT JOIN clients c ON c.id = si.client_id
+     ORDER BY si.created_at`,
+  ).all();
+  const salesRows = await db.prepare(
     `SELECT s.id, s.client_id, c.name AS client_name, s.happened_at, s.note,
        (SELECT COALESCE(SUM(si.amount),0) FROM sale_items si WHERE si.sale_id = s.id) AS total
      FROM sales s JOIN clients c ON c.id = s.client_id ORDER BY s.happened_at`,
   ).all();
-  const saleIds = saleRows.results.map((r) => (r as { id: string }).id);
-  const saleItems = saleIds.length > 0
+  // 旧整单结构：保持兼容（新客户端不再依赖）
+  const saleIds = salesRows.results.map((r) => (r as { id: string }).id);
+  const saleDetail = saleIds.length > 0
     ? await db.prepare(
         `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id IN (${saleIds.map(() => '?').join(',')}) ORDER BY si.created_at`,
       ).bind(...saleIds).all()
     : { results: [] as unknown[] };
   const bySale = new Map<string, unknown[]>();
-  for (const d of saleItems.results) {
+  for (const d of saleDetail.results) {
     const list = bySale.get((d as { sale_id: string }).sale_id) ?? [];
     list.push(d);
     bySale.set((d as { sale_id: string }).sale_id, list);
   }
-  const sales = saleRows.results.map((x) => {
+  const sales = salesRows.results.map((x) => {
     const r = x as Record<string, unknown>;
     const items2 = (bySale.get(String(r.id)) ?? []).map((q) => {
       const p = q as Record<string, unknown>;
@@ -195,19 +209,30 @@ syncRouter.get('/full', async (c) => {
     return { id: r.id, client_id: r.client_id, client_name: r.client_name, happened_at: r.happened_at, note: r.note ?? '', total: r.total ?? 0, items: items2 };
   });
 
+  const purchaseItems = await db.prepare(
+    `SELECT pi.id, pi.purchase_id, pi.item_id, i.name AS item_name, i.category AS item_category,
+            pi.unit, pi.quantity, pi.purchase_price, pi.amount,
+            COALESCE(pi.happened_at, p.happened_at) AS happened_at,
+            COALESCE(NULLIF(pi.note, ''), p.note) AS note,
+            pi.created_by, pi.sync_key
+     FROM purchase_items pi
+     JOIN items i ON i.id = pi.item_id
+     LEFT JOIN purchases p ON p.id = pi.purchase_id
+     ORDER BY pi.created_at`,
+  ).all();
   const purchaseRows = await db.prepare(
     `SELECT p.id, p.happened_at, p.note,
        (SELECT COALESCE(SUM(pi.amount),0) FROM purchase_items pi WHERE pi.purchase_id = p.id) AS total
      FROM purchases p ORDER BY p.happened_at`,
   ).all();
   const purchaseIds = purchaseRows.results.map((r) => (r as { id: string }).id);
-  const purchaseItems = purchaseIds.length > 0
+  const purchaseDetail = purchaseIds.length > 0
     ? await db.prepare(
         `SELECT pi.*, i.name AS item_name FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${purchaseIds.map(() => '?').join(',')}) ORDER BY pi.created_at`,
       ).bind(...purchaseIds).all()
     : { results: [] as unknown[] };
   const byPurchase = new Map<string, unknown[]>();
-  for (const d of purchaseItems.results) {
+  for (const d of purchaseDetail.results) {
     const list = byPurchase.get((d as { purchase_id: string }).purchase_id) ?? [];
     list.push(d);
     byPurchase.set((d as { purchase_id: string }).purchase_id, list);
@@ -235,7 +260,10 @@ syncRouter.get('/full', async (c) => {
     return isStaff ? { ...r, cost_price: 0 } : r;
   });
 
-  return c.json({ clients, items, categories, payment_accounts, sales, purchases, payments, stocks, server_cursor: await maxCursor(db) });
+  return c.json({ clients, items, categories, payment_accounts,
+    // 去单据化主结构：行级商品记录数组（前端 fullSync 主读数），sales/purchases 整单仅作兼容
+    sale_items: saleItems.results, purchase_items: purchaseItems.results,
+    sales, purchases, payments, stocks, server_cursor: await maxCursor(db) });
 });
 
 // GET /sync/stats — 服务器端各实体计数 + 变更流游标（同步状态面板/差异诊断用）
