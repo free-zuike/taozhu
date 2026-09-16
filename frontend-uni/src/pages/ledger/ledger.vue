@@ -343,12 +343,16 @@ async function load() {
     const cq = filterClientId.value ? `&client_id=${filterClientId.value}` : '';
     const results = await Promise.all([
       // 出货/收款按店铺过滤；进货已在独立 tab（purchase-history），交易页不再拉进货
-      request<{ sales: any[] }>(`/sales?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
+      request<{ sales: any[]; sale_items?: any[] }>(`/sales?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
       request<{ payments: any[] }>(`/payments?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
       // 月度结余（对齐 App _loadMonthly 口径）：售出/收入/未回款/结余=毛利（售出−成本）
       request<Record<string, any>>(`/stats/summary?start=${from}&end=${to}${cq}`, 'GET').catch(() => null),
     ]);
-    sales.value = results[0].sales;
+    // 去单据化主结构：优先行级 sale_items（每条商品一行，自带店铺/日期/备注），否则整单嵌套兼容
+    const saleItems = results[0].sale_items;
+    sales.value = (saleItems && saleItems.length > 0)
+        ? assembleSalesFromRows(saleItems)
+        : (results[0].sales || []);
     payments.value = results[1].payments;
     const sum = results[2];
     if (sum) {
@@ -360,6 +364,27 @@ async function load() {
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
+}
+
+// 行级商品记录 → 假整单数组（同 sale_id 归并；渲染代码零改动）
+function assembleSalesFromRows(rows: Array<Record<string, any>>): Array<Record<string, any>> {
+  const byOrder = new Map<string, Array<Record<string, any>>>();
+  const meta = new Map<string, Record<string, any>>();
+  for (const r of rows) {
+    const oid = String(r.sale_id || '');
+    if (!oid) continue;
+    if (!byOrder.has(oid)) byOrder.set(oid, []);
+    byOrder.get(oid)!.push(r);
+    meta.set(oid, {
+      id: oid, client_id: r.client_id || '', client_name: r.client_name || '',
+      happened_at: r.happened_at || '', note: r.note || '',
+    });
+  }
+  return [...byOrder.entries()].map(([oid, items]) => {
+    const m = meta.get(oid)!;
+    const total = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+    return { ...m, total, items };
+  });
 }
 
 function switchTab(t: 'sales' | 'payments') {

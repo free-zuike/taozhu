@@ -135,15 +135,37 @@ async function load() {
   try {
     const { from, to } = monthRange();
     const results = await Promise.all([
-      request<{ purchases: any[] }>(`/purchases?date_from=${from}&date_to=${to}&limit=200`, 'GET'),
+      request<{ purchases: any[]; purchase_items?: any[] }>(`/purchases?date_from=${from}&date_to=${to}&limit=200`, 'GET'),
       request<Record<string, any>>(`/stats/summary?start=${from}&end=${to}`, 'GET').catch(() => null),
     ]);
-    purchases.value = results[0].purchases;
+    // 去单据化主结构：优先行级 purchase_items（每条商品一行），否则整单嵌套兼容
+    const purchaseItems = results[0].purchase_items;
+    purchases.value = (purchaseItems && purchaseItems.length > 0)
+        ? assembleFromRows(purchaseItems)
+        : (results[0].purchases || []);
     const sum = results[1];
     if (sum) mExpense.value = Number(sum.purchase_total || 0);
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
+}
+
+// 行级商品记录 → 假整单数组（同 purchase_id 归并；渲染代码零改动）
+function assembleFromRows(rows: Array<Record<string, any>>): Array<Record<string, any>> {
+  const byOrder = new Map<string, Array<Record<string, any>>>();
+  const meta = new Map<string, Record<string, any>>();
+  for (const r of rows) {
+    const oid = String(r.purchase_id || '');
+    if (!oid) continue;
+    if (!byOrder.has(oid)) byOrder.set(oid, []);
+    byOrder.get(oid)!.push(r);
+    meta.set(oid, { id: oid, happened_at: r.happened_at || '', note: r.note || '' });
+  }
+  return [...byOrder.entries()].map(([oid, items]) => {
+    const m = meta.get(oid)!;
+    const total = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+    return { ...m, total, items };
+  });
 }
 
 const confirm = (title: string, content: string) =>
