@@ -49,15 +49,15 @@ async function seed(db: FakeD1) {
     .bind('p-1', 'i-1', '斤', 1, 2).run();
   // 7月：A店出货100（区间前，计入截止欠款）
   await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-0', 'c-a', '2026-07-01').run();
-  await db.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind('si-0', 's-0', 'i-1', '斤', 50, 2, 1, 100, '2026-07-01').run();
+  await db.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind('si-0', 's-0', 'c-a', 'i-1', '斤', 50, 2, 1, 100, '2026-07-01').run();
   // 9月1日：A店出货50（毛利50）、9月2日 B店出货40
   await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-1', 'c-a', '2026-09-01').run();
-  await db.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind('si-1', 's-1', 'i-1', '斤', 25, 2, 1, 50, '2026-09-01').run();
+  await db.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind('si-1', 's-1', 'c-a', 'i-1', '斤', 25, 2, 1, 50, '2026-09-01').run();
   await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-2', 'c-b', '2026-09-02').run();
-  await db.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind('si-2', 's-2', 'i-1', '斤', 20, 2, 1, 40, '2026-09-02').run();
+  await db.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind('si-2', 's-2', 'c-b', 'i-1', '斤', 20, 2, 1, 40, '2026-09-02').run();
   // 9月3日：进货30
   await db.prepare('INSERT INTO purchases (id, happened_at) VALUES (?, ?)').bind('pu-1', '2026-09-03').run();
   await db.prepare('INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
@@ -268,11 +268,11 @@ describe('按店铺分类汇总对账（美食城多档口总账）', () => {
     // 1号档出货 5 斤（100 元，单价 2 → sale_items amount=10，重复两次=20）、2号档出货 10 斤=20
     // 用直接插入保证可控金额（happened_at 用纯日期，与生产格式一致：YYYY-MM-DD）
     await env.DB.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-1', 'stall-1', today).run();
-    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind('si-1', 's-1', 'i-1', '斤', 10, 2, 1, 20, today).run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-1', 's-1', 'stall-1', 'i-1', '斤', 10, 2, 1, 20, today).run();
     await env.DB.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s-2', 'stall-2', today).run();
-    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind('si-2', 's-2', 'i-1', '斤', 15, 2, 1, 30, today).run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-2', 's-2', 'stall-2', 'i-1', '斤', 15, 2, 1, 30, today).run();
     // 1号档收款 8 元（欠 12）
     await env.DB.prepare('INSERT INTO payments (id, client_id, happened_at, amount) VALUES (?, ?, ?, ?)')
       .bind('pay-1', 'stall-1', today, 8).run();

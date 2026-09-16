@@ -85,8 +85,8 @@ salesRouter.post('/', async (c) => {
     saleItemIds.push(siId);
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).bind(siId, saleId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
+        'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).bind(siId, saleId, clientId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
         item.happened_at?.trim() || happenedAt, item.note?.trim() ?? ''),
     );
     // 出货扣减库存
@@ -308,8 +308,8 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       const amount = Math.round(qty * effectiveSale * 100) / 100;
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(randomId(), id, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
+          'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).bind(randomId(), id, clientId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
           item.happened_at?.trim() || happenedAt, item.note?.trim() ?? ''),
       );
       // 按新明细扣减库存

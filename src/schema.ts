@@ -84,6 +84,7 @@ const DDL: string[] = [
     id TEXT PRIMARY KEY,
     sale_id TEXT NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
     item_id TEXT NOT NULL REFERENCES items(id),
+    client_id TEXT,
     unit TEXT NOT NULL,
     quantity REAL NOT NULL CHECK (quantity > 0),
     sale_price REAL NOT NULL DEFAULT 0,

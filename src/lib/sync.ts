@@ -228,9 +228,10 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
     // 行级校验：数量 ≤0 或 item_id 为空（客户端坏行/脏数据）→ 跳过不插入，防 JOIN items 失败产出"无明细/未分类/价0"脏行
     if (qty <= 0 || itemId === '') continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.sale_price) || 0) * 100) / 100;
+    const clientId = String(it.client_id ?? p.client_id ?? '');
     batch.push(db.prepare(
-      'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(it.id ?? randomId(), id, itemId, it.unit ?? '', qty,
+      'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(it.id ?? randomId(), id, clientId, itemId, it.unit ?? '', qty,
       Number(it.sale_price) || 0, Number(it.cost_price) || 0, Math.round(amount * 100) / 100,
       it.happened_at || p.happened_at || null, it.note ?? ''));
     batch.push(stockDelta(db, itemId, it.unit ?? '', -qty));
