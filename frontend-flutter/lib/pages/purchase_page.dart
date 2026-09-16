@@ -572,12 +572,15 @@ class _PurchasePageState extends State<PurchasePage> {
     // 本地优先：整单落库（列表立即展示）→ 逐商品行入队（去单据化：同步实体是 purchase_item 商品行）
     await LocalDb.upsertOne('purchases', payload);
     for (final r in valid) {
-      await SyncService.enqueueChange(
-        entityType: 'purchase_item',
-        entitySyncId: '${r.rowId}',
-        action: 'upsert',
-        payload: Map<String, dynamic>.from(r.itemsPayload ?? {}),
-      );
+      final rowPayload = Map<String, dynamic>.from(r.itemsPayload ?? {});
+      if (rowPayload.isNotEmpty) {
+        await SyncService.enqueueChange(
+          entityType: 'purchase_item',
+          entitySyncId: '${r.rowId}',
+          action: 'upsert',
+          payload: rowPayload,
+        );
+      }
     }
     await Freq.bump(valid.map((r) => r.priceId ?? ''));
     for (final r in valid) {

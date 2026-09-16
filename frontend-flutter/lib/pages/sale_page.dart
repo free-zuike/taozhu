@@ -722,12 +722,15 @@ class _SalePageState extends State<SalePage> {
     await LocalDb.upsertOne('sales', payload);
     // 入待推送队列：按商品行逐行入队（去单据化——同步实体是 sale_item 商品行，不再有"整单"）
     for (final r in valid) {
-      await SyncService.enqueueChange(
-        entityType: 'sale_item',
-        entitySyncId: '${r.rowId}',
-        action: 'upsert',
-        payload: Map<String, dynamic>.from(r.itemsPayload),
-      );
+      final rowPayload = Map<String, dynamic>.from(r.itemsPayload ?? {});
+      if (rowPayload.isNotEmpty) {
+        await SyncService.enqueueChange(
+          entityType: 'sale_item',
+          entitySyncId: '${r.rowId}',
+          action: 'upsert',
+          payload: rowPayload,
+        );
+      }
     }
     // 使用频率计数（本地，影响记单页商品排序）
     await Freq.bump(valid.map((r) => r.priceId ?? ''));
