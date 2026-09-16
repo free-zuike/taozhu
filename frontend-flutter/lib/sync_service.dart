@@ -338,10 +338,15 @@ class SyncService {
     }
   }
 
-  /// 首次全量同步（新设备/重装）：拉全部实体一次到位，比逐条 pull 快
+  /// 首次全量同步（新设备/重装）：拉全部实体一次到位，比逐条 pull 快。
+  /// 本地优先保护：putAll 会先清空本地 store 再写服务器快照——若存在**未推送成功**的本地
+  /// upsert（push 失败/离线录入），服务器快照不含这些新记录，清空会抹掉本地数据。
+  /// 因此覆盖前先收集本地待推送实体版本，覆盖后按本地版本合并回写（本地未推送=权威）。
   static Future<int> fullSync() async {
     if (kIsWeb) return 0;
     try {
+      // 覆盖前收集：本地待推送 upsert 的实体当前本地版本（仅 upsert；delete 语义=本地也要删，无需保护）
+      final pendingLocal = await _pendingUpsertRows();
       final d = await Api.instance.get('/sync/full');
       if (d == null) return 0;
       final clients = (d['clients'] as List?) ?? [];
@@ -358,6 +363,11 @@ class SyncService {
       await LocalDb.putAll('sales', sales.cast<Map<String, dynamic>>());
       await LocalDb.putAll('purchases', purchases.cast<Map<String, dynamic>>());
       await LocalDb.putAll('payments', payments.cast<Map<String, dynamic>>());
+      // 合并回写：本地未推送的 upsert（服务器没有/旧值）以本地版本覆盖，离线录入不丢
+      for (final e in pendingLocal.entries) {
+        if (e.value.isEmpty) continue;
+        await LocalDb.upsertList(e.key, e.value);
+      }
       final cursor = d['server_cursor'] as int? ?? 0;
       final p = await SharedPreferences.getInstance();
       await p.setInt(_cursorKey, cursor);
@@ -371,6 +381,33 @@ class SyncService {
       _lastSyncFailed = true;
       return 0;
     }
+  }
+
+  /// 收集本地待推送 upsert 的实体当前版本（按 store 分组；仅 upsert——delete 无需保护）。
+  /// fullSync 覆盖前调用；覆盖后用返回结果合并回写未推送成功的新增/修改。
+  static Future<Map<String, List<Map<String, dynamic>>>> _pendingUpsertRows() async {
+    final out = <String, List<Map<String, dynamic>>>{};
+    try {
+      final pending = await LocalDb.getPendingChanges();
+      final want = <String, Set<String>>{};
+      for (final ch in pending) {
+        if ('${ch['action'] ?? 'upsert'}' != 'upsert') continue;
+        final store = _storeOf('${ch['entity_type'] ?? ''}');
+        if (store.isEmpty) continue;
+        final id = '${ch['entity_sync_id'] ?? ''}';
+        if (id.isEmpty) continue;
+        (want[store] ??= {}).add(id);
+      }
+      for (final e in want.entries) {
+        final rows = <Map<String, dynamic>>[];
+        for (final id in e.value) {
+          final row = await LocalDb.getOne(e.key, id);
+          if (row != null) rows.add(row);
+        }
+        out[e.key] = rows;
+      }
+    } catch (_) {}
+    return out;
   }
 
   /// 增量拉取（按游标；排除自己设备回声）：upsert/delete 合并到本地库

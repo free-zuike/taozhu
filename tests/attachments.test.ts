@@ -513,14 +513,19 @@ describe('附件删除走同步变更流（引用变更流驱动：本地删 →
     });
     const saleId = ((await sale.json()) as { id: string }).id;
     const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
-    // push 单据 upsert（payload 无 attachments 字段——历史/页面保存快照形态）
+    // push 单据 upsert（payload 无 attachments 字段——历史/页面保存快照形态；items 为真实明细行）
     const ts = new Date().toISOString();
+    const itPush = await call(env, 'GET', '/api/v1/items', token);
+    const itemRows = ((await itPush.json()) as { items: Array<{ id: string; prices: Array<{ id: string; unit: string }> }> }).items;
     const push = await call(env, 'POST', '/api/v1/sync/push', token, {
       device_id: 'dev-e',
       changes: [{
         entity_type: 'sale', entity_sync_id: saleId, action: 'upsert',
         updated_at: ts,
-        payload: { id: saleId, client_id: clients.clients[0].id, happened_at: '2026-01-08', note: '', items: [] },
+        payload: {
+          id: saleId, client_id: clients.clients[0].id, happened_at: '2026-01-08', note: '', total: 2.5,
+          items: [{ id: 'si-e1', item_id: itemRows[0].id, unit: '斤', quantity: 1, sale_price: 2.5, cost_price: 2, amount: 2.5, happened_at: '2026-01-08', note: '' }],
+        },
       }],
     });
     expect(((await push.json()) as { accepted: number }).accepted).toBe(1);
@@ -555,12 +560,18 @@ describe('附件删除走同步变更流（引用变更流驱动：本地删 →
     ).bind('ref-shared', up1.key).run();
     // push 单据 upsert：attachments 只保留 up2（up1 被移出）→ 只删本单据 up1 引用；文件因共用保留
     const ts = new Date().toISOString();
+    const itPush = await call(env, 'GET', '/api/v1/items', token);
+    const itemRows = ((await itPush.json()) as { items: Array<{ id: string }> }).items;
     const push = await call(env, 'POST', '/api/v1/sync/push', token, {
       device_id: 'dev-f',
       changes: [{
         entity_type: 'sale', entity_sync_id: saleId, action: 'upsert',
         updated_at: ts,
-        payload: { id: saleId, client_id: clients.clients[0].id, happened_at: '2026-01-09', note: '', items: [], attachments: [up2.key] },
+        payload: {
+          id: saleId, client_id: clients.clients[0].id, happened_at: '2026-01-09', note: '', total: 2.5,
+          items: [{ id: 'si-f1', item_id: itemRows[0].id, unit: '斤', quantity: 1, sale_price: 2.5, cost_price: 2, amount: 2.5, happened_at: '2026-01-09', note: '' }],
+          attachments: [up2.key],
+        },
       }],
     });
     expect(((await push.json()) as { accepted: number }).accepted).toBe(1);

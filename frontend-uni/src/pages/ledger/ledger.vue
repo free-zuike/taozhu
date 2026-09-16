@@ -24,7 +24,16 @@
           <text class="name">{{ s.client_name }}</text>
           <text class="amt">¥{{ s.total }}</text>
         </view>
-        <view class="sub">{{ s.happened_at }} · {{ (s.items || []).length }} 项</view>
+        <view class="sub">{{ s.happened_at }}</view>
+        <!-- 商品明细行（对齐 App 交易页：每行一个商品；点击 = 编辑该商品） -->
+        <view v-for="it in (s.items || [])" :key="it.id" class="line" @click="editSaleItem(s, it)">
+          <view class="line-left">
+            <text class="line-name">{{ it.item_name }}</text>
+            <text class="line-meta">{{ it.unit }} · {{ it.quantity }}<text v-if="it.note"> · {{ it.note }}</text></text>
+          </view>
+          <text class="line-amt">¥{{ Number(it.amount || 0).toFixed(2) }}</text>
+        </view>
+        <view v-if="(s.items || []).length === 0" class="line"><text class="line-name">备注行</text></view>
         <view class="ops">
           <text class="op" @click="showAttach('sale', s.id)">凭证</text>
           <text class="op" @click="editSale(s)">编辑</text>
@@ -40,7 +49,14 @@
           <text class="name">{{ p.happened_at }} 进货</text>
           <text class="amt">¥{{ p.total }}</text>
         </view>
-        <view class="sub">{{ (p.items || []).length }} 项</view>
+        <view v-for="it in (p.items || [])" :key="it.id" class="line">
+          <view class="line-left">
+            <text class="line-name">{{ it.item_name }}</text>
+            <text class="line-meta">{{ it.unit }} · {{ it.quantity }}<text v-if="it.note"> · {{ it.note }}</text></text>
+          </view>
+          <text class="line-amt">¥{{ Number(it.amount || 0).toFixed(2) }}</text>
+        </view>
+        <view v-if="(p.items || []).length === 0" class="line"><text class="line-name">备注行</text></view>
         <view class="ops">
           <text class="op" @click="showAttach('purchase', p.id)">凭证</text>
           <text class="op" @click="editPurchase(p)">编辑</text>
@@ -100,6 +116,18 @@
         <button class="btn-save" :disabled="saving" @click="savePayment">{{ saving ? '保存中…' : '保存' }}</button>
       </view>
     </view>
+
+    <!-- 单商品编辑弹层：点击明细行 = 只编辑该商品（数量/售价/单位/日期，对齐 App 单行编辑） -->
+    <view v-if="itemForm.show" class="mask" @click="itemForm.show = false">
+      <view class="sheet" @click.stop>
+        <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
+        <input class="ipt" v-model="itemForm.quantity" type="digit" placeholder="数量" />
+        <input class="ipt" v-model="itemForm.unit" placeholder="单位（斤/件/箱…）" />
+        <input class="ipt" v-model="itemForm.salePrice" type="digit" placeholder="售价（元）" />
+        <input class="ipt" v-model="itemForm.date" placeholder="日期 YYYY-MM-DD" />
+        <button class="btn-save" :disabled="saving" @click="saveSaleItem">{{ saving ? '保存中…' : '保存' }}</button>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -118,6 +146,12 @@ const accounts = ref<string[]>(['现金', '微信', '支付宝', '银行卡', '�
 const payForm = ref<{
   show: boolean; id: string; amount: string; date: string; method: string; methodIdx: number; note: string;
 }>({ show: false, id: '', amount: '', date: '', method: '', methodIdx: 0, note: '' });
+
+// 单商品编辑（明细行级）：只改该商品数量/售价/单位/日期——数据本就是按明细行独立存储
+const itemForm = ref<{
+  show: boolean; saleId: string; itemId: string; itemName: string;
+  quantity: string; unit: string; salePrice: string; date: string;
+}>({ show: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', date: '' });
 
 // ── 附件凭证 ──
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({
@@ -181,7 +215,9 @@ function monthRange(): { from: string; to: string } {
   const m = selMonth.value;
   const pad = (n: number) => String(n).padStart(2, '0');
   const from = `${y}-${pad(m)}-01`;
-  const to = m === 12 ? `${y + 1}-01-31` : `${y}-${pad(m + 1)}-00`;
+  // 当月最后一天（下月 0 日）
+  const next = new Date(y, m, 0); // m 是 1-12，new Date(y,m,0) = 当月最后一天
+  const to = `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`;
   return { from, to };
 }
 function shiftMonth(delta: number) {
@@ -189,6 +225,12 @@ function shiftMonth(delta: number) {
   let m = selMonth.value + delta;
   if (m < 1) { y--; m = 12; }
   if (m > 12) { y++; m = 1; }
+  // 不能选未来月份（与 App 端一致）：当年不超过当前月
+  const now = new Date();
+  if (y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1)) {
+    y = now.getFullYear();
+    m = now.getMonth() + 1;
+  }
   selYear.value = y;
   selMonth.value = m;
   load();
@@ -209,14 +251,25 @@ function pickMonth() {
 }
 function onClientFilter(e: { detail: { value: number } }) {
   const c = clients.value[e.detail.value];
-  if (c) {
-    filterClientId.value = c.id;
-    filterClientName.value = c.name;
-  } else {
-    filterClientId.value = '';
-    filterClientName.value = '';
-  }
+  if (!c) return;
+  filterClientId.value = c.id;
+  filterClientName.value = c.name;
   load();
+}
+
+async function loadClients() {
+  try {
+    const d = await request<{ clients: Array<{ id: string; name: string }> }>('/clients', 'GET');
+    clients.value = d.clients || [];
+    clientNames.value = clients.value.map((x) => x.name);
+    // 默认选中第一家店（无「全部店铺」选项，与 App 端一致）
+    if (clients.value.length > 0) {
+      filterClientId.value = clients.value[0].id;
+      filterClientName.value = clients.value[0].name;
+    }
+  } catch (e) {
+    clientNames.value = [];
+  }
 }
 
 onShow(async () => {
@@ -228,16 +281,6 @@ onShow(async () => {
   await loadClients();
   await load();
 });
-
-async function loadClients() {
-  try {
-    const d = await request<{ clients: Array<{ id: string; name: string }> }>('/clients', 'GET');
-    clients.value = d.clients || [];
-    clientNames.value = ['全部店铺', ...clients.value.map((x) => x.name)];
-  } catch (e) {
-    clientNames.value = ['全部店铺'];
-  }
-}
 
 async function loadAccounts() {
   try {
@@ -283,6 +326,48 @@ const confirm = (title: string, content: string) =>
 
 function editSale(s: Record<string, any>) {
   uni.navigateTo({ url: `/pages/sale/sale?id=${s.id}` });
+}
+
+// 点商品明细行 → 只编辑该商品（对齐 App 单行编辑语义：数据按明细行独立存储）
+function editSaleItem(s: Record<string, any>, it: Record<string, any>) {
+  itemForm.value = {
+    show: true,
+    saleId: String(s.id),
+    itemId: String(it.id || ''),
+    itemName: String(it.item_name || ''),
+    quantity: String(it.quantity ?? ''),
+    unit: String(it.unit || ''),
+    salePrice: String(it.sale_price ?? ''),
+    date: String(it.happened_at || s.happened_at || '').slice(0, 10),
+  };
+}
+
+async function saveSaleItem() {
+  const qty = Number(itemForm.value.quantity);
+  if (!qty || qty <= 0) {
+    uni.showToast({ title: '请输入有效数量', icon: 'none' });
+    return;
+  }
+  if (!itemForm.value.itemId) {
+    uni.showToast({ title: '该行无独立明细，请用「编辑」整单修改', icon: 'none' });
+    return;
+  }
+  saving.value = true;
+  try {
+    await request(`/sales/items/${itemForm.value.itemId}`, 'PATCH', {
+      quantity: qty,
+      unit: itemForm.value.unit,
+      sale_price: Number(itemForm.value.salePrice) || 0,
+      happened_at: itemForm.value.date,
+    });
+    uni.showToast({ title: '已保存', icon: 'success' });
+    itemForm.value.show = false;
+    load();
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '保存失败', icon: 'none' });
+  } finally {
+    saving.value = false;
+  }
 }
 function editPurchase(p: Record<string, any>) {
   uni.navigateTo({ url: `/pages/purchase/purchase?id=${p.id}` });
@@ -373,7 +458,12 @@ async function removePayment(p: Record<string, any>) {
 .name { font-size: 30rpx; font-weight: bold; }
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }
 .sub { font-size: 26rpx; color: #909399; margin-bottom: 12rpx; }
-.ops { display: flex; justify-content: flex-end; gap: 32rpx; }
+.line { display: flex; justify-content: space-between; align-items: center; padding: 10rpx 0; border-top: 1rpx solid #f5f5f5; }
+.line-left { flex: 1; min-width: 0; }
+.line-name { font-size: 27rpx; color: #303133; display: block; }
+.line-meta { font-size: 22rpx; color: #909399; margin-top: 2rpx; display: block; }
+.line-amt { font-size: 27rpx; font-weight: bold; color: #f56c6c; margin-left: 16rpx; }
+.ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
 .op { color: #409eff; font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }

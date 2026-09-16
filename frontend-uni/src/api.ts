@@ -5,6 +5,7 @@
 
 const TOKEN_KEY = 'taozhu_token';
 const BASE_KEY = 'taozhu_api_base';
+const ROLE_KEY = 'taozhu_role';
 
 export function getToken(): string | null {
   return (uni.getStorageSync(TOKEN_KEY) as string) || null;
@@ -14,6 +15,15 @@ export function setToken(t: string) {
 }
 export function clearToken() {
   uni.removeStorageSync(TOKEN_KEY);
+  uni.removeStorageSync(ROLE_KEY);
+}
+
+/** 当前账号角色（admin=老板 / staff=店员）：登录时存，用于页面按角色隐藏入口（对齐 App：员工看不到老板专属页面） */
+export function getRole(): string {
+  return (uni.getStorageSync(ROLE_KEY) as string) || '';
+}
+export function setRole(r: string) {
+  uni.setStorageSync(ROLE_KEY, r);
 }
 
 /** 服务器地址：登录页可手动填；留空则用当前（H5 同源 / 小程序需填） */

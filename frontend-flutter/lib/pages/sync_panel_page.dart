@@ -225,10 +225,11 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       clientLocalAttach =
           await _localAttachCount('sale', saleIds) + await _localAttachCount('payment', payIds);
     }
-    // 明细行级附件并入当前店铺统计（服务器 + 本地副本）
+    // 明细行级附件并入当前店铺统计（服务器 counts(entity=sale) 已含行级扩展——后端对单据级
+    // 会叠加该单全部明细行前缀（v0.17.88 对齐口径），此处若再加 sale_item 会重复计数；
+    // 本地副本存行级目录 attachments/sale_item/{lineId}/，仍需用行级 ids 单独数本地）
     final slCounts = saleLineCounts;
     if (slCounts != null) {
-      clientServerAttach += ((slCounts['total'] as num?) ?? 0).toInt();
       final lineIds = ((slCounts['ids'] as List?) ?? []).cast<String>();
       clientLocalAttach += await _localAttachCount('sale_item', lineIds);
     }

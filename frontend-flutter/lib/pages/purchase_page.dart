@@ -183,7 +183,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..priceId = price['id'] as String?
           ..quantity = qty
           ..purchasePrice = pp
-          ..happenedAt = '${it['happened_at'] ?? hd}'
+          ..happenedAt = '${it['happened_at'] ?? ''}'
           ..rowId = '${it['id'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit

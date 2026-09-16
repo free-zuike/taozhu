@@ -85,8 +85,8 @@
 		"backgroundColor": "#ffffff",
 		"list": [
 			{ "pagePath": "pages/dashboard/dashboard", "text": "工作台" },
-			{ "pagePath": "pages/sale/sale", "text": "出货" },
-			{ "pagePath": "pages/purchase/purchase", "text": "进货" }
+			{ "pagePath": "pages/ledger/ledger", "text": "交易" },
+			{ "pagePath": "pages/payments/payments", "text": "收款" }
 		]
 	},
 	"globalStyle": {

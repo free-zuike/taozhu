@@ -230,7 +230,7 @@ class _MyPageState extends State<MyPage> {
   }
 
   /// 本地核算统计卡（仅老板）：记账天数（最早一笔记账至今）/ 当前店铺总笔数 / 店铺结余。
-  /// 店铺结余 = 当前店铺收款 − 进货（全店通用）＝结账后的盈利（与交易页月度结余口径一致）。
+  /// 店铺结余 = 毛利（当前店铺售出 − 成本，不含进货——进货为全局支出，与交易页月度结余口径一致）。
   /// Web 无本地库：跳过（显示 0，由老板在 App/统计页查看）。
   Future<void> _loadStats() async {
     if (kIsWeb) return;
@@ -261,25 +261,28 @@ class _MyPageState extends State<MyPage> {
             1;
         if (days < 1) days = 1;
       }
-      // 当前店铺本店交易笔数 = 出货笔数（交易是出货，收款只是出货的一部分——不含收款）
+      // 店铺结余 = 毛利（当前店铺售出 − 成本，不含进货——进货为全局支出，与交易页结余口径一致）
       final selId = await SyncService.selectedClientId();
+      // 本店交易数量 = 商品数量（当前店铺出货明细行数，一张单多商品=多行——用户"应该是商品的数量"）
       final curCount = (selId == null || selId.isEmpty)
           ? 0
-          : sales.where((s) => '${s['client_id']}' == selId).length;
-      // 店铺结余 = 当前店铺收款（含减免=平账） − 进货（全店通用）＝结账后的盈利
-      final paidTotal = pays
-          .where((p) => selId == null || '${p['client_id']}' == selId)
-          .fold<double>(0,
-              (s, x) => s + ((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0));
-      var purchaseTotal = 0.0;
-      try {
-        final buys = await LocalDb.getAll('purchases');
-        purchaseTotal = buys.fold<double>(0, (s, x) => s + ((x['total'] as num?)?.toDouble() ?? 0));
-      } catch (_) {}
+          : sales
+              .where((s) => '${s['client_id']}' == selId)
+              .fold<int>(0, (sum, s) => sum + (((s['items'] as List?) ?? []).length));
+      // 毛利 = Σ(售出单价 − 成本单价) × 数量（明细行 sale_price/cost_price）
+      var grossProfit = 0.0;
+      for (final s in sales) {
+        if (selId != null && '${s['client_id']}' != selId) continue;
+        final items = ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        for (final it in items) {
+          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+          grossProfit += (((it['sale_price'] as num?)?.toDouble() ?? 0) - ((it['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+        }
+      }
       setState(() {
         _bookDays = days;
         _curClientCount = curCount;
-        _totalBalance = paidTotal - purchaseTotal;
+        _totalBalance = grossProfit;
       });
     } catch (_) {}
   }

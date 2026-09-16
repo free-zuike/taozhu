@@ -16,7 +16,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
-import { request, getApiBase, setApiBase, setToken, getToken } from '../../api';
+import { request, getApiBase, setApiBase, setToken, setRole, getToken } from '../../api';
 import { APP_VERSION } from '../../version';
 
 const baseUrl = ref(getApiBase());
@@ -56,7 +56,7 @@ async function submit() {
     const body: Record<string, unknown> = { username: username.value.trim(), password: password.value };
     if (needTotp.value) body.code = code.value.trim();
     if (initialized.value) {
-      const d = await request<{ token: string; need_totp?: boolean }>('/auth/login', 'POST', body);
+      const d = await request<{ token: string; need_totp?: boolean; user?: { role?: string } }>('/auth/login', 'POST', body);
       // 两步验证：密码正确但缺少/错误验证码 → need_totp 让用户补输入（参照 App 端流程）
       if ((d as { need_totp?: boolean }).need_totp) {
         needTotp.value = true;
@@ -64,9 +64,11 @@ async function submit() {
         return;
       }
       setToken((d as { token: string }).token);
+      setRole((d.user?.role as string) || '');
     } else {
-      const d = await request<{ token: string }>('/auth/bootstrap', 'POST', body);
+      const d = await request<{ token: string; user?: { role?: string } }>('/auth/bootstrap', 'POST', body);
       setToken(d.token);
+      setRole((d.user?.role as string) || '');
     }
     uni.switchTab({ url: '/pages/dashboard/dashboard' });
   } catch (e) {

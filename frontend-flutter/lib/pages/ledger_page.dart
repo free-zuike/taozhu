@@ -47,13 +47,12 @@ class _LedgerPageState extends State<LedgerPage> {
   Map<String, int> _payAttachCount = {};
   /// 商品 id → 分类名（出货明细行第二行显示分类，替代无实际数据的交易时间）
   Map<String, String> _itemCategory = {};
-  /// 月度结余（五列式卡片）
+  /// 月度结余（四列式卡片；进货为全局支出、进货页可见，本卡不再展示）
   double _mIncome = 0; // 收入 = 收款（实收，未收为 0）
-  double _mExpense = 0; // 支出 = 进货（全店通用）
   double _mSold = 0; // 售出 = 出货（当前店铺）
   double _mGross = 0; // 毛利 = 售出 − 成本（当前店铺）
   double _mDebt = 0; // 未回款 = 应收欠款（截止 end 累计出货 − 累计收款）
-  double _mBalance = 0; // 结余 = 毛利 − 进货 + 回款（去掉成本且回款了的盈利）
+  double _mBalance = 0; // 结余 = 毛利（售出 − 成本，不含进货）
   bool _mLoaded = false; // 月度结余是否已加载（未加载显示占位符，不闪 0）
   int _selYear = DateTime.now().year; // 月度结余所选年份（头部月份切换）
   int _selMonth = DateTime.now().month; // 所选月份
@@ -96,8 +95,8 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   /// 加载所选月份的月度结余：
-  /// 售出=当前店铺出货、支出=进货（全店通用）、收入=收款、毛利=售出−成本（当前店铺）、
-  /// 未回款=应收欠款（截止 end 累计出货−累计收款）、结余=毛利−进货+回款（去掉成本且回款了的盈利）。
+  /// 售出=当前店铺出货、收入=收款（当前店铺）、毛利=售出−成本（当前店铺）、
+  /// 未回款=应收欠款（截止 end 累计出货−累计收款）、结余=毛利（不含进货——进货为全局支出，进货页可见）。
   /// 店员无统计权限跳过；离线保留上次值。
   Future<void> _loadMonthly() async {
     if (_isStaff) return;
@@ -112,17 +111,15 @@ class _LedgerPageState extends State<LedgerPage> {
           .timeout(const Duration(seconds: 8));
       if (!mounted) return;
       final sold = (d['sales_total'] as num?)?.toDouble() ?? 0;
-      final expense = (d['purchase_total'] as num?)?.toDouble() ?? 0;
       final paid = (d['paid_total'] as num?)?.toDouble() ?? 0;
       final gross = (d['gross_profit'] as num?)?.toDouble() ?? 0;
       final debt = (d['debt'] as num?)?.toDouble() ?? 0;
       setState(() {
         _mSold = sold;
-        _mExpense = expense;
         _mIncome = paid;
         _mGross = gross;
         _mDebt = debt;
-        _mBalance = gross - expense + paid;
+        _mBalance = gross; // 结余 = 毛利（售出 − 成本）
         _mLoaded = true;
       });
     } catch (_) {
@@ -143,6 +140,12 @@ class _LedgerPageState extends State<LedgerPage> {
       _selMonth = 1;
     } else {
       _selMonth = m;
+    }
+    // 不能滑到未来月份：当前年时月份上限=当前月（数据不会在未来产生）
+    final now = DateTime.now();
+    if (_selYear > now.year || (_selYear == now.year && _selMonth > now.month)) {
+      _selYear = now.year;
+      _selMonth = now.month;
     }
     _load();
     _loadMonthly();
@@ -167,8 +170,8 @@ class _LedgerPageState extends State<LedgerPage> {
   static String _fmtDate(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  /// 时间范围 → (起始, 结束)：跟随顶部月份选择器（选几月显示几月），
-  /// 列表/查询与该月联动；不再有"当月/全部"筛选。
+  /// 时间范围 → (起始, 结束)：仅顶部统计卡用（月度结余/毛利/未回款按所选月份）；
+  /// 列表始终显示全部数据（对齐参考实现在同一页看所有交易，用户"切换了月份其他月份都不见了"反馈）
   (String, String)? _rangeDates() {
     return (_fmtDate(DateTime(_selYear, _selMonth, 1)),
         _fmtDate(DateTime(_selYear, _selMonth + 1, 0)));
@@ -176,15 +179,10 @@ class _LedgerPageState extends State<LedgerPage> {
 
   String _dateQuery() => ''; // （进货独立 tab，本页不再使用）
 
-  /// 出货/收款查询：店铺必选 + 时间范围；进货不按店铺（仅时间范围）
+  /// 出货/收款查询：店铺必选（列表显示全部时间，不按月过滤）；进货不按店铺
   String _clientQuery() {
-    final r = _rangeDates();
     final params = <String>[];
     if (_clientId != null) params.add('client_id=$_clientId');
-    if (r != null) {
-      params.add('date_from=${r.$1}');
-      params.add('date_to=${r.$2}');
-    }
     return params.isEmpty ? '' : '?${params.join('&')}';
   }
 
@@ -412,22 +410,14 @@ class _LedgerPageState extends State<LedgerPage> {
     return s.length >= 10 ? s.substring(0, 10) : s;
   }
 
-  /// 本地记录按当前店铺 + 时间范围过滤（与网络接口一致；范围空则不筛日期）
+  /// 本地记录按当前店铺过滤（列表始终显示全部数据可上下滑动，对齐参考实现在同一页看所有交易；
+  /// 月份切换只影响顶部统计卡，不再过滤列表——用户"切换了月份其他月份都不见了"反馈）
   List<Map<String, dynamic>> _filterByClient(List<Map<String, dynamic>> rows, String clientId) {
-    final r = _rangeDates();
-    return rows.where((x) {
-      if ('${x['client_id']}' != clientId) return false;
-      if (r != null) {
-        final d = _date(x['happened_at']);
-        if (d.isEmpty) return false;
-        if (d.compareTo(r.$1) < 0 || d.compareTo(r.$2) > 0) return false;
-      }
-      return true;
-    }).toList();
+    return rows.where((x) => '${x['client_id']}' == clientId).toList();
   }
 
   /// 月度结余卡（四列 + 月份切换）：
-  /// 支出=进货（全店）/ 售出=出货（当前店铺）/ 收入=收款（实收，未收为 0）/ 结余=收入−支出（收款后的盈利）。
+  /// 售出=出货（当前店铺）/ 收入=收款（当前店铺）/ 未回款=应收欠款（当前店铺）/ 结余=毛利（售出−成本，不含进货——进货为全局支出、进货页可见）。
   /// 头部月份可直接切换（← 年月 →）；网络值优先，本地兜底按所选月份+当前店铺算售出/收款。
   Widget _monthlyCard(TaozhuColors c) {
     // 本地快照（所选月份，当前店铺）：明细日期空→单据日期
@@ -469,13 +459,12 @@ class _LedgerPageState extends State<LedgerPage> {
         localGross += (((it['sale_price'] as num?)?.toDouble() ?? 0) - ((it['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
       }
     }
-    // 网络值（精确，含进货/其他设备写入）优先；未加载时本地快照兜底
+    // 网络值（精确，含其他设备写入）优先；未加载时本地快照兜底
     final sold = _mLoaded ? _mSold : localSold;
-    final expense = _mLoaded ? _mExpense : 0.0;
     final income = _mLoaded ? _mIncome : localPaid;
     final gross = _mLoaded ? _mGross : localGross;
     final debt = _mLoaded ? _mDebt : (localSold - localPaid);
-    final balance = _mLoaded ? _mBalance : (localGross - 0.0 + localPaid);
+    final balance = _mLoaded ? _mBalance : localGross; // 结余 = 毛利（售出 − 成本，不含进货）
 
     Widget col(String label, double value, Color color) {
       return Expanded(
@@ -540,11 +529,9 @@ class _LedgerPageState extends State<LedgerPage> {
           const SizedBox(height: 2),
           Row(
             children: [
-              col('支出（进货）', expense, c.danger),
+              col('售出', sold, c.primary),
               const SizedBox(width: 3),
-              col('售出（出货）', sold, c.primary),
-              const SizedBox(width: 3),
-              col('收入（收款）', income, income > 0 ? c.success : c.warning),
+              col('收入', income, income > 0 ? c.success : c.warning),
               const SizedBox(width: 3),
               col('未回款', debt, debt > 0 ? c.warning : c.textSub),
               const SizedBox(width: 3),

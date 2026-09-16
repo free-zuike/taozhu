@@ -166,6 +166,11 @@ export function maskPayload(entityType: string, payload: unknown): unknown {
 // ---------------------------------------------------------------------------
 
 async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any>): Promise<void> {
+  // 明细行缺失/为空（客户端异常 payload）→ 拒绝应用，保留服务器已有明细——防全量覆盖后丢数据
+  const items = p.items as Record<string, any>[] | undefined;
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error('出货单明细缺失（items 为空），保留服务器原明细');
+  }
   await db.prepare(
     `INSERT INTO sales (id, client_id, happened_at, note) VALUES (?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET client_id = excluded.client_id, happened_at = excluded.happened_at, note = excluded.note`,
@@ -190,6 +195,11 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
 }
 
 async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string, any>): Promise<void> {
+  // 明细行缺失/为空（客户端异常 payload）→ 拒绝应用，保留服务器已有明细——防全量覆盖后丢数据
+  const items = p.items as Record<string, any>[] | undefined;
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error('进货单明细缺失（items 为空），保留服务器原明细');
+  }
   await db.prepare(
     `INSERT INTO purchases (id, happened_at, note) VALUES (?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET happened_at = excluded.happened_at, note = excluded.note`,

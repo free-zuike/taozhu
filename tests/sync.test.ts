@@ -294,6 +294,11 @@ describe('同步协议', () => {
     const d1 = (await p1.json()) as { accepted: number; rejected: number };
     expect(d1.accepted).toBe(0);
     expect(d1.rejected).toBe(1);
+    // 老板先建商品（sale_items 外键需真实商品）
+    const itemCreate = await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', category: '蔬菜', prices: [{ unit: '件', purchase_price: 5, sale_price: 10 }],
+    });
+    const item = ((await itemCreate.json()) as { id: string });
     // 老板先在云端建店（真实场景店铺必已存在），staff 推 sale upsert → 接受（送货员记单）
     await call(env, 'POST', '/api/v1/sync/push', token, {
       device_id: 'phone-a',
@@ -306,7 +311,10 @@ describe('同步协议', () => {
       device_id: 'phone-s',
       changes: [{
         entity_type: 'sale', entity_sync_id: 's-x', action: 'upsert',
-        payload: { id: 's-x', client_id: 'c-x', happened_at: '2026-09-20', note: '', items: [] },
+        payload: {
+          id: 's-x', client_id: 'c-x', happened_at: '2026-09-20', note: '',
+          items: [{ id: 'si-x', item_id: item.id, unit: '件', quantity: 1, sale_price: 10, cost_price: 5, amount: 10, happened_at: '2026-09-20', note: '' }],
+        },
         updated_at: ts,
       }],
     });

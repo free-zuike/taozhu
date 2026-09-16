@@ -10,17 +10,17 @@
       <view class="card"><text class="cl">饭店数</text><text class="cv">{{ totals.client_count }}</text></view>
     </view>
 
-    <!-- 功能入口（九宫格图标卡片） -->
+    <!-- 功能入口（九宫格图标卡片；店员隐藏老板专属：饭店/收款/对账/统计/账号管理） -->
     <view class="entries">
       <view class="entry" @click="go('/pages/items/items')"><text class="e-ic e-blue">📦</text><text class="e-tx">商品管理</text></view>
-      <view class="entry" @click="go('/pages/clients/clients')"><text class="e-ic e-orange">🏪</text><text class="e-tx">饭店管理</text></view>
+      <view v-if="isAdmin" class="entry" @click="go('/pages/clients/clients')"><text class="e-ic e-orange">🏪</text><text class="e-tx">饭店管理</text></view>
       <view class="entry" @click="go('/pages/categories/categories')"><text class="e-ic e-purple">🗂️</text><text class="e-tx">分类管理</text></view>
       <view class="entry" @click="go('/pages/ledger/ledger')"><text class="e-ic e-blue">📋</text><text class="e-tx">交易</text></view>
-      <view class="entry" @click="go('/pages/payments/payments')"><text class="e-ic e-green">💰</text><text class="e-tx">收款结账</text></view>
-      <view class="entry" @click="go('/pages/statement/statement')"><text class="e-ic e-cyan">📄</text><text class="e-tx">对账单</text></view>
+      <view v-if="isAdmin" class="entry" @click="go('/pages/payments/payments')"><text class="e-ic e-green">💰</text><text class="e-tx">收款结账</text></view>
+      <view v-if="isAdmin" class="entry" @click="go('/pages/statement/statement')"><text class="e-ic e-cyan">📄</text><text class="e-tx">对账单</text></view>
       <view class="entry" @click="go('/pages/stocks/stocks')"><text class="e-ic e-amber">📊</text><text class="e-tx">库存</text></view>
-      <view class="entry" @click="go('/pages/stats/stats')"><text class="e-ic e-red">📈</text><text class="e-tx">统计</text></view>
-      <view class="entry" @click="go('/pages/users/users')"><text class="e-ic e-gray">👥</text><text class="e-tx">账号管理</text></view>
+      <view v-if="isAdmin" class="entry" @click="go('/pages/stats/stats')"><text class="e-ic e-red">📈</text><text class="e-tx">统计</text></view>
+      <view v-if="isAdmin" class="entry" @click="go('/pages/users/users')"><text class="e-ic e-gray">👥</text><text class="e-tx">账号管理</text></view>
       <view class="entry" @click="openServer"><text class="e-ic e-gray">⚙️</text><text class="e-tx">服务器设置</text></view>
     </view>
 
@@ -50,12 +50,13 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { request, getToken, getApiBase, setApiBase, clearToken } from '../../api';
+import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '../../api';
 
 const today = ref({ sales_total: 0, gross_profit: 0, paid_total: 0, purchase_total: 0, sales_count: 0 });
 const totals = ref({ debt: 0, client_count: 0, all_sales: 0, all_paid: 0, item_count: 0 });
 const topDebt = ref<Array<{ id: string; name: string; debt: number }>>([]);
 const canSeeProfit = ref(true); // 店员看不到毛利（后端 can_see_profit=false 时隐藏）
+const isAdmin = ref(true); // 老板可见全部入口；店员隐藏老板专属（饭店/收款/对账/统计/账号管理，对齐 App）
 const fmt = (n: number) => Number(n || 0).toFixed(2);
 
 // 服务器设置：切换域名（小程序无本地库，切服务器=清 token 回登录页重新登录）
@@ -93,6 +94,18 @@ async function saveServer() {
 onShow(async () => {
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
+    return;
+  }
+  isAdmin.value = getRole() !== 'staff';
+  if (!isAdmin.value) {
+    // 店员：工作台不拉欠款/统计（经营数据仅老板），仅显示今日出货/收款
+    try {
+      const d = await request<{ today: typeof today.value; can_see_profit: boolean }>('/stats/overview', 'GET');
+      today.value = d.today;
+      canSeeProfit.value = d.can_see_profit !== false;
+    } catch (e) {
+      uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
+    }
     return;
   }
   try {
