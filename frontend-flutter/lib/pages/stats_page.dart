@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../local_db.dart';
 import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
@@ -64,7 +65,25 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   void _onSync() {
-    if (mounted) _load(network: true);
+    if (mounted) {
+      // 同步完成：本地库店铺镜像可能更新（新增/改名/删除），刷新店铺选择器后重拉统计
+      _loadClients();
+      _load(network: true);
+    }
+  }
+
+  /// 店铺选择器数据源：优先本地库镜像（零网络、同步完成自动刷新），空则回退 HTTP 缓存。
+  /// 原生端页面加载不发网络请求（本地优先铁律），Web 直连在 _bootstrap 里刷新。
+  Future<void> _loadClients() async {
+    var list = await LocalDb.getAllByName('clients');
+    if (list.isEmpty) {
+      final cachedClients = await Api.instance.getCached('/clients');
+      if (cachedClients != null) {
+        list = ((cachedClients['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+      }
+    }
+    if (!mounted) return;
+    setState(() => _clients = list.cast<Map<String, dynamic>>());
   }
 
   Future<void> _bootstrap() async {
@@ -95,6 +114,9 @@ class _StatsPageState extends State<StatsPage> {
       } catch (e) {
         appLog('net', '统计店铺/年份刷新失败: ${e.toString().split('\n').first}', level: 'error');
       }
+    } else {
+      // 原生：本地库店铺镜像为权威（同步驱动刷新），页面加载零网络
+      await _loadClients();
     }
     await _load(network: kIsWeb);
   }

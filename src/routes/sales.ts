@@ -360,6 +360,10 @@ salesRouter.delete('/items/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM sale_items WHERE id = ?').bind(id),
   ];
   await c.env.DB.batch(batch);
+  // 该行若有凭证附件（行级 sale_item 引用），级联删除引用+R2（best-effort 不阻塞删除）
+  try {
+    await deleteEntityAttachments(c.env, 'sale_item', id);
+  } catch (_) {}
   // 删的是该单最后一行商品 → 单据失去明细，按用户语义（无单据概念）整体删除该单：
   // 级联删 sales 行 + 附件引用，避免服务端残留"无明细"空壳单
   const remain = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE sale_id = ?').bind(saleId).first<{ n: number }>();
@@ -387,12 +391,20 @@ salesRouter.delete('/:id', adminOnly(), async (c) => {
   const oldItems = await c.env.DB.prepare(
     'SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)
     .all<{ item_id: string; unit: string; quantity: number }>();
+  // 行级凭证附件：必须在删 sales 前拿行 id 清理（sale_items 外键级联，删头后行即消失）
+  try {
+    const lineRows = await c.env.DB.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
+      .all<{ id: string }>();
+    for (const lr of lineRows.results) {
+      await deleteEntityAttachments(c.env, 'sale_item', lr.id);
+    }
+  } catch (_) {}
   const batch: D1PreparedStatement[] = oldItems.results
     .map((it) => stockDelta(c.env.DB, it.item_id, it.unit, it.quantity)); // 出货扣的加回
   batch.push(c.env.DB.prepare('DELETE FROM sales WHERE id = ?').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
-  // 删除交易附带的凭证图片（孤儿文件清理，best-effort 不阻塞删除）
+  // 删除交易附带的凭证图片（单据级 + 全部明细行级，best-effort 不阻塞删除）
   try {
     await deleteEntityAttachments(c.env, 'sale', id);
   } catch (_) {}

@@ -1272,23 +1272,6 @@ class _LedgerPageState extends State<LedgerPage> {
     return '$date 周${wd[d.weekday - 1]}';
   }
 
-  /// 卡片右上 ⋯ 菜单：编辑 / 删除（附件图标直接放行内，分类在「点击交易修改」里改）
-  Widget _menu({required VoidCallback edit, required VoidCallback del}) {
-    final c = Theme.of(context).extension<TaozhuColors>()!;
-    return PopupMenuButton<String>(
-      padding: EdgeInsets.zero,
-      icon: Icon(Icons.more_vert, size: 18, color: c.textSub),
-      onSelected: (v) {
-        if (v == 'edit') edit();
-        if (v == 'del') del();
-      },
-      itemBuilder: (_) => [
-        const PopupMenuItem(value: 'edit', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.edit_outlined, size: 18), title: Text('编辑'))),
-        PopupMenuItem(value: 'del', child: ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(Icons.delete_outline, size: 18, color: c.danger), title: Text('删除', style: TextStyle(color: c.danger)))),
-      ],
-    );
-  }
-
   /// 出货流水（商品明细铺开）：按明细行日期分组，每行一条商品
   /// （三行卡片：①商品名称+备注 ②商品分类+附件 ③进价·售价·数量）；点行编辑该商品，附件图标直达凭证。
   Widget _buildSaleFlow(String emptyText) {
@@ -1600,7 +1583,9 @@ class _LedgerPageState extends State<LedgerPage> {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
+        // 交互与出货统一：点击=编辑、长按=删除（撤销），不再有三点菜单
         onTap: () => _editPayment(p),
+        onLongPress: () => _deletePayment(p),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
           child: Row(children: [
@@ -1641,10 +1626,6 @@ class _LedgerPageState extends State<LedgerPage> {
                   ]),
                 ),
               ),
-            _menu(
-              edit: () => _editPayment(p),
-              del: () => _deletePayment(p),
-            ),
           ]),
         ),
       ),

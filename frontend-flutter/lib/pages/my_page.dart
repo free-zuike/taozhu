@@ -230,13 +230,29 @@ class _MyPageState extends State<MyPage> {
   }
 
   /// 本地核算统计卡（仅老板）：记账天数（最早一笔记账至今）/ 当前店铺总笔数 / 店铺结余。
-  /// 店铺结余 = 毛利（当前店铺售出 − 成本，不含进货——进货为全局支出，与交易页月度结余口径一致）。
-  /// Web 无本地库：跳过（显示 0，由老板在 App/统计页查看）。
+  /// 店铺结余 = 当前店铺全部月份毛利（售出 − 成本，不含进货——进货为全局支出，与交易页月度结余口径一致）。
+  /// 原生读本地库镜像；Web 无本地库 → 直连服务器拉全量核算（数据量有限）。
   Future<void> _loadStats() async {
-    if (kIsWeb) return;
     try {
-      final sales = await LocalDb.getAll('sales');
-      final pays = await LocalDb.getAll('payments');
+      List<Map<String, dynamic>> sales = [];
+      List<Map<String, dynamic>> pays = [];
+      List<Map<String, dynamic>> buys = [];
+      if (kIsWeb) {
+        final results = await Future.wait([
+          Api.instance.get('/sales'),
+          Api.instance.get('/payments'),
+          Api.instance.get('/purchases'),
+        ]);
+        sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
+        pays = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+        buys = ((results[2]['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } else {
+        sales = await LocalDb.getAll('sales');
+        pays = await LocalDb.getAll('payments');
+        try {
+          buys = await LocalDb.getAll('purchases');
+        } catch (_) {}
+      }
       if (!mounted) return;
       // 记账天数：取三种单据最早的日期到今天
       var first = '';
@@ -247,10 +263,7 @@ class _MyPageState extends State<MyPage> {
       }
       for (final s in sales) first = minD(first, '${s['happened_at'] ?? ''}');
       for (final p in pays) first = minD(first, '${p['happened_at'] ?? ''}');
-      try {
-        final buys = await LocalDb.getAll('purchases');
-        for (final b in buys) first = minD(first, '${b['happened_at'] ?? ''}');
-      } catch (_) {}
+      for (final b in buys) first = minD(first, '${b['happened_at'] ?? ''}');
       var days = 0;
       final f = DateTime.tryParse(first);
       if (f != null) {
@@ -261,7 +274,7 @@ class _MyPageState extends State<MyPage> {
             1;
         if (days < 1) days = 1;
       }
-      // 店铺结余 = 毛利（当前店铺售出 − 成本，不含进货——进货为全局支出，与交易页结余口径一致）
+      // 店铺结余 = 当前店铺全部月份毛利（售出 − 成本，不含进货）
       final selId = await SyncService.selectedClientId();
       // 本店交易数量 = 商品数量（当前店铺出货明细行数，一张单多商品=多行——用户"应该是商品的数量"）
       final curCount = (selId == null || selId.isEmpty)
@@ -480,6 +493,9 @@ class _MyPageState extends State<MyPage> {
       final isDesktop = defaultTargetPlatform == TargetPlatform.windows ||
           defaultTargetPlatform == TargetPlatform.macOS ||
           defaultTargetPlatform == TargetPlatform.linux;
+      // 本地已有该版本安装包（下载完未安装）→ 直接引导安装，不再重复下载
+      final localApk = (isAndroid || isDesktop) ? await _findLocalApk(ver) : null;
+      if (!mounted) return;
       final action = await showDialog<String>(
         context: context,
         builder: (ctx) {
@@ -507,6 +523,24 @@ class _MyPageState extends State<MyPage> {
                         style: TextStyle(fontSize: 12, color: c.textSub, height: 1.5)),
                   ],
                   const SizedBox(height: 10),
+                  if (localApk != null) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: c.success.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(children: [
+                        Icon(Icons.check_circle, size: 16, color: c.success),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text('本地已有 v$ver 安装包，可直接安装（无需重新下载）',
+                              style: TextStyle(fontSize: 12, color: c.success)),
+                        ),
+                      ]),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
                   Text(
                     isAndroid
                         ? '点击「立即更新」后在后台下载：下拉通知栏可见进度，完成或失败都会在这里提示，可继续使用或退出应用。'
@@ -520,6 +554,8 @@ class _MyPageState extends State<MyPage> {
             ),
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('取消')),
+              if (localApk != null)
+                FilledButton(onPressed: () => Navigator.pop(ctx, 'installLocal'), child: const Text('直接安装')),
               if (isAndroid || isDesktop) ...[
                 TextButton(onPressed: () => Navigator.pop(ctx, 'pick'), child: const Text('选择下载源')),
                 FilledButton(onPressed: () => Navigator.pop(ctx, 'update'), child: const Text('立即更新')),
@@ -540,6 +576,28 @@ class _MyPageState extends State<MyPage> {
       } else if (action == 'copy') {
         await Clipboard.setData(ClipboardData(text: releaseUrl));
         toast(context, '已复制下载链接');
+      } else if (action == 'installLocal') {
+        // 调起系统安装器（Android APK）；桌面包引导手动解压
+        final path = localApk;
+        if (path == null || path.isEmpty) return;
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('安装此安装包？'),
+            content: Text(path.split(Platform.pathSeparator).last),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('安装')),
+            ],
+          ),
+        );
+        if (ok != true) return;
+        final result = await OpenFilex.open(path);
+        if (result.type != ResultType.done) {
+          toast(context, '调起安装失败：${result.message}');
+        } else if (!isAndroid) {
+          toast(context, '已打开安装包目录，请手动解压覆盖安装');
+        }
       }
     } catch (e) {
       toast(context, '检查更新失败：${e.toString().replaceFirst('Exception: ', '')}');
@@ -628,6 +686,39 @@ class _MyPageState extends State<MyPage> {
           return;
         }
       } catch (_) {}
+    }
+  }
+
+  /// 查找本地已下载的该版本安装包（下载完未安装、再次点更新时不再重复下载）：
+  /// Android 走系统 DownloadManager 记录 + 应用下载目录（与清理页同通道）；桌面扫下载/临时目录。
+  Future<String?> _findLocalApk(String ver) async {
+    try {
+      if (kIsWeb) return null;
+      final matches = <String>[];
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        final list = await _dlChannel.invokeMethod<List>('listCache') ?? const [];
+        for (final item in list.cast<Map>()) {
+          final name = '${item['name'] ?? ''}';
+          if (name.contains('-$ver') && name.toLowerCase().endsWith('.apk')) {
+            matches.add('${item['path'] ?? ''}');
+          }
+        }
+      } else {
+        Future<void> scan(Directory? dir) async {
+          if (dir == null || !await dir.exists()) return;
+          await for (final f in dir.list(followLinks: false)) {
+            final name = f.uri.pathSegments.last;
+            if (name.contains('-$ver') && name.toLowerCase().endsWith('.apk')) {
+              matches.add(f.path);
+            }
+          }
+        }
+        await scan(await getDownloadsDirectory());
+        await scan(await getTemporaryDirectory());
+      }
+      return matches.isEmpty ? null : matches.first;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -928,10 +1019,10 @@ class _MyPageState extends State<MyPage> {
         children: [
           _userCard(),
           const SizedBox(height: 12),
-          // 统计卡（仅老板）：记账天数 / 当前店铺总笔数 / 总账本结余（本地核算，秒开）
-          if (_role != 'staff' && !kIsWeb)
+          // 统计卡（仅老板）：记账天数 / 当前店铺总笔数 / 店铺结余（原生本地核算秒开；Web 直连核算）
+          if (_role != 'staff')
             _statsCard(),
-          if (_role != 'staff' && !kIsWeb) const SizedBox(height: 18),
+          if (_role != 'staff') const SizedBox(height: 18),
           // 账号与同步（账号卡下方、经营上方）：同步状态 + 成员（账号设置+账号管理，移到同步下方）
           _card([
             _item(Icons.sync_alt, c.primary, '同步状态', _syncSubtitle(),

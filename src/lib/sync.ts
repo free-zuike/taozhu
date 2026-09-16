@@ -8,7 +8,7 @@ import { stockDelta } from './stock';
 import { randomId } from './password';
 import { notifyClients } from '../services/sync-hub';
 import { createStorage } from '../services/storage';
-import { parseAttachmentKey } from './image-key';
+import { parseAttachmentKey, deleteEntityAttachments } from './image-key';
 import type { Env } from '../types';
 
 export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item'] as const;
@@ -395,6 +395,8 @@ export async function applyChange(
               await db.prepare('DELETE FROM sales WHERE id = ?').bind(row.sale_id).run();
             }
           }
+          // 行级删除：该行凭证附件（sale_item 引用）一并清（R2 + 引用表）
+          try { await deleteEntityAttachments(env, 'sale_item', id); } catch (_) {}
           break;
         }
         // upsert：行自包含（店铺从 payload 带出，不再依赖单据头）
@@ -434,6 +436,8 @@ export async function applyChange(
               await db.prepare('DELETE FROM purchases WHERE id = ?').bind(row.purchase_id).run();
             }
           }
+          // 行级删除：该行凭证附件（purchase_item 引用）一并清（R2 + 引用表）
+          try { await deleteEntityAttachments(env, 'purchase_item', id); } catch (_) {}
           break;
         }
         const qty2 = Number(p.quantity) || 0;
@@ -461,6 +465,14 @@ export async function applyChange(
         if (action === 'delete') {
           const old = await db.prepare('SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)
             .all<{ item_id: string; unit: string; quantity: number }>();
+          // R2 行级文件清理：必须在删 sales 前拿行 id（sale_items 外键级联，删头后行即消失）
+          try {
+            const lineRows = await db.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
+              .all<{ id: string }>();
+            for (const lr of lineRows.results) {
+              await deleteEntityAttachments(env, 'sale_item', lr.id);
+            }
+          } catch (_) {}
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, it.quantity));
           bt.push(db.prepare('DELETE FROM sales WHERE id = ?').bind(id));
           await db.batch(bt);
@@ -471,6 +483,8 @@ export async function applyChange(
           await db.prepare(
             "DELETE FROM attachment_refs WHERE entity = 'sale_item' AND entity_id IN (SELECT id FROM sale_items WHERE sale_id = ?)",
           ).bind(id).run();
+          // 单据级前缀 R2 文件（历史/兼容路径）
+          try { await deleteEntityAttachments(env, 'sale', id); } catch (_) {}
         } else {
           await applySaleUpsert(db, id, p);
           // 附件引用差集：仅当 payload 显式提供 attachments 数组才收敛（payload 为期望全集）。
@@ -484,6 +498,14 @@ export async function applyChange(
         if (action === 'delete') {
           const old = await db.prepare('SELECT item_id, unit, quantity FROM purchase_items WHERE purchase_id = ?').bind(id)
             .all<{ item_id: string; unit: string; quantity: number }>();
+          // R2 行级文件清理：必须在删 purchases 前拿行 id（purchase_items 外键级联，删头后行即消失）
+          try {
+            const lineRows = await db.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
+              .all<{ id: string }>();
+            for (const lr of lineRows.results) {
+              await deleteEntityAttachments(env, 'purchase_item', lr.id);
+            }
+          } catch (_) {}
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, -it.quantity));
           bt.push(db.prepare('DELETE FROM purchases WHERE id = ?').bind(id));
           await db.batch(bt);
@@ -493,6 +515,8 @@ export async function applyChange(
           await db.prepare(
             "DELETE FROM attachment_refs WHERE entity = 'purchase_item' AND entity_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?)",
           ).bind(id).run();
+          // 单据级前缀 R2 文件（历史/兼容路径）
+          try { await deleteEntityAttachments(env, 'purchase', id); } catch (_) {}
         } else {
           await applyPurchaseUpsert(db, id, p);
           if (Array.isArray(p.attachments)) {

@@ -288,6 +288,57 @@ describe('交易附件（R2）', () => {
     expect(afterSale?.n ?? 0).toBe(0);
   });
 
+  it('删除交易 → 行级 sale_item 附件引用+R2 文件全清（整单与单行两条路径）', async () => {
+    // 建真实单据（2 明细行）
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const priceId = items.items[0].prices[0].id;
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-05',
+      items: [
+        { price_id: priceId, quantity: 1 },
+        { price_id: priceId, quantity: 2 },
+      ],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const detail = (await (await call(env, 'GET', `/api/v1/sales/${saleId}`, token)).json()) as {
+      items: Array<{ id: string }>;
+    };
+    const [line1, line2] = detail.items.map((x) => x.id);
+
+    // 两行各传一张凭证（行级 sale_item 引用）
+    const up1 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale_item&id=${line1}`, token, photoForm(), true)).json()) as { key: string };
+    const up2 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale_item&id=${line2}`, token, photoForm(), true)).json()) as { key: string };
+    expect(up1.key).toContain(`sale_item/${line1}/`);
+    expect(up2.key).toContain(`sale_item/${line2}/`);
+    const total0 = (await (await call(env, 'GET', '/api/v1/attachments/total', token)).json()) as { total: number };
+    expect(total0.total).toBe(2);
+
+    // 删除单行（line1）→ 该行附件清、line2 与单据保留
+    const delLine = await call(env, 'DELETE', `/api/v1/sales/items/${line1}`, token);
+    expect(delLine.status).toBe(200);
+    const afterLine = (await (await call(env, 'GET', '/api/v1/attachments/total', token)).json()) as { total: number };
+    expect(afterLine.total).toBe(1);
+    const lineRefs = await (env.DB as FakeD1).prepare(
+      "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale_item' AND entity_id = ?",
+    ).bind(line1).first<{ n: number }>();
+    expect(lineRefs?.n ?? 0).toBe(0);
+
+    // 删除整单（剩 line2 为末行）→ 行级附件引用+R2 全清
+    const delSale = await call(env, 'DELETE', `/api/v1/sales/${saleId}`, token);
+    expect(delSale.status).toBe(204);
+    const totalEnd = (await (await call(env, 'GET', '/api/v1/attachments/total', token)).json()) as { total: number };
+    expect(totalEnd.total).toBe(0);
+    const refsEnd = await (env.DB as FakeD1).prepare('SELECT COUNT(*) AS n FROM attachment_refs').first<{ n: number }>();
+    expect(refsEnd?.n ?? 0).toBe(0);
+  });
+
   it('counts 单据级统计计入明细行前缀（整单凭证=批量存入各行的行级图）', async () => {
     // 建真实单据（1 明细行，取出行 id）
     await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });

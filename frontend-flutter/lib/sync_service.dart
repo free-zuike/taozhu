@@ -499,10 +499,10 @@ class SyncService {
                 }
                 applied = true;
               } else if (action == 'delete') {
-                await LocalDb.deleteOne(store, id);
-                // 单据类实体删除：顺带清理本地附件副本（单据级 + 明细行级目录），
-                // 对齐参考 pull 删除路径的本地磁盘清理（引用变更流驱动跨端删除）
+                // 先清本地附件副本再删镜像：行级目录清理需读镜像 items 拿明细行 id，
+                // 镜像先删则读不到 → attachments/sale_item/{lineId}/ 漏删残留孤儿副本
                 await _cleanupLocalAttachmentsOf(entityType, id);
+                await LocalDb.deleteOne(store, id);
                 applied = true;
               } else {
                 // 软删（client/item deleted_at 非空）→ 本地删行（历史单据有快照不丢）
