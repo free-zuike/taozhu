@@ -41,7 +41,8 @@ class _PRow {
 class _PurchasePageState extends State<PurchasePage> {
   List<Map<String, dynamic>> _items = [];
   bool _isStaff = false; // 店员不可见进价（进货价手填）
-  final List<_PRow> _rows = [_PRow()];
+  /// 初始空行必须预生成 rowId（否则首行保存后无行 id，历史页长按删除会误判为整单）
+  late final List<_PRow> _rows = [_newPRow()];
   Map<String, double> _lastQty = {}; // price_id → 上次数量（选单位自动带出）
   late final _dateCtrl = TextEditingController(text: _initDate());
   final _noteCtrl = TextEditingController();
@@ -178,12 +179,17 @@ class _PurchasePageState extends State<PurchasePage> {
           skipped++;
           continue;
         }
+        // 行日期：仅在与单据日期不同（真正独立日期）时才保留；==单据日期视为跟随单据，
+        // 置空以便改顶部日期时整单生效（否则行旧日期覆盖新单据日期导致改日期无效）
+        final lineDate = '${it['happened_at'] ?? ''}';
+        final keepLineDate =
+            lineDate.isNotEmpty && lineDate.substring(0, 10) != hd.substring(0, 10);
         _rows.add(_PRow()
           ..itemId = itemId
           ..priceId = price['id'] as String?
           ..quantity = qty
           ..purchasePrice = pp
-          ..happenedAt = '${it['happened_at'] ?? ''}'
+          ..happenedAt = keepLineDate ? lineDate : ''
           ..rowId = '${it['id'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit

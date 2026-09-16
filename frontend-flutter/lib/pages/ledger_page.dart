@@ -809,7 +809,7 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
-  /// 日期栏 → 该日出货单列表（点单进出货记单页编辑该单全部商品明细）
+  /// 日期栏 → 该日出货商品明细行列表（无"出货单"概念：每行一条商品，点行=编辑该商品、长按=删除该商品）
   Future<void> _openBatchEdit(String date, List<Map<String, dynamic>> lines) async {
     await Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => SaleBatchEditPage(date: date, lines: lines, clientId: _clientId)));
@@ -1406,10 +1406,16 @@ class _LedgerPageState extends State<LedgerPage> {
     // 背景折线方向：盈利=从左下角到右上角（上升），亏损=从右上角到左下角（下降）；无盈亏=平线
     final trendUp = profit == null ? null : profit >= 0;
     // 第三行：进价 · 售价 · 数量单位（老板看进价；店员无进价数据只显示售价·数量）
+    // 无明细坏行（服务端 item_id 空 JOIN 失败）：不显示"售价¥0.00"，给清晰标记且可长按删除
+    final isDirtyLine = itemName.trim().isEmpty;
     final priceLine = StringBuffer();
-    if (!_isStaff && costPrice != null) priceLine.write('进价 ¥${fmtMoney(costPrice.toDouble())} · ');
-    priceLine.write('售价 ¥${fmtMoney(salePrice?.toDouble() ?? 0)}');
-    if (qty.isNotEmpty) priceLine.write(' · ×$qty$unit');
+    if (isDirtyLine) {
+      priceLine.write('（无明细 · 长按删除该脏行）');
+    } else {
+      if (!_isStaff && costPrice != null) priceLine.write('进价 ¥${fmtMoney(costPrice.toDouble())} · ');
+      priceLine.write('售价 ¥${fmtMoney(salePrice?.toDouble() ?? 0)}');
+      if (qty.isNotEmpty) priceLine.write(' · ×$qty$unit');
+    }
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       // 点行 = 只编辑当前商品（数量/售价/单位/日期）；长按 = 删除该商品行（不是整单）

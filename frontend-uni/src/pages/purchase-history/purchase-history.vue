@@ -17,7 +17,7 @@
         <text class="name">{{ p.happened_at }} 进货</text>
         <text class="amt">¥{{ Number(p.total || 0).toFixed(2) }}</text>
       </view>
-      <view v-for="it in (p.items || [])" :key="it.id" class="line" @click="editPurchaseItem(p, it)">
+      <view v-for="it in (p.items || [])" :key="it.id" class="line" @click="editPurchaseItem(p, it)" @longpress="deletePurchaseLine(p, it)">
         <view class="line-left">
           <text class="line-name">{{ it.item_name }}</text>
           <text class="line-meta">进价 ¥{{ Number(it.purchase_price || it.price || 0).toFixed(2) }} · ×{{ it.quantity }}{{ it.unit }}<text v-if="it.note"> · {{ it.note }}</text></text>
@@ -27,8 +27,7 @@
       <view v-if="(p.items || []).length === 0" class="line"><text class="line-name">备注行</text></view>
       <view class="ops">
         <text class="op" @click="showAttach(p.id)">凭证</text>
-        <text class="op" @click="editPurchase(p)">编辑</text>
-        <text class="del" @click="removePurchase(p)">删除</text>
+        <text class="tip-longpress">长按删除该商品</text>
       </view>
     </view>
     <view v-if="purchases.length === 0" class="empty">该月暂无进货记录</view>

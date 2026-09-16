@@ -163,10 +163,10 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     _load();
   }
 
-  /// 日期栏 → 该日进货单列表（点单进进货记单页编辑该单全部商品明细）
-  Future<void> _openBatchEdit(String date, List<Map<String, dynamic>> purchases) async {
+  /// 日期栏 → 该日进货商品明细行列表（无"进货单"概念：每行一条商品，点行=编辑该商品、长按=删除该商品）
+  Future<void> _openBatchEdit(String date, List<Map<String, dynamic>> lines) async {
     await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => PurchaseBatchEditPage(date: date, purchases: purchases)));
+        builder: (_) => PurchaseBatchEditPage(date: date, lines: lines)));
     _load();
   }
 
@@ -567,10 +567,10 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
         children: [
           for (final e in grouped.entries) ...[
-            // 日期栏 = 该日进货单列表编辑入口（点单整单编辑；点明细行单笔编辑）
+            // 日期栏 = 该日进货商品明细行列表（点行编辑该商品；长按删除该商品）
             InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () => _openBatchEdit(e.key, _ordersOfDay(e.value)),
+              onTap: () => _openBatchEdit(e.key, e.value),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
                 child: Row(
@@ -601,20 +601,5 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         ],
       ),
     );
-  }
-
-  /// 由该日明细行还原所属进货单列表（日期栏批量编辑页按整单展示）
-  List<Map<String, dynamic>> _ordersOfDay(List<Map<String, dynamic>> lines) {
-    final orders = <Map<String, dynamic>>[];
-    final seen = <String>{};
-    for (final l in lines) {
-      final o = l['order'] as Map<String, dynamic>?;
-      if (o == null) continue;
-      final id = '${o['id']}';
-      if (id.isEmpty || seen.contains(id)) continue;
-      seen.add(id);
-      orders.add(o);
-    }
-    return orders;
   }
 }

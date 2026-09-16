@@ -34,7 +34,7 @@
           <text class="day-name">{{ g.week }}</text>
           <text class="day-total">{{ g.count }} 件 · 合计 ¥{{ fmtNum(g.amount) }}</text>
         </view>
-        <view v-for="l in g.lines" :key="l.key" class="card-sale" @click="editSaleLine(l)">
+        <view v-for="l in g.lines" :key="l.key" class="card-sale" @click="editSaleLine(l)" @longpress="deleteSaleLine(l)">
           <view class="head">
             <text class="name">{{ l.client_name }}</text>
             <text class="amt">¥{{ Number(l.amount || 0).toFixed(2) }}</text>
@@ -46,8 +46,7 @@
           <view class="sale-line2">售价 ¥{{ Number(l.sale_price || 0).toFixed(2) }} · ×{{ l.quantity }}{{ l.unit }}</view>
           <view class="ops">
             <text class="op" @click.stop="showAttach('sale', l.orderId)">凭证</text>
-            <text class="op" @click.stop="editSaleOrder(l.order)">编辑整单</text>
-            <text class="del" @click.stop="removeSale(l.order)">删除</text>
+            <text class="tip-longpress" @click.stop>长按删除该商品</text>
           </view>
         </view>
       </view>
@@ -213,7 +212,7 @@ function fmtNum(n: number): string {
 type SaleLine = {
   key: string; date: string; week: string; client_name: string; item_name: string;
   note: string; sale_price: number; quantity: string | number; unit: string; amount: number;
-  orderId: string; order: Record<string, any>;
+  itemId: string; orderId: string; order: Record<string, any>;
 };
 type SaleGroup = { date: string; week: string; count: number; amount: number; lines: SaleLine[] };
 const saleGroups = computed<SaleGroup[]>(() => {
@@ -235,7 +234,7 @@ const saleGroups = computed<SaleGroup[]>(() => {
       pushLine({
         key: `o-${s.id}`, date: orderDate, week: '', client_name: String(s.client_name || ''),
         item_name: '备注行', note: String(s.note || ''), sale_price: 0, quantity: '', unit: '',
-        amount: Number(s.total || 0), orderId: String(s.id), order: s,
+        amount: Number(s.total || 0), itemId: '', orderId: String(s.id), order: s,
       });
       continue;
     }
@@ -245,7 +244,7 @@ const saleGroups = computed<SaleGroup[]>(() => {
         key: `${s.id}-${it.id}`, date: d || orderDate, week: '', client_name: String(s.client_name || ''),
         item_name: String(it.item_name || ''), note: String(it.note || ''),
         sale_price: Number(it.sale_price || 0), quantity: it.quantity ?? '', unit: String(it.unit || ''),
-        amount: Number(it.amount || 0), orderId: String(s.id), order: s,
+        amount: Number(it.amount || 0), itemId: String(it.id || ''), orderId: String(s.id), order: s,
       });
     }
   }
@@ -406,13 +405,29 @@ function editSaleLine(l: SaleLine) {
     show: true,
     isPurchase: false,
     saleId: l.orderId,
-    itemId: String((l.order.items || []).find((it: Record<string, any>) => `${it.item_name}` === l.item_name)?.id || ''),
+    itemId: l.itemId,
     itemName: l.item_name,
     quantity: String(l.quantity ?? ''),
     unit: String(l.unit || ''),
     salePrice: String(l.sale_price ?? ''),
     date: l.date.slice(0, 10),
   };
+}
+
+// 明细行长按 → 只删除该商品行（不再有"整单"概念：DELETE /sales/items/:id）
+async function deleteSaleLine(l: SaleLine) {
+  if (!l.itemId) {
+    uni.showToast({ title: '该行无独立明细，无法单独删除', icon: 'none' });
+    return;
+  }
+  if (!(await confirm('删除商品', `确定删除「${l.item_name}」这一行吗？仅删除该商品，库存自动回滚。`))) return;
+  try {
+    await request(`/sales/items/${l.itemId}`, 'DELETE');
+    uni.showToast({ title: '已删除该商品', icon: 'success' });
+    load();
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
+  }
 }
 
 // 整单编辑

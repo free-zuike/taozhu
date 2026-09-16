@@ -2,61 +2,97 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import 'purchase_line_edit.dart';
 import 'purchase_page.dart';
 
-/// 日期栏编辑页：该日进货单列表。
-/// 点某张单 → 进货记单页（PurchasePage 编辑模式），该单所有商品明细完整展开、可直接修改并保存；
-/// 底部「记一笔进货」可补录当天新单（日期已预填当天）；返回本页自动刷新。
+/// 日期栏编辑页：**该日全部进货商品明细行**（非单据列表——没有"进货单"概念，只有一条条商品记录）。
+/// 点某行 → 只编辑该商品（数量/进价/单位/日期弹窗即时保存）；长按 → 删除该商品行；
+/// 底部「记一笔进货」可补录当天（日期已预填当天）；返回本页自动刷新。
 class PurchaseBatchEditPage extends StatefulWidget {
   const PurchaseBatchEditPage({
     super.key,
     required this.date,
-    required this.purchases,
+    required this.lines,
   });
   final String date;
-  final List<Map<String, dynamic>> purchases;
+  /// 该日全部进货明细行（含 order 引用；跨单据平铺）
+  final List<Map<String, dynamic>> lines;
 
   @override
   State<PurchaseBatchEditPage> createState() => _PurchaseBatchEditPageState();
 }
 
 class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
-  late List<Map<String, dynamic>> _orders;
+  late List<Map<String, dynamic>> _lines;
 
   @override
   void initState() {
     super.initState();
-    _orders = List.of(widget.purchases);
+    _lines = List.of(widget.lines);
   }
 
-  /// 从进货记录页进入后已用过的新数据源：本页打开期间数据可能被记单页改过 → 返回时重新拉取
+  /// 本页打开期间数据可能被改过 → 返回时重新拉取该日明细行（按行日期匹配）
   Future<void> _refresh() async {
-    var orders = <Map<String, dynamic>>[];
+    var lines = <Map<String, dynamic>>[];
     try {
       if (kIsWeb) {
         final d = await Api.instance.get('/purchases?date_from=${widget.date}&date_to=${widget.date}&limit=500');
-        orders = ((d['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
+        final orders = ((d['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
+        for (final o in orders) {
+          for (final it in ((o['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+            final d2 = '${it['happened_at'] ?? o['happened_at'] ?? ''}';
+            if (d2.startsWith(widget.date)) {
+              lines.add(_lineOf(o, it));
+            }
+          }
+        }
       } else {
         final all = await LocalDb.getAll('purchases');
-        orders = [
-          for (final o in all)
-            if ('${o['happened_at'] ?? ''}'.startsWith(widget.date)) o,
-        ];
+        for (final o in all) {
+          final orderDate = '${o['happened_at'] ?? ''}';
+          for (final it in ((o['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+            final d2 = '${it['happened_at'] ?? orderDate}';
+            if (d2.startsWith(widget.date)) {
+              lines.add(_lineOf(o, it));
+            }
+          }
+        }
       }
     } catch (_) {
       // 拉取失败：保留进入时的快照（至少能看/能改）
     }
     if (!mounted) return;
-    if (orders.isEmpty) orders = List.of(widget.purchases);
-    setState(() => _orders = orders);
+    if (lines.isEmpty) lines = List.of(widget.lines);
+    setState(() => _lines = lines);
   }
 
-  Future<void> _openOrder(Map<String, dynamic> order) async {
-    await Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => PurchasePage(editId: '${order['id']}')));
-    _refresh();
+  /// 明细行 → 流水行（与进货记录页 _buildList 同构）
+  static Map<String, dynamic> _lineOf(Map<String, dynamic> o, Map<String, dynamic> it) {
+    final orderDate = '${o['happened_at'] ?? ''}';
+    final lineDate = '${it['happened_at'] ?? ''}';
+    return {
+      'date': lineDate.length >= 10 ? lineDate.substring(0, 10) : orderDate,
+      'order': o,
+      'item_name': '${it['item_name'] ?? ''}',
+      'item_id': '${it['item_id'] ?? ''}',
+      'category': '${it['item_category'] ?? it['category'] ?? ''}'.trim(),
+      'note': '${it['note'] ?? ''}'.trim(),
+      'quantity': '${it['quantity'] ?? ''}',
+      'unit': '${it['unit'] ?? ''}',
+      'amount': ((it['amount'] as num?)?.toDouble() ?? 0),
+      'id': '${it['id'] ?? ''}',
+      'row_id': '${it['id'] ?? ''}',
+      'purchase_price': (it['purchase_price'] as num?)?.toDouble() ?? 0,
+      'happened_at': lineDate.isEmpty ? orderDate : lineDate,
+    };
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   Future<void> _addOrder() async {
@@ -65,32 +101,76 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
     _refresh();
   }
 
+  /// 删除单个商品行（长按）：不再有整单删除——只有"删除该商品"
+  Future<void> _deleteLine(Map<String, dynamic> l) async {
+    final order = l['order'] as Map<String, dynamic>;
+    final rowId = '${l['row_id'] ?? ''}';
+    final name = '${l['item_name'] ?? ''}'.isNotEmpty ? '「${l['item_name']}」' : '该商品';
+    if (rowId.isEmpty) {
+      toast(context, '该行无独立明细，无法单独删除');
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除商品'),
+        content: Text('确定删除 $name 这一行吗？仅删除该商品，其余商品保留；库存自动回滚。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      if (kIsWeb) {
+        await Api.instance.delete('/purchases/items/$rowId');
+      } else {
+        final items = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        final updatedItems = items.where((it) => '${it['id']}' != rowId).toList();
+        final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
+        payload['total'] = updatedItems.fold<double>(
+            0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
+        await LocalDb.upsertOne('purchases', payload);
+        await SyncService.enqueueChange(
+            entityType: 'purchase', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
+        unawaited(SyncService.pushPending());
+      }
+      toast(context, '已删除该商品');
+      _refresh();
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(
-        title: Text('编辑 ${widget.date} · ${_orders.length} 张进货单'),
-      ),
+      appBar: AppBar(title: Text('${widget.date} 进货商品')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 6, 4, 10),
             child: Text(
-              '点某张单 → 进货记单页：该单所有商品明细完整显示，可直接修改数量/进价/单位/日期并保存；返回自动刷新。',
+              '点击某行 = 编辑该商品；长按 = 删除该商品。进货只是当天补货记录，每条商品独立保存。',
               style: TextStyle(fontSize: 12, color: c.textSub, height: 1.5),
             ),
           ),
-          if (_orders.isEmpty)
+          if (_lines.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 32),
               child: Center(
-                child: Text('当天暂无进货单，可点下方「记一笔进货」补录',
+                child: Text('当天暂无进货商品，可点下方「记一笔进货」补录',
                     style: TextStyle(fontSize: 13, color: c.textSub)),
               ),
             ),
-          for (final o in _orders) _orderTile(c, o),
+          for (final l in _lines) _lineTile(c, l),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: _addOrder,
@@ -102,21 +182,30 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
     );
   }
 
-  Widget _orderTile(TaozhuColors c, Map<String, dynamic> o) {
-    final items = ((o['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-    final total = (o['total'] as num?)?.toDouble() ??
-        items.fold<double>(0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
-    final note = '${o['note'] ?? ''}'.trim();
+  Widget _lineTile(TaozhuColors c, Map<String, dynamic> l) {
+    final itemName = '${l['item_name'] ?? ''}';
+    final qty = '${l['quantity'] ?? ''}';
+    final unit = '${l['unit'] ?? ''}';
+    final note = '${l['note'] ?? ''}'.trim();
+    final pp = (l['purchase_price'] as num?)?.toDouble() ?? 0;
+    final date = '${l['date'] ?? ''}';
     return InkWell(
       borderRadius: BorderRadius.circular(10),
-      onTap: () => _openOrder(o),
+      // 点行 = 只编辑当前商品（数量/进价/单位/日期）；长按 = 删除该商品行
+      onTap: () async {
+        final order = l['order'] as Map<String, dynamic>;
+        final line = Map<String, dynamic>.from(l)..['id'] = '${l['row_id'] ?? ''}';
+        await editPurchaseLine(context, order, line);
+        _refresh();
+      },
+      onLongPress: () => _deleteLine(l),
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 2),
-        padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+        padding: const EdgeInsets.fromLTRB(10, 8, 2, 8),
         decoration: BoxDecoration(
           color: c.card,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: c.success.withOpacity(0.3)),
+          border: Border.all(color: c.success.withOpacity(0.25)),
         ),
         child: Row(
           children: [
@@ -131,24 +220,28 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    note.isNotEmpty ? note : (items.isNotEmpty ? '${items.first['item_name']} 等 ${items.length} 项' : '进货单'),
+                    itemName.isEmpty ? '（无明细）' : itemName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.textMain),
                   ),
+                  const SizedBox(height: 2),
                   Text(
-                    items.isEmpty
-                        ? '备注行${note.isNotEmpty ? ' · $note' : ''}'
-                        : '${items.length} 种商品${note.isNotEmpty ? ' · $note' : ''}',
+                    [
+                      if (pp > 0) '进价 ¥${fmtMoney(pp)}',
+                      '数量 ×$qty$unit',
+                      if (date.isNotEmpty) date,
+                      if (note.isNotEmpty) note,
+                    ].join(' · '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: c.textSub),
+                    style: TextStyle(fontSize: 11, color: c.textSub),
                   ),
                 ],
               ),
             ),
             const SizedBox(width: 8),
-            Text('¥${fmtMoney(total)}',
+            Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
             const SizedBox(width: 2),
             Icon(Icons.chevron_right, size: 16, color: c.textSub),

@@ -53,7 +53,8 @@ class _SalePageState extends State<SalePage> {
   // 商品下拉菜单项缓存：行组件不再每次 build 重建 items（目录大时明显降卡顿）
   List<DropdownMenuItem<String>> _itemMenus = [];
   String? _clientId;
-  final List<_Row> _rows = [_Row()];
+  /// 初始空行必须预生成 rowId（否则首行保存后无行 id，历史页长按删除会误判为整单）
+  late final List<_Row> _rows = [_newRow()];
   late final _dateCtrl = TextEditingController(text: _initDate());
   final _noteCtrl = TextEditingController();
   bool _busy = false;
@@ -222,12 +223,17 @@ class _SalePageState extends State<SalePage> {
           skipped++;
           continue;
         }
+        // 行日期：仅在与单据日期不同（真正独立日期）时才保留；==单据日期视为跟随单据，
+        // 置空以便改顶部日期时整单生效（否则行旧日期覆盖新单据日期导致改日期无效）
+        final lineDate = '${it['happened_at'] ?? ''}';
+        final keepLineDate =
+            lineDate.isNotEmpty && lineDate.substring(0, 10) != hd.substring(0, 10);
         _rows.add(_Row()
           ..itemId = itemId
           ..priceId = price['id'] as String?
           ..quantity = qty
           ..salePrice = sp
-          ..happenedAt = '${it['happened_at'] ?? ''}'
+          ..happenedAt = keepLineDate ? lineDate : ''
           ..rowId = '${it['id'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
           ..unitCtrl.text = unit

@@ -182,14 +182,16 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
   batch.push(db.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
   for (const it of ((p.items as Record<string, any>[]) ?? [])) {
     const qty = Number(it.quantity) || 0;
-    if (qty <= 0) continue;
+    const itemId = String(it.item_id ?? '').trim();
+    // 行级校验：数量 ≤0 或 item_id 为空（客户端坏行/脏数据）→ 跳过不插入，防 JOIN items 失败产出"无明细/未分类/价0"脏行
+    if (qty <= 0 || itemId.isEmpty) continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.sale_price) || 0) * 100) / 100;
     batch.push(db.prepare(
       'INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(it.id ?? randomId(), id, it.item_id ?? '', it.unit ?? '', qty,
+    ).bind(it.id ?? randomId(), id, itemId, it.unit ?? '', qty,
       Number(it.sale_price) || 0, Number(it.cost_price) || 0, Math.round(amount * 100) / 100,
       it.happened_at || p.happened_at || null, it.note ?? ''));
-    batch.push(stockDelta(db, it.item_id ?? '', it.unit ?? '', -qty));
+    batch.push(stockDelta(db, itemId, it.unit ?? '', -qty));
   }
   await db.batch(batch);
 }
@@ -210,14 +212,16 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
   batch.push(db.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
   for (const it of ((p.items as Record<string, any>[]) ?? [])) {
     const qty = Number(it.quantity) || 0;
-    if (qty <= 0) continue;
+    const itemId = String(it.item_id ?? '').trim();
+    // 行级校验：数量 ≤0 或 item_id 为空（客户端坏行/脏数据）→ 跳过不插入，防 JOIN items 失败产出"无明细/未分类/价0"脏行
+    if (qty <= 0 || itemId.isEmpty) continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.purchase_price) || 0) * 100) / 100;
     batch.push(db.prepare(
       'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(it.id ?? randomId(), id, it.item_id ?? '', it.unit ?? '', qty,
+    ).bind(it.id ?? randomId(), id, itemId, it.unit ?? '', qty,
       Number(it.purchase_price) || 0, Math.round(amount * 100) / 100,
       it.happened_at || p.happened_at || null, it.note ?? ''));
-    batch.push(stockDelta(db, it.item_id ?? '', it.unit ?? '', qty));
+    batch.push(stockDelta(db, itemId, it.unit ?? '', qty));
   }
   await db.batch(batch);
 }
