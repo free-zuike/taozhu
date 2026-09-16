@@ -130,10 +130,24 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
     if (ok != true) return;
     try {
       if (kIsWeb) {
-        await Api.instance.delete('/purchases/items/$rowId');
+        final r = await Api.instance.delete('/purchases/items/$rowId');
+        if (r is Map && r['order_deleted'] == true) {
+          toast(context, '已删除该商品（本条记录已无商品）');
+          _refresh();
+          return;
+        }
       } else {
         final items = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
         final updatedItems = items.where((it) => '${it['id']}' != rowId).toList();
+        if (updatedItems.isEmpty) {
+          // 删的是该条记录最后一商品 → 整条记录删除（不留空壳，与 Web 级联语义一致）
+          await LocalDb.deleteOne('purchases', '${order['id']}');
+          await SyncService.enqueueChange(
+              entityType: 'purchase', entitySyncId: '${order['id']}', action: 'delete', payload: {});
+          toast(context, '已删除该商品（本条记录已无商品）');
+          _refresh();
+          return;
+        }
         final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
         payload['total'] = updatedItems.fold<double>(
             0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));

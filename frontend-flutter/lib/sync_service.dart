@@ -458,7 +458,41 @@ class SyncService {
             } else {
               final store = _storeOf(entityType);
               if (store.isEmpty) continue;
-              if (action == 'delete') {
+              // 行级商品记录（去单据化）：sale_item/purchase_item 合并进对应单据镜像的 items
+              if (entityType == 'sale_item' || entityType == 'purchase_item') {
+                final orderStore = entityType == 'sale_item' ? 'sales' : 'purchases';
+                final orderId = '${payload['${entityType == 'sale_item' ? 'sale_id' : 'purchase_id'}'] ?? ''}';
+                final rowId = id;
+                final order = await LocalDb.getOne(orderStore, orderId);
+                if (action == 'delete') {
+                  // 删行：从单据镜像 items 移除该行；空则删单据（防空壳）
+                  if (order != null) {
+                    final items = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+                    final updated = items.where((it) => '${it['id']}' != rowId).toList();
+                    if (updated.isEmpty) {
+                      await LocalDb.deleteOne(orderStore, orderId);
+                    } else {
+                      final merged = Map<String, dynamic>.from(order)..['items'] = updated;
+                      await LocalDb.upsertOne(orderStore, merged);
+                    }
+                  }
+                } else {
+                  // upsert：单据存在则合并该行，不存在则按订单头建仓（兼容历史整单 pull 已先行建单）
+                  final items = ((order?['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+                  final others = items.where((it) => '${it['id']}' != rowId).toList();
+                  others.add(payload);
+                  final merged = Map<String, dynamic>.from(order ?? {})..['items'] = others;
+                  if (order == null) {
+                    merged['id'] = orderId;
+                    merged['client_id'] = payload['client_id'] ?? '';
+                    merged['client_name'] = payload['client_name'] ?? '';
+                    merged['happened_at'] = payload['happened_at'] ?? '';
+                    merged['note'] = payload['note'] ?? '';
+                  }
+                  await LocalDb.upsertOne(orderStore, merged);
+                }
+                applied = true;
+              } else if (action == 'delete') {
                 await LocalDb.deleteOne(store, id);
                 // 单据类实体删除：顺带清理本地附件副本（单据级 + 明细行级目录），
                 // 对齐参考 pull 删除路径的本地磁盘清理（引用变更流驱动跨端删除）
@@ -709,6 +743,9 @@ class SyncService {
       case 'sale': return 'sales';
       case 'purchase': return 'purchases';
       case 'payment': return 'payments';
+     // 行级商品记录（去单据化）：同 store，行自包含（client_id/happened_at/note/amount 都在行上）
+      case 'sale_item': return 'sale_items';
+      case 'purchase_item': return 'purchase_items';
       default: return '';
     }
   }

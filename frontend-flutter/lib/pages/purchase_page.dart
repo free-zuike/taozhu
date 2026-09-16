@@ -31,6 +31,8 @@ class _PRow {
   String happenedAt = ''; // 该行商品的独立日期（空=用单据日期）
   /// 明细行 id（编辑模式加载原单时保存；行级附件锚点，空=新建未提交行）
   String rowId = '';
+  /// 保存时构建的商品行 payload（去单据化：逐行入队 purchase_item 用）
+  Map<String, dynamic>? itemsPayload;
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
   final nameCtrl = TextEditingController();
   final unitCtrl = TextEditingController();
@@ -514,8 +516,8 @@ class _PurchasePageState extends State<PurchasePage> {
       final price = prices.where((p) => p['id'] == r.priceId).firstOrNull;
       final amount = (r.quantity * r.purchasePrice * 100).round() / 100;
       totalCalc += amount;
-      itemsPayload.add({
-        'id': r.rowId, // 复用预生成的行级 id（顶栏整单凭证批量挂行依赖行 id 一致）
+      final rowPayload = {
+        'id': r.rowId, // 复用预生成的行级 id（行级附件锚点/同步实体 key 一致）
         'purchase_id': purchaseId,
         'item_id': r.itemId,
         'item_name': opt?['name'] ?? r.nameCtrl.text.trim(),
@@ -524,7 +526,9 @@ class _PurchasePageState extends State<PurchasePage> {
         'purchase_price': r.purchasePrice,
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
-      });
+      };
+      r.itemsPayload = rowPayload;
+      itemsPayload.add(rowPayload);
     }
     final payload = {
       'id': purchaseId,
@@ -565,13 +569,16 @@ class _PurchasePageState extends State<PurchasePage> {
       if (mounted) Navigator.pop(context, true);
       return;
     }
+    // 本地优先：整单落库（列表立即展示）→ 逐商品行入队（去单据化：同步实体是 purchase_item 商品行）
     await LocalDb.upsertOne('purchases', payload);
-    await SyncService.enqueueChange(
-      entityType: 'purchase',
-      entitySyncId: purchaseId,
-      action: 'upsert',
-      payload: payload,
-    );
+    for (final r in valid) {
+      await SyncService.enqueueChange(
+        entityType: 'purchase_item',
+        entitySyncId: '${r.rowId}',
+        action: 'upsert',
+        payload: Map<String, dynamic>.from(r.itemsPayload ?? {}),
+      );
+    }
     await Freq.bump(valid.map((r) => r.priceId ?? ''));
     for (final r in valid) {
       await Freq.saveLastQty(r.priceId ?? '', r.quantity);

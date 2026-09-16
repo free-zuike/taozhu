@@ -11,7 +11,7 @@ import { createStorage } from '../services/storage';
 import { parseAttachmentKey } from './image-key';
 import type { Env } from '../types';
 
-export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'sale', 'purchase', 'payment', 'attachment'] as const;
+export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item'] as const;
 export type SyncEntityType = (typeof SYNC_ENTITIES)[number];
 
 export interface SyncChangeInput {
@@ -128,6 +128,40 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
         attachments: refs.results.map((x) => x.file_key),
       };
     }
+    case 'sale_item': {
+      const r = await db.prepare(
+        `SELECT si.*, s.client_id, i.name AS item_name, i.category AS item_category
+         FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN items i ON i.id = si.item_id WHERE si.id = ?`,
+      ).bind(id).first<Record<string, unknown>>();
+      if (!r) return null;
+      const refs = await db.prepare(
+        "SELECT entity, entity_id, file_key FROM attachment_refs WHERE entity = 'sale_item' AND entity_id = ?",
+      ).bind(id).all<{ entity: string; entity_id: string; file_key: string }>();
+      return {
+        id: r.id, sale_id: r.sale_id, client_id: r.client_id, item_id: r.item_id,
+        item_name: r.item_name, item_category: r.item_category ?? '', unit: r.unit ?? '',
+        quantity: r.quantity ?? 0, sale_price: r.sale_price ?? 0, cost_price: r.cost_price ?? 0,
+        amount: r.amount ?? 0, happened_at: r.happened_at ?? '', note: r.note ?? '',
+        attachments: refs.results.map((x) => x.file_key),
+      };
+    }
+    case 'purchase_item': {
+      const r = await db.prepare(
+        `SELECT pi.*, i.name AS item_name, i.category AS item_category
+         FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.id = ?`,
+      ).bind(id).first<Record<string, unknown>>();
+      if (!r) return null;
+      const refs = await db.prepare(
+        "SELECT entity, entity_id, file_key FROM attachment_refs WHERE entity = 'purchase_item' AND entity_id = ?",
+      ).bind(id).all<{ entity: string; entity_id: string; file_key: string }>();
+      return {
+        id: r.id, purchase_id: r.purchase_id, item_id: r.item_id,
+        item_name: r.item_name, item_category: r.item_category ?? '', unit: r.unit ?? '',
+        quantity: r.quantity ?? 0, purchase_price: r.purchase_price ?? 0,
+        amount: r.amount ?? 0, happened_at: r.happened_at ?? '', note: r.note ?? '',
+        attachments: refs.results.map((x) => x.file_key),
+      };
+    }
     case 'payment': {
       const r = await db.prepare('SELECT * FROM payments WHERE id = ?').bind(id).first<Record<string, unknown>>();
       if (!r) return null;
@@ -151,6 +185,14 @@ export function maskPayload(entityType: string, payload: unknown): unknown {
     const p = payload as { prices?: Array<Record<string, unknown>> };
     if (!Array.isArray(p.prices)) return payload;
     return { ...p, prices: p.prices.map((x) => ({ ...x, purchase_price: 0 })) };
+  }
+  if (entityType === 'sale_item') {
+    const p = payload as Record<string, unknown>;
+    return { ...p, cost_price: 0 };
+  }
+  if (entityType === 'purchase_item') {
+    const p = payload as Record<string, unknown>;
+    return { ...p, purchase_price: 0 };
   }
   if (entityType === 'sale' || entityType === 'purchase') {
     const p = payload as { items?: Array<Record<string, unknown>> };
@@ -337,6 +379,83 @@ export async function applyChange(
           ).bind(id, p.name ?? '', p.bank_name ?? '', p.card_last_four ?? '', Number(p.sort) || 0).run();
         }
         break;
+      case 'sale_item': {
+        // 行级出货记录（去单据化）：upsert 单行商品；delete 删行并级联清单据（防空壳）
+        if (action === 'delete') {
+          const row = await db.prepare('SELECT sale_id, item_id, unit, quantity FROM sale_items WHERE id = ?').bind(id)
+            .first<{ sale_id: string; item_id: string; unit: string; quantity: number }>();
+          if (row) {
+            await db.batch([
+              stockDelta(db, row.item_id, row.unit, row.quantity),
+              db.prepare('DELETE FROM sale_items WHERE id = ?').bind(id),
+            ]);
+            const remain = await db.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE sale_id = ?').bind(row.sale_id).first<{ n: number }>();
+            if ((remain?.n ?? 0) === 0) {
+              await db.prepare('DELETE FROM sales WHERE id = ?').bind(row.sale_id).run();
+            }
+          }
+          break;
+        }
+        // upsert：行自包含（店铺从 payload 带出，不再依赖单据头）
+        const qty = Number(p.quantity) || 0;
+        const itemId = String(p.item_id ?? '').trim();
+        if (qty <= 0 || itemId === '') return { ok: false, error: '出货商品缺数量或商品' };
+        const saleId = String(p.sale_id ?? '');
+        // 确保单据头存在（供统计/库存聚合；行已带 client_id 自包含）
+        if (saleId) {
+          await db.prepare(
+            `INSERT INTO sales (id, client_id, happened_at, note) VALUES (?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET client_id = excluded.client_id, happened_at = excluded.happened_at, note = excluded.note`,
+          ).bind(saleId, p.client_id ?? '', p.happened_at ?? '', p.note ?? '').run();
+        }
+        const amount = Number(p.amount) || Math.round(qty * (Number(p.sale_price) || 0) * 100) / 100;
+        await db.prepare(
+          `INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, client_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET sale_id = excluded.sale_id, item_id = excluded.item_id, unit = excluded.unit,
+             quantity = excluded.quantity, sale_price = excluded.sale_price, cost_price = excluded.cost_price,
+             amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note, client_id = excluded.client_id`,
+        ).bind(id, saleId, itemId, p.unit ?? '', qty,
+          Number(p.sale_price) || 0, Number(p.cost_price) || 0, Math.round(amount * 100) / 100,
+          p.happened_at || null, p.note ?? '', p.client_id ?? '').run();
+        break;
+      }
+      case 'purchase_item': {
+        if (action === 'delete') {
+          const row = await db.prepare('SELECT purchase_id, item_id, unit, quantity FROM purchase_items WHERE id = ?').bind(id)
+            .first<{ purchase_id: string; item_id: string; unit: string; quantity: number }>();
+          if (row) {
+            await db.batch([
+              stockDelta(db, row.item_id, row.unit, -row.quantity),
+              db.prepare('DELETE FROM purchase_items WHERE id = ?').bind(id),
+            ]);
+            const remain = await db.prepare('SELECT COUNT(*) AS n FROM purchase_items WHERE purchase_id = ?').bind(row.purchase_id).first<{ n: number }>();
+            if ((remain?.n ?? 0) === 0) {
+              await db.prepare('DELETE FROM purchases WHERE id = ?').bind(row.purchase_id).run();
+            }
+          }
+          break;
+        }
+        const qty2 = Number(p.quantity) || 0;
+        const itemId2 = String(p.item_id ?? '').trim();
+        if (qty2 <= 0 || itemId2 === '') return { ok: false, error: '进货商品缺数量或商品' };
+        const purchaseId = String(p.purchase_id ?? '');
+        if (purchaseId) {
+          await db.prepare(
+            `INSERT INTO purchases (id, happened_at, note) VALUES (?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET happened_at = excluded.happened_at, note = excluded.note`,
+          ).bind(purchaseId, p.happened_at ?? '', p.note ?? '').run();
+        }
+        const amount2 = Number(p.amount) || Math.round(qty2 * (Number(p.purchase_price) || 0) * 100) / 100;
+        await db.prepare(
+          `INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET purchase_id = excluded.purchase_id, item_id = excluded.item_id, unit = excluded.unit,
+             quantity = excluded.quantity, purchase_price = excluded.purchase_price,
+             amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note`,
+        ).bind(id, purchaseId, itemId2, p.unit ?? '', qty2,
+          Number(p.purchase_price) || 0, Math.round(amount2 * 100) / 100,
+          p.happened_at || null, p.note ?? '').run();
+        break;
+      }
       case 'sale':
         if (action === 'delete') {
           const old = await db.prepare('SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)

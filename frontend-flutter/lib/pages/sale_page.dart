@@ -40,6 +40,8 @@ class _Row {
   String happenedAt = ''; // 该行商品的独立日期（空=用单据日期）
   /// 明细行 id（编辑模式加载原单时保存；行级附件锚点，空=新建未提交行）
   String rowId = '';
+  /// 保存时构建的商品行 payload（去单据化：逐行入队 sale_item 用）
+  Map<String, dynamic>? itemsPayload;
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
   final nameCtrl = TextEditingController();
   final unitCtrl = TextEditingController();
@@ -659,9 +661,10 @@ class _SalePageState extends State<SalePage> {
       final price = opt?.prices.where((p) => p['id'] == r.priceId).firstOrNull;
       final amount = (r.quantity * r.salePrice * 100).round() / 100;
       totalCalc += amount;
-      itemsPayload.add({
+      final rowPayload = {
         'id': r.rowId, // 复用预生成的行级 id（顶栏整单凭证批量挂行依赖行 id 一致）
         'sale_id': saleId,
+        'client_id': _clientId,
         'item_id': r.itemId,
         'item_name': opt?.name ?? r.nameCtrl.text.trim(),
         'unit': r.unitCtrl.text.trim(),
@@ -670,7 +673,9 @@ class _SalePageState extends State<SalePage> {
         'cost_price': price?['purchase_price'] ?? 0,
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
-      });
+      };
+      r.itemsPayload = rowPayload;
+      itemsPayload.add(rowPayload);
     }
     final payload = {
       'id': saleId,
@@ -715,13 +720,15 @@ class _SalePageState extends State<SalePage> {
     }
     // 先写本地库（列表/账本立即可见，不卡网络）
     await LocalDb.upsertOne('sales', payload);
-    // 入待推送队列（debounce 250ms 后批量 push 到服务端，LWW 幂等）
-    await SyncService.enqueueChange(
-      entityType: 'sale',
-      entitySyncId: saleId,
-      action: 'upsert',
-      payload: payload,
-    );
+    // 入待推送队列：按商品行逐行入队（去单据化——同步实体是 sale_item 商品行，不再有"整单"）
+    for (final r in valid) {
+      await SyncService.enqueueChange(
+        entityType: 'sale_item',
+        entitySyncId: '${r.rowId}',
+        action: 'upsert',
+        payload: Map<String, dynamic>.from(r.itemsPayload),
+      );
+    }
     // 使用频率计数（本地，影响记单页商品排序）
     await Freq.bump(valid.map((r) => r.priceId ?? ''));
     await Freq.bumpClient(_clientId ?? '');

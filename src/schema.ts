@@ -295,6 +295,12 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     for (const t of ['sale_items', 'purchase_items'] as const) {
       await ensureColumn(db, t, 'happened_at', 'TEXT');
     }
+    // v0.17.101.0 去单据化：商品行自包含店铺 client_id（同步/删除/统计按行走，不再依赖单据头）
+    await ensureColumn(db, 'sale_items', 'client_id', 'TEXT');
+    await db.prepare(
+      `UPDATE sale_items SET client_id = (SELECT s.client_id FROM sales s WHERE s.id = sale_items.sale_id)
+       WHERE client_id IS NULL OR client_id = ''`,
+    ).run();
     // v0.17.82.0：明细行 happened_at 为 NULL 的历史行回填单据日期（此后查询可直接走列索引，无需 COALESCE 包裹导致全表扫）
     await db.prepare(
       `UPDATE sale_items SET happened_at = (SELECT s.happened_at FROM sales s WHERE s.id = sale_items.sale_id)
