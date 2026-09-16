@@ -834,11 +834,11 @@ class _LedgerPageState extends State<LedgerPage> {
     _load();
   }
 
-  /// 删除整单（长按卡片触发）：Web 直连 DELETE + 清本地行；原生 = 本地删行 + 同步队列推送 delete，跨端生效
+  /// 删除某条记录（无明细占位行 <-> 删除该条记录全部；有明细时走行级删除）
   Future<void> _deleteSaleOrder(Map<String, dynamic> order) async {
     final orderId = '${order['id']}';
     final name = '${order['client_name'] ?? ''}';
-    final ok = await _confirm('删除整单', '确定删除 ${_date(order['happened_at'])} 对 $name 的整张出货单吗？相关历史与附件不受影响。');
+    final ok = await _confirm('删除记录', '确定删除 ${_date(order['happened_at'])} 对 $name 的这条记录吗？该记录下全部商品一并删除，库存自动回滚。');
     if (!ok) return;
     try {
       if (kIsWeb) {
@@ -849,7 +849,7 @@ class _LedgerPageState extends State<LedgerPage> {
         await SyncService.enqueueChange(
             entityType: 'sale', entitySyncId: orderId, action: 'delete', payload: {});
       }
-      toast(context, '已删除整单');
+      toast(context, '已删除该记录');
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));

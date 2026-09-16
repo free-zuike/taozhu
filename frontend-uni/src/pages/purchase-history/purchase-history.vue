@@ -202,7 +202,7 @@ async function saveItem() {
     return;
   }
   if (!itemForm.value.itemId) {
-    uni.showToast({ title: '该行无独立明细，请用「编辑」整单修改', icon: 'none' });
+    uni.showToast({ title: '该行无独立明细，请用「编辑」修改该条记录', icon: 'none' });
     return;
   }
   saving.value = true;

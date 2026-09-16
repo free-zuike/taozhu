@@ -430,7 +430,7 @@ async function deleteSaleLine(l: SaleLine) {
   }
 }
 
-// 整单编辑
+// 编辑该条记录（跳记单页，整条记录的商品行可改）
 function editSaleOrder(order: Record<string, any>) {
   uni.navigateTo({ url: `/pages/sale/sale?id=${order.id}` });
 }
@@ -472,7 +472,7 @@ async function saveItem() {
     return;
   }
   if (!itemForm.value.itemId) {
-    uni.showToast({ title: '该行无独立明细，请用「编辑」整单修改', icon: 'none' });
+    uni.showToast({ title: '该行无独立明细，请用「编辑」修改该条记录', icon: 'none' });
     return;
   }
   saving.value = true;

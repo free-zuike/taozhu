@@ -174,8 +174,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除进货单'),
-        content: Text('删除 ${_date(p['happened_at'])} 的这笔进货单？库存将自动回滚。'),
+        title: const Text('删除记录'),
+        content: Text('删除 ${_date(p['happened_at'])} 的这条进货记录？该记录下全部商品一并删除，库存将自动回滚。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(
