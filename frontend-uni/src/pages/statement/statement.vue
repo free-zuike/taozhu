@@ -122,14 +122,16 @@ async function load() {
   try {
     const cid = clientId ? `&client_id=${clientId}` : '';
     const results = await Promise.all([
-      request<{ sales: any[] }>(`/sales?date_from=${from.value}&date_to=${to.value}&limit=1000${cid}`, 'GET'),
+      request<{ sales: any[]; sale_items?: any[] }>(`/sales?date_from=${from.value}&date_to=${to.value}&limit=1000${cid}`, 'GET'),
       request<{ payments: any[] }>(`/payments?date_from=${from.value}&date_to=${to.value}&limit=1000${cid}`, 'GET'),
       request<{ debt: number }>(`/stats/summary?start=${from.value}&end=${to.value}${cid}`, 'GET'),
     ]);
-    sales.value = results[0].sales;
+    // 去单据化主结构：优先行级 sale_items（每条商品一行，出货明细=商品行），否则整单嵌套兼容
+    const saleItems = results[0].sale_items;
+    sales.value = (saleItems && saleItems.length > 0) ? saleItems : (results[0].sales || []);
     payments.value = results[1].payments;
     debt.value = Number(results[2].debt || 0);
-    saleTotal.value = sales.value.reduce((s, x) => s + Number(x.total || 0), 0);
+    saleTotal.value = sales.value.reduce((s, x) => s + Number((x.amount ?? x.total) || 0), 0);
     payTotal.value = payments.value.reduce((s, x) => s + Number(x.amount || 0), 0);
     loaded.value = true;
   } catch (e) {
@@ -153,7 +155,7 @@ function copy() {
     `期末欠款：¥${debt.value.toFixed(2)}`,
     '—— 出货明细 ——',
   ];
-  for (const s of sales.value) lines.push(`${s.happened_at} 出货 ¥${Number(s.total || 0).toFixed(2)}`);
+  for (const s of sales.value) lines.push(`${s.happened_at} ${s.item_name || '出货'} ¥${Number((s.amount ?? s.total) || 0).toFixed(2)}`);
   lines.push('—— 收款明细 ——');
   for (const p of payments.value) {
     lines.push(`${p.happened_at}${p.method ? ' ' + p.method : ''} ¥${Number(p.amount || 0).toFixed(2)}`);
@@ -175,8 +177,12 @@ function copyCsv() {
   }
   const lines: string[] = ['\uFEFF类型,日期,店铺,金额,明细'];
   for (const s of sales.value) {
-    const detail = (s.items || []).map((it: Record<string, any>) => `${it.item_name}${it.quantity}${it.unit}`).join(';');
-    lines.push(`出货,${csv(s.happened_at)},${csv(s.client_name)},${csv(s.total)},${csv(detail)}`);
+    // 行级主结构：该行即一条商品（item_name×qty）；整单兼容：items 数组拼明细
+    const rowAmount = Number((s.amount ?? s.total) || 0);
+    const rowDetail = s.item_name
+        ? `${s.item_name}${s.quantity ?? ''}${s.unit ?? ''}`
+        : ((s.items || []).map((it: Record<string, any>) => `${it.item_name}${it.quantity}${it.unit}`).join(';'));
+    lines.push(`出货,${csv(s.happened_at)},${csv(s.client_name)},${csv(rowAmount)},${csv(rowDetail)}`);
   }
   for (const p of payments.value) {
     lines.push(`收款,${csv(p.happened_at)},${csv(p.client_name)},${csv(p.amount)},${csv(p.method)}`);
