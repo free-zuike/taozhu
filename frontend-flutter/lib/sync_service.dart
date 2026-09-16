@@ -728,7 +728,10 @@ class SyncService {
       // **await 等待附件下载完，同步中的动画/状态行才消失**（完全同步之后再消失）；
       // 单张失败内部静默跳过，下次同步自动重补，不阻塞主流程
       await downloadInUseAttachments();
-      // ⑤ 资料（显示名/头像版本）同步对齐参考 sync() 编排：实体+附件完成后统一 syncMyProfile
+      // ⑤ 孤儿本地附件副本清理：对照在用实体，无主目录（单据删除残留等）自动清——
+      // 本地附件恒等于在用实体集合，面板"全部附件 本地"计数随之归零
+      await cleanupOrphanLocalAttachments();
+      // ⑥ 资料（显示名/头像版本）同步对齐参考 sync() 编排：实体+附件完成后统一 syncMyProfile
       await syncMyProfile();
     } catch (e) {
       _lastSyncFailed = true;
@@ -798,6 +801,56 @@ class SyncService {
             try { lineDir.deleteSync(recursive: true); } catch (_) {}
           }
         }
+      }
+    } catch (_) {}
+  }
+
+  /// 同步完成后扫描清理本地孤儿附件副本：attachments/{entity}/{id}/ 对照本地镜像在用实体
+  /// （sale/purchase/payment 单据 + sale_item/purchase_item 明细行），无主目录 = 单据删除残留
+  /// 等历史孤儿 → 自动删除。本地附件目录恒等于在用实体集合（面板"全部附件 本地"计数随之归零）；
+  /// 补充删除入口即时清理的遗漏（存量孤儿 / 历史版本残留）。
+  static Future<void> cleanupOrphanLocalAttachments() async {
+    try {
+      if (kIsWeb) return;
+      final root = await getApplicationDocumentsDirectory();
+      final base = Directory('${root.path}/attachments');
+      if (!base.existsSync()) return;
+      // 在用 id 集合：entity -> Set<id>
+      final inUse = <String, Set<String>>{};
+      void add(String entity, String id) {
+        if (id.isEmpty) return;
+        (inUse[entity] ??= {}).add(id);
+      }
+      Future<void> collect(List<Map<String, dynamic>> orders, String orderEntity, String lineEntity) async {
+        for (final o in orders) {
+          add(orderEntity, '${o['id'] ?? ''}');
+          final items = (o['items'] as List?) ?? [];
+          for (final it in items) {
+            if (it is Map) add(lineEntity, '${it['id'] ?? ''}');
+          }
+        }
+      }
+      await collect(await LocalDb.getAll('sales'), 'sale', 'sale_item');
+      await collect(await LocalDb.getAll('purchases'), 'purchase', 'purchase_item');
+      await collect(await LocalDb.getAll('payments'), 'payment', 'payment');
+      // 扫描 attachments/ 下 entity 目录，清掉不在用集合的 id 目录
+      for (final eDir in base.list(followLinks: false)) {
+        if (eDir is! Directory) continue;
+        final entity = eDir.uri.pathSegments.last;
+        final have = inUse[entity];
+        if (have == null) {
+          // 未知实体目录（脏残留）整删
+          try { eDir.deleteSync(recursive: true); } catch (_) {}
+          continue;
+        }
+        for (final idDir in eDir.list(followLinks: false)) {
+          if (idDir is! Directory) continue;
+          final id = idDir.uri.pathSegments.last;
+          if (!have.contains(id)) {
+            try { idDir.deleteSync(recursive: true); } catch (_) {}
+          }
+        }
+        try { if (eDir.listSync().isEmpty) eDir.deleteSync(); } catch (_) {}
       }
     } catch (_) {}
   }

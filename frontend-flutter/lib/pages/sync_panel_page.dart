@@ -91,6 +91,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     // 一次性拉齐本地 + 服务器全部数据后再渲染（并行请求，各自容错）：
     // 避免逐块 setState 导致"未同步图标一条条变已同步"的过程，进页直接看到结果。
     if (mounted) setState(() => _loading = true);
+    // 先清本地孤儿附件副本（单据删除残留等，对照在用实体）再计数——存量残留一进面板即归零
+    await SyncService.cleanupOrphanLocalAttachments();
     var local = <String, int>{};
     var pending = 0;
     var deviceId = '';
