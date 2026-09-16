@@ -834,7 +834,7 @@ class SyncService {
       await collect(await LocalDb.getAll('purchases'), 'purchase', 'purchase_item');
       await collect(await LocalDb.getAll('payments'), 'payment', 'payment');
       // 扫描 attachments/ 下 entity 目录，清掉不在用集合的 id 目录
-      for (final eDir in base.list(followLinks: false)) {
+      await for (final eDir in base.list(followLinks: false)) {
         if (eDir is! Directory) continue;
         final entity = eDir.uri.pathSegments.last;
         final have = inUse[entity];
@@ -843,7 +843,7 @@ class SyncService {
           try { eDir.deleteSync(recursive: true); } catch (_) {}
           continue;
         }
-        for (final idDir in eDir.list(followLinks: false)) {
+        await for (final idDir in eDir.list(followLinks: false)) {
           if (idDir is! Directory) continue;
           final id = idDir.uri.pathSegments.last;
           if (!have.contains(id)) {
