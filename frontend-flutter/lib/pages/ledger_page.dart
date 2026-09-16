@@ -254,9 +254,12 @@ class _LedgerPageState extends State<LedgerPage> {
   /// ③ Web 无本地库，仍直连服务器读取。
   Future<void> _load() async {
     final firstLocal = await LocalDb.getAllByName('clients');
-    // 页面展示层仍按"整单镜像"渲染（fullSync 双写整单+行级 store）；行级同步实体在 write/delete 层生效，
-    // 物理删表（页面层全面切换行记录）待后续改造完成后再推进
-    final allSales = await LocalDb.getAll('sales');
+    // 形式层切换：优先从行级 sale_items store 读取并组装（sale_items → 按 sale_id 分组 → 假整单），
+    // 让渲染代码零改动地切到行记录；sales 整单 store 仅 Web/旧数据兜底。
+    final rowSales = await LocalDb.getAll('sale_items');
+    final allSales = rowSales.isNotEmpty
+        ? _assembleFromRows(rowSales)
+        : await LocalDb.getAll('sales');
     final allPays = await LocalDb.getAll('payments');
     // 商品分类映射（明细行第二行显示分类）：原生读本地库镜像，Web 拉简化目录
     final items = kIsWeb
@@ -303,6 +306,27 @@ class _LedgerPageState extends State<LedgerPage> {
     if (kIsWeb) await _loadNetwork(firstLocal);
     // 附件计数（有附件才显示图标）：本地目录扫描零网络；云端 counts 仅同步完成/Web 直连时刷新
     _loadAttachCounts(withCloud: kIsWeb);
+  }
+
+  /// 行记录 → 假整单数组（同 sale_id 归并；行自带头部字段 client_id/client_name/happened_at/note）
+  static List<Map<String, dynamic>> _assembleFromRows(List<Map<String, dynamic>> rows) {
+    final byOrder = <String, List<Map<String, dynamic>>>{};
+    final meta = <String, Map<String, dynamic>>{};
+    for (final r in rows) {
+      final oid = '${r['sale_id'] ?? ''}';
+      if (oid.isEmpty) continue;
+      (byOrder[oid] ??= []).add(r);
+      meta[oid] = {
+        'id': oid, 'client_id': r['client_id'] ?? '', 'client_name': r['client_name'] ?? '',
+        'happened_at': r['happened_at'] ?? '', 'note': r['note'] ?? '',
+      };
+    }
+    return byOrder.entries.map((e) {
+      final items = e.value;
+      final m = meta[e.key]!;
+      final total = items.fold<double>(0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
+      return {...m, 'total': total, 'items': items};
+    }).toList();
   }
 
   /// 统计当前可见出货明细行/收款单的附件数：本地副本目录优先（原生，零网络），云端批量 counts 精确覆盖。

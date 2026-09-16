@@ -90,8 +90,11 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   Future<void> _load() async {
-    // ① 本地库秒开（含空态；不再等网络转圈）
-    final local = await LocalDb.getAll('purchases');
+    // ① 本地库秒开（含空态；不再等网络转圈）—— 形式层切换：优先行级 purchase_items store
+    final rowPurchases = await LocalDb.getAll('purchase_items');
+    final local = rowPurchases.isNotEmpty
+        ? _assembleFromRows(rowPurchases)
+        : await LocalDb.getAll('purchases');
     // 商品目录分类映射：流水行分类优先查询商品设置分类（改动即时生效），明细快照仅兜底
     final catMap = <String, String>{};
     try {
@@ -131,6 +134,26 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         });
       }
     }
+  }
+
+  /// 行记录 → 假整单数组（同 purchase_id 归并；行自带头部字段 happened_at/note）
+  static List<Map<String, dynamic>> _assembleFromRows(List<Map<String, dynamic>> rows) {
+    final byOrder = <String, List<Map<String, dynamic>>>{};
+    final meta = <String, Map<String, dynamic>>{};
+    for (final r in rows) {
+      final oid = '${r['purchase_id'] ?? ''}';
+      if (oid.isEmpty) continue;
+      (byOrder[oid] ??= []).add(r);
+      meta[oid] = {
+        'id': oid, 'happened_at': r['happened_at'] ?? '', 'note': r['note'] ?? '',
+      };
+    }
+    return byOrder.entries.map((e) {
+      final items = e.value;
+      final m = meta[e.key]!;
+      final total = items.fold<double>(0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
+      return {...m, 'total': total, 'items': items};
+    }).toList();
   }
 
   /// 本地全量镜像按所选月份过滤（与网络接口的 date_from/date_to 一致），并汇总当月支出
