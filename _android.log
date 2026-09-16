@@ -1,0 +1,565 @@
+﻿2026-09-16T17:24:08.2656743Z Current runner version: '2.337.0'
+2026-09-16T17:24:08.2682068Z ##[group]Runner Image Provisioner
+2026-09-16T17:24:08.2683037Z Hosted Compute Agent
+2026-09-16T17:24:08.2683646Z Version: 20260828.587
+2026-09-16T17:24:08.2684628Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-16T17:24:08.2685417Z Build Date: 2026-08-28T16:44:25Z
+2026-09-16T17:24:08.2686197Z Worker ID: {af1cf22d-2b87-47b6-a480-6dabbb3917a1}
+2026-09-16T17:24:08.2687056Z Azure Region: westus
+2026-09-16T17:24:08.2687728Z ##[endgroup]
+2026-09-16T17:24:08.2689225Z ##[group]Operating System
+2026-09-16T17:24:08.2689897Z Ubuntu
+2026-09-16T17:24:08.2690593Z 24.04.5
+2026-09-16T17:24:08.2691166Z LTS
+2026-09-16T17:24:08.2691747Z ##[endgroup]
+2026-09-16T17:24:08.2692347Z ##[group]Runner Image
+2026-09-16T17:24:08.2692990Z Image: ubuntu-24.04
+2026-09-16T17:24:08.2693685Z Version: 20260907.300.1
+2026-09-16T17:24:08.2695191Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260907.300/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-16T17:24:08.2696941Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260907.300
+2026-09-16T17:24:08.2698075Z ##[endgroup]
+2026-09-16T17:24:08.2699369Z ##[group]GITHUB_TOKEN Permissions
+2026-09-16T17:24:08.2701395Z Contents: write
+2026-09-16T17:24:08.2702164Z Metadata: read
+2026-09-16T17:24:08.2702795Z ##[endgroup]
+2026-09-16T17:24:08.2705378Z Secret source: Actions
+2026-09-16T17:24:08.2706640Z Cache mode: write
+2026-09-16T17:24:08.2707493Z Prepare workflow directory
+2026-09-16T17:24:08.3051708Z Prepare all required actions
+2026-09-16T17:24:08.3122466Z Getting action download info
+2026-09-16T17:24:08.6946769Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-16T17:24:08.8049260Z Download action repository 'subosito/flutter-action@v2' (SHA:1a449444c387b1966244ae4d4f8c696479add0b2)
+2026-09-16T17:24:09.0652632Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+2026-09-16T17:24:09.3522238Z Getting action download info
+2026-09-16T17:24:09.5088645Z Download action repository 'actions/cache@v5' (SHA:caa296126883cff596d87d8935842f9db880ef25)
+2026-09-16T17:24:09.7620059Z Complete job name: Android APK
+2026-09-16T17:24:09.8569209Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T17:24:09.8580828Z ##[group]Run actions/checkout@v4
+2026-09-16T17:24:09.8582049Z with:
+2026-09-16T17:24:09.8582965Z   repository: free-zuike/***
+2026-09-16T17:24:09.8591263Z   token: ***
+2026-09-16T17:24:09.8592110Z   ssh-strict: true
+2026-09-16T17:24:09.8592970Z   ssh-user: git
+2026-09-16T17:24:09.8593998Z   persist-credentials: true
+2026-09-16T17:24:09.8594977Z   clean: true
+2026-09-16T17:24:09.8595867Z   sparse-checkout-cone-mode: true
+2026-09-16T17:24:09.8596921Z   fetch-depth: 1
+2026-09-16T17:24:09.8597781Z   fetch-tags: false
+2026-09-16T17:24:09.8598677Z   show-progress: true
+2026-09-16T17:24:09.8599559Z   lfs: false
+2026-09-16T17:24:09.8600420Z   submodules: false
+2026-09-16T17:24:09.8666235Z   set-safe-directory: true
+2026-09-16T17:24:09.8667458Z   allow-unsafe-pr-checkout: false
+2026-09-16T17:24:09.8669287Z ##[endgroup]
+2026-09-16T17:24:09.9724551Z Syncing repository: free-zuike/***
+2026-09-16T17:24:09.9728694Z ##[group]Getting Git version info
+2026-09-16T17:24:09.9730830Z Working directory is '/home/runner/work/***/***'
+2026-09-16T17:24:09.9734058Z [command]/usr/bin/git version
+2026-09-16T17:24:09.9806046Z git version 2.55.0
+2026-09-16T17:24:09.9832315Z ##[endgroup]
+2026-09-16T17:24:09.9852944Z Temporarily overriding HOME='/home/runner/work/_temp/38907050-55aa-4255-b9df-ee2ca4df62f1' before making global git config changes
+2026-09-16T17:24:09.9856421Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T17:24:09.9859796Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/***/***
+2026-09-16T17:24:09.9926409Z Deleting the contents of '/home/runner/work/***/***'
+2026-09-16T17:24:09.9935821Z ##[group]Initializing the repository
+2026-09-16T17:24:09.9937997Z [command]/usr/bin/git init /home/runner/work/***/***
+2026-09-16T17:24:10.0041019Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-16T17:24:10.0044876Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-16T17:24:10.0048636Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-16T17:24:10.0051845Z hint: call:
+2026-09-16T17:24:10.0053615Z hint:
+2026-09-16T17:24:10.0055662Z hint: 	git config --global init.defaultBranch <name>
+2026-09-16T17:24:10.0057781Z hint:
+2026-09-16T17:24:10.0059792Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-16T17:24:10.0062979Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-16T17:24:10.0065794Z hint:
+2026-09-16T17:24:10.0067411Z hint: 	git branch -m <name>
+2026-09-16T17:24:10.0068365Z hint:
+2026-09-16T17:24:10.0069626Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-16T17:24:10.0071649Z Initialized empty Git repository in /home/runner/work/***/***/.git/
+2026-09-16T17:24:10.0075814Z [command]/usr/bin/git remote add origin https://github.com/free-zuike/***
+2026-09-16T17:24:10.0119922Z ##[endgroup]
+2026-09-16T17:24:10.0122562Z ##[group]Disabling automatic garbage collection
+2026-09-16T17:24:10.0125209Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-16T17:24:10.0178305Z ##[endgroup]
+2026-09-16T17:24:10.0181144Z ##[group]Setting up auth
+2026-09-16T17:24:10.0184286Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T17:24:10.0207131Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-16T17:24:10.0574930Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T17:24:10.0632055Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-16T17:24:10.0859973Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T17:24:10.0896770Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-16T17:24:10.1125841Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-16T17:24:10.1166833Z ##[endgroup]
+2026-09-16T17:24:10.1168816Z ##[group]Fetching the repository
+2026-09-16T17:24:10.1177999Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +6e3e1a67803aed9b1a9aeaa159069186d1392b43:refs/remotes/origin/main
+2026-09-16T17:24:10.6795968Z From https://github.com/free-zuike/***
+2026-09-16T17:24:10.6797957Z  * [new ref]         6e3e1a67803aed9b1a9aeaa159069186d1392b43 -> origin/main
+2026-09-16T17:24:10.6802690Z ##[endgroup]
+2026-09-16T17:24:10.6805156Z ##[group]Determining the checkout info
+2026-09-16T17:24:10.6807891Z ##[endgroup]
+2026-09-16T17:24:10.6811279Z [command]/usr/bin/git sparse-checkout disable
+2026-09-16T17:24:10.6865566Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-16T17:24:10.6898357Z ##[group]Checking out the ref
+2026-09-16T17:24:10.6901297Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-09-16T17:24:10.7107815Z Switched to a new branch 'main'
+2026-09-16T17:24:10.7114906Z branch 'main' set up to track 'origin/main'.
+2026-09-16T17:24:10.7122219Z ##[endgroup]
+2026-09-16T17:24:10.7164696Z [command]/usr/bin/git log -1 --format=%H
+2026-09-16T17:24:10.7192084Z 6e3e1a67803aed9b1a9aeaa159069186d1392b43
+2026-09-16T17:24:10.7435612Z ##[group]Run VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+2026-09-16T17:24:10.7438020Z [36;1mVERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)[0m
+2026-09-16T17:24:10.7440061Z [36;1mif [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi[0m
+2026-09-16T17:24:10.7441565Z [36;1mgit fetch --tags --quiet || true[0m
+2026-09-16T17:24:10.7443274Z [36;1mif git rev-parse -q --verify "refs/tags/***-v${VERSION}" >/dev/null 2>&1; then[0m
+2026-09-16T17:24:10.7445439Z [36;1m  TAG_COMMIT=$(git rev-list -n 1 "***-v${VERSION}")[0m
+2026-09-16T17:24:10.7446768Z [36;1m  if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then[0m
+2026-09-16T17:24:10.7449974Z [36;1m    echo "::error::版本号未 bump：***-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号（src/version.ts + frontend-flutter/lib/version.dart + frontend-uni/src/manifest.json + tests/api.test.ts 断言），否则产物会覆盖旧 release。"[0m
+2026-09-16T17:24:10.7452892Z [36;1m    exit 1[0m
+2026-09-16T17:24:10.7453699Z [36;1m  fi[0m
+2026-09-16T17:24:10.7454602Z [36;1mfi[0m
+2026-09-16T17:24:10.7455399Z [36;1mecho "版本守卫通过：v${VERSION}"[0m
+2026-09-16T17:24:10.7498780Z shell: /usr/bin/bash -e {0}
+2026-09-16T17:24:10.7499739Z ##[endgroup]
+2026-09-16T17:24:12.0009436Z 版本守卫通过：v0.17.112
+2026-09-16T17:24:12.0244339Z ##[group]Run subosito/flutter-action@v2
+2026-09-16T17:24:12.0244889Z with:
+2026-09-16T17:24:12.0245290Z   channel: stable
+2026-09-16T17:24:12.0245696Z   cache: true
+2026-09-16T17:24:12.0246090Z   architecture: X64
+2026-09-16T17:24:12.0246513Z   pub-cache-path: default
+2026-09-16T17:24:12.0246950Z   dry-run: false
+2026-09-16T17:24:12.0247408Z   git-source: https://github.com/flutter/flutter.git
+2026-09-16T17:24:12.0247906Z ##[endgroup]
+2026-09-16T17:24:12.0311348Z ##[start-action display=Make yq tool available on Windows runners;id=__subosito_flutter-action.__run]
+2026-09-16T17:24:12.0336524Z ##[end-action id=__subosito_flutter-action.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-16T17:24:12.0339582Z ##[start-action display=Make setup script executable;id=__subosito_flutter-action.__run_2]
+2026-09-16T17:24:12.0369902Z ##[group]Run chmod +x "$GITHUB_ACTION_PATH/setup.sh"
+2026-09-16T17:24:12.0370488Z [36;1mchmod +x "$GITHUB_ACTION_PATH/setup.sh"[0m
+2026-09-16T17:24:12.0408815Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T17:24:12.0409352Z ##[endgroup]
+2026-09-16T17:24:12.0491113Z ##[end-action id=__subosito_flutter-action.__run_2;outcome=success;conclusion=success;duration_ms=15]
+2026-09-16T17:24:12.0494628Z ##[start-action display=Set action inputs;id=__subosito_flutter-action.flutter-action]
+2026-09-16T17:24:12.0537630Z ##[group]Run $GITHUB_ACTION_PATH/setup.sh -p \
+2026-09-16T17:24:12.0538162Z [36;1m$GITHUB_ACTION_PATH/setup.sh -p \[0m
+2026-09-16T17:24:12.0538602Z [36;1m  -n '' \[0m
+2026-09-16T17:24:12.0538966Z [36;1m  -f '' \[0m
+2026-09-16T17:24:12.0539328Z [36;1m  -a 'X64' \[0m
+2026-09-16T17:24:12.0539694Z [36;1m  -k '' \[0m
+2026-09-16T17:24:12.0540041Z [36;1m  -c '' \[0m
+2026-09-16T17:24:12.0540394Z [36;1m  -l '' \[0m
+2026-09-16T17:24:12.0540754Z [36;1m  -d 'default' \[0m
+2026-09-16T17:24:12.0541213Z [36;1m  -g 'https://github.com/flutter/flutter.git' \[0m
+2026-09-16T17:24:12.0541705Z [36;1m  stable[0m
+2026-09-16T17:24:12.0576550Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T17:24:12.0577067Z ##[endgroup]
+2026-09-16T17:24:12.3669216Z ##[end-action id=__subosito_flutter-action.flutter-action;outcome=success;conclusion=success;duration_ms=317]
+2026-09-16T17:24:12.3672070Z ##[start-action display=Cache Flutter;id=__subosito_flutter-action.cache-flutter]
+2026-09-16T17:24:12.3759079Z ##[group]Run actions/cache@v5
+2026-09-16T17:24:12.3759440Z with:
+2026-09-16T17:24:12.3759771Z   path: /opt/hostedtoolcache/flutter/stable-3.47.4-x64
+2026-09-16T17:24:12.3760519Z   key: flutter-linux-stable-3.47.4-x64-9584c6713b324636289d067944a46fd6b49df14b
+2026-09-16T17:24:12.3761021Z   enableCrossOsArchive: false
+2026-09-16T17:24:12.3761346Z   fail-on-cache-miss: false
+2026-09-16T17:24:12.3761636Z   lookup-only: false
+2026-09-16T17:24:12.3761909Z   save-always: false
+2026-09-16T17:24:12.3762172Z ##[endgroup]
+2026-09-16T17:24:12.7664983Z Cache hit for: flutter-linux-stable-3.47.4-x64-9584c6713b324636289d067944a46fd6b49df14b
+2026-09-16T17:24:14.0706482Z Received 0 of 1720275084 (0.0%), 0.0 MBs/sec
+2026-09-16T17:24:15.0702658Z Received 100663296 of 1720275084 (5.9%), 48.0 MBs/sec
+2026-09-16T17:24:16.0715535Z Received 222298112 of 1720275084 (12.9%), 70.6 MBs/sec
+2026-09-16T17:24:17.0745487Z Received 369098752 of 1720275084 (21.5%), 88.0 MBs/sec
+2026-09-16T17:24:18.0795181Z Received 469762048 of 1720275084 (27.3%), 89.5 MBs/sec
+2026-09-16T17:24:19.0801346Z Received 574619648 of 1720275084 (33.4%), 91.2 MBs/sec
+2026-09-16T17:24:20.0799081Z Received 700448768 of 1720275084 (40.7%), 95.3 MBs/sec
+2026-09-16T17:24:21.0810526Z Received 805306368 of 1720275084 (46.8%), 95.9 MBs/sec
+2026-09-16T17:24:22.0855087Z Received 926941184 of 1720275084 (53.9%), 98.1 MBs/sec
+2026-09-16T17:24:23.0848294Z Received 1027604480 of 1720275084 (59.7%), 97.9 MBs/sec
+2026-09-16T17:24:24.0905037Z Received 1111490560 of 1720275084 (64.6%), 96.2 MBs/sec
+2026-09-16T17:24:25.0864484Z Received 1207959552 of 1720275084 (70.2%), 95.9 MBs/sec
+2026-09-16T17:24:26.0869178Z Received 1304428544 of 1720275084 (75.8%), 95.6 MBs/sec
+2026-09-16T17:24:27.0868012Z Received 1388314624 of 1720275084 (80.7%), 94.5 MBs/sec
+2026-09-16T17:24:28.0874512Z Received 1480589312 of 1720275084 (86.1%), 94.0 MBs/sec
+2026-09-16T17:24:29.0925070Z Received 1602224128 of 1720275084 (93.1%), 95.4 MBs/sec
+2026-09-16T17:24:30.0925127Z Received 1690304512 of 1720275084 (98.3%), 94.7 MBs/sec
+2026-09-16T17:24:30.3141156Z Received 1720275084 of 1720275084 (100.0%), 95.1 MBs/sec
+2026-09-16T17:24:30.3144215Z Cache Size: ~1641 MB (1720275084 B)
+2026-09-16T17:24:30.3261080Z [command]/usr/bin/tar -xf /home/runner/work/_temp/68542e0e-7bfd-4424-97e3-74b80a948af1/cache.tzst -P -C /home/runner/work/***/*** --use-compress-program unzstd
+2026-09-16T17:24:34.9314352Z Cache restored successfully
+2026-09-16T17:24:35.0092996Z Cache restored from key: flutter-linux-stable-3.47.4-x64-9584c6713b324636289d067944a46fd6b49df14b
+2026-09-16T17:24:35.0228784Z ##[end-action id=__subosito_flutter-action.cache-flutter;outcome=success;conclusion=success;duration_ms=22655]
+2026-09-16T17:24:35.0231706Z ##[start-action display=Cache pub dependencies;id=__subosito_flutter-action.cache-pub]
+2026-09-16T17:24:35.1160105Z ##[group]Run actions/cache@v5
+2026-09-16T17:24:35.1160375Z with:
+2026-09-16T17:24:35.1160596Z   path: /home/runner/.pub-cache
+2026-09-16T17:24:35.1161051Z   key: flutter-pub-linux-stable-3.47.4-x64-9584c6713b324636289d067944a46fd6b49df14b-
+2026-09-16T17:24:35.1161538Z   enableCrossOsArchive: false
+2026-09-16T17:24:35.1161821Z   fail-on-cache-miss: false
+2026-09-16T17:24:35.1162095Z   lookup-only: false
+2026-09-16T17:24:35.1162334Z   save-always: false
+2026-09-16T17:24:35.1162562Z ##[endgroup]
+2026-09-16T17:24:35.5273365Z Cache hit for: flutter-pub-linux-stable-3.47.4-x64-9584c6713b324636289d067944a46fd6b49df14b-
+2026-09-16T17:24:36.8450496Z Received 0 of 46206136 (0.0%), 0.0 MBs/sec
+2026-09-16T17:24:37.3781841Z Received 46206136 of 46206136 (100.0%), 28.7 MBs/sec
+2026-09-16T17:24:37.3784380Z Cache Size: ~44 MB (46206136 B)
+2026-09-16T17:24:37.3825092Z [command]/usr/bin/tar -xf /home/runner/work/_temp/38705423-4f7f-4778-a144-23cd9b3786e2/cache.tzst -P -C /home/runner/work/***/*** --use-compress-program unzstd
+2026-09-16T17:24:38.3318170Z Cache restored successfully
+2026-09-16T17:24:38.3421457Z Cache restored from key: flutter-pub-linux-stable-3.47.4-x64-9584c6713b324636289d067944a46fd6b49df14b-
+2026-09-16T17:24:38.3507187Z ##[end-action id=__subosito_flutter-action.cache-pub;outcome=success;conclusion=success;duration_ms=3327]
+2026-09-16T17:24:38.3512423Z ##[start-action display=Run setup script;id=__subosito_flutter-action.__run_3]
+2026-09-16T17:24:38.3549948Z ##[group]Run $GITHUB_ACTION_PATH/setup.sh \
+2026-09-16T17:24:38.3550309Z [36;1m$GITHUB_ACTION_PATH/setup.sh \[0m
+2026-09-16T17:24:38.3550608Z [36;1m  -n '3.47.4' \[0m
+2026-09-16T17:24:38.3550857Z [36;1m  -a 'x64' \[0m
+2026-09-16T17:24:38.3551176Z [36;1m  -c '/opt/hostedtoolcache/flutter/stable-3.47.4-x64' \[0m
+2026-09-16T17:24:38.3551598Z [36;1m  -d '/home/runner/.pub-cache' \[0m
+2026-09-16T17:24:38.3551899Z [36;1m  stable[0m
+2026-09-16T17:24:38.3588159Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T17:24:38.3588528Z ##[endgroup]
+2026-09-16T17:24:38.4985510Z ##[end-action id=__subosito_flutter-action.__run_3;outcome=success;conclusion=success;duration_ms=147]
+2026-09-16T17:24:38.5624825Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T17:24:38.5626274Z ##[group]Run actions/cache@v4
+2026-09-16T17:24:38.5626536Z with:
+2026-09-16T17:24:38.5626754Z   path: ~/.pub-cache
+2026-09-16T17:24:38.5627163Z   key: Linux-pub-b13d35816bbede093299c16ef71c4bca9d5471b3f2f8ad2a3fb087fd5efe5e02
+2026-09-16T17:24:38.5627635Z   restore-keys: Linux-pub-
+
+2026-09-16T17:24:38.5627920Z   enableCrossOsArchive: false
+2026-09-16T17:24:38.5628192Z   fail-on-cache-miss: false
+2026-09-16T17:24:38.5628450Z   lookup-only: false
+2026-09-16T17:24:38.5628681Z   save-always: false
+2026-09-16T17:24:38.5628899Z env:
+2026-09-16T17:24:38.5629248Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.47.4-x64/flutter
+2026-09-16T17:24:38.5629691Z   PUB_CACHE: /home/runner/.pub-cache
+2026-09-16T17:24:38.5629969Z ##[endgroup]
+2026-09-16T17:24:38.6722231Z (node:2528) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T17:24:38.6723550Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T17:24:38.9271492Z Cache hit for: Linux-pub-b13d35816bbede093299c16ef71c4bca9d5471b3f2f8ad2a3fb087fd5efe5e02
+2026-09-16T17:24:38.9395739Z (node:2528) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-16T17:24:40.1973646Z Received 4194304 of 46732279 (9.0%), 4.0 MBs/sec
+2026-09-16T17:24:40.6909338Z Received 46732279 of 46732279 (100.0%), 29.8 MBs/sec
+2026-09-16T17:24:40.6910318Z Cache Size: ~45 MB (46732279 B)
+2026-09-16T17:24:40.7016903Z [command]/usr/bin/tar -xf /home/runner/work/_temp/b5e147ab-a031-4610-a111-29d7af09b1d9/cache.tzst -P -C /home/runner/work/***/*** --use-compress-program unzstd
+2026-09-16T17:24:41.9351767Z Cache restored successfully
+2026-09-16T17:24:41.9453883Z Cache restored from key: Linux-pub-b13d35816bbede093299c16ef71c4bca9d5471b3f2f8ad2a3fb087fd5efe5e02
+2026-09-16T17:24:41.9575241Z ##[group]Run echo "ver=$(flutter --version 2>/dev/null | sed -n 's/^Flutter \([0-9.]*\).*/\1/p')" >> "$GITHUB_OUTPUT"
+2026-09-16T17:24:41.9576689Z [36;1mecho "ver=$(flutter --version 2>/dev/null | sed -n 's/^Flutter \([0-9.]*\).*/\1/p')" >> "$GITHUB_OUTPUT"[0m
+2026-09-16T17:24:41.9615108Z shell: /usr/bin/bash -e {0}
+2026-09-16T17:24:41.9615393Z env:
+2026-09-16T17:24:41.9615730Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.47.4-x64/flutter
+2026-09-16T17:24:41.9616168Z   PUB_CACHE: /home/runner/.pub-cache
+2026-09-16T17:24:41.9616472Z ##[endgroup]
+2026-09-16T17:24:42.3211520Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T17:24:42.3213031Z ##[group]Run actions/cache@v4
+2026-09-16T17:24:42.3213299Z with:
+2026-09-16T17:24:42.3213546Z   path: ~/.gradle/caches
+~/.gradle/wrapper
+
+2026-09-16T17:24:42.3214208Z   key: Linux-gradle-3.47.4
+2026-09-16T17:24:42.3214508Z   restore-keys: Linux-gradle-
+
+2026-09-16T17:24:42.3214808Z   enableCrossOsArchive: false
+2026-09-16T17:24:42.3215092Z   fail-on-cache-miss: false
+2026-09-16T17:24:42.3215348Z   lookup-only: false
+2026-09-16T17:24:42.3215589Z   save-always: false
+2026-09-16T17:24:42.3215813Z env:
+2026-09-16T17:24:42.3216133Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.47.4-x64/flutter
+2026-09-16T17:24:42.3216582Z   PUB_CACHE: /home/runner/.pub-cache
+2026-09-16T17:24:42.3216867Z ##[endgroup]
+2026-09-16T17:24:42.4244592Z (node:2574) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T17:24:42.4245709Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T17:24:42.6758199Z Cache hit for: Linux-gradle-3.47.4
+2026-09-16T17:24:42.6862550Z (node:2574) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-16T17:24:43.9641708Z Received 0 of 1719958083 (0.0%), 0.0 MBs/sec
+2026-09-16T17:24:44.9640800Z Received 125829120 of 1719958083 (7.3%), 60.0 MBs/sec
+2026-09-16T17:24:45.9641439Z Received 159383552 of 1719958083 (9.3%), 50.7 MBs/sec
+2026-09-16T17:24:46.9643239Z Received 276824064 of 1719958083 (16.1%), 66.0 MBs/sec
+2026-09-16T17:24:47.9765882Z Received 406847488 of 1719958083 (23.7%), 77.4 MBs/sec
+2026-09-16T17:24:48.9754795Z Received 553648128 of 1719958083 (32.2%), 87.8 MBs/sec
+2026-09-16T17:24:49.9755226Z Received 700448768 of 1719958083 (40.7%), 95.3 MBs/sec
+2026-09-16T17:24:50.9760250Z Received 830472192 of 1719958083 (48.3%), 98.9 MBs/sec
+2026-09-16T17:24:51.9825220Z Received 973078528 of 1719958083 (56.6%), 103.0 MBs/sec
+2026-09-16T17:24:52.9782125Z Received 1111490560 of 1719958083 (64.6%), 105.9 MBs/sec
+2026-09-16T17:24:53.9787632Z Received 1254096896 of 1719958083 (72.9%), 108.6 MBs/sec
+2026-09-16T17:24:54.9796034Z Received 1430257664 of 1719958083 (83.2%), 113.5 MBs/sec
+2026-09-16T17:24:55.9801545Z Received 1606418432 of 1719958083 (93.4%), 117.7 MBs/sec
+2026-09-16T17:24:56.9353169Z Received 1719958083 of 1719958083 (100.0%), 117.4 MBs/sec
+2026-09-16T17:24:56.9356758Z Cache Size: ~1640 MB (1719958083 B)
+2026-09-16T17:24:56.9401027Z [command]/usr/bin/tar -xf /home/runner/work/_temp/23a030c3-a205-42c4-ac6b-8a813364ba0b/cache.tzst -P -C /home/runner/work/***/*** --use-compress-program unzstd
+2026-09-16T17:25:06.9841390Z Cache restored successfully
+2026-09-16T17:25:07.0633199Z Cache restored from key: Linux-gradle-3.47.4
+2026-09-16T17:25:07.0799186Z ##[group]Run flutter create --org com.*** --project-name ***_app .
+2026-09-16T17:25:07.0799859Z [36;1mflutter create --org com.*** --project-name ***_app .[0m
+2026-09-16T17:25:07.0836375Z shell: /usr/bin/bash -e {0}
+2026-09-16T17:25:07.0836698Z env:
+2026-09-16T17:25:07.0837103Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.47.4-x64/flutter
+2026-09-16T17:25:07.0837608Z   PUB_CACHE: /home/runner/.pub-cache
+2026-09-16T17:25:07.0837960Z ##[endgroup]
+2026-09-16T17:25:07.2880206Z Recreating project ....
+2026-09-16T17:25:07.3380083Z   macos/RunnerTests/RunnerTests.swift (created)
+2026-09-16T17:25:07.4647275Z   macos/Runner.xcworkspace/contents.xcworkspacedata (created)
+2026-09-16T17:25:07.4654082Z   macos/Runner.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist (created)
+2026-09-16T17:25:07.4658907Z   macos/.gitignore (created)
+2026-09-16T17:25:07.4663278Z   macos/Runner/Info.plist (created)
+2026-09-16T17:25:07.4684786Z   macos/Runner/Base.lproj/MainMenu.xib (created)
+2026-09-16T17:25:07.4685642Z   macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_64.png (created)
+2026-09-16T17:25:07.4686284Z   macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png (created)
+2026-09-16T17:25:07.4690790Z   macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_32.png (created)
+2026-09-16T17:25:07.4696048Z   macos/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json (created)
+2026-09-16T17:25:07.4700217Z   macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_16.png (created)
+2026-09-16T17:25:07.4705867Z   macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_1024.png (created)
+2026-09-16T17:25:07.4711059Z   macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_128.png (created)
+2026-09-16T17:25:07.4716117Z   macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_256.png (created)
+2026-09-16T17:25:07.4724663Z   macos/Runner/AppDelegate.swift (created)
+2026-09-16T17:25:07.4725877Z   macos/Runner/DebugProfile.entitlements (created)
+2026-09-16T17:25:07.4728752Z   macos/Runner/Configs/Release.xcconfig (created)
+2026-09-16T17:25:07.4733851Z   macos/Runner/Configs/Warnings.xcconfig (created)
+2026-09-16T17:25:07.4737717Z   macos/Runner/Configs/Debug.xcconfig (created)
+2026-09-16T17:25:07.4741800Z   macos/Runner/Configs/AppInfo.xcconfig (created)
+2026-09-16T17:25:07.4761135Z   macos/Runner/Release.entitlements (created)
+2026-09-16T17:25:07.4765073Z   macos/Runner/MainFlutterWindow.swift (created)
+2026-09-16T17:25:07.4769325Z   macos/Runner.xcodeproj/project.pbxproj (created)
+2026-09-16T17:25:07.5625096Z   macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist (created)
+2026-09-16T17:25:07.5627637Z   macos/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme (created)
+2026-09-16T17:25:07.5653627Z   macos/Flutter/Flutter-Release.xcconfig (created)
+2026-09-16T17:25:07.5654748Z   macos/Flutter/Flutter-Debug.xcconfig (created)
+2026-09-16T17:25:07.5655496Z   README.md (created)
+2026-09-16T17:25:07.5656038Z   analysis_options.yaml (created)
+2026-09-16T17:25:07.5667083Z   ***_app.iml (created)
+2026-09-16T17:25:07.5673157Z   windows/.gitignore (created)
+2026-09-16T17:25:07.5675940Z   windows/flutter/CMakeLists.txt (created)
+2026-09-16T17:25:07.6704764Z   windows/CMakeLists.txt (created)
+2026-09-16T17:25:07.6719944Z   windows/runner/flutter_window.h (created)
+2026-09-16T17:25:07.6725921Z   windows/runner/CMakeLists.txt (created)
+2026-09-16T17:25:07.6729845Z   windows/runner/main.cpp (created)
+2026-09-16T17:25:07.6735707Z   windows/runner/flutter_window.cpp (created)
+2026-09-16T17:25:07.6738855Z   windows/runner/resource.h (created)
+2026-09-16T17:25:07.6742179Z   windows/runner/utils.h (created)
+2026-09-16T17:25:07.6746379Z   windows/runner/win32_window.h (created)
+2026-09-16T17:25:07.6750575Z   windows/runner/Runner.rc (created)
+2026-09-16T17:25:07.6761087Z   windows/runner/resources/app_icon.ico (created)
+2026-09-16T17:25:07.6766170Z   windows/runner/runner.exe.manifest (created)
+2026-09-16T17:25:07.6769694Z   windows/runner/utils.cpp (created)
+2026-09-16T17:25:07.6773932Z   windows/runner/win32_window.cpp (created)
+2026-09-16T17:25:07.6778879Z   linux/.gitignore (created)
+2026-09-16T17:25:07.6783670Z   linux/flutter/CMakeLists.txt (created)
+2026-09-16T17:25:07.6789633Z   linux/CMakeLists.txt (created)
+2026-09-16T17:25:07.6797941Z   linux/runner/my_application.cc (created)
+2026-09-16T17:25:07.6813818Z   linux/runner/CMakeLists.txt (created)
+2026-09-16T17:25:07.6817780Z   linux/runner/main.cc (created)
+2026-09-16T17:25:07.6821841Z   linux/runner/my_application.h (created)
+2026-09-16T17:25:07.6827062Z   android/gradle/wrapper/gradle-wrapper.properties (created)
+2026-09-16T17:25:07.6833113Z   android/app/src/debug/AndroidManifest.xml (created)
+2026-09-16T17:25:07.6839265Z   android/app/src/profile/AndroidManifest.xml (created)
+2026-09-16T17:25:07.6843840Z   android/app/src/main/AndroidManifest.xml (created)
+2026-09-16T17:25:07.6850083Z   android/app/src/main/res/values/styles.xml (created)
+2026-09-16T17:25:07.6855135Z   android/app/src/main/res/mipmap-xhdpi/ic_launcher.png (created)
+2026-09-16T17:25:07.6859006Z   android/app/src/main/res/drawable/launch_background.xml (created)
+2026-09-16T17:25:07.6862922Z   android/app/src/main/res/mipmap-mdpi/ic_launcher.png (created)
+2026-09-16T17:25:07.6867148Z   android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png (created)
+2026-09-16T17:25:07.6871101Z   android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png (created)
+2026-09-16T17:25:07.6875541Z   android/app/src/main/res/mipmap-hdpi/ic_launcher.png (created)
+2026-09-16T17:25:07.6880083Z   android/app/src/main/res/drawable-v21/launch_background.xml (created)
+2026-09-16T17:25:07.6884093Z   android/app/src/main/res/values-night/styles.xml (created)
+2026-09-16T17:25:07.6888126Z   android/settings.gradle.kts (created)
+2026-09-16T17:25:07.6892981Z   android/.gitignore (created)
+2026-09-16T17:25:07.6896230Z   android/gradle.properties (created)
+2026-09-16T17:25:07.6900409Z   android/app/build.gradle.kts (created)
+2026-09-16T17:25:07.6906613Z   android/app/src/main/kotlin/com/***/***_app/MainActivity.kt (created)
+2026-09-16T17:25:07.6913891Z   android/***_app_android.iml (created)
+2026-09-16T17:25:07.6918837Z   android/build.gradle.kts (created)
+2026-09-16T17:25:07.6922822Z   web/index.html (created)
+2026-09-16T17:25:07.6929011Z   web/favicon.png (created)
+2026-09-16T17:25:07.6932308Z   web/manifest.json (created)
+2026-09-16T17:25:07.6938531Z   web/icons/Icon-maskable-512.png (created)
+2026-09-16T17:25:07.6944634Z   web/icons/Icon-192.png (created)
+2026-09-16T17:25:07.6948940Z   web/icons/Icon-512.png (created)
+2026-09-16T17:25:07.8104865Z   web/icons/Icon-maskable-192.png (created)
+2026-09-16T17:25:07.8110588Z   .idea/libraries/KotlinJavaRuntime.xml (created)
+2026-09-16T17:25:07.8118582Z   .idea/libraries/Dart_SDK.xml (created)
+2026-09-16T17:25:07.8127502Z   .idea/runConfigurations/main_dart.xml (created)
+2026-09-16T17:25:07.8133409Z   .idea/modules.xml (created)
+2026-09-16T17:25:07.8139212Z   .idea/workspace.xml (created)
+2026-09-16T17:25:07.8146213Z   ios/RunnerTests/RunnerTests.swift (created)
+2026-09-16T17:25:07.8155354Z   ios/Runner.xcworkspace/contents.xcworkspacedata (created)
+2026-09-16T17:25:07.8160569Z   ios/Runner.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings (created)
+2026-09-16T17:25:07.8166237Z   ios/Runner.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist (created)
+2026-09-16T17:25:07.8170580Z   ios/.gitignore (created)
+2026-09-16T17:25:07.8175347Z   ios/Runner/Base.lproj/Main.storyboard (created)
+2026-09-16T17:25:07.8181038Z   ios/Runner/Base.lproj/LaunchScreen.storyboard (created)
+2026-09-16T17:25:07.8186010Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json (created)
+2026-09-16T17:25:07.8192046Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-40x40@3x.png (created)
+2026-09-16T17:25:07.8197245Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png (created)
+2026-09-16T17:25:07.8202137Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-20x20@3x.png (created)
+2026-09-16T17:25:07.8207750Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-40x40@1x.png (created)
+2026-09-16T17:25:07.8212565Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-76x76@1x.png (created)
+2026-09-16T17:25:07.8217926Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-29x29@1x.png (created)
+2026-09-16T17:25:07.8222568Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-29x29@2x.png (created)
+2026-09-16T17:25:07.8227859Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-20x20@1x.png (created)
+2026-09-16T17:25:07.8232640Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-29x29@3x.png (created)
+2026-09-16T17:25:07.8237607Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-40x40@2x.png (created)
+2026-09-16T17:25:07.8242166Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-60x60@3x.png (created)
+2026-09-16T17:25:07.8246294Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-60x60@2x.png (created)
+2026-09-16T17:25:07.8250114Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-76x76@2x.png (created)
+2026-09-16T17:25:07.8253897Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-20x20@2x.png (created)
+2026-09-16T17:25:07.8257851Z   ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-83.5x83.5@2x.png (created)
+2026-09-16T17:25:07.8261596Z   ios/Runner/Assets.xcassets/LaunchImage.imageset/Contents.json (created)
+2026-09-16T17:25:07.8265938Z   ios/Runner/Assets.xcassets/LaunchImage.imageset/LaunchImage@2x.png (created)
+2026-09-16T17:25:07.8269634Z   ios/Runner/Assets.xcassets/LaunchImage.imageset/LaunchImage@3x.png (created)
+2026-09-16T17:25:07.8273265Z   ios/Runner/Assets.xcassets/LaunchImage.imageset/README.md (created)
+2026-09-16T17:25:07.8276959Z   ios/Runner/Assets.xcassets/LaunchImage.imageset/LaunchImage.png (created)
+2026-09-16T17:25:07.8280434Z   ios/Runner/AppDelegate.swift (created)
+2026-09-16T17:25:07.8283751Z   ios/Runner/Info.plist (created)
+2026-09-16T17:25:07.8289551Z   ios/Runner/Runner-Bridging-Header.h (created)
+2026-09-16T17:25:07.8293152Z   ios/Runner/SceneDelegate.swift (created)
+2026-09-16T17:25:07.8297158Z   ios/Runner.xcodeproj/project.pbxproj (created)
+2026-09-16T17:25:07.8319236Z   ios/Runner.xcodeproj/project.xcworkspace/contents.xcworkspacedata (created)
+2026-09-16T17:25:07.8324070Z   ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings (created)
+2026-09-16T17:25:07.8328661Z   ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist (created)
+2026-09-16T17:25:07.8332400Z   ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme (created)
+2026-09-16T17:25:07.8340533Z   ios/Flutter/AppFrameworkInfo.plist (created)
+2026-09-16T17:25:07.8344709Z   ios/Flutter/Release.xcconfig (created)
+2026-09-16T17:25:07.8348580Z   ios/Flutter/Debug.xcconfig (created)
+2026-09-16T17:25:07.8352147Z   .gitignore (created)
+2026-09-16T17:25:07.8356858Z   test/widget_test.dart (created)
+2026-09-16T17:25:08.0570014Z Resolving dependencies...
+2026-09-16T17:25:08.8522204Z Downloading packages...
+2026-09-16T17:25:08.8568388Z Got dependencies.
+2026-09-16T17:25:09.4532872Z Wrote 129 files.
+2026-09-16T17:25:09.4533289Z 
+2026-09-16T17:25:09.4533636Z All done!
+2026-09-16T17:25:09.4543219Z You can find general documentation for Flutter at: https://docs.flutter.dev/
+2026-09-16T17:25:09.4544246Z Detailed API documentation is available at: https://api.flutter.dev/
+2026-09-16T17:25:09.4545097Z If you prefer video documentation, consider: https://www.youtube.com/c/flutterdev
+2026-09-16T17:25:09.4545629Z 
+2026-09-16T17:25:09.4546376Z In order to run your application, type:
+2026-09-16T17:25:09.4546897Z 
+2026-09-16T17:25:09.4547126Z   $ flutter run
+2026-09-16T17:25:09.4547448Z 
+2026-09-16T17:25:09.4547775Z Your application code is in ./lib/main.dart.
+2026-09-16T17:25:09.4548314Z 
+2026-09-16T17:25:10.8160756Z ##[group]Run # ① Android 版本与应用版本号同步：versionName=三位版本号；versionCode=三位加权拼成正整数（单调递增，覆盖升级稳定）。
+2026-09-16T17:25:10.8161531Z [36;1m# ① Android 版本与应用版本号同步：versionName=三位版本号；versionCode=三位加权拼成正整数（单调递增，覆盖升级稳定）。[0m
+2026-09-16T17:25:10.8162194Z [36;1m#    不用改写 pubspec version：pub 的 version 格式只支持 x.y.z[+build]，四段 0.8.1.0 会判非法导致构建失败。[0m
+2026-09-16T17:25:10.8162828Z [36;1mVERSION=$(grep -oP "APP_VERSION = '\K[^']+" lib/version.dart || exit 1)[0m
+2026-09-16T17:25:10.8163430Z [36;1mBUILD_NUM=$(echo "$VERSION" | awk -F. '{print ($1*1000000)+($2*10000)+($3*100)}')[0m
+2026-09-16T17:25:10.8164817Z [36;1m# ② 包名统一 com.***.app（与「陶朱」一致：避免两个应用并存、可覆盖升级）[0m
+2026-09-16T17:25:10.8165641Z [36;1msed -i 's|namespace = ".*"|namespace = "com.***.app"|; s|applicationId = ".*"|applicationId = "com.***.app"|' android/app/build.gradle.kts[0m
+2026-09-16T17:25:10.8166521Z [36;1m# ②b MainActivity 类包与 applicationId 对齐——只改 namespace 不改类路径会 ClassNotFoundException 启动即崩[0m
+2026-09-16T17:25:10.8167280Z [36;1mif [ -f android/app/src/main/kotlin/com/***/***_app/MainActivity.kt ]; then[0m
+2026-09-16T17:25:10.8168172Z [36;1m  sed -i 's|package com.***.***_app|package com.***.app|' android/app/src/main/kotlin/com/***/***_app/MainActivity.kt[0m
+2026-09-16T17:25:10.8168858Z [36;1m  mkdir -p android/app/src/main/kotlin/com/***/app[0m
+2026-09-16T17:25:10.8169666Z [36;1m  mv android/app/src/main/kotlin/com/***/***_app/MainActivity.kt android/app/src/main/kotlin/com/***/app/MainActivity.kt[0m
+2026-09-16T17:25:10.8170487Z [36;1mfi[0m
+2026-09-16T17:25:10.8170937Z [36;1m# ②c 主 manifest 加 INTERNET 权限：Flutter 模板只在 debug/profile 清单有，release 无此权限=全部网络请求(DNS/连接)被拒→登录必失败[0m
+2026-09-16T17:25:10.8171885Z [36;1msed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/><application|' android/app/src/main/AndroidManifest.xml[0m
+2026-09-16T17:25:10.8172678Z [36;1m# ②d 应用内更新：允许安装未知来源 APK（检查更新→下载→open_filex 触发安装器）[0m
+2026-09-16T17:25:10.8173482Z [36;1msed -i 's|<application|<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/><application|' android/app/src/main/AndroidManifest.xml[0m
+2026-09-16T17:25:10.8174573Z [36;1m# ②e 最小权限：依赖库（image_picker 等）合并进来的媒体读取权限全部移除[0m
+2026-09-16T17:25:10.8175059Z [36;1m#     —— image_picker 1.1.x 用系统 Photo Picker / GET_CONTENT 选图，拍照走系统相机 Intent，均无需存储权限；[0m
+2026-09-16T17:25:10.8175573Z [36;1m#     tools:node="remove" 对不存在的权限是 no-op，未来依赖升级也安全。[0m
+2026-09-16T17:25:10.8176688Z [36;1msed -i 's|<manifest xmlns:android="http://schemas.android.com/apk/res/android">|<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">|' android/app/src/main/AndroidManifest.xml[0m
+2026-09-16T17:25:10.8179555Z [36;1msed -i 's|<application|<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove"/><uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/><uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/><application|' android/app/src/main/AndroidManifest.xml[0m
+2026-09-16T17:25:10.8181833Z [36;1m# 应用内更新 = 系统下载器（DownloadManager）：重写 MainActivity，注入 MethodChannel ***/download[0m
+2026-09-16T17:25:10.8182338Z [36;1m#     后台下载 + 通知栏（下滑栏）实时进度 + 下载完成回调状态，应用退到后台/被杀仍继续下载。[0m
+2026-09-16T17:25:10.8182816Z [36;1m#     源码在仓库 frontend-flutter/android-patch/MainActivity.kt（不 base64 内联，便于维护）[0m
+2026-09-16T17:25:10.8183354Z [36;1m#     注意：本步骤 working-directory=frontend-flutter，仓库根需用 ../ 前缀[0m
+2026-09-16T17:25:10.8183825Z [36;1mmkdir -p android/app/src/main/kotlin/com/***/app[0m
+2026-09-16T17:25:10.8184877Z [36;1mcp ../frontend-flutter/android-patch/MainActivity.kt android/app/src/main/kotlin/com/***/app/MainActivity.kt[0m
+2026-09-16T17:25:10.8185985Z [36;1mgrep -q "DownloadManager" android/app/src/main/kotlin/com/***/app/MainActivity.kt && echo "MainActivity 注入 OK"[0m
+2026-09-16T17:25:10.8186650Z [36;1m# ③ 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）[0m
+2026-09-16T17:25:10.8187210Z [36;1msed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml[0m
+2026-09-16T17:25:10.8188313Z [36;1msed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml || true[0m
+2026-09-16T17:25:10.8189298Z [36;1m# ④ 正式签名（复用与「陶朱」相同的 keystore）+ 关 R8（规避 release 闪退）[0m
+2026-09-16T17:25:10.8207158Z [36;1mecho "***" | base64 -d > android/app/***-release.keystore[0m
+2026-09-16T17:25:10.8207662Z [36;1mcat android-sign.gradle.kts >> android/app/build.gradle.kts[0m
+2026-09-16T17:25:10.8208181Z [36;1m# ⑤ 按 ABI 拆包构建（体积：universal ~62MB → arm64 单包 ~25MB；手机基本都是 arm64，下载减半以上）[0m
+2026-09-16T17:25:10.8208834Z [36;1mflutter build apk --release --split-per-abi --build-name="$VERSION" --build-number="$BUILD_NUM"[0m
+2026-09-16T17:25:10.8209461Z [36;1m# ⑤b 同时保留 universal 包（***-app-{v}.apk）：ABI 查询失败的兜底与桌面/模拟器兼容[0m
+2026-09-16T17:25:10.8209998Z [36;1mflutter build apk --release --build-name="$VERSION" --build-number="$BUILD_NUM"[0m
+2026-09-16T17:25:10.8246388Z shell: /usr/bin/bash -e {0}
+2026-09-16T17:25:10.8246661Z env:
+2026-09-16T17:25:10.8247002Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.47.4-x64/flutter
+2026-09-16T17:25:10.8247441Z   PUB_CACHE: /home/runner/.pub-cache
+2026-09-16T17:25:10.8247990Z   ANDROID_KEYSTORE_STORE_PASS: ***
+2026-09-16T17:25:10.8248362Z   ANDROID_KEYSTORE_KEY_PASS: ***
+2026-09-16T17:25:10.8248671Z   ANDROID_KEYSTORE_ALIAS: ***
+2026-09-16T17:25:10.8248943Z ##[endgroup]
+2026-09-16T17:25:10.8504293Z MainActivity 注入 OK
+2026-09-16T17:25:10.8531454Z sed: can't read android/app/src/main/res/values/strings.xml: No such file or directory
+2026-09-16T17:25:42.4799769Z Running Gradle task 'assembleRelease'...                        
+2026-09-16T17:25:42.4811979Z WARNING: Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): share_plus
+2026-09-16T17:25:42.4834770Z Future versions of Flutter will fail to build if your app uses plugins that apply KGP.
+2026-09-16T17:25:42.4864343Z 
+2026-09-16T17:25:42.4894953Z Please check the changelogs of these plugins and upgrade to a version that supports Built-in Kotlin.
+2026-09-16T17:25:42.4896581Z If no such version exists, report the issue to the plugin. If necessary, here is a guide on filing
+2026-09-16T17:25:42.4898764Z an issue against a plugin: https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/for-app-developers#report-incompatible-kotlin-gradle-plugin-usage-to-plugin-authors
+2026-09-16T17:25:42.4900380Z 
+2026-09-16T17:25:42.4901797Z If you are a plugin author, please migrate your plugin to Built-in Kotlin using this guide: https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/for-plugin-authors
+2026-09-16T17:25:51.1648734Z lib/sync_service.dart:837:31: Error: The type 'Stream<FileSystemEntity>' used in the 'for' loop must implement 'Iterable<dynamic>'.
+2026-09-16T17:25:51.1649974Z  - 'Stream' is from 'dart:async'.
+2026-09-16T17:25:51.1650966Z  - 'FileSystemEntity' is from 'dart:io'.
+2026-09-16T17:25:51.1659684Z  - 'Iterable' is from 'dart:core'.
+2026-09-16T17:25:51.1660469Z       for (final eDir in base.list(followLinks: false)) {
+2026-09-16T17:25:51.1661188Z                               ^
+2026-09-16T17:25:51.1662284Z lib/sync_service.dart:846:34: Error: The type 'Stream<FileSystemEntity>' used in the 'for' loop must implement 'Iterable<dynamic>'.
+2026-09-16T17:25:51.1663451Z  - 'Stream' is from 'dart:async'.
+2026-09-16T17:25:51.1664319Z  - 'FileSystemEntity' is from 'dart:io'.
+2026-09-16T17:25:51.1664961Z  - 'Iterable' is from 'dart:core'.
+2026-09-16T17:25:51.1665667Z         for (final idDir in eDir.list(followLinks: false)) {
+2026-09-16T17:25:51.1666353Z                                  ^
+2026-09-16T17:25:58.6647169Z Target kernel_snapshot_program failed: Exception
+2026-09-16T17:25:58.6689377Z 
+2026-09-16T17:25:58.6689647Z 
+2026-09-16T17:25:58.6690119Z FAILURE: Build failed with an exception.
+2026-09-16T17:25:58.6690717Z 
+2026-09-16T17:25:58.6691063Z * What went wrong:
+2026-09-16T17:25:58.6691844Z Execution failed for task ':app:compileFlutterBuildRelease'.
+2026-09-16T17:25:58.6693403Z > Process 'command '/opt/hostedtoolcache/flutter/stable-3.47.4-x64/flutter/bin/flutter'' finished with non-zero exit value 1
+2026-09-16T17:25:58.6695257Z 
+2026-09-16T17:25:58.6695621Z * Try:
+2026-09-16T17:25:58.6696374Z > Run with --stacktrace option to get the stack trace.
+2026-09-16T17:25:58.6697391Z > Run with --info or --debug option to get more log output.
+2026-09-16T17:25:58.6698565Z > Run with --scan to get full insights from a Build Scan (powered by Develocity).
+2026-09-16T17:25:58.6699701Z > Get more help at https://help.gradle.org.
+2026-09-16T17:25:58.6700450Z 
+2026-09-16T17:25:58.6700848Z BUILD FAILED in 47s
+2026-09-16T17:25:59.1192980Z Running Gradle task 'assembleRelease'...                           47.6s
+2026-09-16T17:25:59.1627214Z Gradle task assembleRelease failed with exit code 1
+2026-09-16T17:25:59.1706861Z ##[error]Process completed with exit code 1.
+2026-09-16T17:25:59.1763579Z ##[group]Run VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
+2026-09-16T17:25:59.1764613Z [36;1mVERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)[0m
+2026-09-16T17:25:59.1765107Z [36;1mif [ -n "$VERSION" ]; then[0m
+2026-09-16T17:25:59.1765634Z [36;1m  gh release delete "***-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true[0m
+2026-09-16T17:25:59.1766086Z [36;1mfi[0m
+2026-09-16T17:25:59.1802221Z shell: /usr/bin/bash -e {0}
+2026-09-16T17:25:59.1802518Z env:
+2026-09-16T17:25:59.1802875Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.47.4-x64/flutter
+2026-09-16T17:25:59.1803331Z   PUB_CACHE: /home/runner/.pub-cache
+2026-09-16T17:25:59.1806137Z   GH_TOKEN: ***
+2026-09-16T17:25:59.1806395Z ##[endgroup]
+2026-09-16T17:25:59.6642951Z release not found
+2026-09-16T17:25:59.6831272Z Post job cleanup.
+2026-09-16T17:25:59.6837347Z ##[start-action display=Cache pub dependencies;id=__d229c013-1390-4708-a6d6-6f4b7a3250e3.cache-pub]
+2026-09-16T17:25:59.6840379Z ##[end-action id=__d229c013-1390-4708-a6d6-6f4b7a3250e3.cache-pub;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-16T17:25:59.6843197Z ##[start-action display=Cache Flutter;id=__d229c013-1390-4708-a6d6-6f4b7a3250e3.cache-flutter]
+2026-09-16T17:25:59.6846436Z ##[end-action id=__d229c013-1390-4708-a6d6-6f4b7a3250e3.cache-flutter;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-16T17:25:59.6927794Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T17:25:59.6929097Z Post job cleanup.
+2026-09-16T17:25:59.7762782Z [command]/usr/bin/git version
+2026-09-16T17:25:59.7808176Z git version 2.55.0
+2026-09-16T17:25:59.7880405Z Temporarily overriding HOME='/home/runner/work/_temp/3a59c43f-3a8a-4dab-836c-f25880c9a7fe' before making global git config changes
+2026-09-16T17:25:59.7881916Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T17:25:59.7887242Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/***/***
+2026-09-16T17:25:59.7925588Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T17:25:59.7963748Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-16T17:25:59.8225838Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T17:25:59.8257839Z http.https://github.com/.extraheader
+2026-09-16T17:25:59.8270103Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-09-16T17:25:59.8310010Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-16T17:25:59.8559330Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T17:25:59.8602057Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-16T17:25:59.9016966Z Cleaning up orphan processes
+2026-09-16T17:25:59.9367696Z Terminate orphan process: pid (2766) (java)
+2026-09-16T17:25:59.9395232Z Terminate orphan process: pid (2846) (java)
+2026-09-16T17:25:59.9404758Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

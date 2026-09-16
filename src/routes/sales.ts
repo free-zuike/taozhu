@@ -40,10 +40,11 @@ salesRouter.post('/', async (c) => {
   if (!Array.isArray(items) || items.length === 0) return c.json({ error: '请至少添加一种商品' }, 400);
 
   // 幂等：同一 sync_key 已存在（如离线重放重复投递）→ 直接返回已有单据，不重复建单/不重复扣库存
+  // （去单据化后行即主记录：按行级 sync_key 查重，返回该批首行所在 sale_id）
   if (syncKey) {
-    const existed = await c.env.DB.prepare('SELECT id FROM sales WHERE sync_key = ?').bind(syncKey).first<{ id: string }>();
+    const existed = await c.env.DB.prepare('SELECT sale_id FROM sale_items WHERE sync_key = ?').bind(syncKey).first<{ sale_id: string }>();
     if (existed) {
-      return c.json({ id: existed.id, client_id: clientId, dup: true, total: 0, items: 0 });
+      return c.json({ id: existed.sale_id, client_id: clientId, dup: true, total: 0, items: 0 });
     }
   }
 
@@ -66,8 +67,7 @@ salesRouter.post('/', async (c) => {
   let total = 0;
 
   const batch = [
-    c.env.DB.prepare('INSERT INTO sales (id, client_id, happened_at, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(saleId, clientId, happenedAt, note, user.id, syncKey || null),
+    // 去单据化：无 sales 头表（已物理删除），行即主记录，销售批次由 sale_id 关联
   ];
 
   for (const item of items) {
@@ -85,9 +85,9 @@ salesRouter.post('/', async (c) => {
     saleItemIds.push(siId);
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(siId, saleId, clientId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
-        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? ''),
+        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null),
     );
     // 出货扣减库存
     batch.push(stockDelta(c.env.DB, price.item_id, price.unit, -qty));
@@ -111,27 +111,39 @@ salesRouter.get('/', async (c) => {
   // 店员权限：仅可见当天送货记录（送货对单场景），强制锁定当天，忽略传入日期
   if (user.role === 'staff') {
     const today = new Date().toISOString().slice(0, 10);
-    where += ' AND s.happened_at >= ? AND s.happened_at <= ?';
+    where += ' AND si.happened_at >= ? AND si.happened_at <= ?';
     params.push(today, today);
   } else {
-    if (clientId) { where += ' AND s.client_id = ?'; params.push(clientId); }
-    if (dateFrom) { where += ' AND s.happened_at >= ?'; params.push(dateFrom); }
-    if (dateTo) { where += ' AND s.happened_at <= ?'; params.push(dateTo); }
+    if (clientId) { where += ' AND si.client_id = ?'; params.push(clientId); }
+    if (dateFrom) { where += ' AND si.happened_at >= ?'; params.push(dateFrom); }
+    if (dateTo) { where += ' AND si.happened_at <= ?'; params.push(dateTo); }
   }
 
+  // 去单据化：head 表已物理删除，列表从商品行聚合组装（每单一行：店铺/日期/总额由行派生）
+  const aggWhere = where.replace(/si\.happened_at/g, 'happened_at').replace(/si\.client_id/g, 'client_id');
   const countRow = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS cnt FROM sales s ${where}`).bind(...params).first<{ cnt: number }>();
+    `SELECT COUNT(*) AS cnt FROM (SELECT sale_id FROM sale_items si ${aggWhere} GROUP BY sale_id)`,
+  ).bind(...params).first<{ cnt: number }>();
 
-  const rows = await c.env.DB.prepare(
-    `SELECT s.*, c.name AS client_name,
-      (SELECT COALESCE(SUM(si.amount),0) FROM sale_items si WHERE si.sale_id = s.id) AS total
-     FROM sales s JOIN clients c ON c.id = s.client_id ${where}
-     ORDER BY s.happened_at DESC, s.created_at DESC LIMIT ? OFFSET ?`,
-  ).bind(...params, limit, offset).all();
-  if (rows.results.length === 0) return c.json({ sales: [] });
+  const aggRows = await c.env.DB.prepare(
+    `SELECT si.sale_id AS id,
+            MAX(si.client_id) AS client_id,
+            MAX(COALESCE(si.happened_at, '')) AS happened_at,
+            SUM(si.amount) AS total,
+            MIN(si.note) AS note
+     FROM sale_items si ${aggWhere}
+     GROUP BY si.sale_id
+     ORDER BY happened_at DESC, id DESC LIMIT ? OFFSET ?`,
+  ).bind(...params, limit, offset).all<{ id: string; client_id: string; happened_at: string; total: number; note: string }>();
+  if (aggRows.results.length === 0) return c.json({ sales: [], total: 0, sale_items: [] });
 
-  const saleIds = rows.results.map((r) => (r as { id: string }).id);
+  const saleIds = aggRows.results.map((r) => r.id);
   const placeholders = saleIds.map(() => '?').join(',');
+  const clientRows = await c.env.DB.prepare(
+    `SELECT id, name FROM clients WHERE id IN (${[...new Set(aggRows.results.map((r) => r.client_id))].map(() => '?').join(',')})`,
+  ).bind(...[...new Set(aggRows.results.map((r) => r.client_id))]).all<{ id: string; name: string }>();
+  const clientName = new Map(clientRows.results.map((c) => [c.id, c.name]));
+
   const detailRows = await c.env.DB.prepare(
     `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id
      WHERE si.sale_id IN (${placeholders}) ORDER BY si.created_at`,
@@ -145,30 +157,23 @@ salesRouter.get('/', async (c) => {
     bySale.set(saleId2, list);
   }
   // 行级主记录数组（去单据化：每条商品一行，自带店铺/日期/备注/金额——客户端主读数）
-  const saleItemRows = saleIds.length > 0
-    ? await c.env.DB.prepare(
-        `SELECT si.id, si.sale_id, si.client_id, c.name AS client_name, si.item_id, i.name AS item_name,
-                i.category AS item_category, si.unit, si.quantity, si.sale_price, si.cost_price, si.amount,
-                COALESCE(si.happened_at, s.happened_at) AS happened_at,
-                COALESCE(NULLIF(si.note, ''), s.note) AS note, si.created_by
-         FROM sale_items si
-         LEFT JOIN sales s ON s.id = si.sale_id
-         LEFT JOIN clients c ON c.id = si.client_id
-         LEFT JOIN items i ON i.id = si.item_id
-         WHERE si.sale_id IN (${placeholders})
-         ORDER BY si.created_at`,
-      ).bind(...saleIds).all()
-    : { results: [] as unknown[] };
+  const saleItemRows = await c.env.DB.prepare(
+    `SELECT si.id, si.sale_id, si.client_id, c.name AS client_name, si.item_id, i.name AS item_name,
+            i.category AS item_category, si.unit, si.quantity, si.sale_price, si.cost_price, si.amount,
+            si.happened_at, si.note, si.created_by
+     FROM sale_items si
+     LEFT JOIN clients c ON c.id = si.client_id
+     LEFT JOIN items i ON i.id = si.item_id
+     WHERE si.sale_id IN (${placeholders})
+     ORDER BY si.created_at`,
+  ).bind(...saleIds).all();
   return c.json({
     total: countRow?.cnt ?? 0,
-    sales: rows.results.map((r) => {
-      const row = r as unknown as { id: string; client_id: string; client_name: string; happened_at: string; note: string; total: number };
-      return {
-        id: row.id, client_id: row.client_id, client_name: row.client_name,
-        happened_at: row.happened_at, note: row.note ?? '', total: row.total,
-        items: bySale.get(row.id) ?? [],
-      };
-    }),
+    sales: aggRows.results.map((row) => ({
+      id: row.id, client_id: row.client_id, client_name: clientName.get(row.client_id) ?? '',
+      happened_at: row.happened_at, note: row.note ?? '', total: row.total,
+      items: bySale.get(row.id) ?? [],
+    })),
     // 去单据化主结构：行级商品记录（新客户端优先读，整单 sales 字段兼容保留）
     sale_items: saleItemRows.results.map((x) => {
       const r = x as Record<string, unknown>;
@@ -197,36 +202,33 @@ salesRouter.post('/items/date', async (c) => {
     if (saleId) batch.push(c.env.DB.prepare('UPDATE sale_items SET happened_at = ? WHERE id = ?').bind(u.happened_at, u.item_id));
   }
   await c.env.DB.batch(batch);
-  // 单据日期自动取明细最大日期（与记单页 orderDate=最大行日期口径一致）
+  // 无头表：组装时 happened_at=明细行最大日期，无需再同步 head
   const saleIds = [...new Set(rows.results.map((r) => r.sale_id))];
-  const dateBatch: D1PreparedStatement[] = saleIds.map((sid) =>
-    c.env.DB.prepare(
-      `UPDATE sales SET happened_at = (
-         SELECT MAX(COALESCE(happened_at, '')) FROM sale_items WHERE sale_id = ?
-       ) WHERE id = ? AND EXISTS (SELECT 1 FROM sale_items WHERE sale_id = ?)`,
-    ).bind(sid, sid, sid));
-  await c.env.DB.batch(dateBatch);
   for (const sid of saleIds) {
     await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: sid, payload: await buildPayload(c.env.DB, 'sale', sid), updated_by_username: c.get('user').username });
   }
   return c.json({ updated: batch.length });
 });
 
-// GET /sales/:id — 单张出货单详情
+// GET /sales/:id — 单张出货记录详情（去单据化：头字段由商品行聚合，契约不变）
 salesRouter.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const row = await c.env.DB.prepare(
-    `SELECT s.*, c.name AS client_name, (SELECT COALESCE(SUM(si.amount),0) FROM sale_items si WHERE si.sale_id = s.id) AS total
-     FROM sales s JOIN clients c ON c.id = s.client_id WHERE s.id = ?`).bind(id).first();
-  if (!row) return c.json({ error: '出货单不存在' }, 404);
-  const detail = await c.env.DB.prepare(
-    `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`).bind(id).all();
+  const rows = await c.env.DB.prepare(
+    `SELECT si.*, i.name AS item_name, i.category AS item_category
+     FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ? ORDER BY si.created_at`,
+  ).bind(id).all<Record<string, unknown>>();
+  if (rows.results.length === 0) return c.json({ error: '出货记录不存在' }, 404);
+  const first = rows.results[0];
+  const clientRow = await c.env.DB.prepare('SELECT name FROM clients WHERE id = ?').bind(first.client_id).first<{ name: string }>();
+  const total = rows.results.reduce((s, r) => s + (Number(r.amount) || 0), 0);
   return c.json({
-    id: (row as { id: string }).id, client_id: (row as { client_id: string }).client_id,
-    client_name: (row as { client_name: string }).client_name,
-    happened_at: (row as { happened_at: string }).happened_at, note: (row as { note: string }).note ?? '',
-    total: (row as { total: number }).total,
-    items: detail.results,
+    id,
+    client_id: first.client_id ?? '',
+    client_name: clientRow?.name ?? '',
+    happened_at: rows.results.map((r) => `${r.happened_at ?? ''}`).reduce((a, b) => (a >= b ? a : b), ''),
+    note: `${first.note ?? ''}`,
+    total,
+    items: rows.results,
   });
 });
 
@@ -259,40 +261,37 @@ salesRouter.patch('/items/:id', async (c) => {
     ).bind(qty, unit, salePrice, amount, happenedAt || null, note, id),
   ];
   await c.env.DB.batch(batch);
-  // 单据日期自动取明细最大日期（与记单页 orderDate=最大行日期口径一致）
+  // 无头表：组装时 happened_at=明细行最大日期，无需再同步 head
   const saleId = row.sale_id;
-  await c.env.DB.prepare(
-    `UPDATE sales SET happened_at = (
-       SELECT MAX(COALESCE(happened_at, '')) FROM sale_items WHERE sale_id = ?
-     ) WHERE id = ? AND EXISTS (SELECT 1 FROM sale_items WHERE sale_id = ?)`,
-  ).bind(saleId, saleId, saleId).run();
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: c.get('user').username });
   return c.json({ id, sale_id: saleId, item_id: row.item_id, unit, quantity: qty, sale_price: salePrice, amount, happened_at: happenedAt || null });
 });
 
-// PATCH /sales/:id — 编辑出货单（改店铺/日期/备注；传 items 则整体替换明细，原子事务）
+// PATCH /sales/:id — 编辑出货记录（改店铺/日期/备注；传 items 则整体替换明细，原子事务）
 salesRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => null) as {
     client_id?: string; happened_at?: string; note?: string; items?: SaleItemInput[];
   } | null;
-  const sale = await c.env.DB.prepare('SELECT * FROM sales WHERE id = ?').bind(id)
-    .first<{ client_id: string; happened_at: string; note: string }>();
-  if (!sale) return c.json({ error: '出货单不存在' }, 404);
+  // 去单据化：无 head 表，按该批是否存在商品行判断
+  const exist = await c.env.DB.prepare('SELECT client_id FROM sale_items WHERE sale_id = ? LIMIT 1').bind(id)
+    .first<{ client_id: string }>();
+  if (!exist) return c.json({ error: '出货记录不存在' }, 404);
 
-  const clientId = body?.client_id ?? sale.client_id;
+  const clientId = body?.client_id ?? exist.client_id;
   const client = await c.env.DB.prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first();
   if (!client) return c.json({ error: '店铺不存在' }, 404);
-  const happenedAt = body?.happened_at?.trim() || sale.happened_at;
-  const note = body?.note?.trim() ?? sale.note ?? '';
-
-  const batch: D1PreparedStatement[] = [
-    c.env.DB.prepare('UPDATE sales SET client_id = ?, happened_at = ?, note = ? WHERE id = ?')
-      .bind(clientId, happenedAt, note, id),
-    // 换店铺：该记录全部商品行同步迁移店铺（商品行自带 client_id，与头保持一致）
-    c.env.DB.prepare('UPDATE sale_items SET client_id = ? WHERE sale_id = ?')
-      .bind(clientId, id),
-  ];
+  // 整单顶层字段（改日期/备注/店铺）应用到全部商品行：行即主记录，head 由行派生
+  const batch: D1PreparedStatement[] = [];
+  if (body?.client_id !== undefined) {
+    batch.push(c.env.DB.prepare('UPDATE sale_items SET client_id = ? WHERE sale_id = ?').bind(clientId, id));
+  }
+  if (body?.happened_at !== undefined && body.happened_at.trim()) {
+    batch.push(c.env.DB.prepare('UPDATE sale_items SET happened_at = ? WHERE sale_id = ?').bind(body.happened_at.trim(), id));
+  }
+  if (body?.note !== undefined) {
+    batch.push(c.env.DB.prepare('UPDATE sale_items SET note = ? WHERE sale_id = ?').bind(body.note.trim() ?? '', id));
+  }
   let total: number;
   if (body?.items !== undefined) {
     const items = body.items;
@@ -322,6 +321,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       total += Math.round(qty * effectiveSale * 100) / 100;
     }
     batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
+    const happenedAt = body?.happened_at?.trim() || '';
     for (const item of items) {
       const price = priceMap.get(item.price_id);
       if (!price || !price.active) continue;
@@ -331,9 +331,9 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       const amount = Math.round(qty * effectiveSale * 100) / 100;
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).bind(randomId(), id, clientId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
-          item.happened_at?.trim() || happenedAt, item.note?.trim() ?? ''),
+          item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', c.get('user').id),
       );
       // 按新明细扣减库存
       batch.push(stockDelta(c.env.DB, price.item_id, price.unit, -qty));
@@ -344,7 +344,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
   }
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'sale', id), updated_by_username: c.get('user').username });
-  return c.json({ id, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100 });
+  return c.json({ id, client_id: clientId, happened_at: body?.happened_at?.trim() || '', note: body?.note?.trim() ?? '', total: Math.round(total * 100) / 100 });
 });
 
 // DELETE /sales/items/:id — 删除单条出货明细行（出货流水行级删除；回滚该行库存，重算单据日期）
@@ -364,34 +364,28 @@ salesRouter.delete('/items/:id', async (c) => {
   try {
     await deleteEntityAttachments(c.env, 'sale_item', id);
   } catch (_) {}
-  // 删的是该单最后一行商品 → 单据失去明细，按用户语义（无单据概念）整体删除该单：
-  // 级联删 sales 行 + 附件引用，避免服务端残留"无明细"空壳单
+  // 删的是该单最后一行商品 → 该批记录无商品，按用户语义（无单据概念）整体删除该条记录；
+  // 无 head 表（已物理删除），只清行级附件引用，避免服务端残留"无明细"空壳
   const remain = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE sale_id = ?').bind(saleId).first<{ n: number }>();
   if ((remain?.n ?? 0) === 0) {
-    await c.env.DB.prepare('DELETE FROM sales WHERE id = ?').bind(saleId).run();
     try {
       await deleteEntityAttachments(c.env, 'sale', saleId);
     } catch (_) {}
     await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
     return c.json({ ok: true, order_deleted: true });
   }
-  // 单据日期自动取剩余明细最大日期
-  await c.env.DB.prepare(
-    `UPDATE sales SET happened_at = (
-       SELECT MAX(COALESCE(happened_at, '')) FROM sale_items WHERE sale_id = ?
-     ) WHERE id = ? AND EXISTS (SELECT 1 FROM sale_items WHERE sale_id = ?)`,
-  ).bind(saleId, saleId, saleId).run();
+  // 无 head 表：组装时 happened_at=明细行最大日期，无需再同步 head
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: c.get('user').username });
   return c.json({ ok: true });
 });
 
-// DELETE /sales/:id — 删除出货单（回滚库存 + 级联删明细，仅老板）
+// DELETE /sales/:id — 删除出货记录（回滚库存 + 删全部商品行，仅老板）
 salesRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   const oldItems = await c.env.DB.prepare(
     'SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)
     .all<{ item_id: string; unit: string; quantity: number }>();
-  // 行级凭证附件：必须在删 sales 前拿行 id 清理（sale_items 外键级联，删头后行即消失）
+  // 行级凭证附件：删行前拿行 id 清理（行级附件按 sale_item/{lineId}/ 存储）
   try {
     const lineRows = await c.env.DB.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
       .all<{ id: string }>();
@@ -401,7 +395,7 @@ salesRouter.delete('/:id', adminOnly(), async (c) => {
   } catch (_) {}
   const batch: D1PreparedStatement[] = oldItems.results
     .map((it) => stockDelta(c.env.DB, it.item_id, it.unit, it.quantity)); // 出货扣的加回
-  batch.push(c.env.DB.prepare('DELETE FROM sales WHERE id = ?').bind(id));
+  batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
   // 删除交易附带的凭证图片（单据级 + 全部明细行级，best-effort 不阻塞删除）

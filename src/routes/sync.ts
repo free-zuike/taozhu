@@ -173,22 +173,23 @@ syncRouter.get('/full', async (c) => {
   const saleItems = await db.prepare(
     `SELECT si.id, si.sale_id, si.client_id, c.name AS client_name, si.item_id, i.name AS item_name,
             i.category AS item_category, si.unit, si.quantity, si.sale_price, si.cost_price, si.amount,
-            COALESCE(si.happened_at, s.happened_at) AS happened_at,
-            COALESCE(NULLIF(si.note, ''), s.note) AS note,
-            si.created_by, si.sync_key
+            si.happened_at, si.note, si.created_by, si.sync_key
      FROM sale_items si
      JOIN items i ON i.id = si.item_id
-     LEFT JOIN sales s ON s.id = si.sale_id
      LEFT JOIN clients c ON c.id = si.client_id
      ORDER BY si.created_at`,
   ).all();
+  // 去单据化：head 表已物理删除，整单兼容数组按 sale_id 从商品行聚合派生
   const salesRows = await db.prepare(
-    `SELECT s.id, s.client_id, c.name AS client_name, s.happened_at, s.note,
-       (SELECT COALESCE(SUM(si.amount),0) FROM sale_items si WHERE si.sale_id = s.id) AS total
-     FROM sales s JOIN clients c ON c.id = s.client_id ORDER BY s.happened_at`,
+    `SELECT si.sale_id AS id, MAX(si.client_id) AS client_id, MAX(COALESCE(si.happened_at, '')) AS happened_at,
+            SUM(si.amount) AS total, MIN(si.note) AS note
+     FROM sale_items si GROUP BY si.sale_id ORDER BY happened_at DESC`,
   ).all();
-  // 旧整单结构：保持兼容（新客户端不再依赖）
   const saleIds = salesRows.results.map((r) => (r as { id: string }).id);
+  const clientNameRows = await db.prepare(
+    `SELECT id, name FROM clients WHERE id IN (${[...new Set(salesRows.results.map((r) => (r as { client_id: string }).client_id))].map(() => '?').join(',')})`,
+  ).bind(...[...new Set(salesRows.results.map((r) => (r as { client_id: string }).client_id))]).all<{ id: string; name: string }>();
+  const clientNameOf = new Map(clientNameRows.results.map((c) => [c.id, c.name]));
   const saleDetail = saleIds.length > 0
     ? await db.prepare(
         `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id IN (${saleIds.map(() => '?').join(',')}) ORDER BY si.created_at`,
@@ -206,24 +207,21 @@ syncRouter.get('/full', async (c) => {
       const p = q as Record<string, unknown>;
       return isStaff ? { ...p, cost_price: 0 } : p;
     });
-    return { id: r.id, client_id: r.client_id, client_name: r.client_name, happened_at: r.happened_at, note: r.note ?? '', total: r.total ?? 0, items: items2 };
+    return { id: r.id, client_id: r.client_id, client_name: clientNameOf.get(String(r.client_id)) ?? '', happened_at: r.happened_at, note: r.note ?? '', total: r.total ?? 0, items: items2 };
   });
 
   const purchaseItems = await db.prepare(
     `SELECT pi.id, pi.purchase_id, pi.item_id, i.name AS item_name, i.category AS item_category,
             pi.unit, pi.quantity, pi.purchase_price, pi.amount,
-            COALESCE(pi.happened_at, p.happened_at) AS happened_at,
-            COALESCE(NULLIF(pi.note, ''), p.note) AS note,
-            pi.created_by, pi.sync_key
+            pi.happened_at, pi.note, pi.created_by, pi.sync_key
      FROM purchase_items pi
      JOIN items i ON i.id = pi.item_id
-     LEFT JOIN purchases p ON p.id = pi.purchase_id
      ORDER BY pi.created_at`,
   ).all();
   const purchaseRows = await db.prepare(
-    `SELECT p.id, p.happened_at, p.note,
-       (SELECT COALESCE(SUM(pi.amount),0) FROM purchase_items pi WHERE pi.purchase_id = p.id) AS total
-     FROM purchases p ORDER BY p.happened_at`,
+    `SELECT pi.purchase_id AS id, MAX(COALESCE(pi.happened_at, '')) AS happened_at,
+            SUM(pi.amount) AS total, MIN(pi.note) AS note
+     FROM purchase_items pi GROUP BY pi.purchase_id ORDER BY happened_at DESC`,
   ).all();
   const purchaseIds = purchaseRows.results.map((r) => (r as { id: string }).id);
   const purchaseDetail = purchaseIds.length > 0
@@ -282,8 +280,8 @@ syncRouter.get('/stats', async (c) => {
       ? db.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE client_id = ?').bind(clientId).first<{ n: number }>()
       : db.prepare('SELECT COUNT(*) AS n FROM sale_items').first<{ n: number }>(),
     db.prepare('SELECT COUNT(*) AS n FROM purchase_items').first<{ n: number }>(),
-    // 进货不分店铺
-    db.prepare('SELECT COUNT(*) AS n FROM purchases').first<{ n: number }>(),
+    // 去单据化：无 purchases 头表，保留字段语义=进货商品行数（与 purchase_items 一致）
+    db.prepare('SELECT COUNT(*) AS n FROM purchase_items').first<{ n: number }>(),
     clientId
       ? db.prepare('SELECT COUNT(*) AS n FROM payments WHERE client_id = ?').bind(clientId).first<{ n: number }>()
       : db.prepare('SELECT COUNT(*) AS n FROM payments').first<{ n: number }>(),

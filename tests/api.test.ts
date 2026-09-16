@@ -530,7 +530,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string };
-    expect(d.current).toBe('0.17.113');
+    expect(d.current).toBe('0.17.114');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
@@ -740,7 +740,8 @@ describe('全库备份导出 /backup', () => {
     const d = (await res.json()) as { exported_at: string; data: Record<string, unknown[]> };
     expect(d.data).toHaveProperty('clients');
     expect(d.data).toHaveProperty('items');
-    expect(d.data).toHaveProperty('sales');
+    // 去单据化：头表已删，备份含行级主记录
+    expect(d.data).toHaveProperty('sale_items');
     expect(d.data).toHaveProperty('stocks');
     expect(Array.isArray(d.data.payments)).toBe(true);
     // v0.17.68/84 新增同步实体必须纳入备份（否则导出存档缺收款账户/附件引用）
@@ -952,7 +953,7 @@ describe('单据幂等键（sync_key：离线重放/多端不重复）', () => {
     expect(r2.status).toBe(200);
     const d2 = (await r2.json()) as { dup: boolean };
     expect(d2.dup).toBe(true);
-    const rows = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM sales').all<{ cnt: number }>();
+    const rows = await env.DB.prepare('SELECT COUNT(DISTINCT sale_id) AS cnt FROM sale_items').all<{ cnt: number }>();
     expect(rows.results[0].cnt).toBe(1);
     const stock = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind('i1', '斤').first<{ quantity: number }>();
     expect(stock?.quantity).toBe(-5); // 只扣一次
@@ -968,7 +969,7 @@ describe('单据幂等键（sync_key：离线重放/多端不重复）', () => {
     await call(env, 'POST', '/api/v1/payments', token, payBody);
     const pay2 = await call(env, 'POST', '/api/v1/payments', token, payBody);
     expect(((await pay2.json()) as { dup: boolean }).dup).toBe(true);
-    expect((await env.DB.prepare('SELECT COUNT(*) AS cnt FROM purchases').all<{ cnt: number }>()).results[0].cnt).toBe(1);
+    expect((await env.DB.prepare('SELECT COUNT(DISTINCT purchase_id) AS cnt FROM purchase_items').all<{ cnt: number }>()).results[0].cnt).toBe(1);
     expect((await env.DB.prepare('SELECT COUNT(*) AS cnt FROM payments').all<{ cnt: number }>()).results[0].cnt).toBe(1);
   });
 });
@@ -978,7 +979,7 @@ describe('索引存在（sqlite_master）', () => {
     const env = (await setup()).env;
     const idx = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all<{ name: string }>();
     const names = idx.results.map((r) => r.name);
-    for (const want of ['idx_sales_sync_key', 'idx_purchases_sync_key', 'idx_payments_sync_key', 'idx_purchases_date', 'idx_payments_date', 'idx_sale_items_item']) {
+    for (const want of ['idx_payments_sync_key', 'idx_payments_date', 'idx_sale_items_item', 'idx_sale_items_date', 'idx_purchase_items_purchase', 'idx_purchase_items_date']) {
       expect(names).toContain(want);
     }
   });

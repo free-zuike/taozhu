@@ -44,46 +44,26 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_item_prices_item ON item_prices (item_id)`,
-  `CREATE TABLE IF NOT EXISTS purchases (
-    id TEXT PRIMARY KEY,
-    happened_at TEXT NOT NULL,
-    note TEXT DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    created_by TEXT REFERENCES users(id),
-    sync_key TEXT
-  )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_sync_key ON purchases (sync_key)`,
-  `CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases (happened_at)`,
   `CREATE TABLE IF NOT EXISTS purchase_items (
     id TEXT PRIMARY KEY,
-    purchase_id TEXT NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
-    item_id TEXT NOT NULL REFERENCES items(id),
+    purchase_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
     unit TEXT NOT NULL,
     quantity REAL NOT NULL CHECK (quantity > 0),
     purchase_price REAL NOT NULL DEFAULT 0,
     amount REAL NOT NULL DEFAULT 0,
     happened_at TEXT,
     note TEXT DEFAULT '',
+    created_by TEXT,
+    sync_key TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id)`,
   `CREATE INDEX IF NOT EXISTS idx_purchase_items_date ON purchase_items (happened_at)`,
-  `CREATE TABLE IF NOT EXISTS sales (
-    id TEXT PRIMARY KEY,
-    client_id TEXT NOT NULL REFERENCES clients(id),
-    happened_at TEXT NOT NULL,
-    note TEXT DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    created_by TEXT REFERENCES users(id),
-    sync_key TEXT
-  )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_sync_key ON sales (sync_key)`,
-  `CREATE INDEX IF NOT EXISTS idx_sales_client ON sales (client_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sales_date ON sales (happened_at)`,
   `CREATE TABLE IF NOT EXISTS sale_items (
     id TEXT PRIMARY KEY,
-    sale_id TEXT NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
-    item_id TEXT NOT NULL REFERENCES items(id),
+    sale_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
     client_id TEXT,
     unit TEXT NOT NULL,
     quantity REAL NOT NULL CHECK (quantity > 0),
@@ -92,6 +72,8 @@ const DDL: string[] = [
     amount REAL NOT NULL DEFAULT 0,
     happened_at TEXT,
     note TEXT DEFAULT '',
+    created_by TEXT,
+    sync_key TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id)`,
@@ -298,10 +280,15 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     // v0.17.101.0 去单据化：商品行自包含店铺 client_id（同步/删除/统计按行走，不再依赖单据头）
     await ensureColumn(db, 'sale_items', 'client_id', 'TEXT');
-    await db.prepare(
-      `UPDATE sale_items SET client_id = (SELECT s.client_id FROM sales s WHERE s.id = sale_items.sale_id)
-       WHERE client_id IS NULL OR client_id = ''`,
-    ).run();
+    // 头表（sales/purchases）仅旧库存在：删除行表自包含回填依赖头表数据，新库/已删头表库跳过
+    const hasSalesHead = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sales'").first()) != null;
+    const hasPurchasesHead = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'purchases'").first()) != null;
+    if (hasSalesHead) {
+      await db.prepare(
+        `UPDATE sale_items SET client_id = (SELECT s.client_id FROM sales s WHERE s.id = sale_items.sale_id)
+         WHERE client_id IS NULL OR client_id = ''`,
+      ).run();
+    }
     // v0.17.104.0 彻底去单据化：商品行升级为独立主记录，头表字段（创建人/幂等键）全部并入行
     for (const t of ['sale_items', 'purchase_items'] as const) {
       await ensureColumn(db, t, 'created_by', 'TEXT');
@@ -309,23 +296,31 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     for (const t of ['sale_items', 'purchase_items'] as const) {
       await ensureColumn(db, t, 'sync_key', 'TEXT');
     }
-    await db.prepare(
-      `UPDATE sale_items SET created_by = (SELECT s.created_by FROM sales s WHERE s.id = sale_items.sale_id)
-       WHERE created_by IS NULL OR created_by = ''`,
-    ).run();
-    await db.prepare(
-      `UPDATE purchase_items SET created_by = (SELECT p.created_by FROM purchases p WHERE p.id = purchase_items.purchase_id)
-       WHERE created_by IS NULL OR created_by = ''`,
-    ).run();
+    if (hasSalesHead) {
+      await db.prepare(
+        `UPDATE sale_items SET created_by = (SELECT s.created_by FROM sales s WHERE s.id = sale_items.sale_id)
+         WHERE created_by IS NULL OR created_by = ''`,
+      ).run();
+    }
+    if (hasPurchasesHead) {
+      await db.prepare(
+        `UPDATE purchase_items SET created_by = (SELECT p.created_by FROM purchases p WHERE p.id = purchase_items.purchase_id)
+         WHERE created_by IS NULL OR created_by = ''`,
+      ).run();
+    }
     // v0.17.82.0：明细行 happened_at 为 NULL 的历史行回填单据日期（此后查询可直接走列索引，无需 COALESCE 包裹导致全表扫）
-    await db.prepare(
-      `UPDATE sale_items SET happened_at = (SELECT s.happened_at FROM sales s WHERE s.id = sale_items.sale_id)
-       WHERE happened_at IS NULL`,
-    ).run();
-    await db.prepare(
-      `UPDATE purchase_items SET happened_at = (SELECT p.happened_at FROM purchases p WHERE p.id = purchase_items.purchase_id)
-       WHERE happened_at IS NULL`,
-    ).run();
+    if (hasSalesHead) {
+      await db.prepare(
+        `UPDATE sale_items SET happened_at = (SELECT s.happened_at FROM sales s WHERE s.id = sale_items.sale_id)
+         WHERE happened_at IS NULL`,
+      ).run();
+    }
+    if (hasPurchasesHead) {
+      await db.prepare(
+        `UPDATE purchase_items SET happened_at = (SELECT p.happened_at FROM purchases p WHERE p.id = purchase_items.purchase_id)
+         WHERE happened_at IS NULL`,
+      ).run();
+    }
     // v0.17.68.0：明细行级备注 note（每行商品可加备注；历史行回退单据级备注）
     for (const t of ['sale_items', 'purchase_items'] as const) {
       await ensureColumn(db, t, 'note', "TEXT DEFAULT ''");
@@ -339,14 +334,49 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     await ensureColumn(db, 'clients', 'month_start_day', 'INTEGER NOT NULL DEFAULT 1');
     // payments 平账减免列（waived：欠款 = Σsales − Σ(amount+waived)）
     await ensureColumn(db, 'payments', 'waived', 'REAL NOT NULL DEFAULT 0');
-    // v0.16.26.0：单据表幂等键 sync_key（离线重放/多端不重复建单）+ 查询索引
-    for (const t of ['sales', 'purchases', 'payments'] as const) {
-      await ensureColumn(db, t, 'sync_key', 'TEXT');
+    // v0.16.26.0：支付表幂等键 sync_key（sales/purchases 头表已物理删除，行级携带 sync_key）
+    await ensureColumn(db, 'payments', 'sync_key', 'TEXT');
+    // v0.17.105.0 彻底删表：sale_items/purchase_items 为独立主记录（自包含 client_id/日期/备注/创建人/幂等键），
+    // 物理删除 sales/purchases 头表——回填已全部并入行；旧库在此 DROP，新库（DDL 已无头表）IF EXISTS no-op。
+    // 业务读路径（stats/attachments/clients/stocks/sync）已验证全部行级直查，无残留 JOIN。
+    // 先重建行表去外键（SQLite 无法 ALTER 去除 FK；旧库行表 FK 引用将被删的头表——
+    // 若外键约束开启，删头后 INSERT 行会违约失败）。幂等：foreign_key_list 已无对应头表则跳过。
+    for (const [table, headTable, rebuild] of [
+      ['sale_items', 'sales', `CREATE TABLE sale_items_new (
+        id TEXT PRIMARY KEY, sale_id TEXT NOT NULL, item_id TEXT NOT NULL, client_id TEXT,
+        unit TEXT NOT NULL, quantity REAL NOT NULL CHECK (quantity > 0),
+        sale_price REAL NOT NULL DEFAULT 0, cost_price REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0,
+        happened_at TEXT, note TEXT DEFAULT '', created_by TEXT, sync_key TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      )`],
+      ['purchase_items', 'purchases', `CREATE TABLE purchase_items_new (
+        id TEXT PRIMARY KEY, purchase_id TEXT NOT NULL, item_id TEXT NOT NULL,
+        unit TEXT NOT NULL, quantity REAL NOT NULL CHECK (quantity > 0),
+        purchase_price REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0,
+        happened_at TEXT, note TEXT DEFAULT '', created_by TEXT, sync_key TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      )`],
+    ] as const) {
+      const fks = await db.prepare(`PRAGMA foreign_key_list(${table})`).all<{ table: string }>();
+      if (!fks.results.some((x) => x.table === headTable)) continue;
+      await db.prepare(rebuild).run();
+      await db.prepare(
+        `INSERT INTO ${table}_new (id, ${table === 'sale_items' ? 'sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount' : 'purchase_id, item_id, unit, quantity, purchase_price, amount'}, happened_at, note, created_at)
+         SELECT id, ${table === 'sale_items' ? 'sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount' : 'purchase_id, item_id, unit, quantity, purchase_price, amount'}, happened_at, note, COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')) FROM ${table}`,
+      ).run();
+      await db.prepare(`DROP TABLE ${table}`).run();
+      await db.prepare(`ALTER TABLE ${table}_new RENAME TO ${table}`).run();
+      // 重建索引（DROP 时随表删除）
+      const relCol = table === 'sale_items' ? 'sale' : 'purchase';
+      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_${table}_${relCol} ON ${table} (${relCol}_id)`).run();
+      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_${table}_item ON ${table} (item_id)`).run();
+      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_${table}_date ON ${table} (happened_at)`).run();
     }
+    await db.prepare('DROP TABLE IF EXISTS sales').run();
+    await db.prepare('DROP TABLE IF EXISTS purchases').run();
     // CREATE INDEX IF NOT EXISTS 幂等：已存在时 no-op（不耗 D1 写配额），新库补齐索引
     for (const marker of [
-      'idx_sales_sync_key', 'idx_purchases_sync_key', 'idx_payments_sync_key',
-      'idx_purchases_date', 'idx_payments_date', 'idx_sale_items_item',
+      'idx_payments_sync_key', 'idx_payments_date', 'idx_sale_items_item',
       'idx_sale_items_date', 'idx_purchase_items_date',
     ]) {
       const i = DDL.findIndex((s) => s.includes(marker));

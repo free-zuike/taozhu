@@ -208,9 +208,10 @@ describe('附件按店铺统计（/attachments/counts）', () => {
   beforeEach(async () => {
     env = await setup();
     token = await loginAdmin(env);
-    // 直插店铺 + 一张出货单 + 一张收款单（附件统计只依赖单据 id 归属）
+    // 直插店铺 + 一张出货明细行 + 一张收款单（附件统计只依赖单据 id 归属；去单据化：行即主记录）
     await env.DB.prepare('INSERT INTO clients (id, name) VALUES (?, ?)').bind('c1', '店A').run();
-    await env.DB.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s1', 'c1', '2026-01-01').run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('s1', 's1', 'c1', 'i1', '斤', 1, 2, 1, 2, '2026-01-01').run();
     await env.DB.prepare('INSERT INTO payments (id, client_id, happened_at, amount) VALUES (?, ?, ?, ?)').bind('p1', 'c1', '2026-01-01', 100).run();
   });
 

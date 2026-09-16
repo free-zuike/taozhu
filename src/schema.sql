@@ -55,56 +55,44 @@ CREATE TABLE IF NOT EXISTS item_prices (
 );
 CREATE INDEX IF NOT EXISTS idx_item_prices_item ON item_prices (item_id);
 
--- 进货单（主表）：sync_key = 客户端幂等键（离线重放/多端提交不重复建单）
-CREATE TABLE IF NOT EXISTS purchases (
-  id TEXT PRIMARY KEY,
-  happened_at TEXT NOT NULL,
-  note TEXT DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  created_by TEXT REFERENCES users(id),
-  sync_key TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases (happened_at);-- 进货明细
+-- 进货（去单据化：每条商品=独立主记录，无进货单头表——批次仅以 purchase_id 关联；sync_key = 客户端幂等键）
 CREATE TABLE IF NOT EXISTS purchase_items (
   id TEXT PRIMARY KEY,
-  purchase_id TEXT NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+  purchase_id TEXT NOT NULL,
   item_id TEXT NOT NULL REFERENCES items(id),
   unit TEXT NOT NULL,
   quantity REAL NOT NULL CHECK (quantity > 0),
   purchase_price REAL NOT NULL DEFAULT 0,
   amount REAL NOT NULL DEFAULT 0,
   happened_at TEXT,
+  note TEXT DEFAULT '',
+  created_by TEXT,
+  sync_key TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_items_date ON purchase_items (happened_at);
 
--- 出货单（主表）：sync_key = 客户端幂等键
-CREATE TABLE IF NOT EXISTS sales (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id),
-  happened_at TEXT NOT NULL,
-  note TEXT DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  created_by TEXT REFERENCES users(id),
-  sync_key TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_sales_client ON sales (client_id);
-CREATE INDEX IF NOT EXISTS idx_sales_date ON sales (happened_at);
--- 出货明细：快照 sale_price 与 cost_price（出货当时的进价），毛利=Σ((sale-cost)*qty) 不受日后改价影响
+-- 出货（去单据化：每条商品=独立主记录，无出货单头表——批次仅以 sale_id 关联；行自带店铺/日期/备注；sync_key = 客户端幂等键）
 CREATE TABLE IF NOT EXISTS sale_items (
   id TEXT PRIMARY KEY,
-  sale_id TEXT NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+  sale_id TEXT NOT NULL,
   item_id TEXT NOT NULL REFERENCES items(id),
+  client_id TEXT,
   unit TEXT NOT NULL,
   quantity REAL NOT NULL CHECK (quantity > 0),
   sale_price REAL NOT NULL DEFAULT 0,
   cost_price REAL NOT NULL DEFAULT 0,
   amount REAL NOT NULL DEFAULT 0,
   happened_at TEXT,
+  note TEXT DEFAULT '',
+  created_by TEXT,
+  sync_key TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id);
 CREATE INDEX IF NOT EXISTS idx_sale_items_item ON sale_items (item_id);
+CREATE INDEX IF NOT EXISTS idx_sale_items_date ON sale_items (happened_at);
 
 -- 收款（结账登记：店铺欠款 = Σsales.amount − Σ(payments.amount + payments.waived)）
 -- waived = 平账减免金额（实收 amount，减免部分账面视为已结清）

@@ -90,55 +90,54 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       return { id: r.id, name: r.name, bank_name: r.bank_name ?? '', card_last_four: r.card_last_four ?? '', sort: r.sort ?? 0 };
     }
     case 'sale': {
-      const r = await db.prepare(
-        `SELECT s.*, c.name AS client_name,
-           (SELECT COALESCE(SUM(si.amount),0) FROM sale_items si WHERE si.sale_id = s.id) AS total
-         FROM sales s JOIN clients c ON c.id = s.client_id WHERE s.id = ?`,
-      ).bind(id).first<Record<string, unknown>>();
-      if (!r) return null;
-      const detail = await db.prepare(
-        `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`,
-      ).bind(id).all();
-      // 引用驱动附件引用：该实体（单据+明细行）引用的全部附件 key，随实体 payload 同步
+      // 去单据化：head 表已物理删除，头字段由该批商品行聚合派生（契约不变）
+      const rows = await db.prepare(
+        `SELECT si.*, i.name AS item_name, i.category AS item_category
+         FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ? ORDER BY si.created_at`,
+      ).bind(id).all<Record<string, unknown>>();
+      if (rows.results.length === 0) return null;
+      const clientId = `${rows.results[0].client_id ?? ''}`;
+      const clientRow = await db.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>();
+      const happenedAt = rows.results.map((r) => `${r.happened_at ?? ''}`).reduce((a, b) => (a >= b ? a : b), '');
+      const total = rows.results.reduce((s, r) => s + (Number(r.amount) || 0), 0);
       const refs = await db.prepare(
         "SELECT entity, entity_id, file_key FROM attachment_refs WHERE (entity = 'sale' AND entity_id = ?) OR (entity = 'sale_item' AND entity_id IN (SELECT id FROM sale_items WHERE sale_id = ?))",
       ).bind(id, id).all<{ entity: string; entity_id: string; file_key: string }>();
       return {
-        id: r.id, client_id: r.client_id, client_name: r.client_name,
-        happened_at: r.happened_at, note: r.note ?? '', total: r.total ?? 0,
-        items: detail.results,
+        id, client_id: clientId, client_name: clientRow?.name ?? '',
+        happened_at: happenedAt, note: `${rows.results[0].note ?? ''}`, total,
+        items: rows.results,
         attachments: refs.results.map((x) => x.file_key),
       };
     }
     case 'purchase': {
-      const r = await db.prepare(
-        `SELECT p.*, (SELECT COALESCE(SUM(pi.amount),0) FROM purchase_items pi WHERE pi.purchase_id = p.id) AS total
-         FROM purchases p WHERE p.id = ?`,
-      ).bind(id).first<Record<string, unknown>>();
-      if (!r) return null;
-      const detail = await db.prepare(
-        `SELECT pi.*, i.name AS item_name, i.category AS item_category FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`,
-      ).bind(id).all();
+      const rows = await db.prepare(
+        `SELECT pi.*, i.name AS item_name, i.category AS item_category
+         FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ? ORDER BY pi.created_at`,
+      ).bind(id).all<Record<string, unknown>>();
+      if (rows.results.length === 0) return null;
+      const happenedAt = rows.results.map((r) => `${r.happened_at ?? ''}`).reduce((a, b) => (a >= b ? a : b), '');
+      const total = rows.results.reduce((s, r) => s + (Number(r.amount) || 0), 0);
       const refs = await db.prepare(
         "SELECT entity, entity_id, file_key FROM attachment_refs WHERE (entity = 'purchase' AND entity_id = ?) OR (entity = 'purchase_item' AND entity_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?))",
       ).bind(id, id).all<{ entity: string; entity_id: string; file_key: string }>();
       return {
-        id: r.id, happened_at: r.happened_at, note: r.note ?? '', total: r.total ?? 0,
-        items: detail.results,
+        id, happened_at: happenedAt, note: `${rows.results[0].note ?? ''}`, total,
+        items: rows.results,
         attachments: refs.results.map((x) => x.file_key),
       };
     }
     case 'sale_item': {
       const r = await db.prepare(
-        `SELECT si.*, s.client_id, i.name AS item_name, i.category AS item_category
-         FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN items i ON i.id = si.item_id WHERE si.id = ?`,
+        `SELECT si.*, i.name AS item_name, i.category AS item_category
+         FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.id = ?`,
       ).bind(id).first<Record<string, unknown>>();
       if (!r) return null;
       const refs = await db.prepare(
         "SELECT entity, entity_id, file_key FROM attachment_refs WHERE entity = 'sale_item' AND entity_id = ?",
       ).bind(id).all<{ entity: string; entity_id: string; file_key: string }>();
       return {
-        id: r.id, sale_id: r.sale_id, client_id: r.client_id, item_id: r.item_id,
+        id: r.id, sale_id: r.sale_id, client_id: r.client_id ?? '', item_id: r.item_id,
         item_name: r.item_name, item_category: r.item_category ?? '', unit: r.unit ?? '',
         quantity: r.quantity ?? 0, sale_price: r.sale_price ?? 0, cost_price: r.cost_price ?? 0,
         amount: r.amount ?? 0, happened_at: r.happened_at ?? '', note: r.note ?? '',
@@ -213,10 +212,7 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('出货单明细缺失（items 为空），保留服务器原明细');
   }
-  await db.prepare(
-    `INSERT INTO sales (id, client_id, happened_at, note) VALUES (?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET client_id = excluded.client_id, happened_at = excluded.happened_at, note = excluded.note`,
-  ).bind(id, p.client_id ?? '', p.happened_at ?? '', p.note ?? '').run();
+  // 去单据化：无 sales 头表（已物理删除），行即主记录，头字段由行聚合派生
   // 已有旧明细：回滚其库存（出货扣减恢复），再整体替换
   const old = await db.prepare('SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)
     .all<{ item_id: string; unit: string; quantity: number }>();
@@ -245,10 +241,7 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('进货单明细缺失（items 为空），保留服务器原明细');
   }
-  await db.prepare(
-    `INSERT INTO purchases (id, happened_at, note) VALUES (?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET happened_at = excluded.happened_at, note = excluded.note`,
-  ).bind(id, p.happened_at ?? '', p.note ?? '').run();
+  // 去单据化：无 purchases 头表（已物理删除），行即主记录，头字段由行聚合派生
   const old = await db.prepare('SELECT item_id, unit, quantity FROM purchase_items WHERE purchase_id = ?').bind(id)
     .all<{ item_id: string; unit: string; quantity: number }>();
   const batch: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, -it.quantity));
@@ -392,7 +385,7 @@ export async function applyChange(
             ]);
             const remain = await db.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE sale_id = ?').bind(row.sale_id).first<{ n: number }>();
             if ((remain?.n ?? 0) === 0) {
-              await db.prepare('DELETE FROM sales WHERE id = ?').bind(row.sale_id).run();
+              // 无 head 表（已物理删除）：批内无行即无记录，无需级联删头
             }
           }
           // 行级删除：该行凭证附件（sale_item 引用）一并清（R2 + 引用表）
@@ -404,13 +397,6 @@ export async function applyChange(
         const itemId = String(p.item_id ?? '').trim();
         if (qty <= 0 || itemId === '') return { ok: false, error: '出货商品缺数量或商品' };
         const saleId = String(p.sale_id ?? '');
-        // 确保单据头存在（供统计/库存聚合；行已带 client_id 自包含）
-        if (saleId) {
-          await db.prepare(
-            `INSERT INTO sales (id, client_id, happened_at, note) VALUES (?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET client_id = excluded.client_id, happened_at = excluded.happened_at, note = excluded.note`,
-          ).bind(saleId, p.client_id ?? '', p.happened_at ?? '', p.note ?? '').run();
-        }
         const amount = Number(p.amount) || Math.round(qty * (Number(p.sale_price) || 0) * 100) / 100;
         await db.prepare(
           `INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, client_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -433,7 +419,7 @@ export async function applyChange(
             ]);
             const remain = await db.prepare('SELECT COUNT(*) AS n FROM purchase_items WHERE purchase_id = ?').bind(row.purchase_id).first<{ n: number }>();
             if ((remain?.n ?? 0) === 0) {
-              await db.prepare('DELETE FROM purchases WHERE id = ?').bind(row.purchase_id).run();
+              // 无 head 表（已物理删除）：批内无行即无记录，无需级联删头
             }
           }
           // 行级删除：该行凭证附件（purchase_item 引用）一并清（R2 + 引用表）
@@ -444,12 +430,6 @@ export async function applyChange(
         const itemId2 = String(p.item_id ?? '').trim();
         if (qty2 <= 0 || itemId2 === '') return { ok: false, error: '进货商品缺数量或商品' };
         const purchaseId = String(p.purchase_id ?? '');
-        if (purchaseId) {
-          await db.prepare(
-            `INSERT INTO purchases (id, happened_at, note) VALUES (?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET happened_at = excluded.happened_at, note = excluded.note`,
-          ).bind(purchaseId, p.happened_at ?? '', p.note ?? '').run();
-        }
         const amount2 = Number(p.amount) || Math.round(qty2 * (Number(p.purchase_price) || 0) * 100) / 100;
         await db.prepare(
           `INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -465,7 +445,7 @@ export async function applyChange(
         if (action === 'delete') {
           const old = await db.prepare('SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)
             .all<{ item_id: string; unit: string; quantity: number }>();
-          // R2 行级文件清理：必须在删 sales 前拿行 id（sale_items 外键级联，删头后行即消失）
+          // R2 行级文件清理：删行前拿行 id（行级附件按 sale_item/{lineId}/ 存储）
           try {
             const lineRows = await db.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
               .all<{ id: string }>();
@@ -474,14 +454,10 @@ export async function applyChange(
             }
           } catch (_) {}
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, it.quantity));
-          bt.push(db.prepare('DELETE FROM sales WHERE id = ?').bind(id));
+          bt.push(db.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
           await db.batch(bt);
-          // 删除单据：级联清附件引用 + 无引用文件 GC（实体删除级联引用语义）
           await db.prepare(
             "DELETE FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
-          ).bind(id).run();
-          await db.prepare(
-            "DELETE FROM attachment_refs WHERE entity = 'sale_item' AND entity_id IN (SELECT id FROM sale_items WHERE sale_id = ?)",
           ).bind(id).run();
           // 单据级前缀 R2 文件（历史/兼容路径）
           try { await deleteEntityAttachments(env, 'sale', id); } catch (_) {}
@@ -498,7 +474,7 @@ export async function applyChange(
         if (action === 'delete') {
           const old = await db.prepare('SELECT item_id, unit, quantity FROM purchase_items WHERE purchase_id = ?').bind(id)
             .all<{ item_id: string; unit: string; quantity: number }>();
-          // R2 行级文件清理：必须在删 purchases 前拿行 id（purchase_items 外键级联，删头后行即消失）
+          // R2 行级文件清理：删行前拿行 id（行级附件按 purchase_item/{lineId}/ 存储）
           try {
             const lineRows = await db.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
               .all<{ id: string }>();
@@ -507,13 +483,10 @@ export async function applyChange(
             }
           } catch (_) {}
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, -it.quantity));
-          bt.push(db.prepare('DELETE FROM purchases WHERE id = ?').bind(id));
+          bt.push(db.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
           await db.batch(bt);
           await db.prepare(
             "DELETE FROM attachment_refs WHERE entity = 'purchase' AND entity_id = ?",
-          ).bind(id).run();
-          await db.prepare(
-            "DELETE FROM attachment_refs WHERE entity = 'purchase_item' AND entity_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?)",
           ).bind(id).run();
           // 单据级前缀 R2 文件（历史/兼容路径）
           try { await deleteEntityAttachments(env, 'purchase', id); } catch (_) {}

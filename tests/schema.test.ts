@@ -10,7 +10,7 @@ import { createFakeD1 } from './helpers/fake-d1';
 
 const TABLES = [
   'users', 'clients', 'items', 'item_prices',
-  'purchases', 'purchase_items', 'sales', 'sale_items',
+  'purchase_items', 'sale_items',
   'payments', 'settings', 'categories',
 ];
 
@@ -85,5 +85,46 @@ describe('schema.sql 完整建表与幂等', () => {
     expect(cols.results.map((c) => c.name)).toEqual(
       expect.arrayContaining(['bank_name', 'card_last_four']),
     );
+  });
+
+  it('v0.17.114 彻底删表迁移：旧库（含头表+FK 与数据）跑 ensureSchema → 头表删除、行表无 FK、数据保留自包含', async () => {
+    // 构造旧库：头表 + 带 FK 的行表 + 数据（模拟 v0.17.113 之前的物理结构）
+    const db = await createFakeD1();
+    await db.prepare('CREATE TABLE sales (id TEXT PRIMARY KEY, client_id TEXT, happened_at TEXT, note TEXT, created_by TEXT, sync_key TEXT)').run();
+    await db.prepare('CREATE TABLE purchase_items (id TEXT PRIMARY KEY, purchase_id TEXT REFERENCES purchases(id) ON DELETE CASCADE, item_id TEXT, unit TEXT, quantity REAL, purchase_price REAL, amount REAL, happened_at TEXT, note TEXT, created_at TEXT)').run();
+    await db.prepare('CREATE TABLE purchases (id TEXT PRIMARY KEY, happened_at TEXT, note TEXT, created_by TEXT, sync_key TEXT)').run();
+    await db.prepare('CREATE TABLE sale_items (id TEXT PRIMARY KEY, sale_id TEXT NOT NULL REFERENCES sales(id) ON DELETE CASCADE, item_id TEXT, client_id TEXT, unit TEXT, quantity REAL, sale_price REAL, cost_price REAL, amount REAL, happened_at TEXT, note TEXT, created_at TEXT)').run();
+    await db.prepare('INSERT INTO sales (id, client_id, happened_at) VALUES (?, ?, ?)').bind('s1', 'c1', '2026-01-01').run();
+    await db.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('x1', 's1', 'c1', 'i1', '斤', 5, 2, 1, 10, '2026-01-01').run();
+    await db.prepare('INSERT INTO purchases (id, happened_at) VALUES (?, ?)').bind('p1', '2026-01-02').run();
+    await db.prepare('INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('y1', 'p1', 'i1', '斤', 3, 1, 3, '2026-01-02').run();
+    resetSchemaState();
+    await ensureSchema(db as never);
+    // 头表已物理删除
+    for (const t of ['sales', 'purchases']) {
+      const r = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").bind(t).first<{ name: string }>();
+      expect(r, `头表 ${t} 应已删除`).toBeFalsy();
+    }
+    // 行表不再引用头表（FK 已去除）
+    for (const t of ['sale_items', 'purchase_items']) {
+      const fks = await db.prepare(`PRAGMA foreign_key_list(${t})`).all<{ table: string }>();
+      expect(fks.results.length, `${t} 外键应已去除`).toBe(0);
+    }
+    // 数据保留且行自包含
+    const sale = await db.prepare('SELECT * FROM sale_items WHERE id = ?').bind('x1').first<{ client_id: string; happened_at: string; note: string; created_by: string }>();
+    expect(sale?.client_id).toBe('c1');
+    expect(sale?.happened_at).toBe('2026-01-01');
+    const buy = await db.prepare('SELECT * FROM purchase_items WHERE id = ?').bind('y1').first<{ purchase_id: string }>();
+    expect(buy?.purchase_id).toBe('p1');
+    // 索引重建完整
+    const idx = await db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_sale_items_sale','idx_sale_items_item','idx_sale_items_date','idx_purchase_items_purchase','idx_purchase_items_date')").all<{ name: string }>();
+    expect(idx.results.length).toBe(5);
+    // 迁移幂等：再跑一轮不抛错、数据仍在
+    resetSchemaState();
+    await ensureSchema(db as never);
+    const after = await db.prepare('SELECT COUNT(*) AS cnt FROM sale_items').first<{ cnt: number }>();
+    expect(after?.cnt).toBe(1);
   });
 });

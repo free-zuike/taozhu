@@ -94,9 +94,16 @@ attachmentsRouter.post('/counts', async (c) => {
   const store = createStorage(c.env);
   let ids: string[] = [];
   const clientId = body?.client_id?.trim();
-  if (clientId && ORDER_ENTITY.includes(entity)) {
-    const rows = await c.env.DB.prepare(`SELECT id FROM ${entity}s WHERE client_id = ?`).bind(clientId).all<{ id: string }>();
+  if (clientId && entity === 'sale') {
+    // 去单据化：无 sales 头表，按商品行 client_id 聚合该店单据 id（整单凭证实际挂在行级附件）
+    const rows = await c.env.DB.prepare(`SELECT DISTINCT sale_id AS id FROM sale_items WHERE client_id = ?`).bind(clientId).all<{ id: string }>();
     ids = rows.results.map((r) => r.id);
+  } else if (clientId && entity === 'payment') {
+    const rows = await c.env.DB.prepare(`SELECT id FROM payments WHERE client_id = ?`).bind(clientId).all<{ id: string }>();
+    ids = rows.results.map((r) => r.id);
+  } else if (clientId && entity === 'purchase') {
+    // 进货不分店铺（purchase_items 无 client_id）：按店聚合无意义
+    ids = [];
   } else if (clientId && entity === 'sale_item') {
     // 行级附件按店铺聚合：商品行自带 client_id，不再 JOIN sales 头表
     const rows = await c.env.DB.prepare(
@@ -197,9 +204,10 @@ attachmentsRouter.get('/in-use', async (c) => {
     s.add(id);
   };
   const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
-    db.prepare('SELECT id FROM sales').all<{ id: string }>(),
+    // 去单据化：无 sales/purchases 头表，单据 id 由商品行去重聚合
+    db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items').all<{ id: string }>(),
     db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM purchases').all<{ id: string }>(),
+    db.prepare('SELECT DISTINCT purchase_id AS id FROM purchase_items').all<{ id: string }>(),
     db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
     db.prepare('SELECT id FROM payments').all<{ id: string }>(),
   ]);
@@ -251,9 +259,10 @@ attachmentsRouter.get('/orphans', async (c) => {
     s.add(id);
   };
   const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
-    db.prepare('SELECT id FROM sales').all<{ id: string }>(),
+    // 去单据化：无 sales/purchases 头表，单据 id 由商品行去重聚合
+    db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items').all<{ id: string }>(),
     db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM purchases').all<{ id: string }>(),
+    db.prepare('SELECT DISTINCT purchase_id AS id FROM purchase_items').all<{ id: string }>(),
     db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
     db.prepare('SELECT id FROM payments').all<{ id: string }>(),
   ]);
@@ -301,9 +310,10 @@ attachmentsRouter.delete('/orphans', adminOnly(), async (c) => {
     s.add(id);
   };
   const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
-    db.prepare('SELECT id FROM sales').all<{ id: string }>(),
+    // 去单据化：无 sales/purchases 头表，单据 id 由商品行去重聚合
+    db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items').all<{ id: string }>(),
     db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM purchases').all<{ id: string }>(),
+    db.prepare('SELECT DISTINCT purchase_id AS id FROM purchase_items').all<{ id: string }>(),
     db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
     db.prepare('SELECT id FROM payments').all<{ id: string }>(),
   ]);
