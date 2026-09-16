@@ -233,24 +233,29 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     if (ok != true) return;
     try {
       if (kIsWeb) {
-        await Api.instance.delete('/purchases/items/$rowId');
+        final r = await Api.instance.delete('/purchases/items/$rowId');
+        // 服务端已级联：删的是最后一行时该条进货记录整体消失（无空壳）
+        if (r is Map && r['order_deleted'] == true) {
+          toast(context, '已删除该商品（本条记录已无商品）');
+          _load();
+          return;
+        }
       } else {
-        // 原生：本地镜像 items 移除该行 → 整单快照 upsert（服务端整体替换，等价于行级删除）
+        // 原生：本地镜像 items 移除该行
         final items = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
         final updatedItems = items.where((it) => '${it['id']}' != rowId).toList();
+        if (updatedItems.isEmpty) {
+          // 删的是该条记录最后一商品 → 整条记录删除（不留空壳，与 Web 级联语义一致）
+          await LocalDb.deleteOne('purchases', '${order['id']}');
+          await SyncService.enqueueChange(
+              entityType: 'purchase', entitySyncId: '${order['id']}', action: 'delete', payload: {});
+          toast(context, '已删除该商品（本条记录已无商品）');
+          _load();
+          return;
+        }
         final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
         payload['total'] = updatedItems.fold<double>(
             0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
-        final dates = [
-          for (final it in updatedItems)
-            '${it['happened_at'] ?? ''}'.isNotEmpty
-                ? '${it['happened_at']}'
-                : '${payload['happened_at'] ?? ''}',
-        ];
-        if (dates.isNotEmpty) {
-          final maxD = dates.reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
-          if (maxD.isNotEmpty) payload['happened_at'] = maxD;
-        }
         await LocalDb.upsertOne('purchases', payload);
         await SyncService.enqueueChange(
             entityType: 'purchase', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);

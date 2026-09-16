@@ -299,7 +299,18 @@ purchasesRouter.delete('/items/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM purchase_items WHERE id = ?').bind(id),
   ];
   await c.env.DB.batch(batch);
-  // 单据日期自动取剩余明细最大日期（空明细则保持原样）
+  // 删的是该单最后一行商品 → 单据失去明细，按用户语义（无单据概念）整体删除该单：
+  // 级联删 purchases 行 + 附件引用，避免服务端残留"无明细"空壳单
+  const remain = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM purchase_items WHERE purchase_id = ?').bind(purchaseId).first<{ n: number }>();
+  if ((remain?.n ?? 0) === 0) {
+    await c.env.DB.prepare('DELETE FROM purchases WHERE id = ?').bind(purchaseId).run();
+    try {
+      await deleteEntityAttachments(c.env, 'purchase', purchaseId);
+    } catch (_) {}
+    await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: purchaseId, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
+    return c.json({ ok: true, order_deleted: true });
+  }
+  // 单据日期自动取剩余明细最大日期
   await c.env.DB.prepare(
     `UPDATE purchases SET happened_at = (
        SELECT MAX(COALESCE(happened_at, '')) FROM purchase_items WHERE purchase_id = ?

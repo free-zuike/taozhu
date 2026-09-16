@@ -780,11 +780,26 @@ class _LedgerPageState extends State<LedgerPage> {
     if (!ok) return;
     try {
       if (kIsWeb) {
-        await Api.instance.delete('/sales/items/$itemId');
+        final r = await Api.instance.delete('/sales/items/$itemId');
+        // 服务端已级联：删的是最后一行时该条出货记录整体消失（无空壳单）
+        if (r is Map && r['order_deleted'] == true) {
+          toast(context, '已删除该商品（本条记录已无商品）');
+          _load();
+          return;
+        }
       } else {
-        // 原生：本地镜像 items 移除该行 → 整单快照 upsert（服务端整体替换，等价于行级删除）
+        // 原生：本地镜像 items 移除该行
         final items = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
         final updatedItems = items.where((it) => '${it['id']}' != itemId).toList();
+        if (updatedItems.isEmpty) {
+          // 删的是该条记录最后一商品 → 整条记录删除（不留空壳单，与 Web 级联语义一致）
+          await LocalDb.deleteOne('sales', '${order['id']}');
+          await SyncService.enqueueChange(
+              entityType: 'sale', entitySyncId: '${order['id']}', action: 'delete', payload: {});
+          toast(context, '已删除该商品（本条记录已无商品）');
+          _load();
+          return;
+        }
         final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
         payload['total'] = updatedItems.fold<double>(
             0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));

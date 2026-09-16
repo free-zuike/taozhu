@@ -337,7 +337,18 @@ salesRouter.delete('/items/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM sale_items WHERE id = ?').bind(id),
   ];
   await c.env.DB.batch(batch);
-  // 单据日期自动取剩余明细最大日期（空明细则保持原样）
+  // 删的是该单最后一行商品 → 单据失去明细，按用户语义（无单据概念）整体删除该单：
+  // 级联删 sales 行 + 附件引用，避免服务端残留"无明细"空壳单
+  const remain = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE sale_id = ?').bind(saleId).first<{ n: number }>();
+  if ((remain?.n ?? 0) === 0) {
+    await c.env.DB.prepare('DELETE FROM sales WHERE id = ?').bind(saleId).run();
+    try {
+      await deleteEntityAttachments(c.env, 'sale', saleId);
+    } catch (_) {}
+    await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
+    return c.json({ ok: true, order_deleted: true });
+  }
+  // 单据日期自动取剩余明细最大日期
   await c.env.DB.prepare(
     `UPDATE sales SET happened_at = (
        SELECT MAX(COALESCE(happened_at, '')) FROM sale_items WHERE sale_id = ?
