@@ -728,10 +728,7 @@ class SyncService {
       // **await 等待附件下载完，同步中的动画/状态行才消失**（完全同步之后再消失）；
       // 单张失败内部静默跳过，下次同步自动重补，不阻塞主流程
       await downloadInUseAttachments();
-      // ⑤ 孤儿本地附件副本清理：对照在用实体，无主目录（单据删除残留等）自动清——
-      // 本地附件恒等于在用实体集合，面板"全部附件 本地"计数随之归零
-      await cleanupOrphanLocalAttachments();
-      // ⑥ 资料（显示名/头像版本）同步对齐参考 sync() 编排：实体+附件完成后统一 syncMyProfile
+      // ⑤ 资料（显示名/头像版本）同步对齐参考 sync() 编排：实体+附件完成后统一 syncMyProfile
       await syncMyProfile();
     } catch (e) {
       _lastSyncFailed = true;

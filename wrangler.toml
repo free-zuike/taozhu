@@ -27,9 +27,10 @@ bucket_name = "taozhu-attachments"
 name = "SYNC_HUB"
 class_name = "SyncHub"
 
-# 每日定时自动备份（凌晨 3:05，避开整点高峰）：全库 JSON → R2 taozhu/backups/，保留 14 份
+# 自动备份触发（每分钟）：scheduled handler 命中用户配置的备份时间（settings backup_time，北京时间 HH:MM）
+# 才执行——备份时间由用户在 App 备份页自选，不写死
 [triggers]
-crons = ["5 3 * * *"]
+crons = ["* * * * *"]
 
 [[migrations]]
 tag = "v1"

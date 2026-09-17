@@ -140,9 +140,29 @@ class Api {
   Future<String> getBase() => _base();
 
   /// 通用请求：成功返回 data map；失败抛 Exception（message 为后端 error 或通用文案）
+  /// GET 并发去重：同 path 的进行中请求共享同一个 Future（Web 端多页面/多组件同时加载
+  /// 同一接口时只发一次请求，完成即清除；非并发场景不受影响）
+  static final Map<String, Future<Map<String, dynamic>>> _inflightGet = {};
+
   Future<Map<String, dynamic>> request(
     String path, {
     String method = 'GET',
+    Map<String, dynamic>? body,
+  }) {
+    if (method == 'GET' && body == null) {
+      final existing = _inflightGet[path];
+      if (existing != null) return existing;
+      final created = _requestInner(path, method, body);
+      _inflightGet[path] = created;
+      created.whenComplete(() => _inflightGet.remove(path));
+      return created;
+    }
+    return _requestInner(path, method, body);
+  }
+
+  Future<Map<String, dynamic>> _requestInner(
+    String path, {
+    required String method,
     Map<String, dynamic>? body,
   }) async {
     final base = await _base();

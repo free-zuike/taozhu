@@ -17,6 +17,48 @@ class BackupPage extends StatefulWidget {
 class _BackupPageState extends State<BackupPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
 
+  /// 自动备份时间（北京时间 HH:MM，用户自选）：到点自动备份全库 JSON 到云端 R2，保留最近 14 份
+  String _autoTime = '03:05';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAutoTime();
+  }
+
+  Future<void> _loadAutoTime() async {
+    try {
+      final d = await Api.instance.get('/backup/auto');
+      if (mounted && '${d['time'] ?? ''}'.isNotEmpty) {
+        setState(() => _autoTime = '${d['time']}');
+      }
+    } catch (_) {
+      // 读取失败保持默认，不阻塞页面
+    }
+  }
+
+  Future<void> _pickAutoTime() async {
+    final parts = _autoTime.split(':');
+    final t = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(
+        hour: int.tryParse(parts.first) ?? 3,
+        minute: int.tryParse(parts.length > 1 ? parts[1] : '5') ?? 5,
+      ),
+      helpText: '选择每日自动备份时间（北京时间）',
+    );
+    if (t == null || !mounted) return;
+    final hh = t.hour.toString().padLeft(2, '0');
+    final mm = t.minute.toString().padLeft(2, '0');
+    try {
+      await Api.instance.put('/backup/auto', {'time': '$hh:$mm'});
+      if (mounted) setState(() => _autoTime = '$hh:$mm');
+      toast(context, '已设置：每天 $hh:$mm 自动备份到云端');
+    } catch (e) {
+      toast(context, '保存失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
   /// 全库备份导出：Web 直接下载文件；移动/桌面弹系统分享保存
   Future<void> _exportBackup() async {
     try {
@@ -90,6 +132,11 @@ class _BackupPageState extends State<BackupPage> {
           _card(c, [
             _tile(c, Icons.save_alt_outlined, '导出备份', '导出全库 JSON 存档（建议定期导出留底）', _exportBackup),
             _tile(c, Icons.restore_outlined, '导入备份', '从备份 JSON 合并恢复（不覆盖现有数据）', _importBackup),
+          ]),
+          const SizedBox(height: 18),
+          _groupTitle(c, '自动备份'),
+          _card(c, [
+            _tile(c, Icons.schedule_outlined, '自动备份时间', '每天 $_autoTime（北京时间）自动备份全库到云端，保留最近 14 份', _pickAutoTime),
           ]),
           const SizedBox(height: 18),
           Padding(

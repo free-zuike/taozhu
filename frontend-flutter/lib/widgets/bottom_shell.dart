@@ -26,6 +26,17 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
   int _index = 0;
   bool _isStaff = false; // 店员：无统计权限，隐藏统计 tab
 
+  // 懒构建：只有切到的 tab 才实例化（避免 IndexedStack 预构建全部页面 →
+  // 启动瞬间 4 个页面同时 initState 并发发网络请求导致"重复请求 + 挂起"）。
+  // 已构建的 tab 保留状态（IndexedStack 持有），切回不重载。
+  final List<Widget> _pages = const [
+    LedgerPage(),
+    StatsPage(),
+    PurchaseHistoryPage(),
+    MyPage(),
+  ];
+  late final List<bool> _built = [true, false, false, false];
+
   @override
   void initState() {
     super.initState();
@@ -46,6 +57,14 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     // 强制更新检查：启动延迟静默查 latest-version 的 min_supported，当前版本低于最低支持 →
     // 弹不可关闭的更新窗（更新检查属网络动作，网络失败/Web 静默跳过，不违背本地优先）
     _checkForceUpdate();
+  }
+
+  /// 切换 tab：首次切到才构建页面（懒加载防启动并发请求）
+  void _selectTab(int i) {
+    setState(() {
+      _built[i] = true;
+      _index = i;
+    });
   }
 
   /// 启动强制更新检查：仅当服务端声明了 min_supported 且当前版本低于它时弹窗
@@ -85,9 +104,11 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: _isStaff
-            ? const [LedgerPage(), PurchaseHistoryPage(), MyPage()]
-            : const [LedgerPage(), StatsPage(), PurchaseHistoryPage(), MyPage()],
+        // 懒构建：未切到的 tab 先不放（占位），切到时才实例化——避免启动时全部页面并发 initState 发请求
+        children: [
+          for (var i = 0; i < _pages.length; i++)
+            _built[i] ? _pages[i] : const SizedBox.shrink(),
+        ],
       ),
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -105,8 +126,9 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
               _navItem(0, Icons.receipt_long_outlined, '交易'),
               if (!_isStaff) _navItem(1, Icons.bar_chart_outlined, '统计'),
               _centerButton(),
-              _navItem(_isStaff ? 1 : 2, Icons.shopping_cart_outlined, '进货'),
-              _navItem(_isStaff ? 2 : 3, Icons.person_outline, '我的'),
+              // 进货/我的固定指向页数组索引 2/3（staff 时统计 tab 隐藏但索引不变）
+              _navItem(2, Icons.shopping_cart_outlined, '进货'),
+              _navItem(3, Icons.person_outline, '我的'),
             ],
           ),
         ),
@@ -121,7 +143,7 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     return Expanded(
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
-        onTap: () => setState(() => _index = i),
+        onTap: () => _selectTab(i),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [

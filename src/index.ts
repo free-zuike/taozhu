@@ -16,7 +16,7 @@ import { aiRouter } from './routes/ai';
 import { settingsRouter } from './routes/settings';
 import { attachmentsRouter } from './routes/attachments';
 import { stocksRouter } from './routes/stocks';
-import { backupRouter, exportAllData } from './routes/backup';
+import { backupRouter, exportAllData, getBackupTime, isBackupTime } from './routes/backup';
 import { shareRouter, renderShareHtml } from './routes/share';
 import { syncRouter } from './routes/sync';
 import { meRouter } from './routes/me';
@@ -120,10 +120,12 @@ app.all('*', async (c) => {
   return c.env.ASSETS.fetch(c.req.raw);
 });
 
-// 每日定时自动备份（wrangler.toml crons "5 3 * * *"）：全库 JSON 存 R2 taozhu/backups/（与附件存储同库同家族前缀），
-// 保留最近 14 份（超出删除最旧的）。失败静默（下次 cron 重试），不阻塞主流程。
+// 自动备份（wrangler.toml cron 每分钟触发，命中用户配置的北京时间 HH:MM 才执行——时间可配不写死）：
+// 全库 JSON 存 R2 taozhu/backups/（与附件存储同库同前缀家族），保留最近 14 份。失败静默下次重试。
 async function scheduledBackup(env: Env): Promise<void> {
   try {
+    const configured = await getBackupTime(env.DB);
+    if (!isBackupTime(new Date(), configured)) return;
     const data = await exportAllData(env.DB);
     const key = `taozhu/backups/backup-${new Date().toISOString().slice(0, 10)}.json`;
     await env.BUCKET.put(key, JSON.stringify({ exported_at: new Date().toISOString(), data }));
