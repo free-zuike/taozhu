@@ -187,6 +187,9 @@ class SyncService {
 
   /// 附件上传入队：页面添加附件后先落本地副本，再登记待上传（联网后由 sync() 编排统一上传）。
   /// 上传是同步引擎一部分，页面不直连云端；失败条目保留队列，下次同步自动重试。
+  /// 即时上传防重入：一批上传进行中时不再重复触发（避免连续添加附件并发轰炸）
+  static bool _attUploadLock = false;
+
   static Future<void> enqueueAttachmentUpload({
     required String entity,
     required String id,
@@ -201,6 +204,12 @@ class SyncService {
       list.add(entry);
       await p.setStringList(kPendingUploadsKey, list);
     } catch (_) {}
+    // 即时上传：添加附件后立即触发一轮上传（不再等手动同步才传）——
+    // 上传实时反馈；失败保留队列，由同步/下次重试兜底（离线可挂图不变）
+    if (!_attUploadLock) {
+      _attUploadLock = true;
+      unawaited(uploadPendingAttachments().whenComplete(() => _attUploadLock = false));
+    }
   }
 
   /// 同步编排第一步：上传待传附件（对齐参考 sync()：push 前先传附件，引用先写云端）。

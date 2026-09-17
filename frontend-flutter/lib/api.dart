@@ -6,6 +6,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'log.dart';
 import 'version.dart';
 
+/// GET 请求短缓存条目：进行中的 Future + 完成结果/错误（3 秒内复用）
+class _GetEntry {
+  _GetEntry(this.fut);
+  final Future<Map<String, dynamic>> fut;
+  Map<String, dynamic>? result;
+  Object? error;
+  bool done = false;
+  DateTime? doneAt;
+}
+
 class Api {
   Api._();
   static final Api instance = Api._();
@@ -140,9 +150,10 @@ class Api {
   Future<String> getBase() => _base();
 
   /// 通用请求：成功返回 data map；失败抛 Exception（message 为后端 error 或通用文案）
-  /// GET 并发去重：同 path 的进行中请求共享同一个 Future（Web 端多页面/多组件同时加载
-  /// 同一接口时只发一次请求，完成即清除；非并发场景不受影响）
-  static final Map<String, Future<Map<String, dynamic>>> _inflightGet = {};
+  /// GET 去重 + 3 秒短缓存：进行中的同 path 请求共享同一个 Future；完成后 3 秒内再次请求
+  /// 直接复用结果——消除 Web 端多页面/同步完成回调导致的"先后重复请求"（同一接口几秒内
+  /// 只发一次）。写操作（POST/PUT/PATCH/DELETE）不缓存。
+  static final Map<String, _GetEntry> _getCache = {};
 
   Future<Map<String, dynamic>> request(
     String path, {
@@ -150,11 +161,28 @@ class Api {
     Map<String, dynamic>? body,
   }) {
     if (method == 'GET' && body == null) {
-      final existing = _inflightGet[path];
-      if (existing != null) return existing;
+      final now = DateTime.now();
+      final ex = _getCache[path];
+      if (ex != null) {
+        if (!ex.done) return ex.fut; // 进行中：共享同一个 Future
+        if (now.difference(ex.doneAt!) < const Duration(seconds: 3)) {
+          if (ex.error != null) throw ex.error!;
+          return Future.value(ex.result);
+        }
+        _getCache.remove(path); // 缓存过期，重新请求
+      }
       final created = _requestInner(path, method: method, body: body);
-      _inflightGet[path] = created;
-      created.whenComplete(() => _inflightGet.remove(path));
+      final entry = _GetEntry(created);
+      _getCache[path] = entry;
+      created.then((r) {
+        entry.result = r;
+        entry.done = true;
+        entry.doneAt = DateTime.now();
+      }, onError: (Object e) {
+        entry.error = e;
+        entry.done = true;
+        entry.doneAt = DateTime.now();
+      });
       return created;
     }
     return _requestInner(path, method: method, body: body);
