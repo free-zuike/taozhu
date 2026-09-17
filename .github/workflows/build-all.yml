@@ -126,7 +126,7 @@ jobs:
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" || true
+            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" || true
           fi
           echo "release $REL 就绪（资产由各构建 job 上传）"
       - name: 失败即清理（创建失败=空壳，无资产才删）
@@ -267,7 +267,7 @@ jobs:
           for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # 兜底：deploy 未建（如后端未改动仅前端 push）时本 job 自行创建
-            gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
+            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
               --title "陶朱 v${VERSION}" --notes "$NOTES" \
               --published-at "$(git log -1 --format=%cI)" || true
           fi
@@ -371,7 +371,7 @@ jobs:
           # 等待 release 创建（apk job 或并发先到者创建，最多 5 分钟）
           for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" \
+            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" \
               --published-at "$(git log -1 --format=%cI)" || true
           fi
           for _c in 1 2 3 4 5; do
@@ -458,7 +458,7 @@ jobs:
           $REL = "taozhu-v$VERSION"
           for ($_i = 0; $_i -lt 60; $_i++) { gh release view $REL 2>$null; if ($?) { break }; Start-Sleep -Seconds 5 }
           gh release view $REL 2>$null; if (-not $?) {
-            gh release create $REL --title "陶朱 v$VERSION" --notes $notes --published-at "$(git log -1 --format=%cI)" 2>$null
+            gh release create $REL --target "$GITHUB_SHA" --title "陶朱 v$VERSION" --notes $notes --published-at "$(git log -1 --format=%cI)" 2>$null
           }
           for ($_c = 1; $_c -le 5; $_c++) { gh release upload $REL "$env:TEMP/taozhu-windows-${VERSION}.zip" --clobber; if ($?) { break }; Write-Output "upload 重试 $_c/5 (taozhu-windows-${VERSION}.zip)"; Start-Sleep -Seconds 5 }
           echo "uploaded taozhu-windows-${VERSION}.zip"
@@ -531,7 +531,7 @@ jobs:
           REL="taozhu-v${VERSION}"
           for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$REL" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" \
+            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" \
               --published-at "$(git log -1 --format=%cI)" || true
           fi
           for _c in 1 2 3 4 5; do
@@ -618,7 +618,7 @@ jobs:
           REL="taozhu-v${VERSION}"
           for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
           if ! gh release view "$REL" >/dev/null 2>&1; then
-            gh release create "$REL" --title "陶朱 v${VERSION}" --notes "$NOTES" \
+            gh release create "$REL" --target "$GITHUB_SHA" --title "陶朱 v${VERSION}" --notes "$NOTES" \
               --published-at "$(git log -1 --format=%cI)" || true
           fi
           for _c in 1 2 3 4 5; do
@@ -729,7 +729,7 @@ jobs:
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$REL" --repo "$GITHUB_REPOSITORY" \
+            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
               --title "陶朱 v${VERSION}" --notes "$NOTES"
           fi
           for _c in 1 2 3 4 5; do
