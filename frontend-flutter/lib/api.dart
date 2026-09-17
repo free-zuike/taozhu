@@ -152,12 +152,12 @@ class Api {
     if (method == 'GET' && body == null) {
       final existing = _inflightGet[path];
       if (existing != null) return existing;
-      final created = _requestInner(path, method, body);
+      final created = _requestInner(path, method: method, body: body);
       _inflightGet[path] = created;
       created.whenComplete(() => _inflightGet.remove(path));
       return created;
     }
-    return _requestInner(path, method, body);
+    return _requestInner(path, method: method, body: body);
   }
 
   Future<Map<String, dynamic>> _requestInner(

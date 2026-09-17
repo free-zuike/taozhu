@@ -314,6 +314,26 @@ class SyncService {
     }
   }
 
+  /// 同步应用失败条数（pull 单条 apply 失败持久化记录）——「我的」页同步状态显示不一致用
+  static Future<int> pullErrorCount() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return (p.getStringList(kPullErrorsKey) ?? []).length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 待上传附件数（入队未成功上传、保留队列下次同步重试）——「我的」页同步状态显示不一致用
+  static Future<int> pendingUploadCount() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return (p.getStringList(kPendingUploadsKey) ?? []).length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// 队列里待推送的"删除"实体 id 集合（delete action 或 upsert 带非空 deleted_at）：
   /// 推送落地前，列表页网络刷新要用它过滤，防止"刚删的又出现"（服务端还没收到删除）。
   static Future<Set<String>> pendingDeletedIds(String entityType) async {

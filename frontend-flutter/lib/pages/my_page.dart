@@ -55,6 +55,8 @@ class _MyPageState extends State<MyPage> {
   String _webSyncState = ''; // Web 端服务器连通检查：''=检查中 / ok / error
   int _lowStocks = -1; // 低库存数量（-1=未加载）
   int _pending = 0; // 待同步单据数（合并旧 Api 队列 + 新 SyncService 队列）
+  int _pullErrors = 0; // 同步应用失败条数（pull 单条 apply 失败，持久化）——不一致直接可见
+  int _pendingUploads = 0; // 待上传附件数（入队未成功上传，队列保留重试）
   String _lastSync = ''; // 上次同步时间（人类可读）
   // 统计卡（本地核算，仅老板可见）：记账天数 / 当前店铺总笔数 / 总账本结余（全部店铺出货−收款）
   int _bookDays = 0;
@@ -127,6 +129,8 @@ class _MyPageState extends State<MyPage> {
       _syncing = SyncService.syncStatus == 'syncing';
       _syncError = SyncService.syncStatus == 'error';
     });
+    // 同步结束（成功/失败）后刷新各队列计数：不一致（异常/附件待传/待推）即时可见
+    if (!_syncing) _loadPending();
   }
 
   /// 同步完成（版本号变化）后刷新待同步数/上次同步时间/低库存/统计卡
@@ -151,7 +155,8 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
-  /// 同步状态子标题：进应用时实时显示（同步中 / 待同步 / 已同步），不再等进面板刷新
+  /// 同步状态子标题：进应用时实时显示（同步中 / 待同步 / 有异常 / 已同步），
+  /// 不一致（应用失败/附件待传/变更待推）必须直接可见，不能只显示"同步完成"
   String _syncSubtitle() {
     if (kIsWeb) {
       switch (_webSyncState) {
@@ -165,9 +170,26 @@ class _MyPageState extends State<MyPage> {
     }
     if (_syncing) return '正在同步…';
     if (_syncError) return '同步失败，请检查网络或服务器（详见日志）';
+    if (_pullErrors > 0) return '$_pullErrors 条记录同步异常（点击查看详情）';
+    if (_pendingUploads > 0) return '$_pendingUploads 张附件待上传';
     if (_pending > 0) return '$_pending 条待同步${_lastSync.isEmpty ? '' : ' · 上次 $_lastSync'}';
     if (_lastSync.isNotEmpty) return '已同步 · 上次 $_lastSync';
     return '尚未同步（进入应用会自动同步）';
+  }
+
+  /// 同步状态图标/颜色：异常（失败/记录异常/附件待传）用警示色，正常=同步图标，待推送=上传图标
+  (IconData, Color, bool) _syncStatusVisual() {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    if (kIsWeb) {
+      return _webSyncState == 'error'
+          ? (Icons.error_outline, c.danger, true)
+          : (Icons.sync_alt, c.primary, false);
+    }
+    if (_syncing) return (Icons.sync, c.primary, false);
+    if (_syncError || _pullErrors > 0) return (Icons.error_outline, c.danger, true);
+    if (_pendingUploads > 0) return (Icons.image_outlined, c.warning, true);
+    if (_pending > 0) return (Icons.cloud_upload_outlined, c.warning, true);
+    return (Icons.sync_alt, c.primary, false);
   }
 
   /// 以 /auth/me 刷新显示名/头像（登录后、改资料后调用；离线保留本地缓存）
@@ -217,13 +239,18 @@ class _MyPageState extends State<MyPage> {
 
   Future<void> _loadPending() async {
     try {
-      // 两个队列合并：旧 Api.pendingList（SharedPreferences）+ 新 SyncService（LocalDb.local_changes）
+      // 三个队列合并：旧 Api.pendingList（SharedPreferences）+ 新 SyncService（LocalDb.local_changes）
+      // + pull 应用失败（持久化）+ 待上传附件（入队未成功）——"同步完成"≠一切正常，不一致必须可见
       final legacy = await Api.instance.pendingList();
       final changes = await LocalDb.getPendingChanges();
       final lastSync = await SyncService.lastSyncAt();
+      final pullErrors = await SyncService.pullErrorCount();
+      final pendingUploads = await SyncService.pendingUploadCount();
       if (!mounted) return;
       setState(() {
         _pending = legacy.length + changes.length;
+        _pullErrors = pullErrors;
+        _pendingUploads = pendingUploads;
         if (lastSync != null && lastSync.isNotEmpty) _lastSync = _fmtSyncTime(lastSync);
       });
     } catch (_) {}
@@ -1025,8 +1052,12 @@ class _MyPageState extends State<MyPage> {
           if (_role != 'staff') const SizedBox(height: 18),
           // 账号与同步（账号卡下方、经营上方）：同步状态 + 成员（账号设置+账号管理，移到同步下方）
           _card([
-            _item(Icons.sync_alt, c.primary, '同步状态', _syncSubtitle(),
-                () => goPage(context, const SyncPanelPage())),
+            // 同步状态：图标/颜色随状态区分（异常=红色警示，附件/变更待传=橙色，正常=同步图标）
+            (() {
+              final (icon, color, warn) = _syncStatusVisual();
+              return _item(icon, color, '同步状态', _syncSubtitle(),
+                  () => goPage(context, const SyncPanelPage()), warn: warn);
+            })(),
             _item(Icons.people_outline, c.primary, '成员', '账号设置 · 店员/老板账号',
                 () => Navigator.of(context)
                     .push(MaterialPageRoute(builder: (_) => const MembersPage()))
