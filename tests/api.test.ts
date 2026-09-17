@@ -24,10 +24,12 @@ async function call(
   path: string,
   token?: string,
   body?: unknown,
+  extraHeaders?: Record<string, string>,
 ): Promise<Response> {
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (extraHeaders != null) Object.assign(headers, extraHeaders);
   return app.request(`${BASE}${path}`, {
     method,
     headers,
@@ -529,15 +531,49 @@ describe('检查更新代理（/auth/latest-version）', () => {
   it('无需登录返回 200，含 current 版本与 ready/building/source/notes 字段；GitHub 不可达时 latest 为空串不报错', async () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
-    const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string };
-    expect(d.current).toBe('0.17.114');
+    const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string; min_supported: string };
+    expect(d.current).toBe('0.17.115');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
     expect(typeof d.source).toBe('string');
     expect(typeof d.notes).toBe('string');
+    expect(typeof d.min_supported).toBe('string');
     // 末尾第三个参数=用例超时：GitHub/jsDelivr 探测各 6s 超时（测试环境境外网络不佳），默认 5s 不够
   }, 60000);
+});
+
+describe('强制更新门禁（x-app-version 低于最低支持版本 → 426）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  beforeEach(async () => {
+    env = (await setup()).env;
+    const res = await call(env, 'POST', '/api/v1/auth/bootstrap', undefined, { username: 'boss', password: 'admin1234' });
+    token = ((await res.json()) as { token: string }).token;
+  });
+
+  it('携带过旧版本头 → 426 FORCE_UPDATE（含 latest/min_supported）', async () => {
+    const res = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.100' });
+    expect(res.status).toBe(426);
+    const d = (await res.json()) as { error: string; latest: string; min_supported: string };
+    expect(d.error).toBe('FORCE_UPDATE');
+    expect(typeof d.latest).toBe('string');
+    expect(typeof d.min_supported).toBe('string');
+  });
+
+  it('携带当前版本头 → 放行；不带版本头（Web/小程序）→ 放行', async () => {
+    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.115' });
+    expect(r1.status).toBe(200);
+    const r2 = await call(env, 'GET', '/api/v1/clients', token);
+    expect(r2.status).toBe(200);
+  });
+
+  it('更新检查接口不被门禁拦截（低版本也要能查到新版）', async () => {
+    const res = await call(env, 'GET', '/api/v1/auth/latest-version', undefined, undefined, { 'x-app-version': '0.17.100' });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { min_supported: string };
+    expect(d.min_supported).toBe('0.17.114');
+  });
 });
 
 describe('商品价格组（增/改/停用）', () => {

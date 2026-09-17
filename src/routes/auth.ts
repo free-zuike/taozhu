@@ -6,7 +6,7 @@ import { randomSecret, verifyTotp } from '../lib/totp';
 import { authMiddleware } from '../middleware/auth';
 import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
-import { APP_NAME, APP_VERSION } from '../version';
+import { APP_NAME, APP_VERSION, MIN_SUPPORTED_VERSION } from '../version';
 import type { Env, UserRow } from '../types';
 
 export const authRouter = new Hono<{ Bindings: Env; Variables: { user: UserRow } }>();
@@ -219,6 +219,7 @@ authRouter.get('/latest-version', async (c) => {
       building: latestCache.building ?? false,
       source: latestCache.source,
       notes: latestCache.notes,
+      min_supported: MIN_SUPPORTED_VERSION,
     });
   }
   const checkGitHub = async (): Promise<VersionProbe | null> => {
@@ -298,10 +299,11 @@ authRouter.get('/latest-version', async (c) => {
         building: r.building ?? false,
         source: r.source,
         notes,
+        min_supported: MIN_SUPPORTED_VERSION,
       });
     }
   }
-  return c.json({ current: APP_VERSION, latest: '', ready: false, building: false, source: 'backup', notes: '' });
+  return c.json({ current: APP_VERSION, latest: '', ready: false, building: false, source: 'backup', notes: '', min_supported: MIN_SUPPORTED_VERSION });
 });
 
 // 统计系统是否已初始化（前端引导页判断）

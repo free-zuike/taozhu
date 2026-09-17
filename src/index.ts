@@ -1,6 +1,7 @@
 /** taozhu 入口：静态托管 + /api/v1 路由 */
 import { Hono } from 'hono';
 import type { Env } from './types';
+import { APP_VERSION, MIN_SUPPORTED_VERSION, versionBelow } from './version';
 import { authRouter } from './routes/auth';
 import { clientsRouter } from './routes/clients';
 import { itemsRouter } from './routes/items';
@@ -46,6 +47,17 @@ app.use('/api/v1/*', async (c, next) => {
   await ensureSchema(c.env.DB);
   // 记录环境绑定：recordChange 写入变更流后用于实时同步广播（单实例共享同一绑定）
   setHubEnv(c.env);
+  await next();
+});
+
+// 强制更新门禁：原生客户端携带 x-app-version 头且低于最低支持版本 → 426（必须更新才能继续使用）。
+// 更新检查接口放行（客户端要先能查到新版/最低版本才能提示更新）；Web/小程序不带版本头不拦截。
+app.use('/api/v1/*', async (c, next) => {
+  if (c.req.path.includes('/auth/latest-version')) return next();
+  const v = c.req.header('x-app-version')?.trim() ?? '';
+  if (v && versionBelow(v, MIN_SUPPORTED_VERSION)) {
+    return c.json({ error: 'FORCE_UPDATE', latest: APP_VERSION, min_supported: MIN_SUPPORTED_VERSION }, 426);
+  }
   await next();
 });
 

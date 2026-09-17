@@ -1,13 +1,18 @@
-/// API 封装：服务器地址可手动设置 + token + 401 处理（http 包，三端通用）
+/// API 封装：服务器地址可手动设置 + token + 401/426 处理（http 包，三端通用）
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'log.dart';
+import 'version.dart';
 
 class Api {
   Api._();
   static final Api instance = Api._();
+
+  /// 强制更新回调（服务端 426 / latest-version.min_supported 触发）：由 App 启动处注册，
+  /// 弹出不可关闭的更新窗；参数 = 最低需更新到的最新版本号。Web 端无强制更新（部署即新），不注册。
+  static ValueChanged<String>? onForceUpdate;
 
   static const _tokenKey = 'taozhu_token';
   static const _baseKey = 'taozhu_api_base';
@@ -148,6 +153,7 @@ class Api {
     final headers = {'Content-Type': 'application/json'};
     final t = await _token();
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
+    headers['x-app-version'] = APP_VERSION;
 
     // 发起一次请求（按方法分发）；8s 超时防止网络不可达时页面无限转圈
     Future<http.Response> doReq() async {
@@ -202,6 +208,16 @@ class Api {
       await clearToken();
       throw Exception('登录已过期，请重新登录');
     }
+    if (res.statusCode == 426) {
+      // 服务端强制更新门禁：当前版本已低于最低支持版本 → 触发全局更新窗
+      String latest = '';
+      try {
+        final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        latest = '${d['latest'] ?? ''}';
+      } catch (_) {}
+      onForceUpdate?.call(latest);
+      throw Exception(latest.isEmpty ? '当前版本已停用，请更新到最新版本' : '当前版本已停用，必须更新到 v$latest');
+    }
     if (res.statusCode >= 200 && res.statusCode < 300) {
       if (res.bodyBytes.isEmpty) return {};
       return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -226,6 +242,7 @@ class Api {
     final headers = {'Content-Type': 'application/json'};
     final t = await _token();
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
+    headers['x-app-version'] = APP_VERSION;
     final res = await http.get(Uri.parse(url), headers: headers);
     if (res.statusCode == 401) {
       await clearToken();
@@ -320,6 +337,16 @@ class Api {
     if (res.statusCode == 401) {
       await clearToken();
       throw Exception('登录已过期，请重新登录');
+    }
+    if (res.statusCode == 426) {
+      // 服务端强制更新门禁：当前版本已低于最低支持版本 → 触发全局更新窗
+      String latest = '';
+      try {
+        final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        latest = '${d['latest'] ?? ''}';
+      } catch (_) {}
+      onForceUpdate?.call(latest);
+      throw Exception(latest.isEmpty ? '当前版本已停用，请更新到最新版本' : '当前版本已停用，必须更新到 v$latest');
     }
     if (res.statusCode >= 200 && res.statusCode < 300) {
       if (res.bodyBytes.isEmpty) return {};

@@ -1,9 +1,12 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../realtime_sync.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../version.dart';
 import 'center_sheet.dart';
+import 'force_update_dialog.dart';
 import '../pages/sale_page.dart';
 import '../pages/my_page.dart';
 import '../pages/purchase_page.dart';
@@ -27,6 +30,12 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 服务端 426 强制更新门禁 → 弹不可关闭的更新窗（Web 部署即新不注册）
+    if (!kIsWeb) {
+      Api.onForceUpdate = (latest) {
+        if (mounted) showForceUpdateDialog(context, latest);
+      };
+    }
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _isStaff = r == 'staff');
     });
@@ -34,6 +43,26 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     SyncService.sync();
     // 实时同步：保持 WebSocket 连接，服务端有变更立即拉取（断线自动重连）
     RealtimeSync.instance.start();
+    // 强制更新检查：启动延迟静默查 latest-version 的 min_supported，当前版本低于最低支持 →
+    // 弹不可关闭的更新窗（更新检查属网络动作，网络失败/Web 静默跳过，不违背本地优先）
+    _checkForceUpdate();
+  }
+
+  /// 启动强制更新检查：仅当服务端声明了 min_supported 且当前版本低于它时弹窗
+  Future<void> _checkForceUpdate() async {
+    if (kIsWeb) return;
+    await Future.delayed(const Duration(milliseconds: 1500));
+    if (!mounted) return;
+    try {
+      final d = await Api.instance.get('/auth/latest-version');
+      final min = '${d['min_supported'] ?? ''}';
+      final latest = '${d['latest'] ?? ''}';
+      if (min.isNotEmpty && versionBelow(APP_VERSION, min)) {
+        await showForceUpdateDialog(context, latest);
+      }
+    } catch (_) {
+      // 网络失败静默：同步/检查更新路径仍会再次触发
+    }
   }
 
   @override
