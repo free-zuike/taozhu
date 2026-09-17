@@ -19,8 +19,28 @@ permissions:
   contents: write
 
 jobs:
+  # ── 总开关：主仓库正常执行；fork 用户若未配置任何 secrets（无微信上传、无 Cloudflare token）→
+  # 整个 workflow 跳过（test 也不需要跑）；配了任一 secrets 则按需执行对应环节 ──
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.chk.outputs.should_run }}
+    env:
+      WX_APPID: ${{ secrets.WX_APPID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - id: chk
+        run: |
+          if [ "$GITHUB_REPOSITORY" = "free-zuike/taozhu" ] || [ -n "$WX_APPID" ] || [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ── 统一测试门禁：任一平台构建都依赖本 job 通过（needs: test），测试失败全部自动跳过 ──
   test:
+    needs: check
+    if: needs.check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     name: Test（vitest + typecheck）
     steps:
@@ -55,6 +75,7 @@ jobs:
   # 创建时刻按 push 顺序单调递增（列表顺序稳定）；各平台 job 只上传资产，不再 5 分钟等待/竞争创建 ──
   release:
     needs: test
+    if: github.repository == 'free-zuike/taozhu'
     runs-on: ubuntu-latest
     name: 创建 Release
     steps:
@@ -89,6 +110,7 @@ jobs:
   # ── Android APK（正式签名，按 ABI 拆包 + universal 兜底）────────────────────────────
   apk:
     needs: [test, release]
+    if: github.repository == 'free-zuike/taozhu'
     runs-on: ubuntu-latest
     name: Android APK
     steps:
@@ -253,6 +275,7 @@ jobs:
   # ── Linux 桌面 ─────────────────────────────────────────────────────────────────────
   linux:
     needs: [test, release]
+    if: github.repository == 'free-zuike/taozhu'
     runs-on: ubuntu-latest
     name: Linux 桌面
     steps:
@@ -342,6 +365,7 @@ jobs:
   # ── Windows 桌面 ────────────────────────────────────────────────────────────────────
   windows:
     needs: [test, release]
+    if: github.repository == 'free-zuike/taozhu'
     runs-on: windows-latest
     name: Windows 桌面
     env:
@@ -418,6 +442,7 @@ jobs:
   # ── macOS ──────────────────────────────────────────────────────────────────────────
   macos:
     needs: [test, release]
+    if: github.repository == 'free-zuike/taozhu'
     runs-on: macos-latest
     name: macOS
     steps:
@@ -494,6 +519,7 @@ jobs:
   # ── iOS（未签名）──────────────────────────────────────────────────────────────────
   ios:
     needs: [test, release]
+    if: github.repository == 'free-zuike/taozhu'
     runs-on: macos-latest
     name: iOS（未签名）
     steps:
@@ -527,6 +553,13 @@ jobs:
           key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pub-
+
+      # CocoaPods spec 缓存：flutter build ios 自动 pod install，缓存避免每次下载 pod 源
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: ~/.cocoapods
+          key: ${{ runner.os }}-cocoapods
 
       - name: Generate platforms & build iOS (unsigned)
         working-directory: frontend-flutter
@@ -572,8 +605,16 @@ jobs:
 
   # ── 微信小程序（uni-app）──────────────────────────────────────────────────────────
   # 依赖全部平台成功：任一 Flutter 端失败则小程序不构建/不上传（全通过或全不通过）
+  # ── 平台产物门槛：主仓库=5 平台全部成功才继续；fork 用户（平台 job 跳过）视为通过 ──
+  platform-gate:
+    needs: [apk, linux, windows, macos, ios]
+    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.ios.result == 'success')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "platform gate ok"
+
   miniprogram:
-    needs: [test, apk, linux, windows, macos, ios]
+    needs: [test, platform-gate]
     runs-on: ubuntu-latest
     name: 微信小程序
     steps:
@@ -638,8 +679,12 @@ jobs:
           rm -f /tmp/private.key
 
       - name: Package & upload to version Release
+        # 有微信上传密钥才打包/上传（fork 用户未配 secrets 则跳过打 zip）
+        if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WX_APPID: ${{ secrets.WX_APPID }}
+          WX_PRIVATE_KEY: ${{ secrets.WX_PRIVATE_KEY }}
         run: |
           VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || exit 1)
           cd frontend-uni/dist/build/mp-weixin && zip -qr "/tmp/taozhu-miniprogram-${VERSION}.zip" . && cd -
@@ -675,8 +720,57 @@ jobs:
           VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || true)
           [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
 
+  # ── Web（Flutter）构建：与各平台并行，最后 Deploy 直接用其产物（避免 Web 构建串行在链尾）──
+  web:
+    needs: [test, release]
+    runs-on: ubuntu-latest
+    name: Web（Flutter）
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          version: 3.47.2
+          cache: true
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+      - name: Build Web (Flutter) with production API_BASE
+        working-directory: frontend-flutter
+        run: |
+          flutter create --org com.taozhu --project-name taozhu_app .
+          sed -i 's|<title>.*</title>|<title>陶朱</title>|' web/index.html
+          mkdir -p web/canvaskit
+          curl -fsSL -o web/canvaskit/canvaskit.js "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.js"
+          curl -fsSL -o web/canvaskit/canvaskit.wasm "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.wasm"
+          flutter build web --dart-define=API_BASE=https://taozhu.freezuike-3f7.workers.dev --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ --pwa-strategy=none
+          flutter build web --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ -o build/web-standalone --pwa-strategy=none
+      - name: Package & upload web zip (个人自托管分发，同版本固定名)
+        if: github.repository == 'free-zuike/taozhu'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\\K[^']+" src/version.ts || exit 1)
+          cd frontend-flutter/build/web-standalone && zip -qr "/tmp/web-${VERSION}.zip" . && cd -
+          for _c in 1 2 3 4 5; do
+            gh release upload "taozhu-v${VERSION}" "/tmp/web-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
+            echo "upload 重试 $_c/5 (web-${VERSION}.zip)"
+            sleep 5
+          done
+          echo "uploaded: web-${VERSION}.zip"
+      - name: Upload web build artifact (供最后 Deploy 使用)
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: frontend-flutter/build/web
+          retention-days: 1
+
   deploy:
-    needs: miniprogram
+    needs: [miniprogram, web]
     runs-on: ubuntu-latest
     name: Deploy
     env:
@@ -694,57 +788,17 @@ jobs:
       - name: Install backend deps
         run: npm install
 
-      # 部署门禁：后端/前端改动上线前必须测试全绿（含 sql.js 内存库端到端用例）
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Run tests
-        run: npm test
-
-      # Web = Flutter Web（组合 B：一套 Dart 管 Web+App+桌面，功能与 App 同步）
-      # 注入生产 API_BASE → Web 端登录地址留空即连生产；App/个人部署不注入 → 地址必填
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      # 门禁已由 test job（依赖链首环）保证：deploy 是链尾，不需重复 typecheck/test
+      - name: Download web build artifact (由 web job 并行构建)
+        uses: actions/download-artifact@v4
         with:
-          version: 3.47.2
-          cache: true
-
-      - name: Cache Flutter pub dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pub-
-
-      - name: Build Web (Flutter) with production API_BASE
-        working-directory: frontend-flutter
-        run: |
-          flutter create --org com.taozhu --project-name taozhu_app .
-          # 统一浏览器标签标题（模板默认 taozhu_app，刷新瞬间会闪烁）
-          sed -i 's|<title>.*</title>|<title>陶朱</title>|' web/index.html
-          # CanvasKit 自托管：避免白屏期从 gstatic.com 下载渲染引擎（国内慢/不稳）
-          mkdir -p web/canvaskit
-          curl -fsSL -o web/canvaskit/canvaskit.js "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.js"
-          curl -fsSL -o web/canvaskit/canvaskit.wasm "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.wasm"
-          # 站点构建：注入生产 API_BASE → Web 端登录地址留空即连生产
-          # --pwa-strategy=none：不生成 Service Worker（Web 直连服务器无离线缓存），
-          # 否则旧版 JS 被 SW 永久缓存，用户刷新仍跑旧面板 → 旧版同步状态页一直转圈
-          flutter build web --dart-define=API_BASE=https://taozhu.freezuike-3f7.workers.dev --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ --pwa-strategy=none
-          # Release 分发构建（个人自托管 zip）：不注入默认地址 → 登录页必须自填服务器地址
-          flutter build web --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ -o build/web-standalone --pwa-strategy=none
+          name: web-build
+          path: frontend-flutter/build/web
 
       - name: Swap public dir with Flutter web build
         run: |
           rm -rf public
           cp -r frontend-flutter/build/web public
-
-      - name: Package web zip (个人自托管分发，同版本固定名)
-        run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
-          cd frontend-flutter/build/web-standalone && zip -qr "/tmp/web-${VERSION}.zip" . && cd -
-          echo "web_zip=/tmp/web-${VERSION}.zip" >> "$GITHUB_ENV"
-          echo "包: web-${VERSION}.zip"
 
       # 检查更新兜底源：随部署生成 latest.json（与后端版本一致，Worker 在读 GitHub 失败时返回它）
       - name: Generate latest.json (version metadata)
@@ -754,6 +808,7 @@ jobs:
           cat public/latest.json
 
       - name: Setup D1 database (auto-create if missing)
+        if: env.CLOUDFLARE_API_TOKEN != ''
         id: d1
         run: |
           DB_ID=$(npx wrangler d1 list --json 2>/dev/null | node -e "
@@ -774,6 +829,7 @@ jobs:
           echo "Resolved D1 database_id: $DB_ID"
 
       - name: Resolve account ID
+        if: env.CLOUDFLARE_API_TOKEN != ''
         id: account
         run: |
           ACCOUNT_ID=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
@@ -794,41 +850,33 @@ jobs:
           echo "Resolved account_id: $ACCOUNT_ID"
 
       - name: Inject database_id into wrangler.toml
+        if: env.CLOUDFLARE_API_TOKEN != ''
         run: |
           node -e "const fs=require('fs');let t=fs.readFileSync('wrangler.toml','utf8');t=t.replace('PLACEHOLDER_DATABASE_ID',process.argv[1]);fs.writeFileSync('wrangler.toml',t);" "${{ steps.d1.outputs.database_id }}"
 
       # 部署前建表（幂等）：生产库的表结构在发布时初始化，
       # 请求路径的 ensureSchema 降级为只读兜底，不再消耗每日 D1 写配额
       - name: Apply D1 schema (idempotent)
+        if: env.CLOUDFLARE_API_TOKEN != ''
         run: npx wrangler d1 execute taozhu --remote --file src/schema.sql
 
       # 附件 R2 bucket（不存在则创建；已存在会报 10004，忽略即可——幂等）
       # 不依赖 r2 bucket list 输出格式做存在性判断，避免误判
       - name: Setup R2 bucket (idempotent)
+        if: env.CLOUDFLARE_API_TOKEN != ''
         run: |
           npx wrangler r2 bucket create taozhu-attachments 2>&1 || true
 
       - name: Set JWT_SECRET
+        if: env.CLOUDFLARE_API_TOKEN != ''
         run: npx wrangler secret put JWT_SECRET --name taozhu <<< "${{ secrets.JWT_SECRET }}"
 
       - name: Deploy
+        if: env.CLOUDFLARE_API_TOKEN != ''
         run: npx wrangler deploy
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ steps.account.outputs.account_id }}
 
-      # 统一创建 Release（taozhu-vX）：本 workflow 每 push 最先完成，release 创建时刻严格按推送顺序
-      # 单调递增 → GitHub 列表按版本顺序排列；构建 workflow 只上传资产，不再竞争创建。
-      - name: Upload web zip to Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
-          for _c in 1 2 3 4 5; do
-            gh release upload "taozhu-v${VERSION}" "${{ env.web_zip }}" --repo "$GITHUB_REPOSITORY" --clobber && break
-            echo "upload 重试 $_c/5 (web-${VERSION}.zip)"
-            sleep 5
-          done
-          echo "uploaded: web-${VERSION}.zip"
       - name: 部署失败 → 删除整个 release 全部回退（本版本作废，需递增版本号重建）
         if: failure()
         env:
