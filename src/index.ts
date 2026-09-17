@@ -120,15 +120,15 @@ app.all('*', async (c) => {
   return c.env.ASSETS.fetch(c.req.raw);
 });
 
-// 每日定时自动备份（wrangler.toml crons "0 3 * * *"）：全库 JSON 存 R2 taozhu-backups/，
+// 每日定时自动备份（wrangler.toml crons "5 3 * * *"）：全库 JSON 存 R2 taozhu/backups/（与附件存储同库同家族前缀），
 // 保留最近 14 份（超出删除最旧的）。失败静默（下次 cron 重试），不阻塞主流程。
 async function scheduledBackup(env: Env): Promise<void> {
   try {
     const data = await exportAllData(env.DB);
-    const key = `taozhu-backups/backup-${new Date().toISOString().slice(0, 10)}.json`;
+    const key = `taozhu/backups/backup-${new Date().toISOString().slice(0, 10)}.json`;
     await env.BUCKET.put(key, JSON.stringify({ exported_at: new Date().toISOString(), data }));
     // 清理旧备份：列出备份前缀，超过 14 份按 key 排序删最旧
-    const list = await env.BUCKET.list({ prefix: 'taozhu-backups/backup-' });
+    const list = await env.BUCKET.list({ prefix: 'taozhu/backups/backup-' });
     if (list.objects.length > 14) {
       const keep = new Set(list.objects.map((o) => o.key).sort().slice(-14));
       for (const o of list.objects) {

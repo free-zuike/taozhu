@@ -27,7 +27,7 @@ bucket_name = "taozhu-attachments"
 name = "SYNC_HUB"
 class_name = "SyncHub"
 
-# 每日定时自动备份（凌晨 3:05，避开整点高峰）：全库 JSON → R2 taozhu-backups/，保留 14 份
+# 每日定时自动备份（凌晨 3:05，避开整点高峰）：全库 JSON → R2 taozhu/backups/，保留 14 份
 [triggers]
 crons = ["5 3 * * *"]
 
