@@ -20,13 +20,19 @@ const IMPORT_ORDER = [
   'payment_accounts', 'attachment_refs',
 ] as const;
 
-// GET /backup — 全部数据 JSON
-backupRouter.get('/', async (c) => {
+/// 导出全部业务表数据（手动导出与每日定时自动备份共用）
+export async function exportAllData(db: D1Database): Promise<Record<string, unknown[]>> {
   const data: Record<string, unknown[]> = {};
   for (const t of TABLES) {
-    const r = await c.env.DB.prepare(`SELECT * FROM ${t}`).all();
+    const r = await db.prepare(`SELECT * FROM ${t}`).all();
     data[t] = r.results;
   }
+  return data;
+}
+
+// GET /backup — 全部数据 JSON
+backupRouter.get('/', async (c) => {
+  const data = await exportAllData(c.env.DB);
   return c.json({ exported_at: new Date().toISOString(), data });
 });
 

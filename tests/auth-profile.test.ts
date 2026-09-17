@@ -254,3 +254,32 @@ describe('附件按店铺统计（/attachments/counts）', () => {
     expect((await call(env, 'POST', '/api/v1/attachments/counts', token, { entity: 'xxx', client_id: 'c1' })).status).toBe(400);
   });
 });
+
+describe('登录防爆破限流（login_attempts：username:IP 维度，15 分钟 5 次失败锁定）', () => {
+  let env: Env;
+  beforeEach(async () => { env = await setup(); await loginAdmin(env); });
+
+  const login = (password: string, ip = '1.2.3.4') =>
+    app.request(`${BASE}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
+      body: JSON.stringify({ username: 'boss', password }),
+    }, env as never);
+
+  it('连续失败 5 次后第 6 次 429；其他 IP 不受影响；窗口过期恢复；成功后清零', async () => {
+    for (let i = 0; i < 5; i++) {
+      expect((await login('wrong-pass')).status).toBe(401);
+    }
+    // 限流先于校验：错误密码和正确密码都被锁
+    expect((await login('wrong-pass')).status).toBe(429);
+    expect((await login('admin1234')).status).toBe(429);
+    // 其他 IP 正常登录
+    expect((await login('admin1234', '5.6.7.8')).status).toBe(200);
+    // 窗口过期（把失败记录时间改到 16 分钟前）→ 恢复
+    await env.DB.prepare('UPDATE login_attempts SET updated_at = ? WHERE key = ?')
+      .bind(new Date(Date.now() - 16 * 60 * 1000).toISOString(), 'boss:1.2.3.4').run();
+    expect((await login('admin1234')).status).toBe(200);
+    // 成功后计数已清：下一次错误是第 1 次（401 而非 429）
+    expect((await login('wrong-pass')).status).toBe(401);
+  });
+});

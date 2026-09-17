@@ -42,20 +42,58 @@ authRouter.post('/login', async (c) => {
   const password = body?.password ?? '';
   if (!username || !password) return c.json({ error: '请输入登录名和密码' }, 400);
 
+  // 登录防爆破：username:IP 维度，15 分钟窗口内失败 ≥5 次 → 429 锁定（公网自托管安全加固）
+  const ip = c.req.header('CF-Connecting-IP') ?? c.req.header('x-forwarded-for') ?? 'unknown';
+  const failKey = `${username}:${ip}`;
+  if (await loginBlocked(c.env.DB, failKey)) {
+    return c.json({ error: '尝试次数过多，请 15 分钟后再试' }, 429);
+  }
+
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(username).first<UserRow>();
   if (!user || !(await verifyPassword(password, user.password_hash))) {
+    await recordLoginFail(c.env.DB, failKey);
     return c.json({ error: '用户名或密码错误' }, 401);
   }
   // 两步验证：已开启且未带验证码 → 返回 need_totp 让前端补输入（密码已校验，不额外暴露信息）
   if (user.totp_enabled) {
     if (!body?.code) return c.json({ need_totp: true });
     if (!(await verifyTotp(user.totp_secret ?? '', body.code))) {
+      await recordLoginFail(c.env.DB, failKey);
       return c.json({ error: '两步验证码错误' }, 401);
     }
   }
+  await clearLoginFails(c.env.DB, failKey);
   const token = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role });
   return c.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
+
+// 登录防爆破限流（login_attempts 表，username:IP 维度滑动窗口）：15 分钟内失败 ≥5 次锁定
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILS = 5;
+
+async function loginBlocked(db: D1Database, key: string): Promise<boolean> {
+  const row = await db.prepare('SELECT fails, updated_at FROM login_attempts WHERE key = ?').bind(key)
+    .first<{ fails: number; updated_at: string }>();
+  if (!row) return false;
+  const updated = Date.parse(row.updated_at);
+  if (Number.isNaN(updated) || Date.now() - updated > LOGIN_WINDOW_MS) return false;
+  return row.fails >= LOGIN_MAX_FAILS;
+}
+
+async function recordLoginFail(db: D1Database, key: string): Promise<void> {
+  const row = await db.prepare('SELECT fails, updated_at FROM login_attempts WHERE key = ?').bind(key)
+    .first<{ fails: number; updated_at: string }>();
+  const updated = row ? Date.parse(row.updated_at) : 0;
+  const fails = row && !Number.isNaN(updated) && Date.now() - updated <= LOGIN_WINDOW_MS ? row.fails + 1 : 1;
+  const nowIso = new Date().toISOString();
+  await db.prepare(
+    'INSERT INTO login_attempts (key, fails, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET fails = ?, updated_at = ?',
+  ).bind(key, fails, nowIso, fails, nowIso).run();
+}
+
+async function clearLoginFails(db: D1Database, key: string): Promise<void> {
+  await db.prepare('DELETE FROM login_attempts WHERE key = ?').bind(key).run();
+}
 
 // GET /auth/me — 当前用户（登录账号/显示名/头像+版本/两步验证；实时查库）
 // avatar_version 对齐参考架构 profile 体系：客户端按版本比对决定是否重下载头像

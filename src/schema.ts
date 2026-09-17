@@ -152,6 +152,12 @@ const DDL: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_attachment_refs_entity ON attachment_refs (entity, entity_id)`,
   `CREATE INDEX IF NOT EXISTS idx_attachment_refs_key ON attachment_refs (file_key)`,
+  // v0.17.118.0：登录防爆破限流计数（username:IP 维度，滑动窗口）
+  `CREATE TABLE IF NOT EXISTS login_attempts (
+    key TEXT PRIMARY KEY,
+    fails INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  )`,
 ];
 
 let schemaReady = false;
@@ -252,6 +258,14 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // （多张同类型卡靠卡号区分；老表无列 → ALTER 补齐，新表 DDL 已含；ensureColumn 并发幂等）
     await ensureColumn(db, 'payment_accounts', 'bank_name', "TEXT DEFAULT ''");
     await ensureColumn(db, 'payment_accounts', 'card_last_four', "TEXT DEFAULT ''");
+    // v0.17.118.0：登录防爆破限流计数表（username:IP 维度）
+    const laTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'login_attempts'",
+    ).first<{ name: string }>();
+    if (!laTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS login_attempts'));
+      await db.prepare(DDL[i]).run();
+    }
     // 首次使用（空表）自动写入默认账户（现金/微信/支付宝/银行卡/转账），用户可后续增删改；
     // 空表才插，避免覆盖用户已自定义的列表
     const paCount = await db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>();
