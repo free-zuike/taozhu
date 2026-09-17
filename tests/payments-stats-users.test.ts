@@ -113,9 +113,11 @@ describe('统计', () => {
     expect(data.months[0].gross_profit).toBe(12);
   });
 
-  it('有数据年份列表（出货产生 2026）', async () => {
-    const data = (await (await call(env, 'GET', '/api/v1/stats/years', token)).json()) as { years: number[] };
+  it('有数据年份列表（出货产生 2026）+ 最早记账日期 first_date', async () => {
+    const data = (await (await call(env, 'GET', '/api/v1/stats/years', token)).json()) as { years: number[]; first_date?: string };
     expect(data.years).toContain(2026);
+    expect(typeof data.first_date).toBe('string');
+    expect(data.first_date).not.toBe('');
   });
 });
 
@@ -124,9 +126,10 @@ describe('统计（空库）', () => {
   let token: string;
   beforeEach(async () => { env = (await setup()).env; token = await boot(env); });
 
-  it('无任何数据时年份列表为空数组', async () => {
-    const data = (await (await call(env, 'GET', '/api/v1/stats/years', token)).json()) as { years: number[] };
+  it('无任何数据时年份列表为空数组、first_date 为空串', async () => {
+    const data = (await (await call(env, 'GET', '/api/v1/stats/years', token)).json()) as { years: number[]; first_date?: string };
     expect(data.years).toEqual([]);
+    expect(data.first_date).toBe('');
   });
 });
 

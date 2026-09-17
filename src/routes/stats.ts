@@ -182,7 +182,7 @@ statsRouter.get('/categories', async (c) => {
   });
 });
 
-// GET /stats/years — 有数据的年份列表（出货/进货/收款并集，升序）
+// GET /stats/years — 有数据的年份列表（出货/进货/收款并集，升序）+ 最早记账日期（记账天数用）
 statsRouter.get('/years', async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT DISTINCT substr(happened_at, 1, 4) AS y FROM sale_items
@@ -190,7 +190,17 @@ statsRouter.get('/years', async (c) => {
      UNION SELECT DISTINCT substr(happened_at, 1, 4) FROM payments
      ORDER BY y`,
   ).all<{ y: string }>();
-  return c.json({ years: rows.results.map((r) => Number(r.y)).filter((n) => Number.isInteger(n) && n >= 2000) });
+  const first = await c.env.DB.prepare(
+    `SELECT MIN(d) AS d FROM (
+       SELECT MIN(happened_at) AS d FROM sale_items WHERE happened_at IS NOT NULL AND happened_at != ''
+       UNION ALL SELECT MIN(happened_at) FROM purchase_items WHERE happened_at IS NOT NULL AND happened_at != ''
+       UNION ALL SELECT MIN(happened_at) FROM payments WHERE happened_at IS NOT NULL AND happened_at != ''
+     )`,
+  ).first<{ d: string }>();
+  return c.json({
+    years: rows.results.map((r) => Number(r.y)).filter((n) => Number.isInteger(n) && n >= 2000),
+    first_date: first?.d ?? '',
+  });
 });
 
 // GET /stats/summary?start=&end=&client_id= — 任意区间汇总（起止日都含；欠款=截止 end 累计出货−累计收款）

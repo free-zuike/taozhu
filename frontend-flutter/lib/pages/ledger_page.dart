@@ -433,7 +433,8 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
-  /// 本地全量汇总：笔数 = 出货单数 + 收款单数；欠款 = Σ出货总额 − Σ收款金额（与后端口径一致）
+  /// 本地全量汇总：商品数量 = 出货明细行数（去单据化：一张单多商品 = 多行，与「我的」页本店交易口径一致）；
+  /// 欠款 = Σ出货总额 − Σ收款金额（与后端口径一致）
   Map<String, ({int count, double debt})> _localStats(
       List<Map<String, dynamic>> sales, List<Map<String, dynamic>> pays) {
     final saleSum = <String, double>{};
@@ -441,14 +442,14 @@ class _LedgerPageState extends State<LedgerPage> {
     for (final s in sales) {
       final id = '${s['client_id']}';
       saleSum[id] = (saleSum[id] ?? 0) + ((s['total'] as num?)?.toDouble() ?? 0);
-      saleCnt[id] = (saleCnt[id] ?? 0) + 1;
+      saleCnt[id] = (saleCnt[id] ?? 0) + (((s['items'] as List?) ?? []).length);
     }
     final paySum = <String, double>{};
     for (final p in pays) {
       final id = '${p['client_id']}';
       paySum[id] = (paySum[id] ?? 0) + ((p['amount'] as num?)?.toDouble() ?? 0);
     }
-    // 笔数 = 出货单数（收款只是出货的一部分，不计入——与「我的」页本店交易口径一致）；
+    // 商品数量 = 出货明细行数（收款只是出货的一部分，不计入——与「我的」页本店交易口径一致）；
     // 欠款 = Σ出货 − Σ收款
     return {
       for (final id in {...saleSum.keys, ...paySum.keys})
@@ -457,7 +458,7 @@ class _LedgerPageState extends State<LedgerPage> {
     };
   }
 
-  /// 店铺选择弹层的笔数（= 出货笔数；收款只是出货的一部分，不计入——与「我的」页本店交易口径一致）
+  /// 店铺选择弹层的商品数量（= 出货明细行数；与「我的」页本店交易口径一致）
   String _statCount(Map<String, dynamic> c) {
     final v = (c['sale_count'] as num?)?.toInt();
     if (v != null) return '$v';
@@ -665,9 +666,9 @@ class _LedgerPageState extends State<LedgerPage> {
       title: Text('${c['name']}',
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
       subtitle: _isStaff
-          ? null // 店员不显示交易笔数/欠款（经营数据）
+          ? null // 店员不显示商品数量/欠款（经营数据）
           : Text(
-              '交易 ${_statCount(c)} 笔 · 欠 ¥${_statDebt(c).toStringAsFixed(2)}',
+              '商品 ${_statCount(c)} 件 · 欠 ¥${_statDebt(c).toStringAsFixed(2)}',
               style: TextStyle(
                 fontSize: 12,
                 color: Theme.of(context).brightness == Brightness.dark

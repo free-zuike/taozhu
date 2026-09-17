@@ -294,6 +294,7 @@ function onClientFilter(e: { detail: { value: number } }) {
   if (!c) return;
   filterClientId.value = c.id;
   filterClientName.value = c.name;
+  uni.setStorageSync('taozhu_cur_client', c.id); // 我的页统计卡「本店交易/店铺结余」共用当前店铺
   load();
 }
 
@@ -302,10 +303,12 @@ async function loadClients() {
     const d = await request<{ clients: Array<{ id: string; name: string }> }>('/clients', 'GET');
     clients.value = d.clients || [];
     clientNames.value = clients.value.map((x) => x.name);
-    // 默认选中第一家店（无「全部店铺」选项，与 App 端一致）
-    if (clients.value.length > 0) {
-      filterClientId.value = clients.value[0].id;
-      filterClientName.value = clients.value[0].name;
+    // 恢复上次选择的店铺（我的页统计卡共用该口径）；无存档取第一家（与 App 端一致）
+    const saved = uni.getStorageSync('taozhu_cur_client') as string;
+    const c0 = clients.value.find((x) => x.id === saved) || clients.value[0];
+    if (c0) {
+      filterClientId.value = c0.id;
+      filterClientName.value = c0.name;
     }
   } catch (e) {
     clientNames.value = [];

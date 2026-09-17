@@ -10,11 +10,11 @@
       <text class="server-tag" @click="openServer">服务器 ▾</text>
     </view>
 
-    <!-- 统计卡（老板）：今日出货 / 总欠款 / 本月结余 -->
+    <!-- 统计卡（老板）对齐 App：记账天数 / 本店交易（商品行数） / 店铺结余（当前店铺全月毛利） -->
     <view v-if="isAdmin" class="stats">
-      <view class="stat"><text class="st-label">今日出货</text><text class="st-value">¥{{ fmt(stats.sales_total) }}</text></view>
-      <view class="stat"><text class="st-label">今日收款</text><text class="st-value green">¥{{ fmt(stats.paid_total) }}</text></view>
-      <view class="stat"><text class="st-label">总欠款</text><text class="st-value red">¥{{ fmt(stats.debt) }}</text></view>
+      <view class="stat"><text class="st-label">记账天数</text><text class="st-value">{{ stats.bookDays }}</text></view>
+      <view class="stat"><text class="st-label">本店交易</text><text class="st-value">{{ stats.clientCount }}</text></view>
+      <view class="stat"><text class="st-label">店铺结余</text><text class="st-value green">¥{{ fmt(stats.balance) }}</text></view>
     </view>
 
     <view class="group-title">经营</view>
@@ -61,7 +61,8 @@ import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '
 
 const user = ref({ name: '', role: '' });
 const isAdmin = ref(true);
-const stats = ref({ sales_total: 0, paid_total: 0, debt: 0 });
+// 对齐 App 我的页统计卡：记账天数 / 本店交易（商品行数） / 店铺结余（当前店铺毛利）
+const stats = ref({ bookDays: 0, clientCount: 0, balance: 0 });
 const fmt = (n: number) => Number(n || 0).toFixed(2);
 
 const showServer = ref(false);
@@ -93,14 +94,25 @@ onShow(async () => {
 async function loadStats() {
   if (!isAdmin.value) return;
   try {
-    const d = await request<{ today?: Record<string, number>; totals?: Record<string, number> }>('/stats/overview', 'GET').catch(() => null);
-    if (d) {
-      stats.value = {
-        sales_total: Number(d.today?.sales_total || 0),
-        paid_total: Number(d.today?.paid_total || 0),
-        debt: Number(d.totals?.debt || 0),
-      };
+    // 记账天数：最早一笔记账（出货/进货/收款并集）到今天；店铺结余/本店交易：当前店铺全区间毛利+商品行数
+    const y = await request<{ years: number[]; first_date?: string }>('/stats/years', 'GET').catch(() => null);
+    const first = y?.first_date || '';
+    if (!first) {
+      stats.value = { bookDays: 0, clientCount: 0, balance: 0 };
+      return;
     }
+    const now = new Date();
+    const fd = new Date(first.replace(/-/g, '/'));
+    const days = Math.max(1, Math.floor((now.getTime() - fd.getTime()) / 86400000) + 1);
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const cid = (uni.getStorageSync('taozhu_cur_client') as string) || '';
+    const cq = cid ? `&client_id=${cid}` : '';
+    const sum = await request<Record<string, any>>(`/stats/summary?start=${first}&end=${today}${cq}`, 'GET').catch(() => null);
+    stats.value = {
+      bookDays: days,
+      clientCount: Number(sum?.sales_count || 0),
+      balance: Number(sum?.gross_profit || 0),
+    };
   } catch (e) {
     // 统计失败静默
   }
