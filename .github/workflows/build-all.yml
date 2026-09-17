@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.chk.outputs.should_run }}
+      has_cf: ${{ steps.chk.outputs.has_cf }}
     env:
       WX_APPID: ${{ secrets.WX_APPID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -35,6 +36,12 @@ jobs:
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Web（构建 + 部署 Cloudflare）是同一功能：仅主仓库或配了 CF token 才需要构建
+          if [ "$GITHUB_REPOSITORY" = "free-zuike/taozhu" ] || [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "has_cf=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_cf=false" >> "$GITHUB_OUTPUT"
           fi
 
   # ── 统一测试门禁：任一平台构建都依赖本 job 通过（needs: test），测试失败全部自动跳过 ──
@@ -722,7 +729,9 @@ jobs:
 
   # ── Web（Flutter）构建：与各平台并行，最后 Deploy 直接用其产物（避免 Web 构建串行在链尾）──
   web:
-    needs: [test, release]
+    needs: [test, release, check]
+    # Web（构建 + 部署 CF）一体：主仓库或配了 CF token 才构建；无 token → web/deploy 整链跳过
+    if: needs.check.outputs.has_cf == 'true'
     runs-on: ubuntu-latest
     name: Web（Flutter）
     steps:
