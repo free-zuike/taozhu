@@ -5,6 +5,7 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
+import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -90,6 +91,7 @@ paymentsRouter.patch('/:id', adminOnly(), async (c) => {
     .bind(clientId, body?.happened_at?.trim() || pay.happened_at, Math.round(amount * 100) / 100,
       Math.round(waived * 100) / 100, body?.method?.trim() ?? pay.method ?? '', body?.note?.trim() ?? pay.note ?? '', id).run();
   await recordChange(c.env.DB, { entity_type: 'payment', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'payment', id), updated_by_username: c.get('user').username });
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'update', entity_type: 'payment', entity_id: id, detail: `修改收款：金额 ¥${amount}${waived > 0 ? `、平账减免 ¥${waived}` : ''}` });
   return c.json({ ok: true });
 });
 
@@ -98,6 +100,7 @@ paymentsRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM payments WHERE id = ?').bind(id).run();
   await recordChange(c.env.DB, { entity_type: 'payment', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'payment', entity_id: id, detail: '撤销收款' });
   // 撤销收款时一并清理其附件文件（孤儿文件清理，best-effort 不阻塞）
   try {
     await deleteEntityAttachments(c.env, 'payment', id);

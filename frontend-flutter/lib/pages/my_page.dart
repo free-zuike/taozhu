@@ -26,6 +26,7 @@ import 'cleanup_page.dart';
 import 'login_page.dart';
 import 'members_page.dart';
 import 'logs_page.dart';
+import 'audit_page.dart';
 import 'backup_page.dart';
 import 'payment_accounts_page.dart';
 import 'update_sources_page.dart';
@@ -1104,6 +1105,10 @@ class _MyPageState extends State<MyPage> {
             _item(Icons.receipt_long_outlined, c.primary, '日志',
                 '操作记录与错误（全部 / 错误 / 正常 / Debug）',
                 () => goPage(context, const LogsPage())),
+            if (_role != 'staff')
+              _item(Icons.manage_search_outlined, c.primary, '操作审计',
+                  '登录 / 删除 / 修改 / 导入导出等关键操作留痕（仅老板）',
+                  () => goPage(context, const AuditPage())),
           ]),
           const SizedBox(height: 18),
           _card([

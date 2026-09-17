@@ -6,6 +6,7 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../utils/open_print.dart';
 import '../widgets/year_month_picker.dart';
 import 'router.dart';
 import 'purchase_page.dart';
@@ -191,6 +192,17 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     await Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => PurchaseBatchEditPage(date: date, lines: lines)));
     _load();
+  }
+
+  /// Web 端打印进货单：服务端 /print/purchase/:id 生成自包含 HTML（自动打印），token 走 query
+  Future<void> _printPurchase(Map<String, dynamic> order) async {
+    try {
+      final base = await Api.instance.getBase();
+      final token = await Api.instance.getTokenValue() ?? '';
+      await openPrintUrl('$base/api/v1/print/purchase/${order['id']}?token=$token');
+    } catch (e) {
+      toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
   }
 
   Future<void> _deletePurchase(Map<String, dynamic> p) async {
@@ -414,6 +426,16 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
             ),
             Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
+            // Web 端打印进货单（原生端暂不支持，隐藏入口）
+            if (kIsWeb)
+              InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: () => _printPurchase(order),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(Icons.print_outlined, size: 16, color: c.textSub),
+                ),
+              ),
             const SizedBox(width: 4),
             Icon(Icons.chevron_right, size: 14, color: c.textSub),
           ],

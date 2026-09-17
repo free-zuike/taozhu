@@ -13,6 +13,7 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../utils/open_print.dart';
 import '../widgets/center_sheet.dart';
 import '../widgets/year_month_picker.dart';
 import 'router.dart';
@@ -1409,6 +1410,17 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   /// 出货流水行：三行卡片 —— ①商品名称+备注 ②商品分类+附件（分类在前，有附件才显示图标）③进价·售价·数量单位
+  /// Web 端打印出货单：服务端 /print/sale/:id 生成自包含 HTML（自动打印），token 走 query
+  Future<void> _printSaleOrder(Map<String, dynamic> order) async {
+    try {
+      final base = await Api.instance.getBase();
+      final token = await Api.instance.getTokenValue() ?? '';
+      await openPrintUrl('$base/api/v1/print/sale/${order['id']}?token=$token');
+    } catch (e) {
+      toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
   Widget _saleLineTile(TaozhuColors c, Map<String, dynamic> l) {
     final order = l['order'] as Map<String, dynamic>;
     final clientName = '${l['client_name'] ?? ''}';
@@ -1561,6 +1573,16 @@ class _LedgerPageState extends State<LedgerPage> {
                   ),
                   Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                       style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
+                  // Web 端打印出货单（原生端暂不支持，隐藏入口）
+                  if (kIsWeb)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(6),
+                      onTap: () => _printSaleOrder(order),
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Icon(Icons.print_outlined, size: 16, color: c.textSub),
+                      ),
+                    ),
                 ],
               ),
             ),

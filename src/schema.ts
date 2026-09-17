@@ -158,6 +158,17 @@ const DDL: string[] = [
     fails INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
+  // v0.17.126.0：操作审计（谁在什么时候对哪个实体做了什么——删除/改价/导入导出等关键操作留痕）
+  `CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    action TEXT NOT NULL,
+    entity_type TEXT,
+    entity_id TEXT,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at DESC)`,
 ];
 
 let schemaReady = false;
@@ -265,6 +276,14 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!laTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS login_attempts'));
       await db.prepare(DDL[i]).run();
+    }
+    // v0.17.126.0：操作审计表（关键写操作留痕）
+    const auditTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'",
+    ).first<{ name: string }>();
+    if (!auditTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS audit_logs'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
     }
     // 首次使用（空表）自动写入默认账户（现金/微信/支付宝/银行卡/转账），用户可后续增删改；
     // 空表才插，避免覆盖用户已自定义的列表

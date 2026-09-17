@@ -533,7 +533,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string; min_supported: string };
-    expect(d.current).toBe('0.17.125');
+    expect(d.current).toBe('0.17.126');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
@@ -563,7 +563,7 @@ describe('强制更新门禁（x-app-version 低于最低支持版本 → 426）
   });
 
   it('携带当前版本头 → 放行；不带版本头（Web/小程序）→ 放行', async () => {
-    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.125' });
+    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.126' });
     expect(r1.status).toBe(200);
     const r2 = await call(env, 'GET', '/api/v1/clients', token);
     expect(r2.status).toBe(200);
@@ -1054,5 +1054,44 @@ describe('自动备份时刻命中（isBackupTime：北京时间）', () => {
     expect(isBackupTime(new Date('2026-01-01T19:05:00Z'), '03:05')).toBe(true);
     expect(isBackupTime(new Date('2026-01-01T19:06:00Z'), '03:05')).toBe(false);
     expect(isBackupTime(new Date('2026-01-01T16:30:00Z'), '00:30')).toBe(true);
+  });
+});
+
+describe('操作审计（audit_logs：登录/删除/导出留痕，admin 查看）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  beforeEach(async () => {
+    env = (await setup()).env;
+    const res = await call(env, 'POST', '/api/v1/auth/bootstrap', undefined, { username: 'boss', password: 'admin1234' });
+    token = ((await res.json()) as { token: string }).token;
+  });
+
+  it('登录与删除交易产生审计日志，GET /audit 可查（admin）', async () => {
+    const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'boss', password: 'admin1234' });
+    expect(login.status).toBe(200);
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, { name: '白菜', prices: [{ unit: '斤', purchase_price: 1, sale_price: 2 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ prices: Array<{ id: string }> }> };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-05',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    await call(env, 'DELETE', `/api/v1/sales/${saleId}`, token);
+
+    const d = (await (await call(env, 'GET', '/api/v1/audit', token)).json()) as {
+      logs: Array<{ username: string; action: string; entity_type: string | null; detail: string | null }>;
+    };
+    expect(d.logs.length).toBeGreaterThanOrEqual(2);
+    expect(d.logs.some((l) => l.action === 'login' && l.username === 'boss')).toBe(true);
+    expect(d.logs.some((l) => l.action === 'delete' && l.entity_type === 'sale' && l.entity_id === saleId)).toBe(true);
+  });
+
+  it('店员无权查看审计（adminOnly）', async () => {
+    await call(env, 'POST', '/api/v1/users', token, { username: 'staff1', password: 'staff1234', role: 'staff' });
+    const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff1234' });
+    const staffToken = ((await login.json()) as { token: string }).token;
+    expect((await call(env, 'GET', '/api/v1/audit', staffToken)).status).toBe(403);
   });
 });

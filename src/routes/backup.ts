@@ -1,6 +1,7 @@
 /** 全库备份 导出/导入（仅老板）：GET / 返回全部业务表 JSON；POST /import 合并恢复 */
 import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
+import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -70,6 +71,7 @@ export async function exportAllData(db: D1Database): Promise<Record<string, unkn
 // GET /backup — 全部数据 JSON
 backupRouter.get('/', async (c) => {
   const data = await exportAllData(c.env.DB);
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'export', entity_type: 'backup', detail: `导出全库备份（${Object.keys(data).length} 张表）` });
   return c.json({ exported_at: new Date().toISOString(), data });
 });
 
@@ -116,5 +118,6 @@ backupRouter.post('/import', async (c) => {
     }
     report[t] = { inserted, skipped };
   }
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'import', entity_type: 'backup', detail: `导入备份：共新增 ${totalInserted} 条记录` });
   return c.json({ ok: true, report, total_inserted: totalInserted });
 });

@@ -78,6 +78,33 @@ jobs:
       - name: Run tests
         run: npm test
 
+  # ── 前端单测（Flutter）：纯逻辑测试（版本函数等），不依赖网络/后端 mock ──
+  flutter-test:
+    needs: check
+    if: needs.check.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    name: Flutter 前端单测
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          version: 3.47.2
+          cache: true
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+      - name: Generate platforms & run flutter tests
+        working-directory: frontend-flutter
+        run: |
+          flutter create --org com.taozhu --project-name taozhu_app . 2>/dev/null || true
+          # 只跑真实测试文件（不跑 flutter create 生成的模板 widget_test，其引用示例 MyApp 不存在）
+          flutter test test/version_test.dart
+
   # ── 统一创建 Release（test 后第一件事）：各平台上传资产前 release 必须已存在——
   # 创建时刻按 push 顺序单调递增（列表顺序稳定）；各平台 job 只上传资产，不再 5 分钟等待/竞争创建 ──
   release:

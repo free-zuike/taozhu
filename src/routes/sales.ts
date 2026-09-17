@@ -6,6 +6,7 @@ import { parsePage } from '../lib/paging';
 import { stockDelta } from '../lib/stock';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
+import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -398,6 +399,7 @@ salesRouter.delete('/:id', adminOnly(), async (c) => {
   batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'sale', entity_id: id, detail: `删除出货记录（${oldItems.results.length} 件商品）` });
   // 删除交易附带的凭证图片（单据级 + 全部明细行级，best-effort 不阻塞删除）
   try {
     await deleteEntityAttachments(c.env, 'sale', id);

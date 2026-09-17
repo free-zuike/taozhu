@@ -7,6 +7,7 @@ import { authMiddleware } from '../middleware/auth';
 import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
 import { APP_NAME, APP_VERSION, MIN_SUPPORTED_VERSION } from '../version';
+import { recordAudit } from './audit';
 import type { Env, UserRow } from '../types';
 
 export const authRouter = new Hono<{ Bindings: Env; Variables: { user: UserRow } }>();
@@ -63,6 +64,7 @@ authRouter.post('/login', async (c) => {
     }
   }
   await clearLoginFails(c.env.DB, failKey);
+  await recordAudit(c.env.DB, { username: user.username, action: 'login', detail: `登录成功（${user.role}${user.totp_enabled ? '，两步验证' : ''}）` });
   const token = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role });
   return c.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
