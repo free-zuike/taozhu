@@ -12,7 +12,7 @@ class Api {
 
   /// 强制更新回调（服务端 426 / latest-version.min_supported 触发）：由 App 启动处注册，
   /// 弹出不可关闭的更新窗；参数 = 最低需更新到的最新版本号。Web 端无强制更新（部署即新），不注册。
-  static ValueChanged<String>? onForceUpdate;
+  static void Function(String latest)? onForceUpdate;
 
   static const _tokenKey = 'taozhu_token';
   static const _baseKey = 'taozhu_api_base';
