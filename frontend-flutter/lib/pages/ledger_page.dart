@@ -40,6 +40,8 @@ class _LedgerPageState extends State<LedgerPage> {
   bool _offline = false; // 本次加载走了本地缓存（无网络）
   /// 店铺选择弹层本地汇总（原生：笔数/欠款本地计算；Web 直接显示服务端字段）
   Map<String, ({int count, double debt})> _clientStat = {};
+  /// 服务端权威欠款（id → debt）：店选弹层打开时拉 /clients 填充，与月度结余卡/统计口径一致
+  Map<String, double> _serverDebt = {};
   /// 出货单 id → 附件数（整单级，无明细备注行用）
   Map<String, int> _saleAttachCount = {};
   /// 出货明细行 id → 附件数（行级，每行商品独立凭证）
@@ -498,8 +500,10 @@ class _LedgerPageState extends State<LedgerPage> {
     return '${_clientStat['${c['id']}']?.count ?? 0}';
   }
 
-  /// 店铺选择弹层的欠款（服务端字段优先，本地镜像缺失时用本地汇总兜底）
+  /// 店铺选择弹层的欠款（服务端权威优先：与月度结余/统计口径一致；本地镜像兜底离线）
   double _statDebt(Map<String, dynamic> c) {
+    final server = _serverDebt['${c['id']}'];
+    if (server != null) return server;
     final v = (c['debt'] as num?)?.toDouble();
     if (v != null) return v;
     return _clientStat['${c['id']}']?.debt ?? 0;
@@ -636,6 +640,19 @@ class _LedgerPageState extends State<LedgerPage> {
 
   /// 店选弹层：全部店铺（名称 + 交易笔数 + 欠款），底部新增店铺
   Future<void> _showLedgerPicker() async {
+    // 打开弹层时拉一次服务端权威欠款（用户主动交互，允许网络）；失败静默用本地兜底
+    try {
+      final d = await Api.instance.get('/clients');
+      final list = (d['clients'] as List?) ?? [];
+      if (mounted) {
+        setState(() {
+          _serverDebt = {
+            for (final c in list.cast<Map<String, dynamic>>())
+              '${c['id']}': ((c['debt'] as num?)?.toDouble() ?? 0),
+          };
+        });
+      }
+    } catch (_) {}
     final selected = await showCenterSheet<String>(
       context: context,
       maxHeightFactor: 0.8,

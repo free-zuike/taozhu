@@ -116,6 +116,7 @@ class _StatementPageState extends State<StatementPage> {
         _toCtrl.text = e;
       }
     });
+    _load(); // 切换周期立即重新生成对账单
   }
 
   Future<void> _load() async {
@@ -793,7 +794,10 @@ class _StatementPageState extends State<StatementPage> {
                               value: '${c['id']}', child: Text('${c['name']}')))
                           .toList(),
                     ],
-                    onChanged: (v) => setState(() => _clientId = v),
+                    onChanged: (v) {
+                      setState(() => _clientId = v);
+                      _load(); // 切换店铺立即按新店铺重新拉取
+                    },
                   ),
                   const SizedBox(height: 12),
                   SegmentedButton<String>(
