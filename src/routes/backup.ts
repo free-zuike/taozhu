@@ -24,11 +24,20 @@ const IMPORT_ORDER = [
 // 自动备份时间（settings 表 key）：用户可配置，格式 HH:MM（北京时间）；空=未设置
 const KEY_BACKUP_TIME = 'backup_time';
 export const DEFAULT_BACKUP_TIME = '03:05';
+// 自动备份保留份数（settings 表 key）：用户可配置（1-90），默认 14
+const KEY_BACKUP_KEEP = 'backup_keep';
+export const DEFAULT_BACKUP_KEEP = 14;
 
 export async function getBackupTime(db: D1Database): Promise<string> {
   const row = await db.prepare('SELECT value FROM settings WHERE key = ?').bind(KEY_BACKUP_TIME).first<{ value: string }>();
   const v = (row?.value ?? '').trim();
   return /^\d{2}:\d{2}$/.test(v) ? v : DEFAULT_BACKUP_TIME;
+}
+
+export async function getBackupKeep(db: D1Database): Promise<number> {
+  const row = await db.prepare('SELECT value FROM settings WHERE key = ?').bind(KEY_BACKUP_KEEP).first<{ value: string }>();
+  const n = Number((row?.value ?? '').trim());
+  return Number.isInteger(n) && n >= 1 && n <= 90 ? n : DEFAULT_BACKUP_KEEP;
 }
 
 /// 是否命中备份时刻：当前北京时间 HH:MM == 配置时间（精确到分钟，一天恰好命中一次）
@@ -39,23 +48,43 @@ export function isBackupTime(nowUtc: Date, configured: string): boolean {
   return `${hh}:${mm}` === configured;
 }
 
-// GET /backup/auto — 自动备份时间设置（当前生效值）
+// GET /backup/auto — 自动备份设置（当前生效值：时间 + 保留份数）
 backupRouter.get('/auto', async (c) => {
-  const row = await c.env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(KEY_BACKUP_TIME).first<{ value: string }>();
-  return c.json({ time: (row?.value ?? '').trim() || DEFAULT_BACKUP_TIME, configured: (row?.value ?? '').trim() !== '' });
+  const timeRow = await c.env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(KEY_BACKUP_TIME).first<{ value: string }>();
+  const keepRow = await c.env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(KEY_BACKUP_KEEP).first<{ value: string }>();
+  return c.json({
+    time: (timeRow?.value ?? '').trim() || DEFAULT_BACKUP_TIME,
+    configured: (timeRow?.value ?? '').trim() !== '',
+    keep: Number((keepRow?.value ?? '').trim()) || DEFAULT_BACKUP_KEEP,
+  });
 });
 
-// PUT /backup/auto — 设置自动备份时间（body: { time: 'HH:MM' }；北京时间；每日一次）
+// PUT /backup/auto — 设置自动备份（body: { time?: 'HH:MM', keep?: number }；北京时间每日一次；保留份数 1-90）
 backupRouter.put('/auto', async (c) => {
-  const body = await c.req.json().catch(() => null) as { time?: string } | null;
-  const time = (body?.time ?? '').trim();
-  if (!/^\d{2}:\d{2}$/.test(time)) return c.json({ error: '时间格式应为 HH:MM（如 03:05）' }, 400);
-  const hh = Number(time.slice(0, 2));
-  const mm = Number(time.slice(3, 5));
-  if (hh > 23 || mm > 59) return c.json({ error: '时间超出范围' }, 400);
-  await c.env.DB.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-    .bind(KEY_BACKUP_TIME, time).run();
-  return c.json({ time });
+  const body = await c.req.json().catch(() => null) as { time?: string; keep?: number } | null;
+  const upsert = async (key: string, value: string) => {
+    await c.env.DB.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .bind(key, value).run();
+  };
+  if (body?.time !== undefined) {
+    const time = (body.time ?? '').trim();
+    if (!/^\d{2}:\d{2}$/.test(time)) return c.json({ error: '时间格式应为 HH:MM（如 03:05）' }, 400);
+    const hh = Number(time.slice(0, 2));
+    const mm = Number(time.slice(3, 5));
+    if (hh > 23 || mm > 59) return c.json({ error: '时间超出范围' }, 400);
+    await upsert(KEY_BACKUP_TIME, time);
+  }
+  if (body?.keep !== undefined) {
+    const keep = Number(body.keep);
+    if (!Number.isInteger(keep) || keep < 1 || keep > 90) return c.json({ error: '保留份数应为 1-90' }, 400);
+    await upsert(KEY_BACKUP_KEEP, String(keep));
+  }
+  const timeRow = await c.env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(KEY_BACKUP_TIME).first<{ value: string }>();
+  const keepRow = await c.env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(KEY_BACKUP_KEEP).first<{ value: string }>();
+  return c.json({
+    time: (timeRow?.value ?? '').trim() || DEFAULT_BACKUP_TIME,
+    keep: Number((keepRow?.value ?? '').trim()) || DEFAULT_BACKUP_KEEP,
+  });
 });
 
 /// 导出全部业务表数据（手动导出与每日定时自动备份共用）

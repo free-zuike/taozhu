@@ -1,0 +1,142 @@
+﻿2026-09-17T17:05:57.7469584Z Current runner version: '2.337.0'
+2026-09-17T17:05:57.7495217Z ##[group]Runner Image Provisioner
+2026-09-17T17:05:57.7496187Z Hosted Compute Agent
+2026-09-17T17:05:57.7496887Z Version: 20260828.587
+2026-09-17T17:05:57.7497556Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-17T17:05:57.7498409Z Build Date: 2026-08-28T16:44:25Z
+2026-09-17T17:05:57.7499187Z Worker ID: {3a820891-07ce-4728-aab6-bf492bb2a460}
+2026-09-17T17:05:57.7500066Z Azure Region: westus2
+2026-09-17T17:05:57.7500897Z ##[endgroup]
+2026-09-17T17:05:57.7502204Z ##[group]Operating System
+2026-09-17T17:05:57.7503018Z Ubuntu
+2026-09-17T17:05:57.7503640Z 24.04.5
+2026-09-17T17:05:57.7504260Z LTS
+2026-09-17T17:05:57.7504885Z ##[endgroup]
+2026-09-17T17:05:57.7505524Z ##[group]Runner Image
+2026-09-17T17:05:57.7506226Z Image: ubuntu-24.04
+2026-09-17T17:05:57.7506877Z Version: 20260907.300.1
+2026-09-17T17:05:57.7508276Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260907.300/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-17T17:05:57.7509914Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260907.300
+2026-09-17T17:05:57.7511257Z ##[endgroup]
+2026-09-17T17:05:57.7512520Z ##[group]GITHUB_TOKEN Permissions
+2026-09-17T17:05:57.7514502Z Contents: write
+2026-09-17T17:05:57.7515233Z Metadata: read
+2026-09-17T17:05:57.7515902Z ##[endgroup]
+2026-09-17T17:05:57.7517977Z Secret source: Actions
+2026-09-17T17:05:57.7519088Z Cache mode: write
+2026-09-17T17:05:57.7519799Z Prepare workflow directory
+2026-09-17T17:05:57.7842831Z Prepare all required actions
+2026-09-17T17:05:57.7907074Z Getting action download info
+2026-09-17T17:05:58.1407772Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-17T17:05:58.7623693Z Download action repository 'subosito/flutter-action@v2' (SHA:1a449444c387b1966244ae4d4f8c696479add0b2)
+2026-09-17T17:05:58.9535430Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+2026-09-17T17:05:59.2216368Z Getting action download info
+2026-09-17T17:05:59.3609522Z Download action repository 'actions/cache@v5' (SHA:caa296126883cff596d87d8935842f9db880ef25)
+2026-09-17T17:05:59.6000738Z Complete job name: Android APK
+2026-09-17T17:05:59.6932804Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-17T17:05:59.6944281Z ##[group]Run actions/checkout@v4
+2026-09-17T17:05:59.6945627Z with:
+2026-09-17T17:05:59.6946700Z   repository: free-zuike/***
+2026-09-17T17:05:59.6956934Z   token: ***
+2026-09-17T17:05:59.6957916Z   ssh-strict: true
+2026-09-17T17:05:59.6958932Z   ssh-user: git
+2026-09-17T17:05:59.6959946Z   persist-credentials: true
+2026-09-17T17:05:59.6961174Z   clean: true
+2026-09-17T17:05:59.6962213Z   sparse-checkout-cone-mode: true
+2026-09-17T17:05:59.6963444Z   fetch-depth: 1
+2026-09-17T17:05:59.6964445Z   fetch-tags: false
+2026-09-17T17:05:59.7038075Z   show-progress: true
+2026-09-17T17:05:59.7039693Z   lfs: false
+2026-09-17T17:05:59.7041306Z   submodules: false
+2026-09-17T17:05:59.7042395Z   set-safe-directory: true
+2026-09-17T17:05:59.7043574Z   allow-unsafe-pr-checkout: false
+2026-09-17T17:05:59.7045428Z ##[endgroup]
+2026-09-17T17:05:59.8092916Z Syncing repository: free-zuike/***
+2026-09-17T17:05:59.8096751Z ##[group]Getting Git version info
+2026-09-17T17:05:59.8099010Z Working directory is '/home/runner/work/***/***'
+2026-09-17T17:05:59.8102357Z [command]/usr/bin/git version
+2026-09-17T17:05:59.9168820Z git version 2.55.0
+2026-09-17T17:05:59.9190527Z ##[endgroup]
+2026-09-17T17:05:59.9205650Z Temporarily overriding HOME='/home/runner/work/_temp/272037e9-0a4d-4be7-8de4-0b0c4d743c1a' before making global git config changes
+2026-09-17T17:05:59.9208513Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-17T17:05:59.9211904Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/***/***
+2026-09-17T17:05:59.9454870Z Deleting the contents of '/home/runner/work/***/***'
+2026-09-17T17:05:59.9459699Z ##[group]Initializing the repository
+2026-09-17T17:05:59.9463565Z [command]/usr/bin/git init /home/runner/work/***/***
+2026-09-17T17:06:00.0417503Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-17T17:06:00.0420401Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-17T17:06:00.0422920Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-17T17:06:00.0424697Z hint: call:
+2026-09-17T17:06:00.0425904Z hint:
+2026-09-17T17:06:00.0427269Z hint: 	git config --global init.defaultBranch <name>
+2026-09-17T17:06:00.0428976Z hint:
+2026-09-17T17:06:00.0431118Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-17T17:06:00.0434000Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-17T17:06:00.0436375Z hint:
+2026-09-17T17:06:00.0437722Z hint: 	git branch -m <name>
+2026-09-17T17:06:00.0439168Z hint:
+2026-09-17T17:06:00.0441681Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-17T17:06:00.0443981Z Initialized empty Git repository in /home/runner/work/***/***/.git/
+2026-09-17T17:06:00.0447329Z [command]/usr/bin/git remote add origin https://github.com/free-zuike/***
+2026-09-17T17:06:00.0710488Z ##[endgroup]
+2026-09-17T17:06:00.0712943Z ##[group]Disabling automatic garbage collection
+2026-09-17T17:06:00.0714680Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-17T17:06:00.0755070Z ##[endgroup]
+2026-09-17T17:06:00.0757397Z ##[group]Setting up auth
+2026-09-17T17:06:00.0762459Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-17T17:06:00.0801045Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-17T17:06:00.2669901Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-17T17:06:00.2713674Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-17T17:06:00.2956785Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-17T17:06:00.3004267Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-17T17:06:00.3255447Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-17T17:06:00.3296404Z ##[endgroup]
+2026-09-17T17:06:00.3298012Z ##[group]Fetching the repository
+2026-09-17T17:06:00.3306277Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +f788969cdfd5d6a475513754f5cd9c86bbf0cfbf:refs/remotes/origin/main
+2026-09-17T17:06:01.0093262Z From https://github.com/free-zuike/***
+2026-09-17T17:06:01.0096245Z  * [new ref]         f788969cdfd5d6a475513754f5cd9c86bbf0cfbf -> origin/main
+2026-09-17T17:06:01.0102233Z ##[endgroup]
+2026-09-17T17:06:01.0103909Z ##[group]Determining the checkout info
+2026-09-17T17:06:01.0106202Z ##[endgroup]
+2026-09-17T17:06:01.0107388Z [command]/usr/bin/git sparse-checkout disable
+2026-09-17T17:06:01.0298551Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-17T17:06:01.0333747Z ##[group]Checking out the ref
+2026-09-17T17:06:01.0337262Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-09-17T17:06:01.0556868Z Switched to a new branch 'main'
+2026-09-17T17:06:01.0561280Z branch 'main' set up to track 'origin/main'.
+2026-09-17T17:06:01.0569638Z ##[endgroup]
+2026-09-17T17:06:01.0613254Z [command]/usr/bin/git log -1 --format=%H
+2026-09-17T17:06:01.0643642Z f788969cdfd5d6a475513754f5cd9c86bbf0cfbf
+2026-09-17T17:06:01.0901840Z ##[group]Run VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
+2026-09-17T17:06:01.0904269Z [36;1mVERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)[0m
+2026-09-17T17:06:01.0906346Z [36;1mif [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi[0m
+2026-09-17T17:06:01.0907926Z [36;1mgit fetch --tags --quiet || true[0m
+2026-09-17T17:06:01.0909681Z [36;1mif git rev-parse -q --verify "refs/tags/***-v${VERSION}" >/dev/null 2>&1; then[0m
+2026-09-17T17:06:01.0911618Z [36;1m  TAG_COMMIT=$(git rev-list -n 1 "***-v${VERSION}")[0m
+2026-09-17T17:06:01.0913033Z [36;1m  if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then[0m
+2026-09-17T17:06:01.0916236Z [36;1m    echo "::error::版本号未 bump：***-v${VERSION} 已存在（指向 ${TAG_COMMIT}），当前提交 ${GITHUB_SHA}。发版前请先递增版本号（src/version.ts + frontend-flutter/lib/version.dart + frontend-uni/src/manifest.json + tests/api.test.ts 断言），否则产物会覆盖旧 release。"[0m
+2026-09-17T17:06:01.0919175Z [36;1m    exit 1[0m
+2026-09-17T17:06:01.0920097Z [36;1m  fi[0m
+2026-09-17T17:06:01.0921069Z [36;1mfi[0m
+2026-09-17T17:06:01.0921975Z [36;1mecho "版本守卫通过：v${VERSION}"[0m
+2026-09-17T17:06:01.0967911Z shell: /usr/bin/bash -e {0}
+2026-09-17T17:06:01.0968969Z ##[endgroup]
+2026-09-17T17:06:02.2193843Z ##[error]版本号未 bump：***-v0.17.126 已存在（指向 a00e4ca38bead3b71cbb5bc699db0a0211225ccc），当前提交 f788969cdfd5d6a475513754f5cd9c86bbf0cfbf。发版前请先递增版本号（src/version.ts + frontend-flutter/lib/version.dart + frontend-uni/src/manifest.json + tests/api.test.ts 断言），否则产物会覆盖旧 release。
+2026-09-17T17:06:02.2205929Z ##[error]Process completed with exit code 1.
+2026-09-17T17:06:02.2404613Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-17T17:06:02.2406171Z Post job cleanup.
+2026-09-17T17:06:02.3266123Z [command]/usr/bin/git version
+2026-09-17T17:06:02.3309846Z git version 2.55.0
+2026-09-17T17:06:02.3346629Z Temporarily overriding HOME='/home/runner/work/_temp/05903d19-d6ef-4b17-ae15-8a47b7311147' before making global git config changes
+2026-09-17T17:06:02.3347984Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-17T17:06:02.3352779Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/***/***
+2026-09-17T17:06:02.3393227Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-17T17:06:02.3429627Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-17T17:06:02.3686106Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-17T17:06:02.3711984Z http.https://github.com/.extraheader
+2026-09-17T17:06:02.3723400Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-09-17T17:06:02.3760324Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-17T17:06:02.4049398Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-17T17:06:02.4096876Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-17T17:06:02.4544623Z Cleaning up orphan processes
+2026-09-17T17:06:02.4862817Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

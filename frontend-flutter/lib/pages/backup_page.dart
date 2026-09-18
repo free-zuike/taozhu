@@ -17,8 +17,10 @@ class BackupPage extends StatefulWidget {
 class _BackupPageState extends State<BackupPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
 
-  /// 自动备份时间（北京时间 HH:MM，用户自选）：到点自动备份全库 JSON 到云端 R2，保留最近 14 份
+  /// 自动备份时间（北京时间 HH:MM，用户自选）：到点自动备份全库 JSON 到云端 R2
   String _autoTime = '03:05';
+  /// 自动备份保留份数（用户可配 1-90，默认 14）：超出按最旧删除
+  int _autoKeep = 14;
 
   @override
   void initState() {
@@ -29,9 +31,12 @@ class _BackupPageState extends State<BackupPage> {
   Future<void> _loadAutoTime() async {
     try {
       final d = await Api.instance.get('/backup/auto');
-      if (mounted && '${d['time'] ?? ''}'.isNotEmpty) {
-        setState(() => _autoTime = '${d['time']}');
-      }
+      if (!mounted) return;
+      setState(() {
+        if ('${d['time'] ?? ''}'.isNotEmpty) _autoTime = '${d['time']}';
+        final keep = (d['keep'] as num?)?.toInt();
+        if (keep != null && keep >= 1 && keep <= 90) _autoKeep = keep;
+      });
     } catch (_) {
       // 读取失败保持默认，不阻塞页面
     }
@@ -54,6 +59,39 @@ class _BackupPageState extends State<BackupPage> {
       await Api.instance.put('/backup/auto', {'time': '$hh:$mm'});
       if (mounted) setState(() => _autoTime = '$hh:$mm');
       toast(context, '已设置：每天 $hh:$mm 自动备份到云端');
+    } catch (e) {
+      toast(context, '保存失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
+  /// 设置自动备份保留份数（1-90）：云端只保留最近 N 份，超出删最旧
+  Future<void> _pickAutoKeep() async {
+    final ctrl = TextEditingController(text: '$_autoKeep');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('自动备份保留份数'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(hintText: '1-90（默认 14）'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final keep = int.tryParse(ctrl.text.trim());
+    if (keep == null || keep < 1 || keep > 90) {
+      toast(context, '请输入 1-90 的份数');
+      return;
+    }
+    try {
+      await Api.instance.put('/backup/auto', {'keep': keep});
+      if (mounted) setState(() => _autoKeep = keep);
+      toast(context, '已设置：云端保留最近 $keep 份备份');
     } catch (e) {
       toast(context, '保存失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
@@ -136,7 +174,8 @@ class _BackupPageState extends State<BackupPage> {
           const SizedBox(height: 18),
           _groupTitle(c, '自动备份'),
           _card(c, [
-            _tile(c, Icons.schedule_outlined, '自动备份时间', '每天 $_autoTime（北京时间）自动备份全库到云端，保留最近 14 份', _pickAutoTime),
+            _tile(c, Icons.schedule_outlined, '自动备份时间', '每天 $_autoTime（北京时间）自动备份全库到云端', _pickAutoTime),
+            _tile(c, Icons.inventory_2_outlined, '保留备份份数', '云端只保留最近 $_autoKeep 份，超出自动删除最旧', _pickAutoKeep),
           ]),
           const SizedBox(height: 18),
           Padding(

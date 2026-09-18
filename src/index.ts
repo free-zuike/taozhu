@@ -16,7 +16,7 @@ import { aiRouter } from './routes/ai';
 import { settingsRouter } from './routes/settings';
 import { attachmentsRouter } from './routes/attachments';
 import { stocksRouter } from './routes/stocks';
-import { backupRouter, exportAllData, getBackupTime, isBackupTime } from './routes/backup';
+import { backupRouter, exportAllData, getBackupTime, getBackupKeep, isBackupTime } from './routes/backup';
 import { shareRouter, renderShareHtml } from './routes/share';
 import { printRouter } from './routes/print';
 import { syncRouter } from './routes/sync';
@@ -130,15 +130,16 @@ async function scheduledBackup(env: Env): Promise<void> {
   try {
     const configured = await getBackupTime(env.DB);
     if (!isBackupTime(new Date(), configured)) return;
+    const keep = await getBackupKeep(env.DB);
     const data = await exportAllData(env.DB);
     const key = `taozhu/backups/backup-${new Date().toISOString().slice(0, 10)}.json`;
     await env.BUCKET.put(key, JSON.stringify({ exported_at: new Date().toISOString(), data }));
-    // 清理旧备份：列出备份前缀，超过 14 份按 key 排序删最旧
+    // 清理旧备份：超出用户配置的保留份数按 key 排序删最旧
     const list = await env.BUCKET.list({ prefix: 'taozhu/backups/backup-' });
-    if (list.objects.length > 14) {
-      const keep = new Set(list.objects.map((o) => o.key).sort().slice(-14));
+    if (list.objects.length > keep) {
+      const keepSet = new Set(list.objects.map((o) => o.key).sort().slice(-keep));
       for (const o of list.objects) {
-        if (!keep.has(o.key)) await env.BUCKET.delete(o.key);
+        if (!keepSet.has(o.key)) await env.BUCKET.delete(o.key);
       }
     }
   } catch (e) {

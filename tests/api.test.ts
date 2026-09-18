@@ -533,7 +533,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string; min_supported: string };
-    expect(d.current).toBe('0.17.128');
+    expect(d.current).toBe('0.17.129');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
@@ -563,7 +563,7 @@ describe('强制更新门禁（x-app-version 低于最低支持版本 → 426）
   });
 
   it('携带当前版本头 → 放行；不带版本头（Web/小程序）→ 放行', async () => {
-    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.128' });
+    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.129' });
     expect(r1.status).toBe(200);
     const r2 = await call(env, 'GET', '/api/v1/clients', token);
     expect(r2.status).toBe(200);
@@ -1031,20 +1031,22 @@ describe('自动备份时间设置（/backup/auto）', () => {
     token = ((await res.json()) as { token: string }).token;
   });
 
-  it('默认 03:05；PUT 保存后读回', async () => {
-    const d0 = (await (await call(env, 'GET', '/api/v1/backup/auto', token)).json()) as { time: string; configured: boolean };
+    it('默认 03:05 / 保留 14 份；PUT 保存时间与份数后读回', async () => {
+    const d0 = (await (await call(env, 'GET', '/api/v1/backup/auto', token)).json()) as { time: string; configured: boolean; keep: number };
     expect(d0.time).toBe('03:05');
     expect(d0.configured).toBe(false);
+    expect(d0.keep).toBe(14);
     expect((await call(env, 'PUT', '/api/v1/backup/auto', token, { time: '06:30' })).status).toBe(200);
-    const d1 = (await (await call(env, 'GET', '/api/v1/backup/auto', token)).json()) as { time: string; configured: boolean };
+    expect((await call(env, 'PUT', '/api/v1/backup/auto', token, { keep: 30 })).status).toBe(200);
+    const d1 = (await (await call(env, 'GET', '/api/v1/backup/auto', token)).json()) as { time: string; configured: boolean; keep: number };
     expect(d1.time).toBe('06:30');
     expect(d1.configured).toBe(true);
+    expect(d1.keep).toBe(30);
   });
 
   it('非法时间 400', async () => {
     expect((await call(env, 'PUT', '/api/v1/backup/auto', token, { time: '25:99' })).status).toBe(400);
     expect((await call(env, 'PUT', '/api/v1/backup/auto', token, { time: 'abc' })).status).toBe(400);
-    expect((await call(env, 'PUT', '/api/v1/backup/auto', token, {})).status).toBe(400);
   });
 });
 
