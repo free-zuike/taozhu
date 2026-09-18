@@ -30,5 +30,10 @@ frontend-uni/dist/
 frontend-flutter/build/
 frontend-flutter/.dart_tool/
 
-# Ç©ÃûÃÜÔ¿£¨¹«¿ª²Ö¿â²»µÃÌá½»£©
+# Ç©ï¿½ï¿½ï¿½ï¿½Ô¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¿â²»ï¿½ï¿½ï¿½á½»ï¿½ï¿½
 android-keystore/
+
+# local temp scripts/logs (agent debug artifacts, never committed)
+_tmp/
+_*.cjs
+_*.log
