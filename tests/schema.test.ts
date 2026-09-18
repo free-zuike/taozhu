@@ -74,6 +74,8 @@ describe('schema.sql 完整建表与幂等', () => {
     await ensureSchema(db as never);
     await db.prepare('DROP TABLE payment_accounts').run();
     await db.prepare('CREATE TABLE payment_accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0)').run();
+    // 清迁移标记：否则 ensureSchema 快检直接返回，不触发补列（模拟"老库缺列待迁移"）
+    await db.prepare("DELETE FROM schema_meta WHERE key = 'schema_version'").run();
     resetSchemaState();
     // 同一库并发触发两次迁移：若 ALTER 竞争未被锁/幂等兜底，第二个会抛 duplicate column name
     await expect(Promise.all([

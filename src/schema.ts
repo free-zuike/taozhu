@@ -169,6 +169,11 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at DESC)`,
+  // 建表迁移标记：已初始化的库冷启动只查这一行即跳过下方 20+ 次 PRAGMA（首请求提速，避免 Web 首访超时）
+  `CREATE TABLE IF NOT EXISTS schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`,
 ];
 
 let schemaReady = false;
@@ -206,6 +211,19 @@ export async function ensureSchema(db: D1Database): Promise<void> {
   if (schemaReady) return;
   return withSchemaLock(async () => {
     if (schemaReady) return;
+    // 已初始化库：只查一次标记即返回（冷启动首请求不再跑下方 20+ 次 PRAGMA/ALTER 迁移链）
+    try {
+      const meta = await db.prepare(
+        "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+      ).first<{ value: string }>();
+      if (meta?.value === '1') {
+        schemaReady = true;
+        return;
+      }
+    } catch (e) {
+      // schema_meta 表尚不存在（老库）→ 落入全量迁移路径补齐
+      if (!`${e}`.includes('no such table')) throw e;
+    }
     try {
     const exists = await db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'",
@@ -415,6 +433,10 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const i = DDL.findIndex((s) => s.includes(marker));
       if (i >= 0) await db.prepare(DDL[i]).run();
     }
+    // 迁移完成：写标记（INSERT OR REPLACE——老库首次部署后也置位，此后冷启动走快检）
+    await db.prepare(
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '1')",
+    ).run();
     schemaReady = true;
     } catch (err) {
       console.error('[taozhu] ensureSchema failed:', err);

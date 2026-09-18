@@ -162,3 +162,8 @@ CREATE TABLE IF NOT EXISTS sync_changes (
   updated_by_username TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON sync_changes (entity_type, entity_sync_id);
+-- 建表迁移标记（ensureSchema 快检用：已初始化库冷启动只查这一行跳过全量迁移链）
+CREATE TABLE IF NOT EXISTS schema_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
