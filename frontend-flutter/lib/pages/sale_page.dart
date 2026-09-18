@@ -15,11 +15,15 @@ import 'attachment_viewer.dart';
 import 'router.dart';
 
 class SalePage extends StatefulWidget {
-  const SalePage({super.key, this.editId, this.initDate});
+  const SalePage({super.key, this.editId, this.initDate, this.dateRows, this.clientId});
   /// 非空 = 编辑已有出货单（从账本进入），提交走 PATCH
   final String? editId;
   /// 新建模式预填日期（如从账本日期栏补录当天出货）；编辑模式忽略
   final String? initDate;
+  /// 从账本日期栏进入：该日全部商品明细行（直接平铺编辑，保存逐行走行级 diff）
+  final List<Map<String, dynamic>>? dateRows;
+  /// dateRows 模式指定店铺（该日记录同店；缺省取首行店铺）
+  final String? clientId;
   @override
   State<SalePage> createState() => _SalePageState();
 }
@@ -143,6 +147,7 @@ class _SalePageState extends State<SalePage> {
         });
         // 编辑模式：商品目录就绪后预填原单据明细
         if (_editing) await _loadEdit();
+        else if (widget.dateRows != null) await _loadDateRows();
       } catch (e) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       }
@@ -174,6 +179,7 @@ class _SalePageState extends State<SalePage> {
     });
     // 编辑模式：商品目录就绪后预填原单据明细（本地库优先，离线也能回显）
     if (_editing) await _loadEdit();
+        else if (widget.dateRows != null) await _loadDateRows();
   }
 
   /// 商品在本地频率表中的最大使用次数（按价格组合取峰值，0=无记录）
@@ -249,6 +255,53 @@ class _SalePageState extends State<SalePage> {
       if (skipped > 0) {
         toast(context, '原单 $skipped 条商品已删除或价格停用，保存后将移除');
       }
+    });
+  }
+
+  /// 日期栏批量直编：从账本某日进入，直接平铺该日全部商品行（行内直接改，保存走行级 diff）。
+  /// lines 字段约定（账本展开行）：item_id=明细行 id、goods_id=商品 id、quantity/sale_price/unit/happened_at
+  Future<void> _loadDateRows() async {
+    final lines = (widget.dateRows ?? []).cast<Map<String, dynamic>>();
+    if (lines.isEmpty) return;
+    final firstOrder = (lines.first['order'] as Map?) ?? const <String, dynamic>{};
+    setState(() {
+      _clientId = widget.clientId ?? '${firstOrder['client_id'] ?? _clientId}';
+      _noteCtrl.text = '';
+      final hd = widget.initDate ?? _today();
+      _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
+      _rows.clear();
+      _origItemIds = lines.map((l) => '${l['item_id'] ?? ''}').where((x) => x.isNotEmpty).toSet();
+      var skipped = 0;
+      for (final it in lines) {
+        final rowId = '${it['item_id'] ?? ''}';
+        final itemId = '${it['goods_id'] ?? ''}'.isNotEmpty ? '${it['goods_id']}' : rowId;
+        final unit = '${it['unit'] ?? ''}';
+        final qty = (it['quantity'] is num)
+            ? (it['quantity'] as num).toDouble()
+            : (it['qty_num'] as num?)?.toDouble() ?? 0;
+        final sp = (it['sale_price'] as num?)?.toDouble() ?? 0;
+        final opt = _items.where((x) => x.id == itemId).firstOrNull;
+        final price = opt?.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+        if (itemId.isEmpty || opt == null || price == null) {
+          skipped++;
+          continue;
+        }
+        final lineDate = '${it['happened_at'] ?? ''}';
+        final keepLineDate = lineDate.isNotEmpty && lineDate.substring(0, 10) != hd.substring(0, 10);
+        _rows.add(_Row()
+          ..itemId = itemId
+          ..priceId = price['id'] as String?
+          ..quantity = qty
+          ..salePrice = sp
+          ..happenedAt = keepLineDate ? lineDate : ''
+          ..rowId = rowId
+          ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
+          ..unitCtrl.text = unit
+          ..qtyCtrl.text = qty.toString()
+          ..saleCtrl.text = sp.toString());
+      }
+      if (_rows.isEmpty) _rows.add(_newRow());
+      if (skipped > 0) toast(context, '该日 $skipped 条商品已删除或价格停用，保存后将移除');
     });
   }
 

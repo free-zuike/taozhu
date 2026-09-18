@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../local_stats.dart';
 import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
@@ -34,6 +35,8 @@ class _StatsPageState extends State<StatsPage> {
   List<dynamic> _days = [];
   List<dynamic> _months = [];
   List<dynamic> _clientsStats = [];
+  /// 出货明细（商品级，原生本地聚合；Web 由 /sales 直连）——统计页「出货明细」分区
+  List<Map<String, dynamic>> _saleDetail = [];
   List<dynamic> _itemsStats = [];
   List<dynamic> _cats = [];
   bool _loading = true;
@@ -117,6 +120,9 @@ class _StatsPageState extends State<StatsPage> {
     } else {
       // 原生：本地库店铺镜像为权威（同步驱动刷新），页面加载零网络
       await _loadClients();
+      final localY = await localYears();
+      _years = (localY['years'] as List?)?.map((e) => '$e').toList() ?? [];
+      if (_years.isNotEmpty && !_years.contains(_year)) _year = _years.last;
     }
     await _load(network: kIsWeb);
   }
@@ -189,6 +195,18 @@ class _StatsPageState extends State<StatsPage> {
     return max(1, b.difference(a).inDays + 1);
   }
 
+  /// 本地聚合映射（与请求路径一一对应，返回与后端接口同形 Map）
+  Future<Map<String, dynamic>?> _localFor(String path, String start, String end) async {
+    final cid = _clientId;
+    if (path.startsWith('/stats/summary')) return localSummary(start, end, cid);
+    if (path.startsWith('/stats/daily')) return localDaily(start, end, cid);
+    if (path.startsWith('/stats/items')) return localItems(start, end, cid);
+    if (path.startsWith('/stats/categories')) return localCategories(start, end, cid);
+    if (path.startsWith('/stats/clients')) return localClientStats(start, end);
+    if (path.startsWith('/stats/monthly')) return localMonthly(_year, cid);
+    return null;
+  }
+
   Future<void> _load({bool network = false}) async {
     final (start, end) = _viewRange;
     final cq = _clientId != null ? '&client_id=$_clientId' : '';
@@ -214,6 +232,19 @@ class _StatsPageState extends State<StatsPage> {
       setState(() => _loading = true);
     }
     if (!network && !kIsWeb) return;
+    // 原生：本地镜像即时聚合（本地优先，零网络秒开；数据由同步驱动刷新，切换店铺/周期立即重算）
+    if (!kIsWeb) {
+      final local = await Future.wait(paths.map((p) => _localFor(p, start, end)));
+      final detail = await localSaleDetail(start, end, _clientId);
+      if (!mounted) return;
+      setState(() {
+        _saleDetail = detail;
+      });
+      _applyStats(isYear, local);
+      _loadedOnce = true;
+      _loading = false;
+      return;
+    }
     try {
       final results = await Future.wait(paths.map((p) => Api.instance.get(p)));
       for (var i = 0; i < paths.length; i++) {
@@ -399,9 +430,65 @@ class _StatsPageState extends State<StatsPage> {
                       ),
                     if (_clientsStats.isEmpty) _empty('该区间暂无数据', Icons.store_outlined),
                   ],
+                  const SizedBox(height: 20),
+                  _sectionTitle('出货明细（商品）'),
+                  const SizedBox(height: 8),
+                  _detailRows(),
                 ],
               ),
             ),
+    );
+  }
+
+  /// 出货明细（商品级）：按日期分组的商品行——不再只是店铺/日期/笔数/总额
+  Widget _detailRows() {
+    if (_saleDetail.isEmpty) {
+      return _empty('该区间暂无出货明细', Icons.receipt_long_outlined);
+    }
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final d in _saleDetail) {
+      (grouped['${d['date']}'] ??= []).add(d);
+    }
+    return Column(
+      children: [
+        for (final e in grouped.entries) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 10, 4, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('${e.key}（${e.value.length} 条）',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _main)),
+            ),
+          ),
+          for (final d in e.value)
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(10)),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('${d['name'] ?? ''}',
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _main)),
+                        Text(
+                          _clientId == null && '${d['client_name'] ?? ''}'.isNotEmpty
+                              ? '${d['client_name']} · ${d['quantity']}${d['unit']}'
+                              : '${d['quantity']}${d['unit']}',
+                          style: TextStyle(fontSize: 12, color: _sub),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Text('¥${fmtMoney(_num(d['amount']))}',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _danger)),
+                ],
+              ),
+            ),
+        ],
+      ],
     );
   }
 

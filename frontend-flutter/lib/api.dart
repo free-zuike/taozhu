@@ -161,10 +161,6 @@ class Api {
     Map<String, dynamic>? body,
   }) {
     if (method == 'GET' && body == null) {
-      // 统计接口实时敏感（切换店铺/周期必须立即反映），不参与 3 秒缓存
-      if (path.startsWith('/stats/')) {
-        return _requestInner(path, method: method, body: body);
-      }
       final now = DateTime.now();
       final ex = _getCache[path];
       if (ex != null) {

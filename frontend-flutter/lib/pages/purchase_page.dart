@@ -14,11 +14,13 @@ import 'attachment_viewer.dart';
 import 'router.dart';
 
 class PurchasePage extends StatefulWidget {
-  const PurchasePage({super.key, this.editId, this.initDate});
+  const PurchasePage({super.key, this.editId, this.initDate, this.dateRows});
   /// 非空 = 编辑已有进货单（从账本进入），提交走 PATCH
   final String? editId;
   /// 新建模式预填日期（如从进货记录日期栏补录当天进货）；编辑模式忽略
   final String? initDate;
+  /// 从进货记录日期栏进入：该日全部商品明细行（直接平铺编辑，保存逐行走行级 diff）
+  final List<Map<String, dynamic>>? dateRows;
   @override
   State<PurchasePage> createState() => _PurchasePageState();
 }
@@ -114,6 +116,7 @@ class _PurchasePageState extends State<PurchasePage> {
         });
         // 编辑模式：商品目录就绪后预填原单据明细
         if (_editing) await _loadEdit();
+        else if (widget.dateRows != null) await _loadDateRows();
       } catch (e) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       }
@@ -131,6 +134,7 @@ class _PurchasePageState extends State<PurchasePage> {
     });
     // 编辑模式：商品目录就绪后预填原单据明细（本地库优先，离线也能回显）
     if (_editing) await _loadEdit();
+        else if (widget.dateRows != null) await _loadDateRows();
   }
 
   /// 商品在本地频率表中的最大使用次数（按价格组合取峰值，0=无记录）
@@ -206,6 +210,56 @@ class _PurchasePageState extends State<PurchasePage> {
       if (skipped > 0) {
         toast(context, '原单 $skipped 条商品已删除或价格停用，保存后将移除');
       }
+    });
+  }
+
+  /// 日期栏批量直编：直接平铺该日全部进货商品行（行内直接改，保存走行级 diff）。
+  /// lines 字段约定（进货记录展开行）：item_id=商品 id、row_id/id=明细行 id、
+  /// quantity/unit/purchase_price/happened_at
+  Future<void> _loadDateRows() async {
+    final lines = (widget.dateRows ?? []).cast<Map<String, dynamic>>();
+    if (lines.isEmpty) return;
+    setState(() {
+      final hd = widget.initDate ?? _today();
+      _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
+      _noteCtrl.text = '';
+      _rows.clear();
+      _origItemIds = lines
+          .map((l) => '${l['row_id'] ?? l['id'] ?? ''}')
+          .where((x) => x.isNotEmpty)
+          .toSet();
+      var skipped = 0;
+      for (final it in lines) {
+        final rowId = '${it['row_id'] ?? it['id'] ?? ''}';
+        final itemId = '${it['item_id'] ?? ''}';
+        final unit = '${it['unit'] ?? ''}';
+        final qty = (it['quantity'] is num)
+            ? (it['quantity'] as num).toDouble()
+            : (it['qty_num'] as num?)?.toDouble() ?? 0;
+        final pp = (it['purchase_price'] as num?)?.toDouble() ?? 0;
+        final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
+        final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+        final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+        if (itemId.isEmpty || match == null || price == null) {
+          skipped++;
+          continue;
+        }
+        final lineDate = '${it['happened_at'] ?? ''}';
+        final keepLineDate = lineDate.isNotEmpty && lineDate.substring(0, 10) != hd.substring(0, 10);
+        _rows.add(_PRow()
+          ..itemId = itemId
+          ..priceId = price['id'] as String?
+          ..quantity = qty
+          ..purchasePrice = pp
+          ..happenedAt = keepLineDate ? lineDate : ''
+          ..rowId = rowId
+          ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
+          ..unitCtrl.text = unit
+          ..qtyCtrl.text = qty.toString()
+          ..priceCtrl.text = pp.toStringAsFixed(2));
+      }
+      if (_rows.isEmpty) _rows.add(_newPRow());
+      if (skipped > 0) toast(context, '该日 $skipped 条商品已删除或价格停用，保存后将移除');
     });
   }
 

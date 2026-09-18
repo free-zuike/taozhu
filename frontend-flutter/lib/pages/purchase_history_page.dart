@@ -230,9 +230,11 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   }
 
   /// 日期栏 → 该日进货商品明细行列表（无"进货单"概念：每行一条商品，点行=编辑该商品、长按=删除该商品）
+  /// 日期栏 → 直接进入进货记单页批量直编：该日全部商品行平铺（行内直接改数量/进价/备注、
+  /// 可批量加附件、可改日期），保存按行走行级 diff；不再经"行列表+单点编辑"界面
   Future<void> _openBatchEdit(String date, List<Map<String, dynamic>> lines) async {
     await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => PurchaseBatchEditPage(date: date, lines: lines)));
+        builder: (_) => PurchasePage(initDate: date, dateRows: lines)));
     _load();
   }
 

@@ -109,23 +109,55 @@ class _LedgerPageState extends State<LedgerPage> {
   /// 加载所选月份的月度结余：
   /// 售出=当前店铺出货、收入=收款（当前店铺）、毛利=售出−成本（当前店铺）、
   /// 未回款=应收欠款（截止 end 累计出货−累计收款）、结余=毛利（不含进货——进货为全局支出，进货页可见）。
-  /// 店员无统计权限跳过；离线保留上次值。
+  /// 店员无统计权限跳过；离线保留上次值。原生本地聚合秒开（本地优先：统计用本地镜像，网络只由同步刷新）；
+  /// Web 无本地库 → 直连服务器同口径接口。
   Future<void> _loadMonthly() async {
     if (_isStaff) return;
     final y = _selYear;
     final m = _selMonth;
     final start = _fmtDate(DateTime(y, m, 1));
     final end = _fmtDate(DateTime(y, m + 1, 0));
+    final selId = _clientId == null || _clientId!.isEmpty ? null : _clientId;
     try {
-      final cq = _clientId != null ? '&client_id=$_clientId' : '';
-      final d = await Api.instance
-          .get('/stats/summary?start=$start&end=$end$cq')
-          .timeout(const Duration(seconds: 8));
+      double sold = 0, paid = 0, gross = 0, debt = 0;
+      if (kIsWeb) {
+        final cq = selId != null ? '&client_id=$selId' : '';
+        final d = await Api.instance
+            .get('/stats/summary?start=$start&end=$end$cq')
+            .timeout(const Duration(seconds: 8));
+        sold = (d['sales_total'] as num?)?.toDouble() ?? 0;
+        paid = (d['paid_total'] as num?)?.toDouble() ?? 0;
+        gross = (d['gross_profit'] as num?)?.toDouble() ?? 0;
+        debt = (d['debt'] as num?)?.toDouble() ?? 0;
+      } else {
+        // 本地聚合（去单据化行级主记录）：出货额/毛利/收款按区间+店铺；欠款=截止 end 累计出货−收款
+        final rows = await LocalDb.getAll('sale_items');
+        final pays = await LocalDb.getAll('payments');
+        final inRange = (String? h) => h != null && h.isNotEmpty && h.compareTo(start) >= 0 && h.compareTo(end) <= 0;
+        final isSel = (String? cid) => selId == null || cid == '$selId';
+        for (final r in rows) {
+          final h = '${r['happened_at'] ?? ''}';
+          if (!isSel('${r['client_id'] ?? ''}')) continue;
+          final amt = (r['amount'] as num?)?.toDouble() ?? 0;
+          if (inRange(h)) {
+            sold += amt;
+            final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
+            gross += (((r['sale_price'] as num?)?.toDouble() ?? 0) -
+                    ((r['cost_price'] as num?)?.toDouble() ?? 0)) *
+                qty;
+          }
+          if (h.isNotEmpty && h.compareTo(end) <= 0) debt += amt; // 截止 end 累计出货
+        }
+        for (final p in pays) {
+          if (!isSel('${p['client_id'] ?? ''}')) continue;
+          final amount = (p['amount'] as num?)?.toDouble() ?? 0;
+          final waived = (p['waived'] as num?)?.toDouble() ?? 0;
+          final h = '${p['happened_at'] ?? ''}';
+          if (inRange(h)) paid += amount + waived;
+          if (h.isNotEmpty && h.compareTo(end) <= 0) debt -= amount + waived; // 截止 end 累计收款
+        }
+      }
       if (!mounted) return;
-      final sold = (d['sales_total'] as num?)?.toDouble() ?? 0;
-      final paid = (d['paid_total'] as num?)?.toDouble() ?? 0;
-      final gross = (d['gross_profit'] as num?)?.toDouble() ?? 0;
-      final debt = (d['debt'] as num?)?.toDouble() ?? 0;
       setState(() {
         _mSold = sold;
         _mIncome = paid;
@@ -859,11 +891,13 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
-  /// 日期栏 → 该日出货商品明细行列表（无"出货单"概念：每行一条商品，点行=编辑该商品、长按=删除该商品）
+  /// 日期栏 → 直接进入出货记单页批量直编：该日全部商品行平铺（行内直接改数量/价格/备注、
+  /// 可批量加附件、可改日期），保存按行走行级 diff；不再经"行列表+单点编辑"界面
   Future<void> _openBatchEdit(String date, List<Map<String, dynamic>> lines) async {
     await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => SaleBatchEditPage(date: date, lines: lines, clientId: _clientId)));
+        builder: (_) => SalePage(initDate: date, dateRows: lines, clientId: _clientId)));
     _load();
+    _loadMonthly();
   }
 
   /// 删除某条记录（无明细占位行 <-> 删除该条记录全部；有明细时走行级删除）
