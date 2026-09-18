@@ -118,15 +118,16 @@ ${itemsHtml}
 ${String(first.note ?? '').trim() ? `<div class="note">备注：${esc(first.note)}</div>` : ''}`));
 });
 
-// GET /print/monthly?kind=sale|purchase&month=YYYY-MM&mode=detail|daily&client_id=&token=
-// 按月打印：detail=当月逐单明细分页（每单一页）；daily=当月每日汇总（日期/笔数/件数/金额）
+// GET /print/monthly?kind=sale|purchase&month=YYYY-MM&mode=detail|daily|period&client_id=&token=
+// 按月打印：detail=当月逐单明细分页（每单一页）；daily=每日汇总（日期/笔数/件数/金额）；
+// period=旬段汇总模板（标题"店名M月销售"居中 + 打印日期 + 1-10/11-20/21-30/31 日各配销售额列 + 总计）
 printRouter.get('/monthly', async (c) => {
   const token = c.req.query('token') ?? '';
   const payload = await verifyToken(c.env.JWT_SECRET, token);
   if (!payload) return c.json({ error: '未授权' }, 401);
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
   const month = c.req.query('month')?.trim() ?? '';
-  const mode = c.req.query('mode') === 'daily' ? 'daily' : 'detail';
+  const mode = c.req.query('mode') ?? 'detail';
   const clientId = c.req.query('client_id')?.trim() ?? '';
   if (!/^\d{4}-\d{2}$/.test(month)) return c.json({ error: 'month 格式 YYYY-MM' }, 400);
   const [y, m] = month.split('-').map(Number);
@@ -140,6 +141,45 @@ printRouter.get('/monthly', async (c) => {
   if (clientId && kind === 'sale') {
     where += ' AND si.client_id = ?';
     params.push(clientId);
+  }
+
+  // 旬段汇总模板：1-10 / 11-20 / 21-30 / 31 日四段销售额 + 全月总计
+  if (mode === 'period') {
+    const seg = await c.env.DB.prepare(
+      `SELECT
+        COALESCE(SUM(CASE WHEN substr(si.happened_at, 9, 2) BETWEEN '01' AND '10' THEN si.amount END), 0) AS seg1,
+        COALESCE(SUM(CASE WHEN substr(si.happened_at, 9, 2) BETWEEN '11' AND '20' THEN si.amount END), 0) AS seg2,
+        COALESCE(SUM(CASE WHEN substr(si.happened_at, 9, 2) BETWEEN '21' AND '30' THEN si.amount END), 0) AS seg3,
+        COALESCE(SUM(CASE WHEN substr(si.happened_at, 9, 2) >= '31' THEN si.amount END), 0) AS seg4,
+        COALESCE(SUM(si.amount), 0) AS total
+       FROM ${table} si WHERE ${where}`,
+    ).bind(...params).first<{ seg1: number; seg2: number; seg3: number; seg4: number; total: number }>();
+    const client = clientId
+      ? await c.env.DB.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>()
+      : null;
+    const storeName = client?.name || '全部店铺';
+    const now = new Date();
+    const today = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
+    const segs = [
+      { label: '1日到10日', v: seg?.seg1 ?? 0 },
+      { label: '11日到20日', v: seg?.seg2 ?? 0 },
+      { label: '21日到30日', v: seg?.seg3 ?? 0 },
+      { label: '31日', v: seg?.seg4 ?? 0 },
+    ];
+    // 8 列：每段「区间标签 | 销售额」交替（用户模板：1日到10日 销售额 11日到20日 销售额 ... 31日 销售额）
+    const headCells = segs.map((s) => `<th class="num">${esc(s.label)}</th><th class="num">销售额</th>`).join('');
+    const valCells = segs.map((s) => `<td class="num">${esc(s.label)}</td><td class="num">${fmtMoney(s.v)}</td>`).join('');
+    return c.html(page(`${storeName}${m}月${title}`, `<h1>${esc(storeName)}${m}月${title}</h1>
+<div class="meta">${esc(today)}</div>
+<table>
+  <thead><tr>${headCells}</tr></thead>
+  <tbody>
+    <tr>${valCells}</tr>
+  </tbody>
+  <tfoot>
+    <tr class="total-row"><td colspan="8" style="text-align:right">总计：¥${fmtMoney(seg?.total ?? 0)}</td></tr>
+  </tfoot>
+</table>`));
   }
 
   if (mode === 'daily') {

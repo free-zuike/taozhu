@@ -6,9 +6,7 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
-import '../utils/open_print.dart';
 import '../widgets/year_month_picker.dart';
-import '../widgets/center_sheet.dart';
 import 'router.dart';
 import 'purchase_page.dart';
 import 'purchase_line_edit.dart';
@@ -244,53 +242,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     _load();
   }
 
-  /// Web 端打印进货单：服务端 /print/purchase/:id 生成自包含 HTML（自动打印），token 走 query
-  Future<void> _printPurchase(Map<String, dynamic> order) async {
-    try {
-      final base = await Api.instance.getBase();
-      final token = await Api.instance.getTokenValue() ?? '';
-      await openPrintUrl('$base/api/v1/print/purchase/${order['id']}?token=$token');
-    } catch (e) {
-      toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
-    }
-  }
-
-  /// 按月打印进货（日期栏入口）：逐单明细（每单一页）/ 每日汇总（一天一行）两模式
-  Future<void> _printMonthly() async {
-    final month = '${_selYear.toString().padLeft(4, '0')}-${_selMonth.toString().padLeft(2, '0')}';
-    final choice = await showCenterSheet<String>(
-      context: context,
-      maxHeightFactor: 0.5,
-      builder: (ctx) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            child: Text('按月打印进货（$month）', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.receipt_long_outlined),
-            title: const Text('逐单明细（每单一页）'),
-            onTap: () => Navigator.pop(ctx, 'detail'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.calendar_view_day_outlined),
-            title: const Text('每日汇总（一天一行）'),
-            onTap: () => Navigator.pop(ctx, 'daily'),
-          ),
-        ],
-      ),
-    );
-    if (choice == null) return;
-    try {
-      final base = await Api.instance.getBase();
-      final token = await Api.instance.getTokenValue() ?? '';
-      await openPrintUrl('$base/api/v1/print/monthly?kind=purchase&month=$month&mode=$choice&token=$token');
-    } catch (e) {
-      toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
-    }
-  }
-
   Future<void> _deletePurchase(Map<String, dynamic> p) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -512,15 +463,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
             ),
             Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
-            // 打印进货单：Web 服务端 HTML 自动打印；原生系统浏览器调系统打印（可连打印机）
-            InkWell(
-              borderRadius: BorderRadius.circular(6),
-              onTap: () => _printPurchase(order),
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Icon(Icons.print_outlined, size: 16, color: c.textSub),
-              ),
-            ),
             const SizedBox(width: 4),
             Icon(Icons.chevron_right, size: 14, color: c.textSub),
           ],
@@ -578,16 +520,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                     const Spacer(),
                     // 与交易页一致：去左右箭头，点标题弹滚轮选择；列表上下滑动月份联动
                     Icon(Icons.unfold_more, size: 16, color: c.textSub),
-                    const SizedBox(width: 4),
-                    // 按月打印（日期栏入口）：逐单明细 / 每日汇总
-                    InkWell(
-                      borderRadius: BorderRadius.circular(6),
-                      onTap: _printMonthly,
-                      child: Padding(
-                        padding: const EdgeInsets.all(4),
-                        child: Icon(Icons.print_outlined, size: 16, color: c.textSub),
-                      ),
-                    ),
                   ],
                 ),
                 const SizedBox(height: 4),

@@ -13,7 +13,6 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
-import '../utils/open_print.dart';
 import '../widgets/center_sheet.dart';
 import '../widgets/year_month_picker.dart';
 import 'router.dart';
@@ -619,15 +618,6 @@ class _LedgerPageState extends State<LedgerPage> {
                 ),
               ),
               const Spacer(),
-              // 按月打印（日期栏入口）：逐单明细 / 每日汇总
-              InkWell(
-                borderRadius: BorderRadius.circular(6),
-                onTap: () => _printMonthly(y: y, m: m),
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Icon(Icons.print_outlined, size: 16, color: c.textSub),
-                ),
-              ),
             ],
           ),
           const SizedBox(height: 2),
@@ -1469,55 +1459,6 @@ class _LedgerPageState extends State<LedgerPage> {
     );
   }
 
-  /// 出货流水行：三行卡片 —— ①商品名称+备注 ②商品分类+附件（分类在前，有附件才显示图标）③进价·售价·数量单位
-  /// Web 端打印出货单：服务端 /print/sale/:id 生成自包含 HTML（自动打印），token 走 query
-  Future<void> _printSaleOrder(Map<String, dynamic> order) async {
-    try {
-      final base = await Api.instance.getBase();
-      final token = await Api.instance.getTokenValue() ?? '';
-      await openPrintUrl('$base/api/v1/print/sale/${order['id']}?token=$token');
-    } catch (e) {
-      toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
-    }
-  }
-
-  /// 按月打印出货（日期栏入口）：逐单明细（每单一页）/ 每日汇总（一天一行）两模式
-  Future<void> _printMonthly({required int y, required int m}) async {
-    final month = '${y.toString().padLeft(4, '0')}-${m.toString().padLeft(2, '0')}';
-    final choice = await showCenterSheet<String>(
-      context: context,
-      maxHeightFactor: 0.5,
-      builder: (ctx) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            child: Text('按月打印出货（$month）', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.receipt_long_outlined),
-            title: const Text('逐单明细（每单一页）'),
-            onTap: () => Navigator.pop(ctx, 'detail'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.calendar_view_day_outlined),
-            title: const Text('每日汇总（一天一行）'),
-            onTap: () => Navigator.pop(ctx, 'daily'),
-          ),
-        ],
-      ),
-    );
-    if (choice == null) return;
-    try {
-      final base = await Api.instance.getBase();
-      final token = await Api.instance.getTokenValue() ?? '';
-      final cid = _clientId ?? '';
-      await openPrintUrl('$base/api/v1/print/monthly?kind=sale&month=$month&mode=$choice&client_id=$cid&token=$token');
-    } catch (e) {
-      toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
-    }
-  }
-
   Widget _saleLineTile(TaozhuColors c, Map<String, dynamic> l) {
     final order = l['order'] as Map<String, dynamic>;
     final clientName = '${l['client_name'] ?? ''}';
@@ -1670,15 +1611,6 @@ class _LedgerPageState extends State<LedgerPage> {
                   ),
                   Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                       style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
-                  // 打印出货单：Web 服务端 HTML 自动打印；原生系统浏览器调系统打印（可连打印机）
-                  InkWell(
-                    borderRadius: BorderRadius.circular(6),
-                    onTap: () => _printSaleOrder(order),
-                    child: Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: Icon(Icons.print_outlined, size: 16, color: c.textSub),
-                    ),
-                  ),
                 ],
               ),
             ),
