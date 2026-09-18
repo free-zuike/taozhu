@@ -236,6 +236,12 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!exists) {
       await db.batch(DDL.map((sql) => db.prepare(sql)));
     }
+    // 迁移标记表必须存在（老库 users 已存在会跳过上方全量 DDL batch，此处独立补建——
+    // 否则末尾 INSERT schema_meta 抛 no such table → 每次请求都 500，Web 全卡）
+    await db.prepare(`CREATE TABLE IF NOT EXISTS schema_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )`).run();
     // 增量迁移（幂等，已有库也会补齐新表/新列；SQLite 无 ADD COLUMN IF NOT EXISTS，需查列）
     const catTable = await db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'categories'",

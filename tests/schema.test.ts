@@ -89,6 +89,27 @@ describe('schema.sql 完整建表与幂等', () => {
     );
   });
 
+  it('v0.17.139 回归：老生产库（users 已存在、无 schema_meta 表）跑 ensureSchema → 不抛错、补建标记表、写入标记、二次调用走快检', async () => {
+    // 模拟老库：全部业务表已建（users 存在 → 跳过全量 DDL batch），schema_meta 不存在
+    // （v0.17.137 缺陷场景：迁移末尾 INSERT schema_meta 抛 no such table → 每次请求都 500，Web 全卡）
+    const db = await createFakeD1();
+    await db.prepare('CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT \'staff\', display_name TEXT, avatar TEXT, totp_secret TEXT, totp_enabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)').run();
+    await db.prepare('CREATE TABLE sale_items (id TEXT PRIMARY KEY, sale_id TEXT NOT NULL, item_id TEXT NOT NULL, client_id TEXT, unit TEXT NOT NULL, quantity REAL NOT NULL, sale_price REAL NOT NULL DEFAULT 0, cost_price REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0, happened_at TEXT, note TEXT DEFAULT \'\', created_at TEXT NOT NULL)').run();
+    await db.prepare('CREATE TABLE purchase_items (id TEXT PRIMARY KEY, purchase_id TEXT NOT NULL, item_id TEXT NOT NULL, unit TEXT NOT NULL, quantity REAL NOT NULL, purchase_price REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0, happened_at TEXT, note TEXT DEFAULT \'\', created_at TEXT NOT NULL)').run();
+    await db.prepare('CREATE TABLE payments (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, happened_at TEXT NOT NULL, amount REAL NOT NULL, waived REAL NOT NULL DEFAULT 0, method TEXT DEFAULT \'\', note TEXT DEFAULT \'\', created_at TEXT NOT NULL, created_by TEXT, sync_key TEXT)').run();
+    await db.prepare('CREATE TABLE clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, contact TEXT DEFAULT \'\', phone TEXT DEFAULT \'\', note TEXT DEFAULT \'\', start_date TEXT, end_date TEXT, month_start_day INTEGER NOT NULL DEFAULT 1, category_id TEXT, deleted_at TEXT, created_at TEXT NOT NULL)').run();
+    await db.prepare('CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT DEFAULT \'\', deleted_at TEXT, created_at TEXT NOT NULL)').run();
+    await db.prepare('CREATE TABLE payment_accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)').run();
+    resetSchemaState();
+    await expect(ensureSchema(db as never)).resolves.toBeUndefined();
+    // 标记表已补建且有行
+    const meta = await db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").first<{ value: string }>();
+    expect(meta?.value).toBe('2');
+    // 二次调用（模拟后续请求）不抛
+    resetSchemaState();
+    await expect(ensureSchema(db as never)).resolves.toBeUndefined();
+  });
+
   it('v0.17.114 彻底删表迁移：旧库（含头表+FK 与数据）跑 ensureSchema → 头表删除、行表无 FK、数据保留自包含', async () => {
     // 构造旧库：头表 + 带 FK 的行表 + 数据（模拟 v0.17.113 之前的物理结构）
     const db = await createFakeD1();
