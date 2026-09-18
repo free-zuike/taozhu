@@ -665,7 +665,7 @@ class _StatsPageState extends State<StatsPage> {
     final data = _isBuy
         ? <String, double>{
             '进货': sales,
-            if (_mode != 'year') '笔数': _num(_summary['sales_count']),
+            if (_mode != 'year') '天数': _days.length,
           }
         : <String, double>{
             '出货': sales,

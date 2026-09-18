@@ -223,10 +223,10 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       final d = _date(x['happened_at']);
       return d.isNotEmpty && d.compareTo(from) >= 0 && d.compareTo(to) <= 0;
     }).toList();
-    // 当月进货统计：总额 + 笔数 + 商品件数（不只支出金额）
+    // 当月进货统计：总额 + 天数（有进货的日期数）+ 商品件数（不只支出金额）
     _monthExpense = filtered.fold<double>(
         0, (s, p) => s + ((p['total'] as num?)?.toDouble() ?? 0));
-    _monthCount = filtered.length;
+    _monthCount = filtered.map((p) => _date(p['happened_at'])).toSet().length;
     _monthItems = filtered.fold<int>(
         0, (s, p) => s + (((p['items'] as List?) ?? []).length));
     return filtered;
@@ -566,7 +566,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('笔数', style: TextStyle(fontSize: 11, color: c.textSub)),
+                            Text('天数', style: TextStyle(fontSize: 11, color: c.textSub)),
                             const SizedBox(height: 3),
                             Text('$_monthCount',
                                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.textMain)),

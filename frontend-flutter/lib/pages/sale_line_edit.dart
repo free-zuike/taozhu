@@ -218,6 +218,11 @@ Future<Map<String, dynamic>?> editSaleLine(
       if (maxD.isNotEmpty) payload['happened_at'] = maxD;
     }
     await LocalDb.upsertOne('sales', payload);
+    // 行级 store 同步更新（账本读行级 sale_items 组装：只写整单则单改日期/数量后本地列表不变）
+    final edited = updatedItems.where((it) => '${it['id']}' == itemId).firstOrNull;
+    if (edited != null) {
+      await LocalDb.upsertOne('sale_items', Map<String, dynamic>.from(edited));
+    }
     await SyncService.enqueueChange(
         entityType: 'sale', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
     toast(context, '已保存');
