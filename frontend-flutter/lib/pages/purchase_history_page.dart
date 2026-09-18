@@ -203,7 +203,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       final pn = '${prev?['note'] ?? ''}';
       meta[oid] = {
         'id': oid,
-        'happened_at': ph >= h ? ph : h,
+        'happened_at': ph.compareTo(h) >= 0 ? ph : h,
         'note': pn.isNotEmpty ? pn : note,
       };
     }

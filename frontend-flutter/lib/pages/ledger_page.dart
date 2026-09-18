@@ -367,7 +367,7 @@ class _LedgerPageState extends State<LedgerPage> {
         'id': oid,
         'client_id': '${r['client_id'] ?? prev?['client_id'] ?? ''}',
         'client_name': '${r['client_name'] ?? prev?['client_name'] ?? ''}',
-        'happened_at': ph >= h ? ph : h,
+        'happened_at': ph.compareTo(h) >= 0 ? ph : h,
         'note': pn.isNotEmpty ? pn : note,
       };
     }
