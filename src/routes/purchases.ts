@@ -84,6 +84,7 @@ purchasesRouter.post('/', async (c) => {
 
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: purchaseId, payload: await buildPayload(c.env.DB, 'purchase', purchaseId), updated_by_username: user.username });
+  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'purchase', entity_id: purchaseId, detail: `添加进货：${items.length} 件商品，合计 ¥${(Math.round(total * 100) / 100).toFixed(2)}` });
   return c.json({ id: purchaseId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100, items: items.length }, 201);
 });
 

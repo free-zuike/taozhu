@@ -250,7 +250,27 @@ class _StatsPageState extends State<StatsPage> {
       for (var i = 0; i < paths.length; i++) {
         if (results[i].isNotEmpty) await Api.instance.setCache(paths[i], results[i]);
       }
+      // Web 出货明细：直连 /sales 行级数组组装（原生走本地镜像 localSaleDetail 同构字段）
+      final detail = <Map<String, dynamic>>[];
+      try {
+        final d = await Api.instance
+            .get('/sales?client_id=${_clientId ?? ''}&date_from=$start&date_to=$end&limit=1000');
+        for (final r in ((d['sale_items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+          final h = '${r['happened_at'] ?? ''}';
+          if (h.isEmpty) continue;
+          detail.add(<String, dynamic>{
+            'date': h.substring(0, 10),
+            'client_name': '${r['client_name'] ?? ''}',
+            'name': '${r['item_name'] ?? ''}',
+            'quantity': (r['quantity'] as num?)?.toDouble() ?? 0,
+            'unit': '${r['unit'] ?? ''}',
+            'amount': (r['amount'] as num?)?.toDouble() ?? 0,
+          });
+        }
+        detail.sort((a, b) => '${a['date']}'.compareTo('${b['date']}'));
+      } catch (_) {}
       if (!mounted) return;
+      setState(() => _saleDetail = detail);
       _applyStats(isYear, results);
       _loadedOnce = true;
     } catch (_) {

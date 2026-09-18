@@ -627,8 +627,14 @@ class _PurchasePageState extends State<PurchasePage> {
       if (mounted) Navigator.pop(context, true);
       return;
     }
-    // 本地优先：整单落库（列表立即展示）→ 逐商品行入队（去单据化：同步实体是 purchase_item 商品行）
+    // 本地优先：整单落库（列表立即展示）→ 行级 store 双写（进货历史读行级 purchase_items，只写整单新单本地不可见）→ 逐商品行入队
     await LocalDb.upsertOne('purchases', payload);
+    for (final r in valid) {
+      final rowPayload = Map<String, dynamic>.from(r.itemsPayload ?? {});
+      if (rowPayload.isNotEmpty && r.rowId.isNotEmpty) {
+        await LocalDb.upsertOne('purchase_items', rowPayload);
+      }
+    }
     final keptIds = <String>{};
     for (final r in valid) {
       final rowPayload = Map<String, dynamic>.from(r.itemsPayload ?? {});
@@ -646,6 +652,7 @@ class _PurchasePageState extends State<PurchasePage> {
     if (_editing) {
       final removedIds = _origItemIds.difference(keptIds);
       for (final rid in removedIds) {
+        await LocalDb.deleteOne('purchase_items', rid);
         await SyncService.enqueueChange(
           entityType: 'purchase_item', entitySyncId: rid, action: 'delete',
           payload: {'id': rid, 'purchase_id': purchaseId},

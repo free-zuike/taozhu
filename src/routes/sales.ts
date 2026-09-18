@@ -96,6 +96,7 @@ salesRouter.post('/', async (c) => {
 
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: user.username });
+  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'sale', entity_id: saleId, detail: `添加出货：店铺 ${clientId}，${items.length} 件商品，合计 ¥${(Math.round(total * 100) / 100).toFixed(2)}` });
   return c.json({ id: saleId, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100, items: saleItemIds.length }, 201);
 });
 

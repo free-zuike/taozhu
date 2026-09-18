@@ -8,6 +8,7 @@ import '../theme.dart';
 import '../utils/money.dart';
 import '../utils/open_print.dart';
 import '../widgets/year_month_picker.dart';
+import '../widgets/center_sheet.dart';
 import 'router.dart';
 import 'purchase_page.dart';
 import 'purchase_line_edit.dart';
@@ -32,6 +33,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   int _selMonth = DateTime.now().month;
   /// 当月进货总额（仅支出统计：进货页无收入/结余）
   double _monthExpense = 0;
+  int _monthCount = 0;
+  int _monthItems = 0;
   /// 月份滚动联动（与交易页一致）：列表滑动时顶部月份跟随；点标题弹年月选择
   late final ScrollController _listCtrl = ScrollController()..addListener(_onScroll);
   final Map<String, GlobalKey> _dateHeaderKeys = {};
@@ -207,9 +210,12 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       final d = _date(x['happened_at']);
       return d.isNotEmpty && d.compareTo(from) >= 0 && d.compareTo(to) <= 0;
     }).toList();
-    // 仅支出统计：当月进货总额（明细 amount 求和）
+    // 当月进货统计：总额 + 笔数 + 商品件数（不只支出金额）
     _monthExpense = filtered.fold<double>(
         0, (s, p) => s + ((p['total'] as num?)?.toDouble() ?? 0));
+    _monthCount = filtered.length;
+    _monthItems = filtered.fold<int>(
+        0, (s, p) => s + (((p['items'] as List?) ?? []).length));
     return filtered;
   }
 
@@ -244,6 +250,42 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       final base = await Api.instance.getBase();
       final token = await Api.instance.getTokenValue() ?? '';
       await openPrintUrl('$base/api/v1/print/purchase/${order['id']}?token=$token');
+    } catch (e) {
+      toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
+  /// 按月打印进货（日期栏入口）：逐单明细（每单一页）/ 每日汇总（一天一行）两模式
+  Future<void> _printMonthly() async {
+    final month = '${_selYear.toString().padLeft(4, '0')}-${_selMonth.toString().padLeft(2, '0')}';
+    final choice = await showCenterSheet<String>(
+      context: context,
+      maxHeightFactor: 0.5,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            child: Text('按月打印进货（$month）', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.receipt_long_outlined),
+            title: const Text('逐单明细（每单一页）'),
+            onTap: () => Navigator.pop(ctx, 'detail'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.calendar_view_day_outlined),
+            title: const Text('每日汇总（一天一行）'),
+            onTap: () => Navigator.pop(ctx, 'daily'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null) return;
+    try {
+      final base = await Api.instance.getBase();
+      final token = await Api.instance.getTokenValue() ?? '';
+      await openPrintUrl('$base/api/v1/print/monthly?kind=purchase&month=$month&mode=$choice&token=$token');
     } catch (e) {
       toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
@@ -470,16 +512,15 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
             ),
             Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
-            // Web 端打印进货单（原生端暂不支持，隐藏入口）
-            if (kIsWeb)
-              InkWell(
-                borderRadius: BorderRadius.circular(6),
-                onTap: () => _printPurchase(order),
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Icon(Icons.print_outlined, size: 16, color: c.textSub),
-                ),
+            // 打印进货单：Web 服务端 HTML 自动打印；原生系统浏览器调系统打印（可连打印机）
+            InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => _printPurchase(order),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Icon(Icons.print_outlined, size: 16, color: c.textSub),
               ),
+            ),
             const SizedBox(width: 4),
             Icon(Icons.chevron_right, size: 14, color: c.textSub),
           ],
@@ -537,10 +578,20 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                     const Spacer(),
                     // 与交易页一致：去左右箭头，点标题弹滚轮选择；列表上下滑动月份联动
                     Icon(Icons.unfold_more, size: 16, color: c.textSub),
+                    const SizedBox(width: 4),
+                    // 按月打印（日期栏入口）：逐单明细 / 每日汇总
+                    InkWell(
+                      borderRadius: BorderRadius.circular(6),
+                      onTap: _printMonthly,
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Icon(Icons.print_outlined, size: 16, color: c.textSub),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 4),
-                // 支出统计卡（仅支出：进货页无收入/结余）
+                // 进货统计卡：金额 + 笔数 + 商品件数（进货页既看出支也看进货量）
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
@@ -549,13 +600,43 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: c.divider),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      Text('支出（进货）', style: TextStyle(fontSize: 11, color: c.textSub)),
-                      const SizedBox(height: 3),
-                      Text('¥${fmtMoney(_monthExpense)}',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c.danger)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('进货金额', style: TextStyle(fontSize: 11, color: c.textSub)),
+                            const SizedBox(height: 3),
+                            Text('¥${fmtMoney(_monthExpense)}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c.danger)),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('笔数', style: TextStyle(fontSize: 11, color: c.textSub)),
+                            const SizedBox(height: 3),
+                            Text('$_monthCount',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.textMain)),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('商品件数', style: TextStyle(fontSize: 11, color: c.textSub)),
+                            const SizedBox(height: 3),
+                            Text('$_monthItems',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.textMain)),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),

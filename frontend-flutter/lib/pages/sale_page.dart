@@ -774,8 +774,15 @@ class _SalePageState extends State<SalePage> {
       if (mounted) Navigator.pop(context, true);
       return;
     }
-    // 先写本地库（列表/账本立即可见，不卡网络）
+    // 先写本地库（列表/账本立即可见，不卡网络）：整单镜像 + 行级 store 双写——
+    // 账本/统计/对账读行级 sale_items（去单据化），只写整单会导致新单本地不可见（web 直连服务端反而有）
     await LocalDb.upsertOne('sales', payload);
+    for (final r in valid) {
+      final rowPayload = Map<String, dynamic>.from(r.itemsPayload ?? {});
+      if (rowPayload.isNotEmpty && r.rowId.isNotEmpty) {
+        await LocalDb.upsertOne('sale_items', rowPayload);
+      }
+    }
     // 入待推送队列：按商品行逐行入队（去单据化——同步实体是 sale_item 商品行，不再有"整单"）
     final keptIds = <String>{};
     for (final r in valid) {
@@ -794,6 +801,7 @@ class _SalePageState extends State<SalePage> {
     if (_editing) {
       final removedIds = _origItemIds.difference(keptIds);
       for (final rid in removedIds) {
+        await LocalDb.deleteOne('sale_items', rid);
         await SyncService.enqueueChange(
           entityType: 'sale_item', entitySyncId: rid, action: 'delete',
           payload: {'id': rid, 'sale_id': saleId, 'client_id': _clientId ?? ''},
