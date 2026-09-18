@@ -1490,9 +1490,9 @@ class _LedgerPageState extends State<LedgerPage> {
       builder: (ctx) => Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 14),
-            child: Text('按月打印出货（$month）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            child: Text('按月打印出货（$month）', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
           ),
           ListTile(
             leading: const Icon(Icons.receipt_long_outlined),
