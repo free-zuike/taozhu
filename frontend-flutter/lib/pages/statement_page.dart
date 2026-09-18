@@ -248,6 +248,7 @@ class _StatementPageState extends State<StatementPage> {
                           cfg = t.copy();
                           nameCtrl.text = cfg.name;
                           titleCtrl.text = cfg.title;
+                          contentCtrl.text = cfg.content; // 同步正文，避免陈旧文本覆盖新模板
                         }),
                       ),
                   ],
@@ -403,6 +404,7 @@ class _StatementPageState extends State<StatementPage> {
                         if (newName == null || newName.isEmpty) return;
                         setDlg(() {
                           cfg.name = newName;
+                          nameCtrl.text = newName;
                           _upsertTemplate(cfg);
                           _saveTemplates();
                         });
@@ -422,6 +424,7 @@ class _StatementPageState extends State<StatementPage> {
                             cfg = _templates.first.copy();
                             nameCtrl.text = cfg.name;
                             titleCtrl.text = cfg.title;
+                            contentCtrl.text = cfg.content;
                           }
                         });
                       },
@@ -993,12 +996,19 @@ class _StatementPageState extends State<StatementPage> {
     return out;
   }
 
-  /// 出货明细行（每件商品一行：日期 商品 数量单位 金额）——{明细} 变量展开数据源
+  /// 出货明细行（每件商品一行：日期 商品 数量单位 金额；无明细的单据补备注/占位）——{明细} 变量展开数据源
   List<String> _detailLines() {
     final out = <String>[];
     for (final s in _sales) {
       final orderDate = _date(s['happened_at']);
-      for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+      final items = ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (items.isEmpty) {
+        final note = '${s['note'] ?? ''}'.trim();
+        out.add('$orderDate ${note.isEmpty ? '（无明细）' : note} '
+            '¥${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}');
+        continue;
+      }
+      for (final it in items) {
         final id = '${it['happened_at'] ?? ''}';
         final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
         out.add('$d ${it['item_name']} ${it['quantity']}${it['unit']} '

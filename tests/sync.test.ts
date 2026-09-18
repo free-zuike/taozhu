@@ -240,10 +240,12 @@ describe('同步协议', () => {
     const pd = (await push.json()) as { accepted: number; rejected: number };
     expect(pd.accepted).toBe(1);
 
-    // 单据 + 库存：白菜 斤 库存 = -10（只有出货无进货）
-    const stocks = await call(env, 'GET', '/api/v1/stocks', token);
-    const list = ((await stocks.json()) as { stocks: Array<{ item_id: string; unit: string; quantity: number }> }).stocks;
-    expect(list.find((x) => x.item_id === item.id && x.unit === '斤')?.quantity).toBe(-10);
+    // 单据 + 库存：白菜 斤 库存 = -10（只有出货无进货）——GET /stocks 已按口径把负数 clamp 为 0，这里直查 DB 验证真实扣减
+    const dbQty = async () => {
+      const row = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind(item.id, '斤').first<{ quantity: number }>();
+      return row?.quantity ?? 0;
+    };
+    expect(await dbQty()).toBe(-10);
 
     // 删除出货单（LWW 新时间戳）→ 库存还原为 0
     const delTs = new Date(Date.now() + 120_000).toISOString();
@@ -253,9 +255,7 @@ describe('同步协议', () => {
     });
     const dd = (await del.json()) as { accepted: number };
     expect(dd.accepted).toBe(1);
-    const stocks2 = await call(env, 'GET', '/api/v1/stocks', token);
-    const list2 = ((await stocks2.json()) as { stocks: Array<{ item_id: string; unit: string; quantity: number }> }).stocks;
-    expect(list2.find((x) => x.item_id === item.id && x.unit === '斤')?.quantity ?? 0).toBe(0);
+    expect(await dbQty()).toBe(0);
   });
 
   it('行级同步（App 主路径）：sale_item/purchase_item upsert 扣/加库存 + 新建审计；重放不等同重复扣减/审计', async () => {
@@ -286,10 +286,10 @@ describe('同步协议', () => {
     }];
     const r1 = await call(env, 'POST', '/api/v1/sync/push', token, { device_id: 'phone-a', changes: saleCh });
     expect(((await r1.json()) as { accepted: number }).accepted).toBe(1);
+    // 直查 DB 验证真实扣减（GET /stocks 已按口径把负数 clamp 为 0）
     const stock = async () => {
-      const s = (await (await call(env, 'GET', '/api/v1/stocks', token)).json()) as
-        { stocks: Array<{ item_id: string; unit: string; quantity: number }> };
-      return s.stocks.find((x) => x.item_id === item.id && x.unit === '斤')?.quantity ?? 0;
+      const row = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind(item.id, '斤').first<{ quantity: number }>();
+      return row?.quantity ?? 0;
     };
     expect(await stock()).toBe(-6);
     const countAudit = async () => {

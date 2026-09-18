@@ -167,4 +167,20 @@ describe('库存（stocks）', () => {
     const staffToken = ((await login.json()) as { token: string }).token;
     expect((await call(env, 'POST', '/api/v1/stocks/rebuild', staffToken)).status).toBe(403);
   });
+
+  it('负数库存显示为 0（用户口径：没有就是 0）', async () => {
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string }> };
+    const itemId = items.items[0].id;
+    // 先建库存行（盘点 0），再只出货无进货 → DB 库存为负
+    await call(env, 'PUT', '/api/v1/stocks', token, { rows: [{ item_id: itemId, unit: '斤', quantity: 0 }] });
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-neg', 's-neg', clientId, itemId, '斤', 8, 2, 1, 16, '2026-09-10').run();
+    const d = (await (await call(env, 'GET', '/api/v1/stocks', token)).json()) as { stocks: Array<{ quantity: number }> };
+    expect(d.stocks[0].quantity).toBe(0); // -8 → 显示 0
+    // items/summary 记单目录同样不出现负数
+    const sum = (await (await call(env, 'GET', '/api/v1/items/summary', token)).json()) as {
+      items: Array<{ prices: Array<{ stock: number }> }>;
+    };
+    expect(sum.items[0].prices[0].stock).toBe(0);
+  });
 });

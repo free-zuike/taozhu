@@ -130,6 +130,8 @@ printRouter.get('/monthly', async (c) => {
   const mode = c.req.query('mode') ?? 'detail';
   const clientId = c.req.query('client_id')?.trim() ?? '';
   if (!/^\d{4}-\d{2}$/.test(month)) return c.json({ error: 'month 格式 YYYY-MM' }, 400);
+  const mInt = Number(month.slice(5, 7));
+  if (mInt < 1 || mInt > 12) return c.json({ error: 'month 月份超出 1-12' }, 400);
   const [y, m] = month.split('-').map(Number);
   const nextMonth = m === 12 ? `${y + 1}-01` : `${month.slice(0, 4)}-${String(m + 1).padStart(2, '0')}`;
   const table = kind === 'sale' ? 'sale_items' : 'purchase_items';

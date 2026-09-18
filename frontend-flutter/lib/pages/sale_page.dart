@@ -230,8 +230,12 @@ class _SalePageState extends State<SalePage> {
       for (final it in items) {
         final itemId = '${it['item_id']}';
         final unit = '${it['unit'] ?? ''}';
-        final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-        final sp = (it['sale_price'] as num?)?.toDouble() ?? 0;
+        final qty = it['quantity'] is num
+            ? (it['quantity'] as num).toDouble()
+            : double.tryParse('${it['quantity']}') ?? 0;
+        final sp = it['sale_price'] is num
+            ? (it['sale_price'] as num).toDouble()
+            : double.tryParse('${it['sale_price']}') ?? 0;
         final opt = _items.where((x) => x.id == itemId).firstOrNull;
         final price = opt?.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
         if (opt == null || price == null) {
@@ -242,7 +246,7 @@ class _SalePageState extends State<SalePage> {
         // 置空以便改顶部日期时整单生效（否则行旧日期覆盖新单据日期导致改日期无效）
         final lineDate = '${it['happened_at'] ?? ''}';
         final keepLineDate =
-            lineDate.isNotEmpty && lineDate.substring(0, 10) != hd.substring(0, 10);
+            lineDate.length >= 10 && lineDate.substring(0, 10) != hd.substring(0, 10);
         _rows.add(_Row()
           ..itemId = itemId
           ..priceId = price['id'] as String?

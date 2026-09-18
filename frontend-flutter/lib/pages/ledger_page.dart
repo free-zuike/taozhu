@@ -363,10 +363,15 @@ class _LedgerPageState extends State<LedgerPage> {
       final ph = '${prev?['happened_at'] ?? ''}';
       final note = '${r['note'] ?? ''}';
       final pn = '${prev?['note'] ?? ''}';
+      // 店铺/店名：空串也回退上一行（与小程序 || 语义一致，避免脏行归组/统计两端不一致）
+      final cid = '${r['client_id'] ?? ''}';
+      final cname = '${r['client_name'] ?? ''}';
+      final pcid = '${prev?['client_id'] ?? ''}';
+      final pcname = '${prev?['client_name'] ?? ''}';
       meta[oid] = {
         'id': oid,
-        'client_id': '${r['client_id'] ?? prev?['client_id'] ?? ''}',
-        'client_name': '${r['client_name'] ?? prev?['client_name'] ?? ''}',
+        'client_id': cid.isNotEmpty ? cid : pcid,
+        'client_name': cname.isNotEmpty ? cname : pcname,
         'happened_at': ph.compareTo(h) >= 0 ? ph : h,
         'note': pn.isNotEmpty ? pn : note,
       };

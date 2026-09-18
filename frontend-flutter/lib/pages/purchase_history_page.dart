@@ -223,10 +223,23 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       final d = _date(x['happened_at']);
       return d.isNotEmpty && d.compareTo(from) >= 0 && d.compareTo(to) <= 0;
     }).toList();
-    // 当月进货统计：总额 + 天数（有进货的日期数）+ 商品件数（不只支出金额）
+    // 当月进货统计：总额 + 天数（有进货的行日期数——按行日期去重，非整单数）+ 商品件数
     _monthExpense = filtered.fold<double>(
         0, (s, p) => s + ((p['total'] as num?)?.toDouble() ?? 0));
-    _monthCount = filtered.map((p) => _date(p['happened_at'])).toSet().length;
+    final daySet = <String>{};
+    for (final p in filtered) {
+      final orderDate = _date(p['happened_at']);
+      final items = ((p['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (items.isEmpty) {
+        daySet.add(orderDate);
+        continue;
+      }
+      for (final it in items) {
+        final id = '${it['happened_at'] ?? ''}';
+        daySet.add(id.length >= 10 ? id.substring(0, 10) : orderDate);
+      }
+    }
+    _monthCount = daySet.length;
     _monthItems = filtered.fold<int>(
         0, (s, p) => s + (((p['items'] as List?) ?? []).length));
     return filtered;

@@ -184,8 +184,12 @@ class _PurchasePageState extends State<PurchasePage> {
       for (final it in items) {
         final itemId = '${it['item_id']}';
         final unit = '${it['unit'] ?? ''}';
-        final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-        final pp = (it['purchase_price'] as num?)?.toDouble() ?? 0;
+        final qty = it['quantity'] is num
+            ? (it['quantity'] as num).toDouble()
+            : double.tryParse('${it['quantity']}') ?? 0;
+        final pp = it['purchase_price'] is num
+            ? (it['purchase_price'] as num).toDouble()
+            : double.tryParse('${it['purchase_price']}') ?? 0;
         final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
         final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
         final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
@@ -197,7 +201,7 @@ class _PurchasePageState extends State<PurchasePage> {
         // 置空以便改顶部日期时整单生效（否则行旧日期覆盖新单据日期导致改日期无效）
         final lineDate = '${it['happened_at'] ?? ''}';
         final keepLineDate =
-            lineDate.isNotEmpty && lineDate.substring(0, 10) != hd.substring(0, 10);
+            lineDate.length >= 10 && lineDate.substring(0, 10) != hd.substring(0, 10);
         _rows.add(_PRow()
           ..itemId = itemId
           ..priceId = price['id'] as String?

@@ -103,11 +103,11 @@ export async function exportAllData(db: D1Database): Promise<Record<string, unkn
   return data;
 }
 
-/// 北京时间戳（YYYYMMDD-HHMMSS），备份文件名保证唯一（定时/手动不互相覆盖）
+/// 北京时间戳（YYYYMMDD-HHMMSSmmm），备份文件名唯一（定时/手动/同秒均不覆盖）
 function bjStamp(d: Date): string {
   const b = new Date(d.getTime() + 8 * 3600 * 1000);
   const p = (n: number) => String(n).padStart(2, '0');
-  return `${b.getUTCFullYear()}${p(b.getUTCMonth() + 1)}${p(b.getUTCDate())}-${p(b.getUTCHours())}${p(b.getUTCMinutes())}${p(b.getUTCSeconds())}`;
+  return `${b.getUTCFullYear()}${p(b.getUTCMonth() + 1)}${p(b.getUTCDate())}-${p(b.getUTCHours())}${p(b.getUTCMinutes())}${p(b.getUTCSeconds())}${String(b.getUTCMilliseconds()).padStart(3, '0')}`;
 }
 
 /// 合并导入备份数据（逐表逐行 INSERT OR IGNORE；POST /import 与 R2 恢复共用）
@@ -127,7 +127,7 @@ export async function importBackupData(
         skipped++;
         continue;
       }
-      const cols = Object.keys(row);
+      const cols = Object.keys(row).filter((k) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k));
       if (cols.length === 0) {
         skipped++;
         continue;
@@ -187,7 +187,7 @@ backupRouter.post('/import', async (c) => {
     | { data?: Record<string, Record<string, unknown>[]> }
     | null;
   const data = body?.data;
-  if (!data || typeof data !== 'object') {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return c.json({ error: '备份数据格式不正确（缺少 data 对象）' }, 400);
   }
   const { report, total_inserted } = await importBackupData(c.env.DB, data);
@@ -233,7 +233,7 @@ backupRouter.post('/files/:key/restore', async (c) => {
   } catch {
     data = null;
   }
-  if (!data || typeof data !== 'object') {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return c.json({ error: '备份文件内容损坏' }, 400);
   }
   const { report, total_inserted } = await importBackupData(c.env.DB, data);

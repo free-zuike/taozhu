@@ -210,6 +210,7 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   Future<void> _load({bool network = false}) async {
+    try {
     final (start, end) = _viewRange;
     final cq = _clientId != null && !_isBuy ? '&client_id=$_clientId' : '';
     final kq = '&kind=$_kind';
@@ -285,6 +286,12 @@ class _StatsPageState extends State<StatsPage> {
       if (!cached.any((x) => x != null)) {
         setState(() => _loading = false);
       }
+    }
+    } catch (e) {
+      // 任何加载异常复位 loading，不再转圈
+      debugPrint('统计加载异常: ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted && _loading) setState(() => _loading = false);
     }
   }
 

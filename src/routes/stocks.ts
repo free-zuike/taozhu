@@ -50,10 +50,11 @@ stocksRouter.get('/', async (c) => {
   return c.json({
     stocks: rows.results.map((r) => ({
       id: r.id, item_id: r.item_id, item_name: r.item_name, unit: r.unit,
-      quantity: r.quantity, min_stock: r.min_stock,
+      // 负数库存（卖出多于进）按 0 展示：没有就是 0
+      quantity: Math.max(Number(r.quantity) || 0, 0), min_stock: r.min_stock,
       suggest_min: suggest.get(`${r.item_id}\u0000${r.unit}`) ?? 0,
       cost_price: canSeeCost ? (r.cost_price ?? 0) : 0,
-      low: r.quantity < r.min_stock,
+      low: (Number(r.quantity) || 0) < r.min_stock,
     })),
     can_see_cost: canSeeCost,
   });
