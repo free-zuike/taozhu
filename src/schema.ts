@@ -79,6 +79,9 @@ const DDL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sale_items_item ON sale_items (item_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sale_items_date ON sale_items (happened_at)`,
+  // v0.17.138.0：按店统计/对账/店铺列表高频（client_id 等值 + 日期范围）——单列 + 复合索引避免全表扫
+  `CREATE INDEX IF NOT EXISTS idx_sale_items_client ON sale_items (client_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sale_items_date_client ON sale_items (happened_at, client_id)`,
   `CREATE TABLE IF NOT EXISTS payments (
     id TEXT PRIMARY KEY,
     client_id TEXT NOT NULL REFERENCES clients(id),
@@ -94,6 +97,8 @@ const DDL: string[] = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_sync_key ON payments (sync_key)`,
   `CREATE INDEX IF NOT EXISTS idx_payments_client ON payments (client_id)`,
   `CREATE INDEX IF NOT EXISTS idx_payments_date ON payments (happened_at)`,
+  // v0.17.138.0：收款区间+店铺过滤（stats summary/对账单 paid 子查询）
+  `CREATE INDEX IF NOT EXISTS idx_payments_date_client ON payments (happened_at, client_id)`,
   `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -216,7 +221,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '1') {
+      if (meta?.value === '2') {
         schemaReady = true;
         return;
       }
@@ -429,13 +434,14 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     for (const marker of [
       'idx_payments_sync_key', 'idx_payments_date', 'idx_sale_items_item',
       'idx_sale_items_date', 'idx_purchase_items_date',
+      'idx_sale_items_client', 'idx_sale_items_date_client', 'idx_payments_date_client',
     ]) {
       const i = DDL.findIndex((s) => s.includes(marker));
       if (i >= 0) await db.prepare(DDL[i]).run();
     }
     // 迁移完成：写标记（INSERT OR REPLACE——老库首次部署后也置位，此后冷启动走快检）
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '1')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '2')",
     ).run();
     schemaReady = true;
     } catch (err) {

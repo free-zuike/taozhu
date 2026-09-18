@@ -167,3 +167,9 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_sale_items_client ON sale_items (client_id);
+
+CREATE INDEX IF NOT EXISTS idx_sale_items_date_client ON sale_items (happened_at, client_id);
+
+CREATE INDEX IF NOT EXISTS idx_payments_date_client ON payments (happened_at, client_id);

@@ -120,9 +120,9 @@ describe('schema.sql 完整建表与幂等', () => {
     expect(sale?.happened_at).toBe('2026-01-01');
     const buy = await db.prepare('SELECT * FROM purchase_items WHERE id = ?').bind('y1').first<{ purchase_id: string }>();
     expect(buy?.purchase_id).toBe('p1');
-    // 索引重建完整
-    const idx = await db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_sale_items_sale','idx_sale_items_item','idx_sale_items_date','idx_purchase_items_purchase','idx_purchase_items_date')").all<{ name: string }>();
-    expect(idx.results.length).toBe(5);
+    // 索引重建完整（含 v0.17.138 店铺维度索引）
+    const idx = await db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_sale_items_sale','idx_sale_items_item','idx_sale_items_date','idx_sale_items_client','idx_sale_items_date_client','idx_payments_date_client','idx_purchase_items_purchase','idx_purchase_items_date')").all<{ name: string }>();
+    expect(idx.results.length).toBe(8);
     // 迁移幂等：再跑一轮不抛错、数据仍在
     resetSchemaState();
     await ensureSchema(db as never);
