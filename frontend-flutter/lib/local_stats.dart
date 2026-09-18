@@ -8,7 +8,7 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
   final pays = await LocalDb.getAll('payments');
   final buys = await LocalDb.getAll('purchase_items');
   final sel = clientId ?? '';
-  final inRange = (String h) => h.isNotEmpty && h >= start && h <= end;
+  final inRange = (String h) => h.isNotEmpty && h.compareTo(start) >= 0 && h.compareTo(end) <= 0;
   double sold = 0, gross = 0, paid = 0, purchase = 0, debt = 0;
   var count = 0;
   for (final r in rows) {
@@ -16,7 +16,7 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
     if (sel.isNotEmpty && cid != sel) continue;
     final h = '${r['happened_at'] ?? ''}';
     final amt = (r['amount'] as num?)?.toDouble() ?? 0;
-    if (h.isNotEmpty && h <= end) debt += amt; // 截止 end 累计出货
+    if (h.isNotEmpty && h.compareTo(end) <= 0) debt += amt; // 截止 end 累计出货
     if (!inRange(h)) continue;
     sold += amt;
     count++;
@@ -28,7 +28,7 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
     if (sel.isNotEmpty && cid != sel) continue;
     final amt = ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0);
     final h = '${p['happened_at'] ?? ''}';
-    if (h.isNotEmpty && h <= end) debt -= amt;
+    if (h.isNotEmpty && h.compareTo(end) <= 0) debt -= amt;
     if (inRange(h)) paid += amt;
   }
   for (final b in buys) {
@@ -53,7 +53,7 @@ Future<Map<String, dynamic>> localDaily(String start, String end, String? client
   for (final r in rows) {
     if (clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
-    if (h.isEmpty || h < start || h > end) continue;
+    if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     final day = h.substring(0, 10);
     acc(day, 'sales_total', (r['amount'] as num?)?.toDouble() ?? 0);
     acc(day, 'gross_profit', ((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0) * ((r['quantity'] as num?)?.toDouble() ?? 0));
@@ -61,7 +61,7 @@ Future<Map<String, dynamic>> localDaily(String start, String end, String? client
   for (final p in pays) {
     if (clientId != null && '${p['client_id'] ?? ''}' != clientId) continue;
     final h = '${p['happened_at'] ?? ''}';
-    if (h.isEmpty || h < start || h > end) continue;
+    if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     acc(h.substring(0, 10), 'paid_total', ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0));
   }
   final days = byDay.entries.map((e) => <String, dynamic>{
@@ -80,7 +80,7 @@ Future<Map<String, dynamic>> localItems(String start, String end, String? client
   for (final r in rows) {
     if (clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
-    if (h.isEmpty || h < start || h > end) continue;
+    if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     final key = '${r['item_id'] ?? ''}';
     final a = agg[key] ??= {'quantity': 0, 'amount': 0, 'gross_profit': 0};
     final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
@@ -110,7 +110,7 @@ Future<Map<String, dynamic>> localCategories(String start, String end, String? c
   for (final r in rows) {
     if (clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
-    if (h.isEmpty || h < start || h > end) continue;
+    if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     final cat = catOf['${r['item_id'] ?? ''}']?.trim().isNotEmpty == true
         ? catOf['${r['item_id'] ?? ''}']!
         : ('${r['item_category'] ?? ''}'.trim().isNotEmpty ? '${r['item_category']}' : '未分类');
@@ -157,7 +157,7 @@ Future<Map<String, dynamic>> localClientStats(String start, String end) async {
     if (h.isEmpty) continue;
     final a = agg[cid] ??= {'sales_total': 0, 'paid_total': 0, 'gross_profit': 0, 'all_sales': 0, 'all_paid': 0};
     a['all_sales'] = (a['all_sales'] ?? 0) + ((r['amount'] as num?)?.toDouble() ?? 0);
-    if (h >= start && h <= end) {
+    if (h.compareTo(start) >= 0 && h.compareTo(end) <= 0) {
       a['sales_total'] = (a['sales_total'] ?? 0) + ((r['amount'] as num?)?.toDouble() ?? 0);
       a['gross_profit'] = (a['gross_profit'] ?? 0) +
           (((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * ((r['quantity'] as num?)?.toDouble() ?? 0);
@@ -170,7 +170,7 @@ Future<Map<String, dynamic>> localClientStats(String start, String end) async {
     final amt = ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0);
     final a = agg[cid] ??= {'sales_total': 0, 'paid_total': 0, 'gross_profit': 0, 'all_sales': 0, 'all_paid': 0};
     a['all_paid'] = (a['all_paid'] ?? 0) + amt;
-    if (h >= start && h <= end) a['paid_total'] = (a['paid_total'] ?? 0) + amt;
+    if (h.compareTo(start) >= 0 && h.compareTo(end) <= 0) a['paid_total'] = (a['paid_total'] ?? 0) + amt;
   }
   final list = agg.entries.map((e) => <String, dynamic>{
     'id': e.key, 'name': nameOf[e.key] ?? '',
@@ -191,7 +191,7 @@ Future<Map<String, dynamic>> localYears() async {
   void add(String h) {
     if (h.length < 4) return;
     years.add(h.substring(0, 4));
-    if (first == null || h < first!) first = h;
+    if (first == null || h.compareTo(first!) < 0) first = h;
   }
   for (final r in rows) add('${r['happened_at'] ?? ''}');
   for (final p in pays) add('${p['happened_at'] ?? ''}');
@@ -212,7 +212,7 @@ Future<List<Map<String, dynamic>>> localSaleDetail(String start, String end, Str
     final cid = '${r['client_id'] ?? ''}';
     if (clientId != null && cid != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
-    if (h.isEmpty || h < start || h > end) continue;
+    if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     final itemId = '${r['item_id'] ?? ''}';
     out.add(<String, dynamic>{
       'date': h.substring(0, 10),

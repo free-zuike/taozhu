@@ -203,7 +203,7 @@ class _StatsPageState extends State<StatsPage> {
     if (path.startsWith('/stats/items')) return localItems(start, end, cid);
     if (path.startsWith('/stats/categories')) return localCategories(start, end, cid);
     if (path.startsWith('/stats/clients')) return localClientStats(start, end);
-    if (path.startsWith('/stats/monthly')) return localMonthly(_year, cid);
+    if (path.startsWith('/stats/monthly')) return localMonthly(_year ?? '', cid);
     return null;
   }
 
@@ -464,7 +464,7 @@ class _StatsPageState extends State<StatsPage> {
             Container(
               margin: const EdgeInsets.symmetric(vertical: 2),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(10)),
+              decoration: BoxDecoration(color: _surface, borderRadius: BorderRadius.circular(10)),
               child: Row(
                 children: [
                   Expanded(

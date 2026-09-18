@@ -874,3 +874,23 @@ jobs:
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || true)
           [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
 
+  # ── 失败兜底清理：任一平台/部署失败 → 删除本次空壳 release（assets==0 才删，防误删已传资产）──
+  cleanup-failed-release:
+    needs: [apk, linux, windows, macos, miniprogram, deploy]
+    if: ${{ always() && failure() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
+          [ -n "$VERSION" ] || exit 0
+          ASSETS=$(gh release view "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets | length' 2>/dev/null || echo 0)
+          echo "release assets: $ASSETS"
+          if [ "$ASSETS" -eq 0 ]; then
+            gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+            echo "已删除空壳 release（本版本作废，需递增版本号重建）"
+          else
+            echo "release 已有资产（$ASSETS 个），保留（完整性由各构建 job 校验）"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
