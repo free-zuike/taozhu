@@ -287,6 +287,7 @@ class _LedgerPageState extends State<LedgerPage> {
   /// ② 同步完成后 SyncService.version 通知会再来 _load 一次（本地数据自动更新）；
   /// ③ Web 无本地库，仍直连服务器读取。
   Future<void> _load() async {
+    try {
     final firstLocal = await LocalDb.getAllByName('clients');
     // 形式层切换：优先从行级 sale_items store 读取并组装（sale_items → 按 sale_id 分组 → 假整单），
     // 让渲染代码零改动地切到行记录；sales 整单 store 仅 Web/旧数据兜底。
@@ -340,6 +341,12 @@ class _LedgerPageState extends State<LedgerPage> {
     if (kIsWeb) await _loadNetwork(firstLocal);
     // 附件计数（有附件才显示图标）：本地目录扫描零网络；云端 counts 仅同步完成/Web 直连时刷新
     _loadAttachCounts(withCloud: kIsWeb);
+    } catch (e) {
+      // 任何加载异常：复位 loading 不再转圈（保留上次数据或空态）
+      debugPrint('账本加载异常: ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted && _loading) setState(() => _loading = false);
+    }
   }
 
   /// 行记录 → 假整单数组（同 sale_id 归并；行自带头部字段 client_id/client_name/happened_at/note）
@@ -353,13 +360,15 @@ class _LedgerPageState extends State<LedgerPage> {
       // 整单日期 = 行最大日期（改行/单日期后按最新日期归组与过滤，与服务器聚合一致）
       final prev = meta[oid];
       final h = '${r['happened_at'] ?? ''}';
+      final ph = '${prev?['happened_at'] ?? ''}';
       final note = '${r['note'] ?? ''}';
+      final pn = '${prev?['note'] ?? ''}';
       meta[oid] = {
         'id': oid,
-        'client_id': r['client_id'] ?? (prev?['client_id'] ?? ''),
-        'client_name': r['client_name'] ?? (prev?['client_name'] ?? ''),
-        'happened_at': prev != null && (prev['happened_at'] ?? '') >= h ? prev['happened_at'] : h,
-        'note': prev != null && '${prev['note'] ?? ''}'.isNotEmpty ? prev['note'] : (note.isNotEmpty ? note : (prev?['note'] ?? '')),
+        'client_id': '${r['client_id'] ?? prev?['client_id'] ?? ''}',
+        'client_name': '${r['client_name'] ?? prev?['client_name'] ?? ''}',
+        'happened_at': ph >= h ? ph : h,
+        'note': pn.isNotEmpty ? pn : note,
       };
     }
     return byOrder.entries.map((e) {

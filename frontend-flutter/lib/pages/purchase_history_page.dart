@@ -134,6 +134,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   Future<void> _load() async {
+    try {
     // ① 本地库秒开（含空态；不再等网络转圈）—— 形式层切换：优先行级 purchase_items store
     final rowPurchases = await LocalDb.getAll('purchase_items');
     final local = rowPurchases.isNotEmpty
@@ -178,6 +179,12 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         });
       }
     }
+    } catch (e) {
+      // 任何加载异常复位 loading，不再转圈
+      debugPrint('进货历史加载异常: ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted && _loading) setState(() => _loading = false);
+    }
   }
 
   /// 行记录 → 假整单数组（同 purchase_id 归并；行自带头部字段 happened_at/note）
@@ -191,11 +198,13 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       // 整单日期 = 行最大日期（改行/单日期后按最新日期归组与过滤，与服务器聚合一致）
       final prev = meta[oid];
       final h = '${r['happened_at'] ?? ''}';
+      final ph = '${prev?['happened_at'] ?? ''}';
       final note = '${r['note'] ?? ''}';
+      final pn = '${prev?['note'] ?? ''}';
       meta[oid] = {
         'id': oid,
-        'happened_at': prev != null && (prev['happened_at'] ?? '') >= h ? prev['happened_at'] : h,
-        'note': prev != null && '${prev['note'] ?? ''}'.isNotEmpty ? prev['note'] : (note.isNotEmpty ? note : (prev?['note'] ?? '')),
+        'happened_at': ph >= h ? ph : h,
+        'note': pn.isNotEmpty ? pn : note,
       };
     }
     return byOrder.entries.map((e) {
