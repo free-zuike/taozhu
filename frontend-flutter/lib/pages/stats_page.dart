@@ -294,7 +294,7 @@ class _StatsPageState extends State<StatsPage> {
             ? '全部店铺'
             : (_clients.where((c) => '${c['id']}' == picked).map((c) => '${c['name']}').firstOrNull ?? '全部店铺');
       });
-      _load();
+      _load(network: true);
     }
   }
 
@@ -430,7 +430,7 @@ class _StatsPageState extends State<StatsPage> {
             return;
           }
           setState(() => _quick = value);
-          _load();
+          _load(network: true);
         },
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -476,7 +476,7 @@ class _StatsPageState extends State<StatsPage> {
         _customStart = picked.start;
         _customEnd = picked.end;
       });
-      _load();
+      _load(network: true);
     }
   }
 
@@ -489,7 +489,7 @@ class _StatsPageState extends State<StatsPage> {
           items: _years.map((y) => DropdownMenuItem(value: y, child: Text('$y'))).toList(),
           onChanged: (v) {
             setState(() => _year = v);
-            _load();
+            _load(network: true);
           },
         ),
         const SizedBox(width: 16),
@@ -499,7 +499,7 @@ class _StatsPageState extends State<StatsPage> {
           items: [for (int i = 1; i <= 12; i++) DropdownMenuItem(value: i, child: Text('$i月'))],
           onChanged: (v) {
             setState(() => _month = v!);
-            _load();
+            _load(network: true);
           },
         ),
       ],
@@ -515,7 +515,7 @@ class _StatsPageState extends State<StatsPage> {
           items: _years.map((y) => DropdownMenuItem(value: y, child: Text('$y 年'))).toList(),
           onChanged: (v) {
             setState(() => _year = v);
-            _load();
+            _load(network: true);
           },
         ),
       ],

@@ -32,6 +32,11 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   int _selMonth = DateTime.now().month;
   /// 当月进货总额（仅支出统计：进货页无收入/结余）
   double _monthExpense = 0;
+  /// 月份滚动联动（与交易页一致）：列表滑动时顶部月份跟随；点标题弹年月选择
+  late final ScrollController _listCtrl = ScrollController()..addListener(_onScroll);
+  final Map<String, GlobalKey> _dateHeaderKeys = {};
+  Timer? _scrollDebounce;
+  bool _scrollPicking = false;
 
   @override
   void initState() {
@@ -43,7 +48,44 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   @override
   void dispose() {
     SyncService.version.removeListener(_onSync);
+    _listCtrl.dispose();
+    _scrollDebounce?.cancel();
     super.dispose();
+  }
+
+  /// 列表滚动 → 顶部月份跟随最上方日期头（防抖 100ms；编程滚动时不联动防回跳）
+  void _onScroll() {
+    if (_scrollPicking) return;
+    _scrollDebounce?.cancel();
+    _scrollDebounce = Timer(const Duration(milliseconds: 100), _syncMonthFromScroll);
+  }
+
+  void _syncMonthFromScroll() {
+    if (!mounted || _scrollPicking) return;
+    String? topKey;
+    double? bestDy;
+    for (final e in _dateHeaderKeys.entries) {
+      final ctx = e.value.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject();
+      if (box is! RenderBox) continue;
+      final dy = box.localToGlobal(Offset.zero).dy;
+      if (dy < 0) continue; // 已滚过头顶
+      if (bestDy == null || dy < bestDy) {
+        bestDy = dy;
+        topKey = e.key;
+      }
+    }
+    if (topKey == null || topKey.length < 7) return;
+    final y = int.tryParse(topKey.substring(0, 4));
+    final m = int.tryParse(topKey.substring(5, 7));
+    if (y == null || m == null || m < 1 || m > 12) return;
+    if (y == _selYear && m == _selMonth) return;
+    setState(() {
+      _selYear = y;
+      _selMonth = m;
+    });
+    _load();
   }
 
   void _onSync() {
@@ -475,12 +517,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
               children: [
                 Row(
                   children: [
-                    IconButton(
-                      tooltip: '上一月',
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(Icons.chevron_left, size: 20, color: c.textSub),
-                      onPressed: () => _shiftMonth(-1),
-                    ),
                     InkWell(
                       borderRadius: BorderRadius.circular(8),
                       onTap: _pickMonth,
@@ -496,13 +532,9 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                         ),
                       ),
                     ),
-                    IconButton(
-                      tooltip: '下一月',
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(Icons.chevron_right, size: 20, color: c.textSub),
-                      onPressed: () => _shiftMonth(1),
-                    ),
                     const Spacer(),
+                    // 与交易页一致：去左右箭头，点标题弹滚轮选择；列表上下滑动月份联动
+                    Icon(Icons.unfold_more, size: 16, color: c.textSub),
                   ],
                 ),
                 const SizedBox(height: 4),
@@ -622,35 +654,39 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
+        controller: _listCtrl,
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
         children: [
           for (final e in grouped.entries) ...[
-            // 日期栏 = 该日进货商品明细行列表（点行编辑该商品；长按删除该商品）
-            InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: () => _openBatchEdit(e.key, e.value),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
-                child: Row(
-                  children: [
-                    Icon(Icons.edit_calendar_outlined, size: 15, color: c.success),
-                    const SizedBox(width: 4),
-                    Text(_weekday(e.key),
+            // 日期栏 = 该日进货商品明细行列表（点击=进入批量修改/批量附件；列表滑动月份联动）
+            KeyedSubtree(
+              key: _dateHeaderKeys.putIfAbsent('${e.key}', GlobalKey.new),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => _openBatchEdit(e.key, e.value),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
+                  child: Row(
+                    children: [
+                      Icon(Icons.edit_calendar_outlined, size: 15, color: c.success),
+                      const SizedBox(width: 4),
+                      Text(_weekday(e.key),
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: c.textMain)),
+                      const Spacer(),
+                      Text(
+                        '${e.value.length} 条 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + ((l['amount'] as num?)?.toDouble() ?? 0)))}',
                         style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: c.textMain)),
-                    const Spacer(),
-                    Text(
-                      '${e.value.length} 条 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + ((l['amount'] as num?)?.toDouble() ?? 0)))}',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: c.textSub),
-                    ),
-                    const SizedBox(width: 2),
-                    Icon(Icons.chevron_right, size: 16, color: c.textSub),
-                  ],
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: c.textSub),
+                      ),
+                      const SizedBox(width: 2),
+                      Icon(Icons.chevron_right, size: 16, color: c.textSub),
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -8,6 +8,7 @@ import '../theme.dart';
 import '../utils/money.dart';
 import 'purchase_line_edit.dart';
 import 'purchase_page.dart';
+import 'attachment_viewer.dart';
 import 'router.dart';
 
 /// 日期栏编辑页：**该日全部进货商品明细行**（非单据列表——没有"进货单"概念，只有一条条商品记录）。
@@ -95,6 +96,21 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
   @override
   void dispose() {
     super.dispose();
+  }
+
+  /// 批量添加附件：凭证一次挂到该日每行商品（各自独立一份），不经单改
+  Future<void> _addBatchAttachments() async {
+    final lineIds = [
+      for (final l in _lines)
+        if ('${l['row_id'] ?? ''}'.isNotEmpty) '${l['row_id']}',
+    ];
+    if (lineIds.isEmpty) {
+      toast(context, '当天无商品明细，无法批量挂图');
+      return;
+    }
+    await showAttachmentViewer(context, 'purchase_item', widget.date,
+        '批量添加附件（该日每行商品各一份）', lineIds: lineIds);
+    _refresh();
   }
 
   Future<void> _addOrder() async {
@@ -191,6 +207,16 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
               child: Center(
                 child: Text('当天暂无进货商品，可点下方「记一笔进货」补录',
                     style: TextStyle(fontSize: 13, color: c.textSub)),
+              ),
+            ),
+          // 批量添加附件：整日凭证一次挂到该日每行商品（各自独立一份）
+          if (_lines.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: OutlinedButton.icon(
+                onPressed: _addBatchAttachments,
+                icon: const Icon(Icons.image_outlined, size: 18),
+                label: const Text('批量添加附件（该日每行商品各一份）'),
               ),
             ),
           for (final l in _lines) _lineTile(c, l),
