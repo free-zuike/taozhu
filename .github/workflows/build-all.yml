@@ -78,41 +78,6 @@ jobs:
       - name: Run tests
         run: npm test
 
-  # ── 前端单测（Flutter）：纯逻辑测试（版本函数等），不依赖网络/后端 mock ──
-  flutter-test:
-    needs: check
-    if: needs.check.outputs.should_run == 'true'
-    runs-on: ubuntu-latest
-    name: Flutter 前端单测
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          version: 3.47.2
-          cache: true
-      - name: Cache Flutter pub dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pub-
-      - name: Generate platforms & run flutter tests
-        working-directory: frontend-flutter
-        run: |
-          flutter create --org com.taozhu --project-name taozhu_app . 2>/dev/null || true
-          # 只跑真实测试文件（不跑 flutter create 生成的模板 widget_test，其引用示例 MyApp 不存在）
-          flutter test test/version_test.dart
-
-  # ── 统一创建 Release（test 后第一件事）：各平台上传资产前 release 必须已存在——
-  # 创建时刻按 push 顺序单调递增（列表顺序稳定）；各平台 job 只上传资产，不再 5 分钟等待/竞争创建 ──
-  release:
-    needs: test
-    if: github.repository == 'free-zuike/taozhu'
-    runs-on: ubuntu-latest
-    name: 创建 Release
-    steps:
       - uses: actions/checkout@v4
       - name: Create release (统一创建，保证列表顺序)
         env:
@@ -140,10 +105,14 @@ jobs:
           if [ "$ASSETS" -eq 0 ]; then
             gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
           fi
+  # ── 前端单测（Flutter）：纯逻辑测试（版本函数等），不依赖网络/后端 mock ──
+
+  # ── 统一创建 Release（test 后第一件事）：各平台上传资产前 release 必须已存在——
+  # 创建时刻按 push 顺序单调递增（列表顺序稳定）；各平台 job 只上传资产，不再 5 分钟等待/竞争创建 ──
 
   # ── Android APK（正式签名，按 ABI 拆包 + universal 兜底）────────────────────────────
   apk:
-    needs: [test, release]
+    needs: [test]
     if: github.repository == 'free-zuike/taozhu'
     runs-on: ubuntu-latest
     name: Android APK
@@ -198,13 +167,14 @@ jobs:
         working-directory: frontend-flutter
         run: flutter create --org com.taozhu --project-name taozhu_app .
 
-      - name: Build APK (release, 正式签名)
+      - name: Build APK (release, 正式签名) + 前端单测
         working-directory: frontend-flutter
         env:
           ANDROID_KEYSTORE_STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_STORE_PASS }}
           ANDROID_KEYSTORE_KEY_PASS: ${{ secrets.ANDROID_KEYSTORE_KEY_PASS }}
           ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
         run: |
+          flutter test test/version_test.dart || exit 1
           # ① Android 版本与应用版本号同步：versionName=三位版本号；versionCode=三位加权拼成正整数（单调递增，覆盖升级稳定）。
           #    不用改写 pubspec version：pub 的 version 格式只支持 x.y.z[+build]，四段 0.8.1.0 会判非法导致构建失败。
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" lib/version.dart || exit 1)
@@ -308,8 +278,8 @@ jobs:
 
   # ── Linux 桌面 ─────────────────────────────────────────────────────────────────────
   linux:
-    needs: [test, release]
-    if: github.repository == 'free-zuike/taozhu'
+    needs: [test, check]
+    if: ${{ github.repository == 'free-zuike/taozhu' || needs.check.outputs.has_cf == 'true' }}
     runs-on: ubuntu-latest
     name: Linux 桌面
     steps:
@@ -350,12 +320,14 @@ jobs:
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
 
       - name: Generate platforms & build Linux
+        if: github.repository == 'free-zuike/taozhu'
         working-directory: frontend-flutter
         run: |
           flutter create --org com.taozhu --project-name taozhu_app .
           flutter build linux --release
 
       - name: Package & upload Linux
+        if: github.repository == 'free-zuike/taozhu'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -396,9 +368,51 @@ jobs:
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
           [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
 
+      - name: Setup Flutter
+        if: needs.check.outputs.has_cf == 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          version: 3.47.2
+          cache: true
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+      - name: Build Web (Flutter) with production API_BASE
+        working-directory: frontend-flutter
+        run: |
+          flutter create --org com.taozhu --project-name taozhu_app .
+          sed -i 's|<title>.*</title>|<title>陶朱</title>|' web/index.html
+          mkdir -p web/canvaskit
+          curl -fsSL -o web/canvaskit/canvaskit.js "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.js"
+          curl -fsSL -o web/canvaskit/canvaskit.wasm "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.wasm"
+          flutter build web --dart-define=API_BASE=https://taozhu.freezuike-3f7.workers.dev --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ --pwa-strategy=none
+          flutter build web --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ -o build/web-standalone --pwa-strategy=none
+      - name: Package & upload web zip (个人自托管分发，同版本固定名)
+        if: github.repository == 'free-zuike/taozhu'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\\K[^']+" src/version.ts || exit 1)
+          cd frontend-flutter/build/web-standalone && zip -qr "/tmp/web-${VERSION}.zip" . && cd -
+          for _c in 1 2 3 4 5; do
+            gh release upload "taozhu-v${VERSION}" "/tmp/web-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
+            echo "upload 重试 $_c/5 (web-${VERSION}.zip)"
+            sleep 5
+          done
+          echo "uploaded: web-${VERSION}.zip"
+      - name: Upload web build artifact (供最后 Deploy 使用)
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: frontend-flutter/build/web
+          retention-days: 1
   # ── Windows 桌面 ────────────────────────────────────────────────────────────────────
   windows:
-    needs: [test, release]
+    needs: [test]
     if: github.repository == 'free-zuike/taozhu'
     runs-on: windows-latest
     name: Windows 桌面
@@ -475,7 +489,7 @@ jobs:
 
   # ── macOS ──────────────────────────────────────────────────────────────────────────
   macos:
-    needs: [test, release]
+    needs: [test]
     if: github.repository == 'free-zuike/taozhu'
     runs-on: macos-latest
     name: macOS
@@ -550,14 +564,6 @@ jobs:
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
           [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
 
-  # ── iOS（未签名）──────────────────────────────────────────────────────────────────
-  ios:
-    needs: [test, release]
-    if: github.repository == 'free-zuike/taozhu'
-    runs-on: macos-latest
-    name: iOS（未签名）
-    steps:
-      - uses: actions/checkout@v4
 
       - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
         id: guard
@@ -636,19 +642,15 @@ jobs:
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
           [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+  # ── iOS（未签名）──────────────────────────────────────────────────────────────────
 
   # ── 微信小程序（uni-app）──────────────────────────────────────────────────────────
   # 依赖全部平台成功：任一 Flutter 端失败则小程序不构建/不上传（全通过或全不通过）
   # ── 平台产物门槛：主仓库=5 平台全部成功才继续；fork 用户（平台 job 跳过）视为通过 ──
-  platform-gate:
-    needs: [apk, linux, windows, macos, ios]
-    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.ios.result == 'success')) }}
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "platform gate ok"
 
   miniprogram:
-    needs: [test, platform-gate]
+    needs: [test, apk, linux, windows, macos]
+    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success')) }}
     runs-on: ubuntu-latest
     name: 微信小程序
     steps:
@@ -755,58 +757,9 @@ jobs:
           [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
 
   # ── Web（Flutter）构建：与各平台并行，最后 Deploy 直接用其产物（避免 Web 构建串行在链尾）──
-  web:
-    needs: [test, release, check]
-    # Web（构建 + 部署 CF）一体：主仓库或配了 CF token 才构建；无 token → web/deploy 整链跳过
-    if: needs.check.outputs.has_cf == 'true'
-    runs-on: ubuntu-latest
-    name: Web（Flutter）
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          version: 3.47.2
-          cache: true
-      - name: Cache Flutter pub dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pub-
-      - name: Build Web (Flutter) with production API_BASE
-        working-directory: frontend-flutter
-        run: |
-          flutter create --org com.taozhu --project-name taozhu_app .
-          sed -i 's|<title>.*</title>|<title>陶朱</title>|' web/index.html
-          mkdir -p web/canvaskit
-          curl -fsSL -o web/canvaskit/canvaskit.js "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.js"
-          curl -fsSL -o web/canvaskit/canvaskit.wasm "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.wasm"
-          flutter build web --dart-define=API_BASE=https://taozhu.freezuike-3f7.workers.dev --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ --pwa-strategy=none
-          flutter build web --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ -o build/web-standalone --pwa-strategy=none
-      - name: Package & upload web zip (个人自托管分发，同版本固定名)
-        if: github.repository == 'free-zuike/taozhu'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=$(grep -oP "APP_VERSION = '\\K[^']+" src/version.ts || exit 1)
-          cd frontend-flutter/build/web-standalone && zip -qr "/tmp/web-${VERSION}.zip" . && cd -
-          for _c in 1 2 3 4 5; do
-            gh release upload "taozhu-v${VERSION}" "/tmp/web-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
-            echo "upload 重试 $_c/5 (web-${VERSION}.zip)"
-            sleep 5
-          done
-          echo "uploaded: web-${VERSION}.zip"
-      - name: Upload web build artifact (供最后 Deploy 使用)
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-build
-          path: frontend-flutter/build/web
-          retention-days: 1
 
   deploy:
-    needs: [miniprogram, web]
+    needs: [miniprogram, linux]
     runs-on: ubuntu-latest
     name: Deploy
     env:
