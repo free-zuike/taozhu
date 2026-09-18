@@ -406,13 +406,6 @@ class _StatsPageState extends State<StatsPage> {
                     _rankCard(i + 1, _c.warning, '${c['category']}', '${c['quantity']} 件',
                         '¥${fmtMoney(_num(c['amount']))}'),
                   if (_cats.isEmpty) _empty('该区间暂无分类数据', Icons.category_outlined),
-                  const SizedBox(height: 20),
-                  _sectionTitle('商品排行（出货额）'),
-                  const SizedBox(height: 8),
-                  for (final (i, it) in _itemsStats.indexed)
-                    _rankCard(i + 1, _primary, '${it['name']}', '${it['quantity']} ${it['unit']}',
-                        '¥${fmtMoney(_num(it['amount']))}'),
-                  if (_itemsStats.isEmpty) _empty('该区间暂无出货', Icons.sell_outlined),
                   if (_clientId == null && _mode != 'year') ...[
                     const SizedBox(height: 20),
                     _sectionTitle('按店结账（元）'),

@@ -165,7 +165,7 @@ class Api {
       final ex = _getCache[path];
       if (ex != null) {
         if (!ex.done) return ex.fut; // 进行中：共享同一个 Future
-        if (now.difference(ex.doneAt!) < const Duration(seconds: 3)) {
+        if (now.difference(ex.doneAt!) < const Duration(seconds: 20)) {
           if (ex.error != null) throw ex.error!;
           return Future.value(ex.result);
         }

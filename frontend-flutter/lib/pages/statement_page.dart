@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
+import '../sync_service.dart';
 import '../local_db.dart';
 import '../log.dart';
 import '../utils/download.dart';
@@ -67,8 +68,20 @@ class _StatementPageState extends State<StatementPage> {
   void initState() {
     super.initState();
     _loadClients();
+    _restoreSelectedClient();
     _applyPeriod('month');
     _loadXlsCfg();
+  }
+
+  /// 默认店铺=全局记忆的当前店铺（本地 prefs 读取，秒回；无记忆则全部店铺）
+  Future<void> _restoreSelectedClient() async {
+    try {
+      final sel = await SyncService.selectedClientId();
+      if (sel != null && mounted && _clientId != sel) {
+        setState(() => _clientId = sel);
+        _load();
+      }
+    } catch (_) {}
   }
 
   @override
