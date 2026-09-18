@@ -297,4 +297,33 @@ describe('按店铺分类汇总对账（美食城多档口总账）', () => {
     expect(d.category_name).toBe('美食城');
     expect(Array.isArray(d.clients)).toBe(true);
   });
+
+  it('kind=purchase 统计切换为进货口径：summary 进货额/无毛利无欠款、daily/items 换进货表', async () => {
+    // 本 describe 种子无进货数据，测试内自造：9月3日 白菜 30 斤 ¥30
+    await env.DB.prepare('INSERT INTO items (id, name) VALUES (?, ?)').bind('i-kind', '土豆').run();
+    await env.DB.prepare('INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('pi-kind', 'pu-kind', 'i-kind', '斤', 30, 1, 30, '2026-09-03').run();
+    // 进货：9月3日 30 斤 ¥30
+    const sum = (await (await call(env, 'GET',
+      '/api/v1/stats/summary?start=2026-09-01&end=2026-09-30&kind=purchase', token)).json()) as {
+      kind: string; sales_total: number; gross_profit: number; debt: number; sales_count: number;
+    };
+    expect(sum.kind).toBe('purchase');
+    expect(sum.sales_total).toBe(30); // 进货额
+    expect(sum.gross_profit).toBe(0); // 进货无毛利
+    expect(sum.debt).toBe(0); // 进货无欠款
+    expect(sum.sales_count).toBe(1);
+    // daily：只含 9-03 进货日
+    const daily = (await (await call(env, 'GET',
+      '/api/v1/stats/daily?start=2026-09-01&end=2026-09-30&kind=purchase', token)).json()) as { days: Array<{ day: string; sales_total: number }> };
+    expect(daily.days.length).toBe(1);
+    expect(daily.days[0].day).toBe('2026-09-03');
+    expect(daily.days[0].sales_total).toBe(30);
+    // items：土豆 30 斤 ¥30
+    const items = (await (await call(env, 'GET',
+      '/api/v1/stats/items?start=2026-09-01&end=2026-09-30&kind=purchase', token)).json()) as { items: Array<{ name: string; quantity: number; amount: number }> };
+    expect(items.items[0]?.name).toBe('土豆');
+    expect(items.items[0]?.quantity).toBe(30);
+    expect(items.items[0]?.amount).toBe(30);
+  });
 });

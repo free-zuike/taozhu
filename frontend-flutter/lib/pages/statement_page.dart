@@ -456,10 +456,7 @@ class _StatementPageState extends State<StatementPage> {
   Excel _buildExcel(_XlsCfg cfg, String clientName) {
     final excel = Excel.createExcel();
     // 复用默认空 sheet 并改名，避免多余的 Sheet1（v0.17.142：导出只留一个"对账单"页）
-    if (excel.rename('Sheet1', '对账单') == false) {
-      excel.delete('Sheet1');
-      excel['对账单'];
-    }
+    excel.rename('Sheet1', '对账单'); // excel 4.x rename 直接改名（返回 void），默认 sheet 恒存在
     final sheet = excel['对账单'];
     sheet.setColumnWidth(0, 14);
     sheet.setColumnWidth(1, 32);

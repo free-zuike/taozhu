@@ -21,6 +21,8 @@ class _StatsPageState extends State<StatsPage> {
   List<Map<String, dynamic>> _clients = [];
   String? _clientId;
   String _clientName = '全部店铺';
+  String _kind = 'sale'; // sale=出货 | purchase=进货（统计报表切换）
+  bool get _isBuy => _kind == 'purchase';
 
   String _mode = 'range';
   String _quick = 'rolling';
@@ -198,27 +200,28 @@ class _StatsPageState extends State<StatsPage> {
   /// 本地聚合映射（与请求路径一一对应，返回与后端接口同形 Map）
   Future<Map<String, dynamic>?> _localFor(String path, String start, String end) async {
     final cid = _clientId;
-    if (path.startsWith('/stats/summary')) return localSummary(start, end, cid);
-    if (path.startsWith('/stats/daily')) return localDaily(start, end, cid);
-    if (path.startsWith('/stats/items')) return localItems(start, end, cid);
-    if (path.startsWith('/stats/categories')) return localCategories(start, end, cid);
+    if (path.startsWith('/stats/summary')) return localSummary(start, end, cid, kind: _kind);
+    if (path.startsWith('/stats/daily')) return localDaily(start, end, cid, kind: _kind);
+    if (path.startsWith('/stats/items')) return localItems(start, end, cid, kind: _kind);
+    if (path.startsWith('/stats/categories')) return localCategories(start, end, cid, kind: _kind);
     if (path.startsWith('/stats/clients')) return localClientStats(start, end);
-    if (path.startsWith('/stats/monthly')) return localMonthly(_year ?? '', cid);
+    if (path.startsWith('/stats/monthly')) return localMonthly(_year ?? '', cid, kind: _kind);
     return null;
   }
 
   Future<void> _load({bool network = false}) async {
     final (start, end) = _viewRange;
-    final cq = _clientId != null ? '&client_id=$_clientId' : '';
+    final cq = _clientId != null && !_isBuy ? '&client_id=$_clientId' : '';
+    final kq = '&kind=$_kind';
     final isYear = _mode == 'year';
     final paths = isYear
-        ? ['/stats/monthly?year=$_year']
+        ? ['/stats/monthly?year=$_year$kq']
         : [
-            '/stats/summary?start=$start&end=$end$cq',
-            '/stats/daily?start=$start&end=$end$cq',
-            '/stats/items?start=$start&end=$end$cq',
-            '/stats/categories?start=$start&end=$end$cq',
-            if (_clientId == null) '/stats/clients?start=$start&end=$end',
+            '/stats/summary?start=$start&end=$end$cq$kq',
+            '/stats/daily?start=$start&end=$end$cq$kq',
+            '/stats/items?start=$start&end=$end$cq$kq',
+            '/stats/categories?start=$start&end=$end$cq$kq',
+            if (_clientId == null && !_isBuy) '/stats/clients?start=$start&end=$end',
           ];
     // 本地优先：有缓存先渲染（秒开不转圈）；网络刷新仅同步完成/下拉/Web 直连时执行，
     // 页面加载不发请求（本地优先铁律：只有同步才访问网络获取数据）
@@ -235,7 +238,7 @@ class _StatsPageState extends State<StatsPage> {
     // 原生：本地镜像即时聚合（本地优先，零网络秒开；数据由同步驱动刷新，切换店铺/周期立即重算）
     if (!kIsWeb) {
       final local = await Future.wait(paths.map((p) => _localFor(p, start, end)));
-      final detail = await localSaleDetail(start, end, _clientId);
+      final detail = await localSaleDetail(start, end, _clientId, kind: _kind);
       if (!mounted) return;
       setState(() {
         _saleDetail = detail;
@@ -250,17 +253,20 @@ class _StatsPageState extends State<StatsPage> {
       for (var i = 0; i < paths.length; i++) {
         if (results[i].isNotEmpty) await Api.instance.setCache(paths[i], results[i]);
       }
-      // Web 出货明细：直连 /sales 行级数组组装（原生走本地镜像 localSaleDetail 同构字段）
+      // Web 明细：直连行级数组组装（出货 /sales、进货 /purchases；原生走本地镜像同构字段）
       final detail = <Map<String, dynamic>>[];
       try {
-        final d = await Api.instance
-            .get('/sales?client_id=${_clientId ?? ''}&date_from=$start&date_to=$end&limit=1000');
-        for (final r in ((d['sale_items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+        final d = await Api.instance.get(
+            _isBuy
+                ? '/purchases?date_from=$start&date_to=$end&limit=1000'
+                : '/sales?client_id=${_clientId ?? ''}&date_from=$start&date_to=$end&limit=1000');
+        final rowsKey = _isBuy ? 'purchase_items' : 'sale_items';
+        for (final r in ((d[rowsKey] as List?) ?? []).cast<Map<String, dynamic>>()) {
           final h = '${r['happened_at'] ?? ''}';
           if (h.isEmpty) continue;
           detail.add(<String, dynamic>{
             'date': h.substring(0, 10),
-            'client_name': '${r['client_name'] ?? ''}',
+            'client_name': _isBuy ? '' : '${r['client_name'] ?? ''}',
             'name': '${r['item_name'] ?? ''}',
             'quantity': (r['quantity'] as num?)?.toDouble() ?? 0,
             'unit': '${r['unit'] ?? ''}',
@@ -377,38 +383,56 @@ class _StatsPageState extends State<StatsPage> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  // 店铺胶囊（全宽，店名完整显示，不再被右侧按钮挤压）
-                  InkWell(
-                    borderRadius: BorderRadius.circular(20),
-                    onTap: _pickShop,
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                      decoration: BoxDecoration(
-                        color: _surface,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _primary.withOpacity(0.35)),
-                        boxShadow: [
-                          BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.05), blurRadius: 8, offset: const Offset(0, 2)),
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.store_outlined, size: 18, color: _primary),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(_clientName,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15, color: _main)),
-                          ),
-                          Text('切换', style: TextStyle(fontSize: 12, color: _primary)),
-                          const SizedBox(width: 2),
-                          Icon(Icons.expand_more, size: 18, color: _sub),
-                        ],
-                      ),
+                  // 出货 / 进货 统计切换
+                  SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<String>(
+                      segments: const [
+                        ButtonSegment(value: 'sale', label: Text('出货')),
+                        ButtonSegment(value: 'purchase', label: Text('进货')),
+                      ],
+                      selected: {_kind},
+                      onSelectionChanged: (s) {
+                        setState(() => _kind = s.first);
+                        _load(network: true);
+                      },
                     ),
                   ),
                   const SizedBox(height: 12),
+                  // 店铺胶囊（全宽，店名完整显示，不再被右侧按钮挤压）；进货视图无店铺维度隐藏
+                  if (!_isBuy) ...[
+                    InkWell(
+                      borderRadius: BorderRadius.circular(20),
+                      onTap: _pickShop,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                        decoration: BoxDecoration(
+                          color: _surface,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: _primary.withOpacity(0.35)),
+                          boxShadow: [
+                            BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.05), blurRadius: 8, offset: const Offset(0, 2)),
+                          ],
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.store_outlined, size: 18, color: _primary),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(_clientName,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15, color: _main)),
+                            ),
+                            Text('切换', style: TextStyle(fontSize: 12, color: _primary)),
+                            const SizedBox(width: 2),
+                            Icon(Icons.expand_more, size: 18, color: _sub),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   // 快捷区间：统一一行（今日 / 最近30天 / 自定义），无重复模式切换
                   _quickBar(),
                   const SizedBox(height: 6),
@@ -416,17 +440,19 @@ class _StatsPageState extends State<StatsPage> {
                       style: TextStyle(color: _sub, fontSize: 12)),
                   const SizedBox(height: 12),
                   const SizedBox(height: 20),
-                  _sectionTitle(_mode == 'year' ? '月度出货趋势' : '每日出货趋势'),
+                  _sectionTitle(_isBuy
+                      ? (_mode == 'year' ? '月度进货趋势' : '每日进货趋势')
+                      : (_mode == 'year' ? '月度出货趋势' : '每日出货趋势')),
                   const SizedBox(height: 8),
                   _lineChart(),
                   const SizedBox(height: 20),
-                  _sectionTitle('分类排行（出货额）'),
+                  _sectionTitle(_isBuy ? '分类排行（进货额）' : '分类排行（出货额）'),
                   const SizedBox(height: 8),
                   for (final (i, c) in _cats.indexed)
                     _rankCard(i + 1, _c.warning, '${c['category']}', '${c['quantity']} 件',
                         '¥${fmtMoney(_num(c['amount']))}'),
                   if (_cats.isEmpty) _empty('该区间暂无分类数据', Icons.category_outlined),
-                  if (_clientId == null && _mode != 'year') ...[
+                  if (!_isBuy && _clientId == null && _mode != 'year') ...[
                     const SizedBox(height: 20),
                     _sectionTitle('按店结账（元）'),
                     const SizedBox(height: 8),
@@ -444,7 +470,7 @@ class _StatsPageState extends State<StatsPage> {
                     if (_clientsStats.isEmpty) _empty('该区间暂无数据', Icons.store_outlined),
                   ],
                   const SizedBox(height: 20),
-                  _sectionTitle('出货明细（商品）'),
+                  _sectionTitle(_isBuy ? '进货明细（商品）' : '出货明细（商品）'),
                   const SizedBox(height: 8),
                   _detailRows(),
                 ],
@@ -454,9 +480,12 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   /// 出货明细（商品级）：按日期分组的商品行——不再只是店铺/日期/笔数/总额
+  /// 明细空态文案（按出货/进货）
+  Widget _emptyDetail() => _empty(_isBuy ? '该区间暂无进货明细' : '该区间暂无出货明细', Icons.receipt_long_outlined);
+
   Widget _detailRows() {
     if (_saleDetail.isEmpty) {
-      return _empty('该区间暂无出货明细', Icons.receipt_long_outlined);
+      return _emptyDetail();
     }
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final d in _saleDetail) {
@@ -632,13 +661,19 @@ class _StatsPageState extends State<StatsPage> {
     final paid = _mode == 'year'
         ? _months.fold<double>(0, (s, x) => s + _num(x['paid_total']))
         : _num(_summary['paid_total']);
-    final data = <String, double>{
-      '出货': sales,
-      if (_canSeeProfit) '毛利': gross,
-      '收款': paid,
-      if (_mode != 'year') '进货': _num(_summary['purchase_total']),
-      if (_mode != 'year') '欠款': _num(_summary['debt']),
-    };
+    // 进货视图：进货额 + 笔数（无毛利/收款/欠款维度）
+    final data = _isBuy
+        ? <String, double>{
+            '进货': sales,
+            if (_mode != 'year') '笔数': _num(_summary['sales_count']),
+          }
+        : <String, double>{
+            '出货': sales,
+            if (_canSeeProfit) '毛利': gross,
+            '收款': paid,
+            if (_mode != 'year') '进货': _num(_summary['purchase_total']),
+            if (_mode != 'year') '欠款': _num(_summary['debt']),
+          };
     final w = MediaQuery.of(context).size.width;
     final itemW = (w.clamp(200.0, 900.0) - 16 * 2 - 12) / 2;
     return Wrap(
@@ -665,7 +700,7 @@ class _StatsPageState extends State<StatsPage> {
                               ? _danger
                               : _main,
                         )),
-                    if (e.key == '出货')
+                    if (e.key == '出货' || e.key == '进货')
                       Text('日均 ¥${fmtMoney(sales / _spanDays)}',
                           style: TextStyle(color: _sub, fontSize: 12)),
                   ],

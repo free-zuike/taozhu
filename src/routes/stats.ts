@@ -94,26 +94,35 @@ statsRouter.get('/clients', async (c) => {
   });
 });
 
-// GET /stats/monthly?year=2026 — 按月：出货额/毛利/收款
+// GET /stats/monthly?year=2026&kind=sale|purchase — 按月：出货额/毛利/收款（进货视图=按月进货额）
 statsRouter.get('/monthly', async (c) => {
   const canSeeProfit = c.get('user').role === 'admin';
   const year = c.req.query('year')?.trim() || String(new Date().getUTCFullYear());
+  const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
   const salesRows = await c.env.DB.prepare(
-    `SELECT substr(si.happened_at, 1, 7) AS month,
-      SUM(si.amount) AS sales_total,
-      SUM((si.sale_price - si.cost_price) * si.quantity) AS gross_profit
-     FROM sale_items si
-     WHERE si.happened_at >= ? AND si.happened_at <= ?
-     GROUP BY month ORDER BY month`,
+    kind === 'purchase'
+      ? `SELECT substr(pi.happened_at, 1, 7) AS month,
+        SUM(pi.amount) AS sales_total, 0 AS gross_profit
+       FROM purchase_items pi
+       WHERE pi.happened_at >= ? AND pi.happened_at <= ?
+       GROUP BY month ORDER BY month`
+      : `SELECT substr(si.happened_at, 1, 7) AS month,
+        SUM(si.amount) AS sales_total,
+        SUM((si.sale_price - si.cost_price) * si.quantity) AS gross_profit
+       FROM sale_items si
+       WHERE si.happened_at >= ? AND si.happened_at <= ?
+       GROUP BY month ORDER BY month`,
   ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; sales_total: number; gross_profit: number }>();
-  const paidRows = await c.env.DB.prepare(
-    `SELECT substr(happened_at, 1, 7) AS month, SUM(amount + waived) AS paid_total
-     FROM payments WHERE happened_at >= ? AND happened_at <= ? GROUP BY month ORDER BY month`,
-  ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; paid_total: number }>();
+  const paidRows = kind === 'purchase'
+    ? { results: [] as Array<{ month: string; paid_total: number }> }
+    : await c.env.DB.prepare(
+        `SELECT substr(happened_at, 1, 7) AS month, SUM(amount + waived) AS paid_total
+         FROM payments WHERE happened_at >= ? AND happened_at <= ? GROUP BY month ORDER BY month`,
+      ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; paid_total: number }>();
   const paidMap = new Map(paidRows.results.map((p) => [p.month, p.paid_total]));
   const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
   return c.json({
-    year,
+    year, kind,
     can_see_profit: canSeeProfit,
     months: salesRows.results.map((s) => ({
       month: s.month, sales_total: r(s.sales_total), gross_profit: canSeeProfit ? r(s.gross_profit) : 0,
@@ -158,26 +167,35 @@ statsRouter.get('/monthly-flow', async (c) => {
   return c.json({ year, can_see_profit: canSeeProfit, months });
 });
 
-// GET /stats/categories?start=&end=&client_id= — 区间内按商品分类聚合出货（额降序）
+// GET /stats/categories?start=&end=&client_id=&kind=sale|purchase — 区间内按商品分类聚合（出货额/进货额降序）
 statsRouter.get('/categories', async (c) => {
   const start = c.req.query('start')?.trim();
   const end = c.req.query('end')?.trim();
   if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
   const clientId = c.req.query('client_id')?.trim();
+  const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
   const params: unknown[] = [start, end];
-  let cond = ' AND si.happened_at >= ? AND si.happened_at <= ?';
-  if (clientId) { cond += ' AND si.client_id = ?'; params.push(clientId); }
+  if (clientId && kind === 'sale') { params.push(clientId); }
   const rows = await c.env.DB.prepare(
-    `SELECT COALESCE(cat.name, '未分类') AS category,
-       SUM(si.quantity) AS quantity, SUM(si.amount) AS amount
-     FROM sale_items si
-     JOIN items i ON i.id = si.item_id
-     LEFT JOIN categories cat ON cat.id = i.category_id
-     WHERE 1=1${cond}
-     GROUP BY COALESCE(cat.name, '未分类') ORDER BY amount DESC`,
+    kind === 'purchase'
+      ? `SELECT COALESCE(cat.name, '未分类') AS category,
+         SUM(pi.quantity) AS quantity, SUM(pi.amount) AS amount
+       FROM purchase_items pi
+       JOIN items i ON i.id = pi.item_id
+       LEFT JOIN categories cat ON cat.id = i.category_id
+       WHERE pi.happened_at >= ? AND pi.happened_at <= ?
+       GROUP BY COALESCE(cat.name, '未分类') ORDER BY amount DESC`
+      : `SELECT COALESCE(cat.name, '未分类') AS category,
+         SUM(si.quantity) AS quantity, SUM(si.amount) AS amount
+       FROM sale_items si
+       JOIN items i ON i.id = si.item_id
+       LEFT JOIN categories cat ON cat.id = i.category_id
+       WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}
+       GROUP BY COALESCE(cat.name, '未分类') ORDER BY amount DESC`,
   ).bind(...params).all<{ category: string; quantity: number; amount: number }>();
   const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
   return c.json({
+    kind,
     categories: rows.results.map((x) => ({ category: x.category, quantity: r(x.quantity), amount: r(x.amount) })),
   });
 });
@@ -203,7 +221,7 @@ statsRouter.get('/years', async (c) => {
   });
 });
 
-// GET /stats/summary?start=&end=&client_id= — 任意区间汇总（起止日都含；欠款=截止 end 累计出货−累计收款）
+// GET /stats/summary?start=&end=&client_id=&kind=sale|purchase — 任意区间汇总（起止日都含；欠款=截止 end 累计出货−累计收款）
 statsRouter.get('/summary', async (c) => {
   const canSeeProfit = c.get('user').role === 'admin';
   const start = c.req.query('start')?.trim();
@@ -212,15 +230,20 @@ statsRouter.get('/summary', async (c) => {
   const clientId = c.req.query('client_id')?.trim();
   const db = c.env.DB;
   const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
 
+  // 出货（或进货）区间汇总：kind=purchase 走 purchase_items（无店铺维度、无毛利）
   const salesParams: unknown[] = [start, end];
-  const salesSql = `SELECT
-      COALESCE(SUM(si.amount), 0) AS sales_total,
-      COALESCE(SUM((si.sale_price - si.cost_price) * si.quantity), 0) AS gross_profit,
-      COUNT(*) AS sales_count
-     FROM sale_items si
-     WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`;
-  if (clientId) salesParams.push(clientId);
+  const salesSql = kind === 'purchase'
+    ? `SELECT COALESCE(SUM(pi.amount), 0) AS sales_total, 0 AS gross_profit, COUNT(*) AS sales_count
+       FROM purchase_items pi WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
+    : `SELECT
+        COALESCE(SUM(si.amount), 0) AS sales_total,
+        COALESCE(SUM((si.sale_price - si.cost_price) * si.quantity), 0) AS gross_profit,
+        COUNT(*) AS sales_count
+       FROM sale_items si
+       WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`;
+  if (clientId && kind === 'sale') salesParams.push(clientId);
   const sales = await db.prepare(salesSql).bind(...salesParams).first<{
     sales_total: number; gross_profit: number; sales_count: number;
   }>();
@@ -237,7 +260,7 @@ statsRouter.get('/summary', async (c) => {
      WHERE pi.happened_at >= ? AND pi.happened_at <= ?`;
   const buy = await db.prepare(buySql).bind(...buyParams).first<{ purchase_total: number }>();
 
-  // 截止 end 的总欠款（区间前累计也计入：全部出货 − 全部收款，时间 ≤ end）
+  // 截止 end 的总欠款（区间前累计也计入：全部出货 − 全部收款，时间 ≤ end）；进货视图无欠款
   // SQL 占位符顺序：all_sales(<=?, client=?) → all_paid(<=?, client=?)
   const debtParams: unknown[] = clientId ? [end, clientId, end, clientId] : [end, end];
   const debtSql = `SELECT
@@ -248,16 +271,16 @@ statsRouter.get('/summary', async (c) => {
   const debt = await db.prepare(debtSql).bind(...debtParams).first<{ all_sales: number; all_paid: number }>();
 
   return c.json({
-    start, end,
+    start, end, kind,
     can_see_profit: canSeeProfit,
     sales_total: r(sales?.sales_total), gross_profit: canSeeProfit ? r(sales?.gross_profit) : 0,
     sales_count: sales?.sales_count ?? 0,
     paid_total: r(paid?.paid_total), purchase_total: r(buy?.purchase_total),
-    debt: r((debt?.all_sales ?? 0) - (debt?.all_paid ?? 0)),
+    debt: kind === 'purchase' ? 0 : r((debt?.all_sales ?? 0) - (debt?.all_paid ?? 0)),
   });
 });
 
-// GET /stats/daily?start=&end=&client_id= — 区间内按日：出货/毛利/收款/进货（只含有数据的日，前端补零）
+// GET /stats/daily?start=&end=&client_id=&kind=sale|purchase — 区间内按日：出货/毛利/收款/进货（只含有数据的日，前端补零）
 statsRouter.get('/daily', async (c) => {
   const canSeeProfit = c.get('user').role === 'admin';
   const start = c.req.query('start')?.trim();
@@ -266,15 +289,21 @@ statsRouter.get('/daily', async (c) => {
   const clientId = c.req.query('client_id')?.trim();
   const db = c.env.DB;
   const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
 
   const sParams: unknown[] = [start, end];
-  const sSql = `SELECT substr(si.happened_at, 1, 10) AS day,
-      SUM(si.amount) AS sales_total,
-      SUM((si.sale_price - si.cost_price) * si.quantity) AS gross_profit
-     FROM sale_items si
-     WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}
-     GROUP BY day ORDER BY day`;
-  if (clientId) sParams.push(clientId);
+  const sSql = kind === 'purchase'
+    ? `SELECT substr(pi.happened_at, 1, 10) AS day, SUM(pi.amount) AS sales_total, 0 AS gross_profit
+       FROM purchase_items pi
+       WHERE pi.happened_at >= ? AND pi.happened_at <= ?
+       GROUP BY day ORDER BY day`
+    : `SELECT substr(si.happened_at, 1, 10) AS day,
+        SUM(si.amount) AS sales_total,
+        SUM((si.sale_price - si.cost_price) * si.quantity) AS gross_profit
+       FROM sale_items si
+       WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}
+       GROUP BY day ORDER BY day`;
+  if (clientId && kind === 'sale') sParams.push(clientId);
   const salesRows = await db.prepare(sSql).bind(...sParams).all<{ day: string; sales_total: number; gross_profit: number }>();
 
   const pParams: unknown[] = [start, end];
@@ -303,24 +332,33 @@ statsRouter.get('/daily', async (c) => {
   });
 });
 
-// GET /stats/items?start=&end=&client_id= — 区间内商品出货排行（按出货额降序，Top 15）
+// GET /stats/items?start=&end=&client_id=&kind=sale|purchase — 区间内商品排行（出货额/进货额降序，Top 15）
 statsRouter.get('/items', async (c) => {
   const start = c.req.query('start')?.trim();
   const end = c.req.query('end')?.trim();
   if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
   const clientId = c.req.query('client_id')?.trim();
+  const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
   const params: unknown[] = [start, end];
-  if (clientId) params.push(clientId);
+  if (clientId && kind === 'sale') params.push(clientId);
   const rows = await c.env.DB.prepare(
-    `SELECT i.name, si.unit, SUM(si.quantity) AS quantity, SUM(si.amount) AS amount
-     FROM sale_items si
-     JOIN items i ON i.id = si.item_id
-     WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}
-     GROUP BY si.item_id, si.unit
-     ORDER BY amount DESC LIMIT 15`,
+    kind === 'purchase'
+      ? `SELECT i.name, pi.unit, SUM(pi.quantity) AS quantity, SUM(pi.amount) AS amount
+         FROM purchase_items pi
+         JOIN items i ON i.id = pi.item_id
+         WHERE pi.happened_at >= ? AND pi.happened_at <= ?
+         GROUP BY pi.item_id, pi.unit
+         ORDER BY amount DESC LIMIT 15`
+      : `SELECT i.name, si.unit, SUM(si.quantity) AS quantity, SUM(si.amount) AS amount
+         FROM sale_items si
+         JOIN items i ON i.id = si.item_id
+         WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}
+         GROUP BY si.item_id, si.unit
+         ORDER BY amount DESC LIMIT 15`,
   ).bind(...params).all<{ name: string; unit: string; quantity: number; amount: number }>();
   const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
   return c.json({
+    kind,
     items: rows.results.map((x) => ({
       name: x.name, unit: x.unit,
       quantity: r(x.quantity), amount: r(x.amount),

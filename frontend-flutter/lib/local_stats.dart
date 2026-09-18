@@ -3,8 +3,10 @@
 import 'local_db.dart';
 
 /// 本地镜像按区间+店铺聚合出货/毛利/收款/进货/欠款（与 /stats/summary 同形）
-Future<Map<String, dynamic>?> localSummary(String start, String end, String? clientId) async {
-  final rows = await LocalDb.getAll('sale_items');
+/// kind='purchase'：换成进货口径（无店铺维度、无毛利/欠款，sales_total=进货额）
+Future<Map<String, dynamic>?> localSummary(String start, String end, String? clientId, {String kind = 'sale'}) async {
+  final isBuy = kind == 'purchase';
+  final rows = await LocalDb.getAll(isBuy ? 'purchase_items' : 'sale_items');
   final pays = await LocalDb.getAll('payments');
   final buys = await LocalDb.getAll('purchase_items');
   final sel = clientId ?? '';
@@ -12,18 +14,23 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
   double sold = 0, gross = 0, paid = 0, purchase = 0, debt = 0;
   var count = 0;
   for (final r in rows) {
-    final cid = '${r['client_id'] ?? ''}';
-    if (sel.isNotEmpty && cid != sel) continue;
+    if (!isBuy) {
+      final cid = '${r['client_id'] ?? ''}';
+      if (sel.isNotEmpty && cid != sel) continue;
+    }
     final h = '${r['happened_at'] ?? ''}';
     final amt = (r['amount'] as num?)?.toDouble() ?? 0;
-    if (h.isNotEmpty && h.compareTo(end) <= 0) debt += amt; // 截止 end 累计出货
+    if (!isBuy && h.isNotEmpty && h.compareTo(end) <= 0) debt += amt; // 截止 end 累计出货
     if (!inRange(h)) continue;
     sold += amt;
     count++;
-    final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
-    gross += (((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+    if (!isBuy) {
+      final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
+      gross += (((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+    }
   }
   for (final p in pays) {
+    if (isBuy) break;
     final cid = '${p['client_id'] ?? ''}';
     if (sel.isNotEmpty && cid != sel) continue;
     final amt = ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0);
@@ -36,14 +43,15 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
     if (inRange(h)) purchase += (b['amount'] as num?)?.toDouble() ?? 0;
   }
   return {
-    'sales_total': _r(sold), 'gross_profit': _r(gross), 'paid_total': _r(paid),
-    'purchase_total': _r(purchase), 'debt': _r(debt), 'sales_count': count, 'can_see_profit': true,
+    'sales_total': _r(sold), 'gross_profit': _r(gross), 'paid_total': _r(isBuy ? 0 : paid),
+    'purchase_total': _r(isBuy ? sold : purchase), 'debt': _r(isBuy ? 0 : debt), 'sales_count': count, 'can_see_profit': true,
   };
 }
 
-/// 每日聚合（与 /stats/daily 同形）：days: [{day, sales_total, gross_profit, paid_total}]
-Future<Map<String, dynamic>> localDaily(String start, String end, String? clientId) async {
-  final rows = await LocalDb.getAll('sale_items');
+/// 每日聚合（与 /stats/daily 同形）：days: [{day, sales_total, gross_profit, paid_total}]；kind=purchase 换进货口径
+Future<Map<String, dynamic>> localDaily(String start, String end, String? clientId, {String kind = 'sale'}) async {
+  final isBuy = kind == 'purchase';
+  final rows = await LocalDb.getAll(isBuy ? 'purchase_items' : 'sale_items');
   final pays = await LocalDb.getAll('payments');
   final byDay = <String, Map<String, double>>{};
   void acc(String day, String k, double v) {
@@ -51,14 +59,17 @@ Future<Map<String, dynamic>> localDaily(String start, String end, String? client
         (byDay[day]![k] ?? 0) + v;
   }
   for (final r in rows) {
-    if (clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
+    if (!isBuy && clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
     if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     final day = h.substring(0, 10);
     acc(day, 'sales_total', (r['amount'] as num?)?.toDouble() ?? 0);
-    acc(day, 'gross_profit', ((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0) * ((r['quantity'] as num?)?.toDouble() ?? 0));
+    if (!isBuy) {
+      acc(day, 'gross_profit', ((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0) * ((r['quantity'] as num?)?.toDouble() ?? 0));
+    }
   }
   for (final p in pays) {
+    if (isBuy) break;
     if (clientId != null && '${p['client_id'] ?? ''}' != clientId) continue;
     final h = '${p['happened_at'] ?? ''}';
     if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
@@ -71,14 +82,15 @@ Future<Map<String, dynamic>> localDaily(String start, String end, String? client
   return {'days': days};
 }
 
-/// 商品排行（与 /stats/items 同形）：items: [{name, unit, quantity, amount}]（按 商品+单位 分组）
-Future<Map<String, dynamic>> localItems(String start, String end, String? clientId) async {
-  final rows = await LocalDb.getAll('sale_items');
+/// 商品排行（与 /stats/items 同形）：items: [{name, unit, quantity, amount}]（按 商品+单位 分组）；kind=purchase 换进货
+Future<Map<String, dynamic>> localItems(String start, String end, String? clientId, {String kind = 'sale'}) async {
+  final isBuy = kind == 'purchase';
+  final rows = await LocalDb.getAll(isBuy ? 'purchase_items' : 'sale_items');
   final items = await LocalDb.getAllByName('items');
   final nameOf = {for (final it in items) '${it['id']}': '${it['name'] ?? ''}'};
   final agg = <String, Map<String, dynamic>>{};
   for (final r in rows) {
-    if (clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
+    if (!isBuy && clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
     if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     final itemId = '${r['item_id'] ?? ''}';
@@ -98,9 +110,10 @@ Future<Map<String, dynamic>> localItems(String start, String end, String? client
   return {'items': items2};
 }
 
-/// 分类聚合（与 /stats/categories 同形）：categories: [{category, quantity, amount}]
-Future<Map<String, dynamic>> localCategories(String start, String end, String? clientId) async {
-  final rows = await LocalDb.getAll('sale_items');
+/// 分类聚合（与 /stats/categories 同形）：categories: [{category, quantity, amount}]；kind=purchase 换进货
+Future<Map<String, dynamic>> localCategories(String start, String end, String? clientId, {String kind = 'sale'}) async {
+  final isBuy = kind == 'purchase';
+  final rows = await LocalDb.getAll(isBuy ? 'purchase_items' : 'sale_items');
   final items = await LocalDb.getAllByName('items');
   final catOf = <String, String>{};
   for (final it in items) {
@@ -109,7 +122,7 @@ Future<Map<String, dynamic>> localCategories(String start, String end, String? c
   }
   final agg = <String, Map<String, dynamic>>{};
   for (final r in rows) {
-    if (clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
+    if (!isBuy && clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
     if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     final cat = catOf['${r['item_id'] ?? ''}']?.trim().isNotEmpty == true
@@ -127,19 +140,22 @@ Future<Map<String, dynamic>> localCategories(String start, String end, String? c
   return {'categories': cats};
 }
 
-/// 按月聚合（与 /stats/monthly 同形）：months: [{month, sales_total, gross_profit}]
-Future<Map<String, dynamic>> localMonthly(String year, String? clientId) async {
-  final rows = await LocalDb.getAll('sale_items');
+/// 按月聚合（与 /stats/monthly 同形）：months: [{month, sales_total, gross_profit}]；kind=purchase 换进货
+Future<Map<String, dynamic>> localMonthly(String year, String? clientId, {String kind = 'sale'}) async {
+  final isBuy = kind == 'purchase';
+  final rows = await LocalDb.getAll(isBuy ? 'purchase_items' : 'sale_items');
   final agg = <String, Map<String, double>>{};
   for (final r in rows) {
-    if (clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
+    if (!isBuy && clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
     if (h.length < 7 || !h.startsWith(year)) continue;
     final month = h.substring(0, 7);
     final a = agg[month] ??= {'sales_total': 0, 'gross_profit': 0};
     a['sales_total'] = (a['sales_total'] ?? 0) + ((r['amount'] as num?)?.toDouble() ?? 0);
-    a['gross_profit'] = (a['gross_profit'] ?? 0) +
-        (((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * ((r['quantity'] as num?)?.toDouble() ?? 0);
+    if (!isBuy) {
+      a['gross_profit'] = (a['gross_profit'] ?? 0) +
+          (((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * ((r['quantity'] as num?)?.toDouble() ?? 0);
+    }
   }
   final months = agg.entries.map((e) => <String, dynamic>{
     'month': e.key, 'sales_total': _r(e.value['sales_total'] ?? 0), 'gross_profit': _r(e.value['gross_profit'] ?? 0),
@@ -203,23 +219,26 @@ Future<Map<String, dynamic>> localYears() async {
   return {'years': list, 'first_date': first?.substring(0, 10) ?? ''};
 }
 
-/// 出货明细（商品级，按日期升序每行一件）：本地镜像直算，供统计页「出货明细」分区
-Future<List<Map<String, dynamic>>> localSaleDetail(String start, String end, String? clientId) async {
-  final rows = await LocalDb.getAll('sale_items');
+/// 交易明细（商品级，按日期升序每行一件）：本地镜像直算，供统计页「明细」分区；kind=purchase 换进货明细
+Future<List<Map<String, dynamic>>> localSaleDetail(String start, String end, String? clientId, {String kind = 'sale'}) async {
+  final isBuy = kind == 'purchase';
+  final rows = await LocalDb.getAll(isBuy ? 'purchase_items' : 'sale_items');
   final clients = await LocalDb.getAllByName('clients');
   final items = await LocalDb.getAllByName('items');
   final clientName = {for (final c in clients) '${c['id']}': '${c['name'] ?? ''}'};
   final itemName = {for (final it in items) '${it['id']}': '${it['name'] ?? ''}'};
   final out = <Map<String, dynamic>>[];
   for (final r in rows) {
-    final cid = '${r['client_id'] ?? ''}';
-    if (clientId != null && cid != clientId) continue;
+    if (!isBuy) {
+      final cid = '${r['client_id'] ?? ''}';
+      if (clientId != null && cid != clientId) continue;
+    }
     final h = '${r['happened_at'] ?? ''}';
     if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     final itemId = '${r['item_id'] ?? ''}';
     out.add(<String, dynamic>{
       'date': h.substring(0, 10),
-      'client_name': clientName[cid] ?? '',
+      'client_name': isBuy ? '' : (clientName['${r['client_id'] ?? ''}'] ?? ''),
       'name': itemName[itemId] ?? '${r['item_name'] ?? ''}',
       'quantity': (r['quantity'] as num?)?.toDouble() ?? 0,
       'unit': '${r['unit'] ?? ''}',
