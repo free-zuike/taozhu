@@ -566,7 +566,7 @@ jobs:
 
 
       - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
-        id: guard
+        id: guard-ios
         run: |
           VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1)
           if [ -z "$VERSION" ]; then echo "::error::无法从 version.dart 提取版本号"; exit 1; fi
@@ -636,7 +636,7 @@ jobs:
 
       - name: 失败即清理不完整 release
         # 仅版本守卫通过后的失败才清理（版本守卫失败=版本未 bump，已发布的完整 release 应保留）
-        if: failure() && steps.guard.outcome == 'success'
+        if: failure() && steps.guard-ios.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
