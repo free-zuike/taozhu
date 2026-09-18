@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { stockUpsert } from '../lib/stock';
+import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -77,6 +78,31 @@ stocksRouter.put('/', adminOnly(), async (c) => {
   if (batch.length === 0) return c.json({ error: '盘点数据不合法（需 item_id/unit/数量≥0）' }, 400);
   await c.env.DB.batch(batch);
   return c.json({ ok: true, updated: batch.length });
+});
+
+// POST /stocks/rebuild — 全量重算库存：从进货(+)出货(−)流水重建（保留预警阈值）。
+// 用途：历史 App 行级同步路径在旧版（v0.17.144 前）无库存联动，此端点在升级后一次性回补存量。
+stocksRouter.post('/rebuild', adminOnly(), async (c) => {
+  const old = await c.env.DB.prepare('SELECT item_id, unit, min_stock FROM stocks')
+    .all<{ item_id: string; unit: string; min_stock: number }>();
+  const minMap = new Map(old.results.map((r) => [`${r.item_id}\u0000${r.unit}`, r.min_stock]));
+  await c.env.DB.prepare('DELETE FROM stocks').run();
+  const rows = await c.env.DB.prepare(
+    `SELECT item_id, unit, SUM(qty) AS quantity FROM (
+       SELECT item_id, unit, quantity AS qty FROM purchase_items
+       UNION ALL SELECT item_id, unit, -quantity AS qty FROM sale_items
+     ) GROUP BY item_id, unit`,
+  ).all<{ item_id: string; unit: string; quantity: number }>();
+  const batch = rows.results.map((r) => {
+    const min = minMap.get(`${r.item_id}\u0000${r.unit}`) ?? 0;
+    return stockUpsert(c.env.DB, r.item_id, r.unit, Math.round(Number(r.quantity) * 100) / 100, min);
+  });
+  await c.env.DB.batch(batch);
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'rebuild', entity_type: 'stocks',
+    detail: `全量重算库存：${batch.length} 个商品+单位`,
+  });
+  return c.json({ ok: true, rebuilt: batch.length });
 });
 
 // PATCH /stocks/:id — 调整单行库存/阈值

@@ -159,7 +159,14 @@ function assembleFromRows(rows: Array<Record<string, any>>): Array<Record<string
     if (!oid) continue;
     if (!byOrder.has(oid)) byOrder.set(oid, []);
     byOrder.get(oid)!.push(r);
-    meta.set(oid, { id: oid, happened_at: r.happened_at || '', note: r.note || '' });
+    // 整单日期 = 行最大日期（与 Web/App 及服务器聚合口径一致，避免同单多行日期不同时两端对不上）
+    const prev = meta.get(oid);
+    const h = String(r.happened_at || '');
+    meta.set(oid, {
+      id: oid,
+      happened_at: prev && String(prev.happened_at || '') >= h ? prev.happened_at : h,
+      note: r.note || (prev?.note || ''),
+    });
   }
   return [...byOrder.entries()].map(([oid, items]) => {
     const m = meta.get(oid)!;

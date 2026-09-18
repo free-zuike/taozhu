@@ -141,4 +141,30 @@ describe('库存（stocks）', () => {
     };
     expect(d.items[0].prices[0].stock).toBe(25);
   });
+
+  it('全量重算库存：从进货(+)出货(−)流水重建，保留阈值；店员 403', async () => {
+    // 直接造历史流水（模拟 v0.17.144 前 App 行级同步：stocks 无联动）
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string }> };
+    const itemId = items.items[0].id;
+    await env.DB.prepare('INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('pi-r1', 'pu-r1', itemId, '斤', 40, 1, 40, '2026-09-01').run();
+    await env.DB.prepare('INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('pi-r2', 'pu-r2', itemId, '斤', 15, 1, 15, '2026-09-05').run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-r1', 's-r1', clientId, itemId, '斤', 10, 2, 1, 20, '2026-09-08').run();
+    // 先设阈值：rebuild 后应保留
+    await call(env, 'PUT', '/api/v1/stocks', token, { rows: [{ item_id: itemId, unit: '斤', quantity: 0, min_stock: 5 }] });
+    const r = await call(env, 'POST', '/api/v1/stocks/rebuild', token);
+    expect(r.status).toBe(200);
+    const d = (await (await call(env, 'GET', '/api/v1/stocks', token)).json()) as {
+      stocks: Array<{ quantity: number; min_stock: number }>;
+    };
+    expect(d.stocks[0].quantity).toBe(45); // 40 + 15 − 10
+    expect(d.stocks[0].min_stock).toBe(5); // 阈值保留
+    // 店员无权重算
+    await call(env, 'POST', '/api/v1/users', token, { username: 'staff1', password: 'staff1234', role: 'staff' });
+    const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff1234' });
+    const staffToken = ((await login.json()) as { token: string }).token;
+    expect((await call(env, 'POST', '/api/v1/stocks/rebuild', staffToken)).status).toBe(403);
+  });
 });

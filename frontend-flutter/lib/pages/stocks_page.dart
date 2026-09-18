@@ -261,6 +261,34 @@ class _StocksPageState extends State<StocksPage> {
     }
   }
 
+    /// 全量重算库存：从进货(+)出货(−)流水重建（历史 App 行级同步在旧版无库存联动，升级后一次性回补）
+  Future<void> _rebuildStock() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('重算库存'),
+        content: const Text('按全部进货/出货流水重新计算每个商品+单位的库存（保留预警阈值）。\n用于修复历史数据：旧版本 App 端添加的进货/出货未联动库存。\n\n确认重算？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('重算'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final r = await Api.instance.post('/stocks/rebuild', {});
+      toast(context, '已重算 ${r['rebuilt'] ?? 0} 个商品库存');
+      SyncService.notifyStockChanged();
+      _refresh();
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -268,6 +296,11 @@ class _StocksPageState extends State<StocksPage> {
         title: const Text('库存'),
         actions: [
           IconButton(tooltip: '盘点', icon: const Icon(Icons.edit_note_outlined), onPressed: _count),
+          IconButton(
+            tooltip: '重算库存（从进货/出货流水重建，保留阈值）',
+            icon: const Icon(Icons.autorenew),
+            onPressed: _rebuildStock,
+          ),
           IconButton(
             tooltip: '只看预警',
             icon: Icon(Icons.notification_important_outlined,

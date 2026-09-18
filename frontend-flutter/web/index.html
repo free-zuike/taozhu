@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="陶朱 - 通用进销存记账">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#F8C91C">
+  <title>陶朱进销存</title>
+  <!-- 首访骨架屏：Flutter 引擎（main.dart.js + canvaskit）下载期间显示品牌+加载动画，首帧渲染后移除——避免白屏 -->
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #fff; }
+    #flt-loader {
+      position: fixed; inset: 0; z-index: 9999;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #fff; font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      transition: opacity .3s ease;
+    }
+    #flt-loader.hidden { opacity: 0; pointer-events: none; }
+    #flt-loader .brand { font-size: 30px; font-weight: 800; color: #F8C91C; letter-spacing: 2px; margin-bottom: 16px; }
+    #flt-loader .spinner {
+      width: 34px; height: 34px;
+      border: 3px solid rgba(248,201,28,.25); border-top-color: #F8C91C;
+      border-radius: 50%; animation: flt-spin .9s linear infinite;
+    }
+    #flt-loader .tip { margin-top: 14px; font-size: 13px; color: #999; }
+    @keyframes flt-spin { to { transform: rotate(360deg); } }
+    @media (prefers-color-scheme: dark) {
+      #flt-loader { background: #1a1a1a; }
+      #flt-loader .tip { color: #777; }
+    }
+  </style>
+  <script>
+    // Flutter 渲染出首帧后隐藏骨架屏（引擎就绪前页面不再白屏）
+    function hideLoader() {
+      var el = document.getElementById('flt-loader');
+      if (el) { el.classList.add('hidden'); setTimeout(function () { el.remove(); }, 350); }
+    }
+    window.addEventListener('flutter-first-frame', hideLoader);
+    // 兜底：超时（离线/加载失败）也隐藏，避免永远挡住
+    setTimeout(hideLoader, 20000);
+  </script>
+</head>
+<body>
+  <div id="flt-loader">
+    <div class="brand">陶朱</div>
+    <div class="spinner"></div>
+    <div class="tip">正在加载…</div>
+  </div>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

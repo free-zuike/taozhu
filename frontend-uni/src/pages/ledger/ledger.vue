@@ -378,9 +378,15 @@ function assembleSalesFromRows(rows: Array<Record<string, any>>): Array<Record<s
     if (!oid) continue;
     if (!byOrder.has(oid)) byOrder.set(oid, []);
     byOrder.get(oid)!.push(r);
+    // 整单日期 = 行最大日期（与 Web/App 及服务器聚合口径一致，避免同单多行日期不同时两端对不上）
+    const prev = meta.get(oid);
+    const h = String(r.happened_at || '');
     meta.set(oid, {
-      id: oid, client_id: r.client_id || '', client_name: r.client_name || '',
-      happened_at: r.happened_at || '', note: r.note || '',
+      id: oid,
+      client_id: r.client_id || (prev?.client_id || ''),
+      client_name: r.client_name || (prev?.client_name || ''),
+      happened_at: prev && String(prev.happened_at || '') >= h ? prev.happened_at : h,
+      note: r.note || (prev?.note || ''),
     });
   }
   return [...byOrder.entries()].map(([oid, items]) => {
