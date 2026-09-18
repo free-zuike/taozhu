@@ -143,41 +143,40 @@ printRouter.get('/monthly', async (c) => {
     params.push(clientId);
   }
 
-  // 旬段汇总模板：1-10 / 11-20 / 21-30 / 31 日四段销售额 + 全月总计
+  // 旬段汇总模板（按实际日期逐日展开）：1日、2日…月末每天一行（无数据日=0）+ 全月总计
   if (mode === 'period') {
-    const seg = await c.env.DB.prepare(
-      `SELECT
-        COALESCE(SUM(CASE WHEN substr(si.happened_at, 9, 2) BETWEEN '01' AND '10' THEN si.amount END), 0) AS seg1,
-        COALESCE(SUM(CASE WHEN substr(si.happened_at, 9, 2) BETWEEN '11' AND '20' THEN si.amount END), 0) AS seg2,
-        COALESCE(SUM(CASE WHEN substr(si.happened_at, 9, 2) BETWEEN '21' AND '30' THEN si.amount END), 0) AS seg3,
-        COALESCE(SUM(CASE WHEN substr(si.happened_at, 9, 2) >= '31' THEN si.amount END), 0) AS seg4,
-        COALESCE(SUM(si.amount), 0) AS total
-       FROM ${table} si WHERE ${where}`,
-    ).bind(...params).first<{ seg1: number; seg2: number; seg3: number; seg4: number; total: number }>();
+    const rows = await c.env.DB.prepare(
+      `SELECT CAST(substr(si.happened_at, 9, 2) AS INTEGER) AS day, SUM(si.amount) AS total
+       FROM ${table} si WHERE ${where}
+       GROUP BY day ORDER BY day`,
+    ).bind(...params).all<{ day: number; total: number }>();
     const client = clientId
       ? await c.env.DB.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>()
       : null;
     const storeName = client?.name || '全部店铺';
     const now = new Date();
     const today = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
-    const segs = [
-      { label: '1日到10日', v: seg?.seg1 ?? 0 },
-      { label: '11日到20日', v: seg?.seg2 ?? 0 },
-      { label: '21日到30日', v: seg?.seg3 ?? 0 },
-      { label: '31日', v: seg?.seg4 ?? 0 },
-    ];
-    // 8 列：每段「区间标签 | 销售额」交替（用户模板：1日到10日 销售额 11日到20日 销售额 ... 31日 销售额）
-    const headCells = segs.map((s) => `<th class="num">${esc(s.label)}</th><th class="num">销售额</th>`).join('');
-    const valCells = segs.map((s) => `<td class="num">${esc(s.label)}</td><td class="num">${fmtMoney(s.v)}</td>`).join('');
+    const dayMap = new Map(rows.results.map((r) => [r.day, Number(r.total) || 0]));
+    const daysInMonth = new Date(y, m, 0).getDate();
+    let grand = 0;
+    const bodyRows: string[] = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const v = dayMap.get(d) ?? 0;
+      grand += v;
+      bodyRows.push(`            <tr>
+              <td>${d}日</td>
+              <td class="num">${fmtMoney(v)}</td>
+            </tr>`);
+    }
     return c.html(page(`${storeName}${m}月${title}`, `<h1>${esc(storeName)}${m}月${title}</h1>
 <div class="meta">${esc(today)}</div>
 <table>
-  <thead><tr>${headCells}</tr></thead>
+  <thead><tr><th>日期</th><th style="width:140px" class="num">销售额</th></tr></thead>
   <tbody>
-    <tr>${valCells}</tr>
+${bodyRows.join('\n')}
   </tbody>
   <tfoot>
-    <tr class="total-row"><td colspan="8" style="text-align:right">总计：¥${fmtMoney(seg?.total ?? 0)}</td></tr>
+    <tr class="total-row"><td style="text-align:right">总计</td><td class="num">${fmtMoney(grand)}</td></tr>
   </tfoot>
 </table>`));
   }

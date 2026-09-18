@@ -221,6 +221,7 @@ class _StatementPageState extends State<StatementPage> {
     var cfg = _xls.copy();
     final nameCtrl = TextEditingController(text: cfg.name);
     final titleCtrl = TextEditingController(text: cfg.title);
+    final contentCtrl = TextEditingController(text: cfg.content);
 
     final ok = await showDialog<bool>(
       context: context,
@@ -336,6 +337,41 @@ class _StatementPageState extends State<StatementPage> {
                   ),
                 ],
                 const SizedBox(height: 8),
+                // 模板正文（自由编排 + 变量占位；空=按上方结构化字段生成）
+                const Text('模板正文（可插入变量；预览/导出/打印同源渲染）',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: contentCtrl,
+                  maxLines: 6,
+                  minLines: 3,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    hintText: '留空 = 按上方结构化字段生成\n\n示例：\n对账单\n店铺：{店铺}\n账期：{账期}\n出货合计：{出货合计}　期末欠款：{期末欠款}\n\n明细：\n{明细}',
+                  ),
+                  onChanged: (v) => cfg.content = v,
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 2,
+                  children: [
+                    for (final v in const ['店铺', '账期', '日期', '出货合计', '收款合计', '期末欠款', '出货笔数', '明细', '旬段表'])
+                      ActionChip(
+                        label: Text('{$v}', style: const TextStyle(fontSize: 11)),
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () {
+                          final t = contentCtrl.text;
+                          final idx = contentCtrl.selection.isValid ? contentCtrl.selection.start : t.length;
+                          contentCtrl.text = t.replaceRange(idx, idx, '{$v}');
+                          contentCtrl.selection = TextSelection.collapsed(offset: idx + '{$v}'.length);
+                          cfg.content = contentCtrl.text;
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 // 模板操作 + 预览
                 Wrap(
                   spacing: 8,
@@ -394,11 +430,23 @@ class _StatementPageState extends State<StatementPage> {
                       icon: const Icon(Icons.visibility_outlined, size: 16),
                       label: const Text('预览'),
                       onPressed: () {
+                        // 模板正文优先：变量渲染后的样式（所见即所得）；空正文走结构化表格预览
+                        final contentLines = cfg.content.trim().isEmpty
+                            ? null
+                            : _renderContentLines(cfg.content, clientName);
                         showDialog<void>(
                           context: ctx,
                           builder: (c2) => AlertDialog(
                             title: Text('预览：${cfg.name}'),
-                            content: SizedBox(width: 460, child: _previewTable(cfg, clientName)),
+                            content: SizedBox(
+                              width: 460,
+                              child: contentLines != null
+                                  ? SingleChildScrollView(
+                                      child: Text(contentLines.join('\n'),
+                                          style: const TextStyle(fontSize: 12, height: 1.7)),
+                                    )
+                                  : _previewTable(cfg, clientName),
+                            ),
                             actions: [
                               TextButton(onPressed: () => Navigator.pop(c2), child: const Text('关闭')),
                             ],
@@ -681,39 +729,41 @@ class _StatementPageState extends State<StatementPage> {
     return byDay;
   }
 
-  /// 旬段聚合（1-10 / 11-20 / 21-30 / 31 日四段销售额，按明细行日期日份）
-  List<double> _salesByPeriod() {
-    final seg = [0.0, 0.0, 0.0, 0.0];
+  /// 该月每天销售额（1日→月末逐日，无数据日=0）——旬段模板实为按日展开，非段合计
+  List<double> _salesByDayOfMonth() {
+    final from = _fromCtrl.text.trim();
+    final y = int.tryParse(from.length >= 7 ? from.substring(0, 4) : '') ?? DateTime.now().year;
+    final m = int.tryParse(from.length >= 7 ? from.substring(5, 7) : '') ?? DateTime.now().month;
+    final daysInMonth = DateTime(y, m + 1, 0).day;
+    final arr = List<double>.filled(daysInMonth, 0);
     for (final s in _sales) {
       final orderDate = _date(s['happened_at']);
       for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
         final id = '${it['happened_at'] ?? ''}';
         final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
         if (d.length < 10) continue;
+        // 仅统计账期月份内的行（跨月账期忽略非本月行）
+        final dy = int.tryParse(d.substring(0, 4)) ?? 0;
+        final dm = int.tryParse(d.substring(5, 7)) ?? 0;
+        if (dy != y || dm != m) continue;
         final day = int.tryParse(d.substring(8, 10)) ?? 1;
-        seg[day >= 31 ? 3 : day >= 21 ? 2 : day >= 11 ? 1 : 0] +=
-            ((it['amount'] as num?)?.toDouble() ?? 0);
+        if (day < 1 || day > daysInMonth) continue;
+        arr[day - 1] += (it['amount'] as num?)?.toDouble() ?? 0;
       }
     }
-    return seg;
+    return arr;
   }
 
-  /// 旬段汇总表（Excel）：8 列 = 区间标签与销售额交替（1日到10日|销售额|11日到20日|销售额|21日到30日|销售额|31日|销售额）+ 总计
+  /// 旬段汇总表（Excel）：按实际日期逐日展开（1日、2日、…月末，每天一行日期+销售额，无数据日=0）+ 总计
   void _sheetPeriod(Sheet sheet, _XlsCfg cfg) {
-    sheet.appendRow([
-      TextCellValue('1日到10日'), TextCellValue('销售额'),
-      TextCellValue('11日到20日'), TextCellValue('销售额'),
-      TextCellValue('21日到30日'), TextCellValue('销售额'),
-      TextCellValue('31日'), TextCellValue('销售额'),
-    ]);
-    final seg = _salesByPeriod();
-    sheet.appendRow([
-      TextCellValue('1-10日'), TextCellValue('¥${seg[0].toStringAsFixed(2)}'),
-      TextCellValue('11-20日'), TextCellValue('¥${seg[1].toStringAsFixed(2)}'),
-      TextCellValue('21-30日'), TextCellValue('¥${seg[2].toStringAsFixed(2)}'),
-      TextCellValue('31日'), TextCellValue('¥${seg[3].toStringAsFixed(2)}'),
-    ]);
-    final total = seg.fold<double>(0, (a, b) => a + b);
+    sheet.appendRow([TextCellValue('日期'), TextCellValue('销售额')]);
+    final daily = _salesByDayOfMonth();
+    double total = 0;
+    for (var i = 0; i < daily.length; i++) {
+      final v = daily[i];
+      total += v;
+      sheet.appendRow([TextCellValue('${i + 1}日'), TextCellValue('¥${v.toStringAsFixed(2)}')]);
+    }
     sheet.appendRow([TextCellValue('总计'), TextCellValue('¥${total.toStringAsFixed(2)}')]);
   }
 
@@ -805,15 +855,16 @@ class _StatementPageState extends State<StatementPage> {
         );
     final rows = <TableRow>[];
     if (cfg.mode == 'period') {
-      rows.add(row(['1日到10日', '销售额', '11日到20日', '销售额', '21日到30日', '销售额', '31日', '销售额'], head: true));
-      final seg = _salesByPeriod();
-      rows.add(row([
-        '1-10日', '¥${seg[0].toStringAsFixed(2)}',
-        '11-20日', '¥${seg[1].toStringAsFixed(2)}',
-        '21-30日', '¥${seg[2].toStringAsFixed(2)}',
-        '31日', '¥${seg[3].toStringAsFixed(2)}',
-      ]));
-      rows.add(row(['总计', '¥${seg.fold<double>(0, (a, b) => a + b).toStringAsFixed(2)}', '', '', '', '', '', '']));
+      // 按实际日期逐日展开（1日、2日…月末，每天一行，无数据日=0）
+      rows.add(row(['日期', '销售额'], head: true));
+      final daily = _salesByDayOfMonth();
+      double total = 0;
+      for (var i = 0; i < daily.length; i++) {
+        final v = daily[i];
+        total += v;
+        rows.add(row(['${i + 1}日', '¥${v.toStringAsFixed(2)}']));
+      }
+      rows.add(row(['总计', '¥${total.toStringAsFixed(2)}']));
     } else if (cfg.mode == 'daily') {
       rows.add(row(['日期', '金额'], head: true));
       final byDay = _salesByDay();
@@ -895,6 +946,66 @@ class _StatementPageState extends State<StatementPage> {
       defaultColumnWidth: const IntrinsicColumnWidth(),
       children: rows,
     );
+  }
+
+  /// 模板正文变量渲染（预览/导出/打印三端同源数据）：
+  /// 变量：{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{明细}{旬段表}
+  /// 返回渲染后的逐行文本；{明细} 每件商品一行、{旬段表} 四段汇总文本。
+  List<String> _renderContentLines(String content, String clientName) {
+    final now = DateTime.now();
+    final today = '${now.year}年${now.month}月${now.day}日';
+    final map = <String, String>{
+      '店铺': clientName,
+      '账期': '${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}',
+      '日期': today,
+      '出货合计': '¥${_saleTotal.toStringAsFixed(2)}',
+      '收款合计': '¥${_payTotal.toStringAsFixed(2)}',
+      '期末欠款': '¥${_debtEnd.toStringAsFixed(2)}',
+      '出货笔数': '${_sales.length}',
+    };
+    final out = <String>[];
+    for (final raw in content.split('\n')) {
+      var line = raw;
+      for (final e in map.entries) {
+        line = line.replaceAll('{${e.key}}', e.value);
+      }
+      if (line.contains('{明细}')) {
+        final items = _detailLines();
+        line = line.replaceAll('{明细}',
+            items.isEmpty ? '（本期无出货明细）' : items.join('\n'));
+      }
+      if (line.contains('{旬段表}')) {
+        // 按实际日期逐日展开：1日 ¥x、2日 ¥y …（无数据日=0），末行总计
+        final daily = _salesByDayOfMonth();
+        double total = 0;
+        final parts = <String>[];
+        for (var i = 0; i < daily.length; i++) {
+          total += daily[i];
+          if (daily[i] != 0 || parts.isEmpty) {
+            parts.add('${i + 1}日 ¥${daily[i].toStringAsFixed(2)}');
+          }
+        }
+        parts.add('总计 ¥${total.toStringAsFixed(2)}');
+        line = line.replaceAll('{旬段表}', parts.join('、'));
+      }
+      out.add(line);
+    }
+    return out;
+  }
+
+  /// 出货明细行（每件商品一行：日期 商品 数量单位 金额）——{明细} 变量展开数据源
+  List<String> _detailLines() {
+    final out = <String>[];
+    for (final s in _sales) {
+      final orderDate = _date(s['happened_at']);
+      for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+        final id = '${it['happened_at'] ?? ''}';
+        final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
+        out.add('$d ${it['item_name']} ${it['quantity']}${it['unit']} '
+            '¥${((it['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}');
+      }
+    }
+    return out;
   }
 
   /// 我的分享管理：列出历史分享链接（含到期/已过期），可随时取消（删除）
@@ -1302,6 +1413,9 @@ class _XlsCfg {
 
   String name = '标准';
   String title = '陶朱对账单';
+  /// 模板正文（自由编排，支持变量占位：{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{明细}{旬段表}）；
+  /// 空 = 用下方结构化字段（表头信息行/明细粒度/明细列）生成
+  String content = '';
   bool headClient = true;
   bool headPeriod = true;
   bool headSaleTotal = true;
@@ -1317,6 +1431,7 @@ class _XlsCfg {
   Map<String, dynamic> toJson() => {
         'name': name,
         'title': title,
+        'content': content,
         'headClient': headClient,
         'headPeriod': headPeriod,
         'headSaleTotal': headSaleTotal,
@@ -1333,6 +1448,7 @@ class _XlsCfg {
   _XlsCfg.fromJson(Map<String, dynamic> j) {
     name = '${j['name'] ?? '标准'}';
     title = '${j['title'] ?? '陶朱对账单'}';
+    content = '${j['content'] ?? ''}';
     headClient = j['headClient'] != false;
     headPeriod = j['headPeriod'] != false;
     headSaleTotal = j['headSaleTotal'] != false;

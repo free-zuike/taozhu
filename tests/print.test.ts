@@ -99,17 +99,16 @@ describe('单据打印（/print）', () => {
     expect(html).toContain('page-break-after');
   });
 
-  it('按月旬段汇总模板：标题含店名月销售 + 8 列 + 总计（1-10/11-20/21-30/31 日）', async () => {
-    // 现有 seed：9/10 两行 16 元（1-10 段）、9/12 一行 8 元（11-20 段）→ 段1=16、段2=8、总计 24
+  it('按月旬段汇总模板：标题含店名月销售 + 按实际日期逐日展开（每天一行）+ 总计', async () => {
+    // 现有 seed：9/10 两行 16 元（10日）、9/12 一行 8 元（12日）→ 逐日行含 10日/12日，总计 24
     const res = await call(env, 'GET', `/api/v1/print/monthly?kind=sale&month=2026-09&mode=period&client_id=c1&token=${token}`);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('老王菜铺9月出货');
-    expect(html).toContain('1日到10日');
-    expect(html).toContain('11日到20日');
-    expect(html).toContain('21日到30日');
-    expect(html).toContain('31日');
-    expect(html).toContain('总计：¥24.00');
+    expect(html).toContain('10日');
+    expect(html).toContain('12日');
+    expect(html).toContain('总计');
+    expect(html).toContain('24.00');
   });
 
   it('按月进货打印 + 非法月份 400 + 空月提示', async () => {
