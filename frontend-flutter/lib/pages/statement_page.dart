@@ -860,17 +860,23 @@ class _StatementPageState extends State<StatementPage> {
                 padding: const EdgeInsets.all(12),
                 child: Text('周期内无出货', style: TextStyle(color: c.textSub)),
               ),
+            // 出货明细 = 商品明细（每件商品一行，不再按"单"汇总店铺/日期/笔数/总额）
             for (final s in _sales)
-              Card(
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.storefront, size: 20, color: _c.primary),
-                  title: Text('${s['client_name'] ?? ''}'),
-                  subtitle: Text('${_date(s['happened_at'])} · ${(s['items'] as List? ?? []).length} 项'),
-                  trailing: Text('¥${(s['total'] as num?)?.toStringAsFixed(2) ?? '-'}',
-                      style: TextStyle(fontWeight: FontWeight.w700, color: c.danger)),
+              for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>())
+                Card(
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.sell_outlined, size: 20, color: _c.primary),
+                    title: Text('${it['item_name'] ?? ''}'),
+                    subtitle: Text(
+                      '${_date(s['happened_at'])}'
+                      '${_clientId == null && '${s['client_name'] ?? ''}'.isNotEmpty ? ' · ${s['client_name']}' : ''}'
+                      ' · ${it['quantity'] ?? ''}${it['unit'] ?? ''} × ¥${(it['sale_price'] as num?)?.toStringAsFixed(2) ?? '-'}',
+                    ),
+                    trailing: Text('¥${(it['amount'] as num?)?.toStringAsFixed(2) ?? '-'}',
+                        style: TextStyle(fontWeight: FontWeight.w700, color: c.danger)),
+                  ),
                 ),
-              ),
             const SizedBox(height: 8),
             const Text('收款明细', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
             const SizedBox(height: 8),

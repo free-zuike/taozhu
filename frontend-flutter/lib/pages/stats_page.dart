@@ -23,7 +23,7 @@ class _StatsPageState extends State<StatsPage> {
   String _clientName = '全部店铺';
 
   String _mode = 'range';
-  String _quick = 'month';
+  String _quick = 'rolling';
   DateTime? _customStart;
   DateTime? _customEnd;
 

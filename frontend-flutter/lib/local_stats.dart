@@ -71,33 +71,34 @@ Future<Map<String, dynamic>> localDaily(String start, String end, String? client
   return {'days': days};
 }
 
-/// 商品排行（与 /stats/items 同形）：items: [{item_id, item_name, quantity, amount, gross_profit}]
+/// 商品排行（与 /stats/items 同形）：items: [{name, unit, quantity, amount}]（按 商品+单位 分组）
 Future<Map<String, dynamic>> localItems(String start, String end, String? clientId) async {
   final rows = await LocalDb.getAll('sale_items');
   final items = await LocalDb.getAllByName('items');
   final nameOf = {for (final it in items) '${it['id']}': '${it['name'] ?? ''}'};
-  final agg = <String, Map<String, double>>{};
+  final agg = <String, Map<String, dynamic>>{};
   for (final r in rows) {
     if (clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
     if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
-    final key = '${r['item_id'] ?? ''}';
-    final a = agg[key] ??= {'quantity': 0, 'amount': 0, 'gross_profit': 0};
+    final itemId = '${r['item_id'] ?? ''}';
+    final unit = '${r['unit'] ?? ''}';
+    final key = '$itemId|$unit';
+    final a = agg[key] ??= {'item_id': itemId, 'unit': unit, 'quantity': 0.0, 'amount': 0.0};
     final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
-    a['quantity'] = (a['quantity'] ?? 0) + qty;
-    a['amount'] = (a['amount'] ?? 0) + ((r['amount'] as num?)?.toDouble() ?? 0);
-    a['gross_profit'] = (a['gross_profit'] ?? 0) +
-        (((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+    a['quantity'] = (a['quantity'] as double) + qty;
+    a['amount'] = (a['amount'] as double) + ((r['amount'] as num?)?.toDouble() ?? 0);
   }
-  final items2 = agg.entries.map((e) => <String, dynamic>{
-    'item_id': e.key, 'item_name': nameOf[e.key] ?? '',
-    'quantity': _r(e.value['quantity'] ?? 0), 'amount': _r(e.value['amount'] ?? 0),
-    'gross_profit': _r(e.value['gross_profit'] ?? 0),
+  final items2 = agg.values.map((a) => <String, dynamic>{
+    'name': nameOf['${a['item_id']}'] ?? '',
+    'unit': a['unit'],
+    'quantity': _r(a['quantity'] as double),
+    'amount': _r(a['amount'] as double),
   }).toList()..sort((a, b) => ((b['amount'] as num) - (a['amount'] as num)).toInt());
   return {'items': items2};
 }
 
-/// 分类聚合（与 /stats/categories 同形）：categories: [{category, amount, count}]
+/// 分类聚合（与 /stats/categories 同形）：categories: [{category, quantity, amount}]
 Future<Map<String, dynamic>> localCategories(String start, String end, String? clientId) async {
   final rows = await LocalDb.getAll('sale_items');
   final items = await LocalDb.getAllByName('items');
@@ -106,7 +107,7 @@ Future<Map<String, dynamic>> localCategories(String start, String end, String? c
     final c = '${it['category'] ?? ''}';
     if (c.isNotEmpty) catOf['${it['id']}'] = c;
   }
-  final agg = <String, Map<String, double>>{};
+  final agg = <String, Map<String, dynamic>>{};
   for (final r in rows) {
     if (clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
@@ -114,12 +115,14 @@ Future<Map<String, dynamic>> localCategories(String start, String end, String? c
     final cat = catOf['${r['item_id'] ?? ''}']?.trim().isNotEmpty == true
         ? catOf['${r['item_id'] ?? ''}']!
         : ('${r['item_category'] ?? ''}'.trim().isNotEmpty ? '${r['item_category']}' : '未分类');
-    final a = agg[cat] ??= {'amount': 0, 'count': 0};
-    a['amount'] = (a['amount'] ?? 0) + ((r['amount'] as num?)?.toDouble() ?? 0);
-    a['count'] = (a['count'] ?? 0) + 1;
+    final a = agg[cat] ??= {'quantity': 0.0, 'amount': 0.0};
+    a['quantity'] = (a['quantity'] as double) + ((r['quantity'] as num?)?.toDouble() ?? 0);
+    a['amount'] = (a['amount'] as double) + ((r['amount'] as num?)?.toDouble() ?? 0);
   }
   final cats = agg.entries.map((e) => <String, dynamic>{
-    'category': e.key, 'amount': _r(e.value['amount'] ?? 0), 'count': (e.value['count'] ?? 0).toInt(),
+    'category': e.key,
+    'quantity': _r(e.value['quantity'] as double),
+    'amount': _r(e.value['amount'] as double),
   }).toList()..sort((a, b) => ((b['amount'] as num) - (a['amount'] as num)).toInt());
   return {'categories': cats};
 }
