@@ -533,7 +533,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string; min_supported: string };
-    expect(d.current).toBe('0.17.143');
+    expect(d.current).toBe('0.17.144');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
@@ -563,7 +563,7 @@ describe('强制更新门禁（x-app-version 低于最低支持版本 → 426）
   });
 
   it('携带当前版本头 → 放行；不带版本头（Web/小程序）→ 放行', async () => {
-    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.143' });
+    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.144' });
     expect(r1.status).toBe(200);
     const r2 = await call(env, 'GET', '/api/v1/clients', token);
     expect(r2.status).toBe(200);
@@ -1095,5 +1095,23 @@ describe('操作审计（audit_logs：登录/删除/导出留痕，admin 查看�
     const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff1234' });
     const staffToken = ((await login.json()) as { token: string }).token;
     expect((await call(env, 'GET', '/api/v1/audit', staffToken)).status).toBe(403);
+  });
+});
+
+describe('备份手动端点（/backup/now、/backup/files 鉴权）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+  beforeEach(async () => {
+    env = (await setup()).env;
+    const res = await call(env, 'POST', '/api/v1/auth/bootstrap', undefined, { username: 'boss', password: 'admin1234' });
+    token = ((await res.json()) as { token: string }).token;
+  });
+
+  it('立即备份 / 备份历史 未登录一律 401；登录后已通过鉴权（无 R2 绑定则存储初始化失败非鉴权错误）', async () => {
+    expect((await call(env, 'POST', '/api/v1/backup/now')).status).toBe(401);
+    expect((await call(env, 'GET', '/api/v1/backup/files')).status).toBe(401);
+    // 已登录：若走到存储初始化（无 R2 绑定抛错）则说明鉴权已放行（500 ≠ 401/403）
+    const r = await call(env, 'GET', '/api/v1/backup/files', token);
+    expect([500, 200]).toContain(r.status);
   });
 });

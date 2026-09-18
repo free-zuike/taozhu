@@ -44,6 +44,8 @@ class _Row {
   String happenedAt = ''; // 该行商品的独立日期（空=用单据日期）
   /// 明细行 id（编辑模式加载原单时保存；行级附件锚点，空=新建未提交行）
   String rowId = '';
+  /// 日期栏批量直编：该行所属原出货单号（该日可能多单，各行保留各自单号，不能统一挂新单）
+  String origSaleId = '';
   /// 保存时构建的商品行 payload（去单据化：逐行入队 sale_item 用）
   Map<String, dynamic>? itemsPayload;
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
@@ -67,6 +69,8 @@ class _SalePageState extends State<SalePage> {
   Map<String, double> _lastQty = {}; // price_id → 上次数量（选单位自动带出）
   /// 编辑模式原单行 id 集合（保存时对被删行发 sale_item delete，防"删除的行服务端复活"）
   Set<String> _origItemIds = {};
+  /// 原单号映射（行 id → 原 sale_id；批量直编该日多单时删行按各自原单补位）
+  Map<String, String> _rowSaleId = {};
 
   bool get _editing => widget.editId != null;
 
@@ -246,10 +250,12 @@ class _SalePageState extends State<SalePage> {
           ..salePrice = sp
           ..happenedAt = keepLineDate ? lineDate : ''
           ..rowId = '${it['id'] ?? ''}'
+          ..origSaleId = _saleId
           ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..saleCtrl.text = sp.toString());
+        _rowSaleId['${it['id'] ?? ''}'] = _saleId;
       }
       if (_rows.isEmpty) _rows.add(_newRow());
       if (skipped > 0) {
@@ -276,10 +282,20 @@ class _SalePageState extends State<SalePage> {
         final rowId = '${it['item_id'] ?? ''}';
         final itemId = '${it['goods_id'] ?? ''}'.isNotEmpty ? '${it['goods_id']}' : rowId;
         final unit = '${it['unit'] ?? ''}';
-        final qty = (it['quantity'] is num)
-            ? (it['quantity'] as num).toDouble()
-            : (it['qty_num'] as num?)?.toDouble() ?? 0;
-        final sp = (it['sale_price'] as num?)?.toDouble() ?? 0;
+        // 该行原出货单号（该日可能多单，各行保留各自单号——批量直编不能统一挂新单）
+        final origSaleId = '${(it['order'] as Map?)?['id'] ?? ''}';
+        if (rowId.isNotEmpty && origSaleId.isNotEmpty) _rowSaleId[rowId] = origSaleId;
+        // 数量兼容 num 与字符串（账本展开行 quantity 为 num，历史/其它来源可能是字符串）
+        final rawQty = it['quantity'];
+        final qty = rawQty is num
+            ? rawQty.toDouble()
+            : (double.tryParse('$rawQty') ??
+                (it['qty_num'] is num
+                    ? (it['qty_num'] as num).toDouble()
+                    : double.tryParse('${it['qty_num']}') ?? 0));
+        final sp = (it['sale_price'] is num)
+            ? (it['sale_price'] as num).toDouble()
+            : (double.tryParse('${it['sale_price']}') ?? 0);
         final opt = _items.where((x) => x.id == itemId).firstOrNull;
         final price = opt?.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
         if (itemId.isEmpty || opt == null || price == null) {
@@ -295,6 +311,7 @@ class _SalePageState extends State<SalePage> {
           ..salePrice = sp
           ..happenedAt = keepLineDate ? lineDate : ''
           ..rowId = rowId
+          ..origSaleId = origSaleId
           ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -704,6 +721,7 @@ class _SalePageState extends State<SalePage> {
     }
     setState(() => _busy = true);
     // 写本地优先：构建完整 payload → 落本地库（立即可见）→ 入待推送队列 → debounce push
+    final isDateRows = widget.dateRows != null && widget.dateRows!.isNotEmpty;
     final saleId = _saleId;
     final clientName = _clients.where((c) => c['id'] == _clientId).firstOrNull?['name'] as String? ?? '';
     // 单据日期 = 明细行最大日期（行独立日期，分组/对账以最新行为准）
@@ -717,9 +735,11 @@ class _SalePageState extends State<SalePage> {
       final price = opt?.prices.where((p) => p['id'] == r.priceId).firstOrNull;
       final amount = (r.quantity * r.salePrice * 100).round() / 100;
       totalCalc += amount;
+      // 批量直编：行保留各自原单号（该日可能多单，统一挂新单会把原单行搬走→本地/服务器错乱）
+      final rowSaleId = isDateRows ? (r.origSaleId.isNotEmpty ? r.origSaleId : saleId) : saleId;
       final rowPayload = {
         'id': r.rowId, // 复用预生成的行级 id（顶栏整单凭证批量挂行依赖行 id 一致）
-        'sale_id': saleId,
+        'sale_id': rowSaleId,
         'client_id': _clientId,
         'item_id': r.itemId,
         'item_name': opt?.name ?? r.nameCtrl.text.trim(),
@@ -743,7 +763,9 @@ class _SalePageState extends State<SalePage> {
       'items': itemsPayload,
     };
     if (kIsWeb) {
-      // Web 无本地库/同步队列：直连服务端。新增 POST /sales（sync_key 幂等）；编辑 PATCH /sales/:id 全量替换明细
+      // Web 无本地库/同步队列：直连服务端。
+      // 批量直编：按原单分组 PATCH（各组保留原单号，只提交组内行）；
+      // 编辑：PATCH /sales/:id 全量替换；新建：POST /sales（sync_key 幂等）
       final webItems = [
         for (final r in valid)
           {
@@ -754,7 +776,29 @@ class _SalePageState extends State<SalePage> {
           },
       ];
       try {
-        if (_editing) {
+        if (isDateRows) {
+          final byOrder = <String, List<_Row>>{};
+          for (final r in valid) {
+            final oid = r.origSaleId.isNotEmpty ? r.origSaleId : saleId;
+            (byOrder[oid] ??= []).add(r);
+          }
+          for (final e in byOrder.entries) {
+            await Api.instance.patch('/sales/${e.key}', {
+              'client_id': _clientId,
+              'happened_at': orderDate,
+              'note': _noteCtrl.text.trim(),
+              'items': [
+                for (final r in e.value)
+                  {
+                    'price_id': r.priceId,
+                    'quantity': r.quantity,
+                    'sale_price': r.salePrice,
+                    'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
+                  },
+              ],
+            });
+          }
+        } else if (_editing) {
           await Api.instance.patch('/sales/$saleId', {
             'client_id': _clientId, 'happened_at': orderDate, 'note': _noteCtrl.text.trim(), 'items': webItems,
           });
@@ -775,8 +819,8 @@ class _SalePageState extends State<SalePage> {
       return;
     }
     // 先写本地库（列表/账本立即可见，不卡网络）：整单镜像 + 行级 store 双写——
-    // 账本/统计/对账读行级 sale_items（去单据化），只写整单会导致新单本地不可见（web 直连服务端反而有）
-    await LocalDb.upsertOne('sales', payload);
+    // 账本/统计/对账读行级 sale_items（去单据化）；批量直编不改单号，不新建整单镜像
+    if (!isDateRows) await LocalDb.upsertOne('sales', payload);
     for (final r in valid) {
       final rowPayload = Map<String, dynamic>.from(r.itemsPayload ?? {});
       if (rowPayload.isNotEmpty && r.rowId.isNotEmpty) {
@@ -797,14 +841,18 @@ class _SalePageState extends State<SalePage> {
         );
       }
     }
-    // 编辑模式：原单行被删除的行 → 行级 delete（防"删的行服务端复活"）
-    if (_editing) {
+    // 编辑/批量直编：原单行被删除的行 → 行级 delete（防"删的行服务端复活"）
+    if (_editing || isDateRows) {
       final removedIds = _origItemIds.difference(keptIds);
       for (final rid in removedIds) {
         await LocalDb.deleteOne('sale_items', rid);
         await SyncService.enqueueChange(
           entityType: 'sale_item', entitySyncId: rid, action: 'delete',
-          payload: {'id': rid, 'sale_id': saleId, 'client_id': _clientId ?? ''},
+          payload: {
+            'id': rid,
+            'sale_id': _rowSaleId[rid] ?? saleId,
+            'client_id': _clientId ?? '',
+          },
         );
       }
     }

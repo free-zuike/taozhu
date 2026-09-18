@@ -9,6 +9,7 @@ import { randomId } from './password';
 import { notifyClients } from '../services/sync-hub';
 import { createStorage } from '../services/storage';
 import { parseAttachmentKey, deleteEntityAttachments } from './image-key';
+import { recordAudit } from '../routes/audit';
 import type { Env } from '../types';
 
 export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item'] as const;
@@ -398,14 +399,37 @@ export async function applyChange(
         if (qty <= 0 || itemId === '') return { ok: false, error: '出货商品缺数量或商品' };
         const saleId = String(p.sale_id ?? '');
         const amount = Number(p.amount) || Math.round(qty * (Number(p.sale_price) || 0) * 100) / 100;
-        await db.prepare(
-          `INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, client_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET sale_id = excluded.sale_id, item_id = excluded.item_id, unit = excluded.unit,
-             quantity = excluded.quantity, sale_price = excluded.sale_price, cost_price = excluded.cost_price,
-             amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note, client_id = excluded.client_id`,
-        ).bind(id, saleId, itemId, p.unit ?? '', qty,
-          Number(p.sale_price) || 0, Number(p.cost_price) || 0, Math.round(amount * 100) / 100,
-          p.happened_at || null, p.note ?? '', p.client_id ?? '').run();
+        // 库存联动：出货扣减（行级 upsert——App 主同步路径；旧行存在=修改，先恢复旧卖出量再按新扣）
+        const oldRow = await db.prepare(
+          'SELECT item_id, unit, quantity FROM sale_items WHERE id = ?',
+        ).bind(id).first<{ item_id: string; unit: string; quantity: number }>();
+        const isNew = oldRow == null;
+        const stock = oldRow
+          ? [
+              stockDelta(db, oldRow.item_id, oldRow.unit, oldRow.quantity),
+              stockDelta(db, itemId, p.unit ?? '', -qty),
+            ]
+          : [stockDelta(db, itemId, p.unit ?? '', -qty)];
+        await db.batch([
+          db.prepare(
+            `INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, client_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET sale_id = excluded.sale_id, item_id = excluded.item_id, unit = excluded.unit,
+               quantity = excluded.quantity, sale_price = excluded.sale_price, cost_price = excluded.cost_price,
+               amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note, client_id = excluded.client_id`,
+          ).bind(id, saleId, itemId, p.unit ?? '', qty,
+            Number(p.sale_price) || 0, Number(p.cost_price) || 0, Math.round(amount * 100) / 100,
+            p.happened_at || null, p.note ?? '', p.client_id ?? ''),
+          ...stock,
+        ]);
+        if (isNew) {
+          try {
+            await recordAudit(db, {
+              username: String(p.created_by ?? 'sync'),
+              action: 'create', entity_type: 'sale_item', entity_id: id,
+              detail: `添加出货商品行（同步）：${itemId} × ${qty}${String(p.unit ?? '')}`,
+            });
+          } catch (_) {}
+        }
         break;
       }
       case 'purchase_item': {
@@ -431,14 +455,37 @@ export async function applyChange(
         if (qty2 <= 0 || itemId2 === '') return { ok: false, error: '进货商品缺数量或商品' };
         const purchaseId = String(p.purchase_id ?? '');
         const amount2 = Number(p.amount) || Math.round(qty2 * (Number(p.purchase_price) || 0) * 100) / 100;
-        await db.prepare(
-          `INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET purchase_id = excluded.purchase_id, item_id = excluded.item_id, unit = excluded.unit,
-             quantity = excluded.quantity, purchase_price = excluded.purchase_price,
-             amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note`,
-        ).bind(id, purchaseId, itemId2, p.unit ?? '', qty2,
-          Number(p.purchase_price) || 0, Math.round(amount2 * 100) / 100,
-          p.happened_at || null, p.note ?? '').run();
+        // 库存联动：进货增加（行级 upsert——App 主同步路径；旧行存在=修改，先恢复旧进货量再按新加）
+        const oldRow2 = await db.prepare(
+          'SELECT item_id, unit, quantity FROM purchase_items WHERE id = ?',
+        ).bind(id).first<{ item_id: string; unit: string; quantity: number }>();
+        const isNew2 = oldRow2 == null;
+        const stock2 = oldRow2
+          ? [
+              stockDelta(db, oldRow2.item_id, oldRow2.unit, -oldRow2.quantity),
+              stockDelta(db, itemId2, p.unit ?? '', qty2),
+            ]
+          : [stockDelta(db, itemId2, p.unit ?? '', qty2)];
+        await db.batch([
+          db.prepare(
+            `INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET purchase_id = excluded.purchase_id, item_id = excluded.item_id, unit = excluded.unit,
+               quantity = excluded.quantity, purchase_price = excluded.purchase_price,
+               amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note`,
+          ).bind(id, purchaseId, itemId2, p.unit ?? '', qty2,
+            Number(p.purchase_price) || 0, Math.round(amount2 * 100) / 100,
+            p.happened_at || null, p.note ?? ''),
+          ...stock2,
+        ]);
+        if (isNew2) {
+          try {
+            await recordAudit(db, {
+              username: String(p.created_by ?? 'sync'),
+              action: 'create', entity_type: 'purchase_item', entity_id: id,
+              detail: `添加进货商品行（同步）：${itemId2} × ${qty2}${String(p.unit ?? '')}`,
+            });
+          } catch (_) {}
+        }
         break;
       }
       case 'sale':

@@ -258,6 +258,71 @@ describe('同步协议', () => {
     expect(list2.find((x) => x.item_id === item.id && x.unit === '斤')?.quantity ?? 0).toBe(0);
   });
 
+  it('行级同步（App 主路径）：sale_item/purchase_item upsert 扣/加库存 + 新建审计；重放不等同重复扣减/审计', async () => {
+    // 建商品 + 店铺
+    const create = await call(env, 'POST', '/api/v1/items', token, {
+      name: '土豆', category: '蔬菜',
+      prices: [{ unit: '斤', purchase_price: 1.0, sale_price: 2.0 }],
+    });
+    const item = ((await create.json()) as { id: string; prices: string[] });
+    const ts = new Date().toISOString();
+    await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'phone-a',
+      changes: [{
+        entity_type: 'client', entity_sync_id: 'c-row', action: 'upsert',
+        payload: { id: 'c-row', name: '行级店', month_start_day: 1 }, updated_at: ts,
+      }],
+    });
+
+    // 行级出货（App 添加出货 → enqueue sale_item upsert）→ 库存扣减 + 审计 create
+    const saleCh = [{
+      entity_type: 'sale_item', entity_sync_id: 'si-row', action: 'upsert',
+      payload: {
+        id: 'si-row', sale_id: 's-row', client_id: 'c-row', item_id: item.id,
+        unit: '斤', quantity: 6, sale_price: 2, cost_price: 1, amount: 12,
+        happened_at: '2026-09-21', created_by: 'boss',
+      },
+      updated_at: ts,
+    }];
+    const r1 = await call(env, 'POST', '/api/v1/sync/push', token, { device_id: 'phone-a', changes: saleCh });
+    expect(((await r1.json()) as { accepted: number }).accepted).toBe(1);
+    const stock = async () => {
+      const s = (await (await call(env, 'GET', '/api/v1/stocks', token)).json()) as
+        { stocks: Array<{ item_id: string; unit: string; quantity: number }> };
+      return s.stocks.find((x) => x.item_id === item.id && x.unit === '斤')?.quantity ?? 0;
+    };
+    expect(await stock()).toBe(-6);
+    const countAudit = async () => {
+      const a = (await (await call(env, 'GET', '/api/v1/audit?limit=100', token)).json()) as
+        { logs: Array<{ action: string; entity_type: string; entity_id: string }> };
+      return a.logs.filter((x) => x.entity_type === 'sale_item' && x.action === 'create' && x.entity_id === 'si-row').length;
+    };
+    expect(await countAudit()).toBe(1);
+
+    // 重放同一行 → 幂等接受，库存不重复扣减、审计不重复
+    const r2 = await call(env, 'POST', '/api/v1/sync/push', token, { device_id: 'phone-a', changes: saleCh });
+    expect(((await r2.json()) as { accepted: number }).accepted).toBe(1);
+    expect(await stock()).toBe(-6);
+    expect(await countAudit()).toBe(1);
+
+    // 行级进货（App 添加进货 → enqueue purchase_item upsert）→ 库存增加 + 审计
+    const buyCh = [{
+      entity_type: 'purchase_item', entity_sync_id: 'pi-row', action: 'upsert',
+      payload: {
+        id: 'pi-row', purchase_id: 'p-row', item_id: item.id,
+        unit: '斤', quantity: 8, purchase_price: 1, amount: 8,
+        happened_at: '2026-09-22', created_by: 'boss',
+      },
+      updated_at: ts,
+    }];
+    const r3 = await call(env, 'POST', '/api/v1/sync/push', token, { device_id: 'phone-a', changes: buyCh });
+    expect(((await r3.json()) as { accepted: number }).accepted).toBe(1);
+    expect(await stock()).toBe(2); // -6 + 8
+    const buyAudit = (await (await call(env, 'GET', '/api/v1/audit?limit=100', token)).json()) as
+      { logs: Array<{ action: string; entity_type: string; entity_id: string }> };
+    expect(buyAudit.logs.filter((x) => x.entity_type === 'purchase_item' && x.action === 'create' && x.entity_id === 'pi-row')).toHaveLength(1);
+  });
+
   it('pull 排除自己设备的回声（updated_by_device_id 过滤）', async () => {
     // 在线建店（无设备 id 的变更会下发到所有设备）
     await call(env, 'POST', '/api/v1/clients', token, { name: '线下店' });

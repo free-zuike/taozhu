@@ -17,15 +17,18 @@ class BackupPage extends StatefulWidget {
 class _BackupPageState extends State<BackupPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
 
-  /// 自动备份时间（北京时间 HH:MM，用户自选）：到点自动备份全库 JSON 到云端 R2
+  /// 自动备份时间（北京时间 HH:MM，用户自选）：到点自动备份全库 JSON 到云端（走存储工厂）
   String _autoTime = '03:05';
   /// 自动备份保留份数（用户可配 1-90，默认 14）：超出按最旧删除
   int _autoKeep = 14;
+  /// 云端备份历史（新→旧）：自动从存储端读取，可直接恢复，无需下载
+  List<Map<String, dynamic>> _backups = [];
 
   @override
   void initState() {
     super.initState();
     _loadAutoTime();
+    _loadBackups();
   }
 
   Future<void> _loadAutoTime() async {
@@ -158,6 +161,52 @@ class _BackupPageState extends State<BackupPage> {
     }
   }
 
+  /// 立即手动备份全库到云端（走存储工厂；历史可直接恢复）
+  Future<void> _backupNow() async {
+    try {
+      final r = await Api.instance.post('/backup/now', {});
+      final name = '${r['key'] ?? ''}'.split('/').last;
+      toast(context, '备份完成：$name');
+      _loadBackups();
+    } catch (e) {
+      toast(context, '备份失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
+  /// 云端备份历史（新→旧）：自动读取存储端，无需下载文件
+  Future<void> _loadBackups() async {
+    try {
+      final d = await Api.instance.get('/backup/files');
+      final list = ((d['files'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (mounted) setState(() => _backups = list);
+    } catch (_) {}
+  }
+
+  /// 从云端历史备份恢复（服务端直接读取合并导入，不覆盖现有数据）
+  Future<void> _restoreBackup(Map<String, dynamic> b) async {
+    final name = '${b['name'] ?? ''}';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('恢复备份'),
+        content: Text('从云端历史备份「$name」恢复？\n\n将备份中的记录合并到当前数据：\n· 相同 ID 的记录跳过（不覆盖现有数据）\n· 只新增备份里有、当前没有的记录\n\n建议恢复前先「立即备份/导出」留底。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('恢复')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final r = await Api.instance.post('/backup/files/$name/restore', {});
+      final total = ((r['total_inserted'] as num?) ?? 0).toInt();
+      toast(context, '恢复完成：共新增 $total 条记录');
+      _loadBackups();
+    } catch (e) {
+      toast(context, '恢复失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = _c;
@@ -168,6 +217,7 @@ class _BackupPageState extends State<BackupPage> {
         children: [
           _groupTitle(c, '备份'),
           _card(c, [
+            _tile(c, Icons.cloud_upload_outlined, '立即备份', '手动备份全库到云端（历史可直接恢复），保留最近 $_autoKeep 份', _backupNow),
             _tile(c, Icons.save_alt_outlined, '导出备份', '导出全库 JSON 存档（建议定期导出留底）', _exportBackup),
             _tile(c, Icons.restore_outlined, '导入备份', '从备份 JSON 合并恢复（不覆盖现有数据）', _importBackup),
           ]),
@@ -177,6 +227,28 @@ class _BackupPageState extends State<BackupPage> {
             _tile(c, Icons.schedule_outlined, '自动备份时间', '每天 $_autoTime（北京时间）自动备份全库到云端', _pickAutoTime),
             _tile(c, Icons.inventory_2_outlined, '保留备份份数', '云端只保留最近 $_autoKeep 份，超出自动删除最旧', _pickAutoKeep),
           ]),
+          if (_backups.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            _groupTitle(c, '备份历史（云端）'),
+            _card(c, [
+              for (final b in _backups)
+                ListTile(
+                  leading: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(color: c.success.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+                    child: Icon(Icons.cloud_done_outlined, size: 20, color: c.success),
+                  ),
+                  title: Text('${b['name'] ?? ''}', style: TextStyle(fontSize: 13, color: c.textMain)),
+                  subtitle: Text(_fmtSize((b['size'] as num?)?.toInt() ?? 0),
+                      style: TextStyle(fontSize: 12, color: c.textSub)),
+                  trailing: TextButton(
+                    onPressed: () => _restoreBackup(b),
+                    child: Text('恢复', style: TextStyle(fontSize: 13, color: c.success)),
+                  ),
+                ),
+            ]),
+          ],
           const SizedBox(height: 18),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -197,6 +269,13 @@ class _BackupPageState extends State<BackupPage> {
       padding: const EdgeInsets.only(left: 4, bottom: 8),
       child: Text(t, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textSub)),
     );
+  }
+
+  /// 备份文件大小格式化（B / KB / MB）
+  static String _fmtSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / 1024 / 1024).toStringAsFixed(2)} MB';
   }
 
   Widget _card(TaozhuColors c, List<Widget> tiles) {

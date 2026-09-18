@@ -71,20 +71,17 @@ class _StatementPageState extends State<StatementPage> {
   void initState() {
     super.initState();
     _loadClients();
-    _restoreSelectedClient();
-    _applyPeriod('month');
     _loadTemplates();
+    _initLoad(); // 先恢复记忆店铺，再生成对账单（避免首载默认全店数据串店）
   }
 
-  /// 默认店铺=全局记忆的当前店铺（本地 prefs 读取，秒回；无记忆则全部店铺）
-  Future<void> _restoreSelectedClient() async {
+  /// 恢复全局记忆的当前店铺后生成对账单（本地 prefs 读取，秒回；无记忆则全部店铺）
+  Future<void> _initLoad() async {
     try {
       final sel = await SyncService.selectedClientId();
-      if (sel != null && mounted && _clientId != sel) {
-        setState(() => _clientId = sel);
-        _load();
-      }
+      if (sel != null && mounted) setState(() => _clientId = sel);
     } catch (_) {}
+    _applyPeriod('month');
   }
 
   @override

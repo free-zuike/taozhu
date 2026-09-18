@@ -33,6 +33,8 @@ class _PRow {
   String happenedAt = ''; // 该行商品的独立日期（空=用单据日期）
   /// 明细行 id（编辑模式加载原单时保存；行级附件锚点，空=新建未提交行）
   String rowId = '';
+  /// 日期栏批量直编：该行所属原进货单号（该日可能多单，各行保留各自单号，不能统一挂新单）
+  String origPurchaseId = '';
   /// 保存时构建的商品行 payload（去单据化：逐行入队 purchase_item 用）
   Map<String, dynamic>? itemsPayload;
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
@@ -56,6 +58,8 @@ class _PurchasePageState extends State<PurchasePage> {
 
   /// 编辑模式原单行 id 集合（保存时对被删行发 purchase_item delete，防"删的行服务端复活"）
   Set<String> _origItemIds = {};
+  /// 原单号映射（行 id → 原 purchase_id；批量直编该日多单时删行按各自原单补位）
+  Map<String, String> _rowPurchaseId = {};
 
   /// 新建模式表单默认日期：优先 initDate（如进货记录日期栏补录当天），否则今天；编辑模式忽略
   String _initDate() {
@@ -201,10 +205,12 @@ class _PurchasePageState extends State<PurchasePage> {
           ..purchasePrice = pp
           ..happenedAt = keepLineDate ? lineDate : ''
           ..rowId = '${it['id'] ?? ''}'
+          ..origPurchaseId = _purchaseId
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..priceCtrl.text = pp.toStringAsFixed(2));
+        _rowPurchaseId['${it['id'] ?? ''}'] = _purchaseId;
       }
       if (_rows.isEmpty) _rows.add(_newPRow());
       if (skipped > 0) {
@@ -233,10 +239,20 @@ class _PurchasePageState extends State<PurchasePage> {
         final rowId = '${it['row_id'] ?? it['id'] ?? ''}';
         final itemId = '${it['item_id'] ?? ''}';
         final unit = '${it['unit'] ?? ''}';
-        final qty = (it['quantity'] is num)
-            ? (it['quantity'] as num).toDouble()
-            : (it['qty_num'] as num?)?.toDouble() ?? 0;
-        final pp = (it['purchase_price'] as num?)?.toDouble() ?? 0;
+        // 该行原进货单号（该日可能多单，各行保留各自单号——批量直编不能统一挂新单）
+        final origPurchaseId = '${(it['order'] as Map?)?['id'] ?? ''}';
+        if (rowId.isNotEmpty && origPurchaseId.isNotEmpty) _rowPurchaseId[rowId] = origPurchaseId;
+        // 数量兼容 num 与字符串（purchase_history 传的是 '5'，Web/后端为 num）
+        final rawQty = it['quantity'];
+        final qty = rawQty is num
+            ? rawQty.toDouble()
+            : (double.tryParse('$rawQty') ??
+                (it['qty_num'] is num
+                    ? (it['qty_num'] as num).toDouble()
+                    : double.tryParse('${it['qty_num']}') ?? 0));
+        final pp = (it['purchase_price'] is num)
+            ? (it['purchase_price'] as num).toDouble()
+            : (double.tryParse('${it['purchase_price']}') ?? 0);
         final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
         final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
         final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
@@ -253,6 +269,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..purchasePrice = pp
           ..happenedAt = keepLineDate ? lineDate : ''
           ..rowId = rowId
+          ..origPurchaseId = origPurchaseId
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -561,6 +578,7 @@ class _PurchasePageState extends State<PurchasePage> {
     }
     setState(() => _busy = true);
     // 写本地优先：构建完整 payload → 落本地库 → 入队列 → debounce push
+    final isDateRows = widget.dateRows != null && widget.dateRows!.isNotEmpty;
     final purchaseId = _purchaseId;
     // 单据日期 = 明细行最大日期
     final orderDate = valid
@@ -574,9 +592,11 @@ class _PurchasePageState extends State<PurchasePage> {
       final price = prices.where((p) => p['id'] == r.priceId).firstOrNull;
       final amount = (r.quantity * r.purchasePrice * 100).round() / 100;
       totalCalc += amount;
+      // 批量直编：行保留各自原单号（该日可能多单，统一挂新单会把原单行搬走→本地/服务器错乱）
+      final rowPurchaseId = isDateRows ? (r.origPurchaseId.isNotEmpty ? r.origPurchaseId : purchaseId) : purchaseId;
       final rowPayload = {
         'id': r.rowId, // 复用预生成的行级 id（行级附件锚点/同步实体 key 一致）
-        'purchase_id': purchaseId,
+        'purchase_id': rowPurchaseId,
         'item_id': r.itemId,
         'item_name': opt?['name'] ?? r.nameCtrl.text.trim(),
         'unit': r.unitCtrl.text.trim(),
@@ -596,7 +616,8 @@ class _PurchasePageState extends State<PurchasePage> {
       'items': itemsPayload,
     };
     if (kIsWeb) {
-      // Web 无本地库/同步队列：直连服务端。新增 POST /purchases（sync_key 幂等）；编辑 PATCH /purchases/:id 全量替换明细
+      // Web 无本地库/同步队列：直连服务端。
+      // 批量直编：按原单分组 PATCH；编辑：PATCH /purchases/:id 全量替换；新建：POST（sync_key 幂等）
       final webItems = [
         for (final r in valid)
           {
@@ -607,7 +628,28 @@ class _PurchasePageState extends State<PurchasePage> {
           },
       ];
       try {
-        if (_editing) {
+        if (isDateRows) {
+          final byOrder = <String, List<_PRow>>{};
+          for (final r in valid) {
+            final oid = r.origPurchaseId.isNotEmpty ? r.origPurchaseId : purchaseId;
+            (byOrder[oid] ??= []).add(r);
+          }
+          for (final e in byOrder.entries) {
+            await Api.instance.patch('/purchases/${e.key}', {
+              'happened_at': orderDate,
+              'note': _noteCtrl.text.trim(),
+              'items': [
+                for (final r in e.value)
+                  {
+                    'price_id': r.priceId,
+                    'quantity': r.quantity,
+                    'purchase_price': r.purchasePrice,
+                    'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
+                  },
+              ],
+            });
+          }
+        } else if (_editing) {
           await Api.instance.patch('/purchases/$purchaseId', {
             'happened_at': orderDate, 'note': _noteCtrl.text.trim(), 'items': webItems,
           });
@@ -627,8 +669,8 @@ class _PurchasePageState extends State<PurchasePage> {
       if (mounted) Navigator.pop(context, true);
       return;
     }
-    // 本地优先：整单落库（列表立即展示）→ 行级 store 双写（进货历史读行级 purchase_items，只写整单新单本地不可见）→ 逐商品行入队
-    await LocalDb.upsertOne('purchases', payload);
+    // 本地优先：整单落库（列表立即展示）→ 行级 store 双写（进货历史读行级 purchase_items）；批量直编不改单号不新建整单镜像
+    if (!isDateRows) await LocalDb.upsertOne('purchases', payload);
     for (final r in valid) {
       final rowPayload = Map<String, dynamic>.from(r.itemsPayload ?? {});
       if (rowPayload.isNotEmpty && r.rowId.isNotEmpty) {
@@ -648,14 +690,14 @@ class _PurchasePageState extends State<PurchasePage> {
         );
       }
     }
-    // 编辑模式：原单行被删除的行 → 行级 delete（防"删的行服务端复活"）
-    if (_editing) {
+    // 编辑/批量直编：原单行被删除的行 → 行级 delete（防"删的行服务端复活"）
+    if (_editing || isDateRows) {
       final removedIds = _origItemIds.difference(keptIds);
       for (final rid in removedIds) {
         await LocalDb.deleteOne('purchase_items', rid);
         await SyncService.enqueueChange(
           entityType: 'purchase_item', entitySyncId: rid, action: 'delete',
-          payload: {'id': rid, 'purchase_id': purchaseId},
+          payload: {'id': rid, 'purchase_id': _rowPurchaseId[rid] ?? purchaseId},
         );
       }
     }

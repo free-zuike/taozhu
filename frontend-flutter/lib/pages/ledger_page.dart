@@ -350,9 +350,16 @@ class _LedgerPageState extends State<LedgerPage> {
       final oid = '${r['sale_id'] ?? ''}';
       if (oid.isEmpty) continue;
       (byOrder[oid] ??= []).add(r);
+      // 整单日期 = 行最大日期（改行/单日期后按最新日期归组与过滤，与服务器聚合一致）
+      final prev = meta[oid];
+      final h = '${r['happened_at'] ?? ''}';
+      final note = '${r['note'] ?? ''}';
       meta[oid] = {
-        'id': oid, 'client_id': r['client_id'] ?? '', 'client_name': r['client_name'] ?? '',
-        'happened_at': r['happened_at'] ?? '', 'note': r['note'] ?? '',
+        'id': oid,
+        'client_id': r['client_id'] ?? (prev?['client_id'] ?? ''),
+        'client_name': r['client_name'] ?? (prev?['client_name'] ?? ''),
+        'happened_at': prev != null && (prev['happened_at'] ?? '') >= h ? prev['happened_at'] : h,
+        'note': prev != null && '${prev['note'] ?? ''}'.isNotEmpty ? prev['note'] : (note.isNotEmpty ? note : (prev?['note'] ?? '')),
       };
     }
     return byOrder.entries.map((e) {
@@ -639,19 +646,9 @@ class _LedgerPageState extends State<LedgerPage> {
 
   /// 店选弹层：全部店铺（名称 + 交易笔数 + 欠款），底部新增店铺
   Future<void> _showLedgerPicker() async {
-    // 打开弹层时拉一次服务端权威欠款（用户主动交互，允许网络）；失败静默用本地兜底
-    try {
-      final d = await Api.instance.get('/clients');
-      final list = (d['clients'] as List?) ?? [];
-      if (mounted) {
-        setState(() {
-          _serverDebt = {
-            for (final c in list.cast<Map<String, dynamic>>())
-              '${c['id']}': ((c['debt'] as num?)?.toDouble() ?? 0),
-          };
-        });
-      }
-    } catch (_) {}
+    // 本地优先：弹层立即用本地镜像展示（零网络秒开，不等待服务器）；
+    // 服务端权威欠款异步刷新（后台拉取，下次打开弹层即命中，失败静默本地兜底）
+    _fetchServerDebt();
     final selected = await showCenterSheet<String>(
       context: context,
       maxHeightFactor: 0.8,
@@ -693,6 +690,22 @@ class _LedgerPageState extends State<LedgerPage> {
       // 店铺切换后：月度结余收入按新店铺重算（支出=进货全店不变）
       _loadMonthly();
     }
+  }
+
+  /// 后台拉取服务端权威欠款（弹层已打开也不阻塞；完成后更新 State，下次打开即命中）
+  Future<void> _fetchServerDebt() async {
+    try {
+      final d = await Api.instance.get('/clients');
+      final list = (d['clients'] as List?) ?? [];
+      if (mounted) {
+        setState(() {
+          _serverDebt = {
+            for (final c in list.cast<Map<String, dynamic>>())
+              '${c['id']}': ((c['debt'] as num?)?.toDouble() ?? 0),
+          };
+        });
+      }
+    } catch (_) {}
   }
 
   /// 店铺按分类分组（食堂/档口等；未分类归入"未分类"）
@@ -1281,9 +1294,11 @@ class _LedgerPageState extends State<LedgerPage> {
         ),
       );
     }
-    // 按日期分组（流水：日期组头 + 行）
+    // 按日期分组（流水：日期组头 + 行）——按日期升序，改日期后顺序正确
+    final sortedRows = rows.toList()
+      ..sort((a, b) => _date(a['happened_at']).compareTo(_date(b['happened_at'])));
     final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final r in rows) {
+    for (final r in sortedRows) {
       final d = _date(r['happened_at']);
       (grouped[d] ??= []).add(r);
     }

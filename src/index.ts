@@ -16,7 +16,7 @@ import { aiRouter } from './routes/ai';
 import { settingsRouter } from './routes/settings';
 import { attachmentsRouter } from './routes/attachments';
 import { stocksRouter } from './routes/stocks';
-import { backupRouter, exportAllData, getBackupTime, getBackupKeep, isBackupTime } from './routes/backup';
+import { backupRouter, getBackupTime, isBackupTime, performBackup } from './routes/backup';
 import { shareRouter, renderShareHtml } from './routes/share';
 import { printRouter } from './routes/print';
 import { syncRouter } from './routes/sync';
@@ -125,23 +125,12 @@ app.all('*', async (c) => {
 });
 
 // 自动备份（wrangler.toml cron 每分钟触发，命中用户配置的北京时间 HH:MM 才执行——时间可配不写死）：
-// 全库 JSON 存 R2 taozhu/backups/（与附件存储同库同前缀家族），保留最近 14 份。失败静默下次重试。
+// 全库 JSON 走备份存储工厂（createStorage），保留最近可配份数；失败静默下次重试。
 async function scheduledBackup(env: Env): Promise<void> {
   try {
     const configured = await getBackupTime(env.DB);
     if (!isBackupTime(new Date(), configured)) return;
-    const keep = await getBackupKeep(env.DB);
-    const data = await exportAllData(env.DB);
-    const key = `taozhu/backups/backup-${new Date().toISOString().slice(0, 10)}.json`;
-    await env.BUCKET.put(key, JSON.stringify({ exported_at: new Date().toISOString(), data }));
-    // 清理旧备份：超出用户配置的保留份数按 key 排序删最旧
-    const list = await env.BUCKET.list({ prefix: 'taozhu/backups/backup-' });
-    if (list.objects.length > keep) {
-      const keepSet = new Set(list.objects.map((o) => o.key).sort().slice(-keep));
-      for (const o of list.objects) {
-        if (!keepSet.has(o.key)) await env.BUCKET.delete(o.key);
-      }
-    }
+    await performBackup(env); // 工厂化：存储端由 STORAGE_DRIVER 决定（默认 R2），清理保留份数在内
   } catch (e) {
     console.error('[taozhu] 定时自动备份失败:', e);
   }

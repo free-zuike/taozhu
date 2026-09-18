@@ -188,8 +188,14 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       final oid = '${r['purchase_id'] ?? ''}';
       if (oid.isEmpty) continue;
       (byOrder[oid] ??= []).add(r);
+      // 整单日期 = 行最大日期（改行/单日期后按最新日期归组与过滤，与服务器聚合一致）
+      final prev = meta[oid];
+      final h = '${r['happened_at'] ?? ''}';
+      final note = '${r['note'] ?? ''}';
       meta[oid] = {
-        'id': oid, 'happened_at': r['happened_at'] ?? '', 'note': r['note'] ?? '',
+        'id': oid,
+        'happened_at': prev != null && (prev['happened_at'] ?? '') >= h ? prev['happened_at'] : h,
+        'note': prev != null && '${prev['note'] ?? ''}'.isNotEmpty ? prev['note'] : (note.isNotEmpty ? note : (prev?['note'] ?? '')),
       };
     }
     return byOrder.entries.map((e) {
@@ -661,9 +667,11 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         });
       }
     }
-    // 按行日期分组
+    // 按行日期分组（按日期升序——改行/单日期后列表按新日期顺序重排，非插入序）
+    final sortedLines = lines.toList()
+      ..sort((a, b) => '${a['date']}'.compareTo('${b['date']}'));
     final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final l in lines) {
+    for (final l in sortedLines) {
       (grouped['${l['date']}'] ??= []).add(l);
     }
     return RefreshIndicator(
