@@ -13,7 +13,9 @@ import '../utils/money.dart';
 import '../utils/open_print.dart';
 import '../theme.dart';
 import '../widgets/date_field.dart';
+import '../statement_tmpl.dart';
 import 'router.dart';
+import 'statement_template_page.dart';
 
 /// 对账单：按店铺 + 周期汇总出货/收款/期末欠款，一键复制文本发送给客户
 class StatementPage extends StatefulWidget {
@@ -209,6 +211,125 @@ class _StatementPageState extends State<StatementPage> {
       buf.writeln('${_date(p['happened_at'])}${m.isNotEmpty ? ' $m' : ''}$w ¥${(p['amount'] as num?)?.toStringAsFixed(2) ?? '-'}');
     }
     return buf.toString();
+  }
+
+  /// 对账单数据快照（公共渲染库输入）
+  TemplateData _td(String clientName) => TemplateData(
+        sales: _sales,
+        payments: _payments,
+        from: _fromCtrl.text.trim(),
+        to: _toCtrl.text.trim(),
+        clientName: clientName,
+        debtEnd: _debtEnd,
+      );
+
+  /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃）
+  Widget _previewTplRows(List<List<GridCell>> rows) {
+    return SingleChildScrollView(
+      child: Table(
+        border: TableBorder.all(color: Colors.black26, width: 0.5),
+        defaultColumnWidth: const IntrinsicColumnWidth(),
+        children: [
+          for (final row in rows)
+            TableRow(children: [
+              for (final c in row)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  child: Text(c.text,
+                      textAlign: c.align == 'center'
+                          ? TextAlign.center
+                          : (c.align == 'right' ? TextAlign.right : TextAlign.left),
+                      style: const TextStyle(fontSize: 11)),
+                ),
+            ]),
+        ],
+      ),
+    );
+  }
+
+  /// 导出对账单（模板化：选择模板 → 预览 → 导出；模板自定义在独立「模板设置」页）
+  Future<void> _exportTpl() async {
+    if (!_loaded) {
+      toast(context, '请先生成对账单');
+      return;
+    }
+    final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
+    List<XlsCfg> templates;
+    try {
+      templates = await loadTemplates();
+      if (templates.isEmpty) templates = [XlsCfg()..name = '标准'];
+    } catch (_) {
+      templates = [XlsCfg()..name = '标准'];
+    }
+    String selName = templates.first.name;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('导出对账单'),
+          scrollable: true,
+          content: SizedBox(
+            width: 500,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('选择模板', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                Wrap(spacing: 6, runSpacing: 4, children: [
+                  for (final t in templates)
+                    ChoiceChip(
+                      label: Text(t.name, style: const TextStyle(fontSize: 12)),
+                      selected: t.name == selName,
+                      onSelected: (_) => setDlg(() => selName = t.name),
+                    ),
+                ]),
+                const SizedBox(height: 10),
+                Row(children: [
+                  OutlinedButton.icon(
+                      icon: const Icon(Icons.visibility_outlined, size: 16), label: const Text('预览'),
+                      onPressed: () {
+                        final sel = templates.firstWhere((t) => t.name == selName, orElse: () => templates.first);
+                        showDialog<void>(
+                          context: ctx,
+                          builder: (c2) => AlertDialog(
+                            title: Text('预览：${sel.name}'),
+                            content: SizedBox(width: 560, child: _previewTplRows(renderTemplateRows(sel, _td(clientName)))),
+                            actions: [TextButton(onPressed: () => Navigator.pop(c2), child: const Text('关闭'))],
+                          ),
+                        );
+                      }),
+                  const SizedBox(width: 12),
+                  Text('自定义模板请到对账单页底部「模板设置」', style: TextStyle(fontSize: 11, color: _c.textSub)),
+                ]),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('导出')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final sel = templates.firstWhere((t) => t.name == selName, orElse: () => templates.first);
+    final excel = Excel.createExcel();
+    excel.rename('Sheet1', '对账单');
+    final sheet = excel['对账单'];
+    final trows = renderTemplateRows(sel, _td(clientName));
+    for (final row in trows) {
+      sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
+    }
+    final bytes = excel.encode();
+    if (bytes == null) {
+      toast(context, '导出失败，请重试');
+      return;
+    }
+    final name = '$clientName-${_fromCtrl.text.trim()}-${_toCtrl.text.trim()}.xlsx';
+    await saveBytes(
+        Uint8List.fromList(bytes), name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '陶朱对账单');
+    if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
   }
 
   /// 导出 Excel + 排版模板管理：模板选择/自定义/另存新模板/修改/删除 + 所见即所得版式预览
@@ -1776,15 +1897,27 @@ class _StatementPageState extends State<StatementPage> {
                 ),
               ),
             const SizedBox(height: 8),
-            // 导出 Excel（按当前模板排版）
+            // 导出 Excel（选模板 → 预览 → 导出；模板自定义在「模板设置」）
             OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
                 minimumSize: const Size.fromHeight(46),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: _exportXls,
+              onPressed: _exportTpl,
               icon: const Icon(Icons.table_chart_outlined, size: 18),
               label: const Text('导出 Excel'),
+            ),
+            const SizedBox(height: 8),
+            // 模板设置（独立页：组件/网格/正文模板新增、编辑、排序、预览）
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(46),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const StatementTemplatePage())),
+              icon: const Icon(Icons.widgets_outlined, size: 18),
+              label: const Text('模板设置'),
             ),
             const SizedBox(height: 8),
             // 打印（按当前模板：逐单明细/每日汇总/旬段汇总 → 服务端渲染）
