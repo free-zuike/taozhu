@@ -85,8 +85,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     setState(() {
       _selYear = y;
       _selMonth = m;
+      _filterByRange(_purchases); // 列表全量：联动只跟随月份显示 + 重算当月统计，不重载（避免跳月丢数据）
     });
-    _load();
   }
 
   void _onSync() {
@@ -115,7 +115,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     _load();
   }
 
-  /// 月份选择弹层（只选年月，无需选日）
+  /// 月份选择弹层（只选年月，无需选日）——选择后滚动到该月首个日期头，列表不重载
   Future<void> _pickMonth() async {
     final picked = await showYearMonthPicker(
       context,
@@ -126,8 +126,21 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     setState(() {
       _selYear = picked.year;
       _selMonth = picked.month;
+      _filterByRange(_purchases); // 重算当月统计（列表全量不变）
     });
-    _load();
+    _scrollToMonth();
+  }
+
+  /// 滚动到所选月份第一个日期头（月份选择器跳转；无该月数据则停留在原位）
+  void _scrollToMonth() {
+    final prefix = '${_selYear}-${_selMonth.toString().padLeft(2, '0')}';
+    final key = _dateHeaderKeys.entries
+        .where((e) => e.key.startsWith(prefix))
+        .map((e) => e.value)
+        .firstOrNull;
+    final ctx = key?.currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), alignment: 0);
   }
 
   static String _fmt(DateTime d) =>
@@ -150,22 +163,24 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     // Web 端 LocalDb 恒空：跳过空渲染，避免删除/同步通知时列表"空白→填充"跳动；仅本地有数据才先渲染
     if ((!kIsWeb || local.isNotEmpty) && mounted) {
       setState(() {
-        _purchases = _filterByRange(local);
+        _filterByRange(local); // 计算当月统计（总额/天数/件数），返回值忽略
+        _purchases = local; // 列表全量展示：跨月滚动，月份联动只跟随显示不重载（避免跳月丢数据）
         _itemCategory = catMap;
         _loading = false;
       });
     }
     // 原生本地化：列表页刷新只读本地，同步只由「我的」页/进应用自动同步驱动。
     if (kIsWeb) {
-      // ② Web（无本地库）：直连服务器刷新（静默；失败保留本地展示）
+      // ② Web（无本地库）：直连服务器刷新（静默；失败保留本地展示）——全量拉取（列表跨月滚动）
       try {
-        final d = await Api.instance.get('/purchases?${_dateQuery()}&limit=500');
+        final d = await Api.instance.get('/purchases?limit=1000');
         if (!mounted) return;
         final rows = ((d['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
         await LocalDb.upsertList('purchases', rows);
         if (!mounted) return;
         setState(() {
-          _purchases = _filterByRange(rows);
+          _filterByRange(rows);
+          _purchases = rows;
           _itemCategory = catMap;
           _loading = false;
           _offline = false;

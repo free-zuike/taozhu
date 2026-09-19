@@ -433,22 +433,25 @@ class _StatementPageState extends State<StatementPage> {
                       icon: const Icon(Icons.visibility_outlined, size: 16),
                       label: const Text('预览'),
                       onPressed: () {
-                        // 模板正文优先：变量渲染后的样式（所见即所得）；空正文走结构化表格预览
-                        final contentLines = cfg.content.trim().isEmpty
-                            ? null
-                            : _renderContentLines(cfg.content, clientName);
+                        // 网格模板优先（Excel 式：变量替换+对齐）；否则正文文本/结构化表格
+                        final useGrid = cfg.grid.isNotEmpty;
+                        final contentLines = !useGrid && cfg.content.trim().isNotEmpty
+                            ? _renderContentLines(cfg.content, clientName)
+                            : null;
                         showDialog<void>(
                           context: ctx,
                           builder: (c2) => AlertDialog(
                             title: Text('预览：${cfg.name}'),
                             content: SizedBox(
                               width: 460,
-                              child: contentLines != null
-                                  ? SingleChildScrollView(
-                                      child: Text(contentLines.join('\n'),
-                                          style: const TextStyle(fontSize: 12, height: 1.7)),
-                                    )
-                                  : _previewTable(cfg, clientName),
+                              child: useGrid
+                                  ? _gridPreview(cfg, clientName)
+                                  : contentLines != null
+                                      ? SingleChildScrollView(
+                                          child: Text(contentLines.join('\n'),
+                                              style: const TextStyle(fontSize: 12, height: 1.7)),
+                                        )
+                                      : _previewTable(cfg, clientName),
                             ),
                             actions: [
                               TextButton(onPressed: () => Navigator.pop(c2), child: const Text('关闭')),
@@ -456,6 +459,12 @@ class _StatementPageState extends State<StatementPage> {
                           ),
                         );
                       },
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.grid_on_outlined, size: 16),
+                      label: const Text('网格模板'),
+                      onPressed: () => _gridEditorDialog(ctx, cfg, clientName),
                     ),
                   ],
                 ),
@@ -480,12 +489,17 @@ class _StatementPageState extends State<StatementPage> {
       toast(context, '导出失败，请重试');
       return;
     }
-    // 导出前版式预览确认
+    // 导出前版式预览确认（网格模板优先，所见即所得）
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('导出预览'),
-        content: SizedBox(width: 460, child: _previewTable(cfg, clientName)),
+        content: SizedBox(
+          width: 460,
+          child: cfg.grid.isNotEmpty
+              ? _gridPreview(cfg, clientName)
+              : _previewTable(cfg, clientName),
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('导出')),
@@ -500,12 +514,20 @@ class _StatementPageState extends State<StatementPage> {
     if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
   }
 
-  /// 按排版配置生成 Excel：标题 + 可选表头信息行 + 明细（三种粒度）
+  /// 按排版配置生成 Excel：网格模板优先（每格变量替换后逐行写入），否则标题 + 可选表头信息行 + 明细（三种粒度）
   Excel _buildExcel(_XlsCfg cfg, String clientName) {
     final excel = Excel.createExcel();
     // 复用默认空 sheet 并改名，避免多余的 Sheet1（v0.17.142：导出只留一个"对账单"页）
     excel.rename('Sheet1', '对账单'); // excel 4.x rename 直接改名（返回 void），默认 sheet 恒存在
     final sheet = excel['对账单'];
+    // Excel 式网格模板：每格变量替换后逐行写入（内容与预览/打印同源；对齐样式后续补 cellStyle）
+    if (cfg.grid.isNotEmpty) {
+      final grid = _renderGrid(cfg, clientName);
+      for (final row in grid) {
+        sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
+      }
+      return excel;
+    }
     sheet.setColumnWidth(0, 14);
     sheet.setColumnWidth(1, 32);
     sheet.setColumnWidth(2, 14);
@@ -818,6 +840,178 @@ class _StatementPageState extends State<StatementPage> {
     return buf.toString();
   }
 
+  /// 网格模板预览（Excel 式：变量替换后按对齐渲染，所见即所得）
+  Widget _gridPreview(_XlsCfg cfg, String clientName) {
+    final grid = _renderGrid(cfg, clientName);
+    return SingleChildScrollView(
+      child: Table(
+        border: TableBorder.all(color: Colors.black26, width: 0.5),
+        defaultColumnWidth: const IntrinsicColumnWidth(),
+        children: [
+          for (final row in grid)
+            TableRow(children: [
+              for (final c in row)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  child: Text(c.text,
+                      textAlign: _alignOf(c.align), style: const TextStyle(fontSize: 11)),
+                ),
+            ]),
+        ],
+      ),
+    );
+  }
+
+  static TextAlign _alignOf(String a) =>
+      a == 'center' ? TextAlign.center : (a == 'right' ? TextAlign.right : TextAlign.left);
+
+  static IconData _alignIcon(String a) =>
+      a == 'center' ? Icons.format_align_center : (a == 'right' ? Icons.format_align_right : Icons.format_align_left);
+
+  /// Excel 式网格模板编辑器：行列可调、每格可放变量（{店铺}…{明细}、{1日}…{31日}）+ 对齐（左/中/右），实时预览
+  Future<void> _gridEditorDialog(BuildContext ctx, _XlsCfg cfg, String clientName) async {
+    if (cfg.grid.isEmpty) {
+      cfg.grid = [
+        [_GridCell('对账单', 'center'), _GridCell(), _GridCell()],
+        [_GridCell('店铺：{店铺}'), _GridCell(), _GridCell()],
+        [_GridCell('账期：{账期}'), _GridCell(), _GridCell()],
+      ];
+    }
+    final ctrls = <String, TextEditingController>{};
+    TextEditingController ctrlFor(int r, int c) =>
+        ctrls.putIfAbsent('$r-$c', () => TextEditingController(text: cfg.grid[r][c].text));
+    var focusR = 0, focusC = 0;
+    final genVars = const ['店铺', '账期', '日期', '出货合计', '收款合计', '期末欠款', '出货笔数', '明细', '旬段表'];
+    await showDialog<void>(
+      context: ctx,
+      builder: (dctx) => StatefulBuilder(
+        builder: (dctx, setDlg) {
+          final rows = cfg.grid.length;
+          final cols = cfg.grid.isEmpty ? 0 : cfg.grid[0].length;
+          // 补齐矩形（初始/加列后各行等列数）
+          for (final r in cfg.grid) {
+            while (r.length < cols) r.add(_GridCell());
+          }
+          void insertVar(String v) {
+            final cell = cfg.grid[focusR][focusC];
+            cell.text += v;
+            ctrlFor(focusR, focusC).text = cell.text;
+          }
+          return AlertDialog(
+            title: const Text('网格模板编辑'),
+            scrollable: true,
+            content: SizedBox(
+              width: 620,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(spacing: 6, children: [
+                    OutlinedButton.icon(
+                        icon: const Icon(Icons.add, size: 14), label: const Text('加行'),
+                        onPressed: () => setDlg(() => cfg.grid.add([for (var c = 0; c < cols; c++) _GridCell()]))),
+                    OutlinedButton.icon(
+                        icon: const Icon(Icons.remove, size: 14), label: const Text('删行'),
+                        onPressed: rows > 1 ? () => setDlg(() => cfg.grid.removeLast()) : null),
+                    OutlinedButton.icon(
+                        icon: const Icon(Icons.playlist_add, size: 14), label: const Text('加列'),
+                        onPressed: () => setDlg(() { for (final r in cfg.grid) r.add(_GridCell()); })),
+                    OutlinedButton.icon(
+                        icon: const Icon(Icons.playlist_remove, size: 14), label: const Text('删列'),
+                        onPressed: cols > 1 ? () => setDlg(() { for (final r in cfg.grid) r.removeLast(); }) : null),
+                    const SizedBox(width: 8),
+                    Text('点击格子选中，再插入变量/切对齐', style: TextStyle(fontSize: 11, color: _c.textSub)),
+                  ]),
+                  const SizedBox(height: 6),
+                  // 变量插入（通用 + 按日 1-31，插入到选中格）
+                  Wrap(spacing: 4, runSpacing: 2, children: [
+                    for (final v in genVars)
+                      ActionChip(
+                        label: Text('{$v}', style: const TextStyle(fontSize: 10)),
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => setDlg(() => insertVar('{$v}')),
+                      ),
+                    ActionChip(
+                      label: const Text('{N日}', style: TextStyle(fontSize: 10)),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () async {
+                        final day = await showDialog<int>(
+                          context: dctx,
+                          builder: (c3) => SimpleDialog(
+                            title: const Text('插入日期变量（该日销售额）'),
+                            children: [
+                              for (var d = 1; d <= 31; d++)
+                                SimpleDialogOption(
+                                  onPressed: () => Navigator.pop(c3, d),
+                                  child: Text('{$d日}', style: const TextStyle(fontSize: 13)),
+                                ),
+                            ],
+                          ),
+                        );
+                        if (day != null && day >= 1) setDlg(() => insertVar('{$day日}'));
+                      },
+                    ),
+                    OutlinedButton.icon(
+                        icon: const Icon(Icons.visibility_outlined, size: 14), label: const Text('预览'),
+                        onPressed: () => showDialog<void>(
+                            context: dctx,
+                            builder: (c3) => AlertDialog(
+                                title: Text('预览：${cfg.name}'),
+                                content: SizedBox(width: 580, child: _gridPreview(cfg, clientName)),
+                                actions: [TextButton(onPressed: () => Navigator.pop(c3), child: const Text('关闭'))]))),
+                  ]),
+                  const SizedBox(height: 8),
+                  // 网格编辑表格：每格输入 + 对齐切换（点击格子选中后插入变量）
+                  SingleChildScrollView(
+                    child: Table(
+                      border: TableBorder.all(color: Colors.black26, width: 0.5),
+                      defaultColumnWidth: const IntrinsicColumnWidth(),
+                      children: [
+                        for (var r = 0; r < rows; r++)
+                          TableRow(children: [
+                            for (var c = 0; c < cfg.grid[r].length; c++)
+                              Padding(
+                                padding: const EdgeInsets.all(2),
+                                child: TextField(
+                                  key: ValueKey('g-$r-$c'),
+                                  controller: ctrlFor(r, c),
+                                  style: const TextStyle(fontSize: 12),
+                                  onTap: () => setDlg(() { focusR = r; focusC = c; }),
+                                  onChanged: (v) => cfg.grid[r][c].text = v,
+                                  decoration: InputDecoration(
+                                    isDense: true,
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                                    border: const OutlineInputBorder(),
+                                    suffixIcon: IconButton(
+                                      iconSize: 14,
+                                      padding: EdgeInsets.zero,
+                                      tooltip: '切换对齐（左/中/右）',
+                                      icon: Icon(_alignIcon(cfg.grid[r][c].align), size: 14, color: _c.primary),
+                                      onPressed: () => setDlg(() {
+                                        cfg.grid[r][c].align = cfg.grid[r][c].align == 'left'
+                                            ? 'center'
+                                            : (cfg.grid[r][c].align == 'center' ? 'right' : 'left');
+                                      }),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ]),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('完成')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   /// 版式预览（所见即所得）：标题居中 + 表头信息行 + 明细表格 + 总计——与导出/打印同源排版
   Widget _previewTable(_XlsCfg cfg, String clientName) {
     final infoRows = <String>[
@@ -952,26 +1146,39 @@ class _StatementPageState extends State<StatementPage> {
   }
 
   /// 模板正文变量渲染（预览/导出/打印三端同源数据）：
-  /// 变量：{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{明细}{旬段表}
-  /// 返回渲染后的逐行文本；{明细} 每件商品一行、{旬段表} 四段汇总文本。
-  List<String> _renderContentLines(String content, String clientName) {
+  /// 单文本变量替换（正文/网格共用）：{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数} + {1日}…{31日}按日
+  String _replaceVars(String text, String clientName) {
     final now = DateTime.now();
     final today = '${now.year}年${now.month}月${now.day}日';
-    final map = <String, String>{
-      '店铺': clientName,
-      '账期': '${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}',
-      '日期': today,
-      '出货合计': '¥${_saleTotal.toStringAsFixed(2)}',
-      '收款合计': '¥${_payTotal.toStringAsFixed(2)}',
-      '期末欠款': '¥${_debtEnd.toStringAsFixed(2)}',
-      '出货笔数': '${_sales.length}',
-    };
+    var line = text
+        .replaceAll('{店铺}', clientName)
+        .replaceAll('{账期}', '${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}')
+        .replaceAll('{日期}', today)
+        .replaceAll('{出货合计}', '¥${_saleTotal.toStringAsFixed(2)}')
+        .replaceAll('{收款合计}', '¥${_payTotal.toStringAsFixed(2)}')
+        .replaceAll('{期末欠款}', '¥${_debtEnd.toStringAsFixed(2)}')
+        .replaceAll('{出货笔数}', '${_sales.length}');
+    final daily = _salesByDayOfMonth();
+    for (var d = 1; d <= daily.length; d++) {
+      line = line.replaceAll('{$d日}', '¥${daily[d - 1].toStringAsFixed(2)}');
+    }
+    return line;
+  }
+
+  /// 渲染网格模板（Excel 式：每格变量替换 + 对齐）——预览/导出/打印同源
+  List<List<_GridCell>> _renderGrid(_XlsCfg cfg, String clientName) {
+    return [
+      for (final row in cfg.grid)
+        [for (final c in row) _GridCell(_replaceVars(c.text, clientName), c.align)],
+    ];
+  }
+
+  /// 变量：{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{明细}{旬段表}{1日}…{31日}
+  /// 返回渲染后的逐行文本；{明细} 每件商品一行、{旬段表} 逐日汇总文本。
+  List<String> _renderContentLines(String content, String clientName) {
     final out = <String>[];
     for (final raw in content.split('\n')) {
-      var line = raw;
-      for (final e in map.entries) {
-        line = line.replaceAll('{${e.key}}', e.value);
-      }
+      var line = _replaceVars(raw, clientName);
       if (line.contains('{明细}')) {
         final items = _detailLines();
         line = line.replaceAll('{明细}',
@@ -1418,14 +1625,27 @@ class _StatementPageState extends State<StatementPage> {
 
 /// 对账单排版模板（前端自定义，本机持久化）：标题/表头信息行/明细粒度/明细列
 /// mode：detail=逐行明细 | daily=按日汇总 | item=按商品汇总 | period=旬段汇总（1-10/11-20/21-30/31 日 8 列）
+/// 网格单元格：文本（可含 {变量} 占位，如 {店铺}、{1日}…{31日}）+ 对齐（left/center/right）
+class _GridCell {
+  _GridCell([this.text = '', this.align = 'left']);
+  String text;
+  String align;
+  Map<String, dynamic> toJson() => {'t': text, 'a': align};
+  _GridCell.fromJson(Map<String, dynamic> j)
+      : text = '${j['t'] ?? ''}',
+        align = '${j['a'] ?? 'left'}';
+}
+
 class _XlsCfg {
   _XlsCfg();
 
   String name = '标准';
   String title = '陶朱对账单';
-  /// 模板正文（自由编排，支持变量占位：{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{明细}{旬段表}）；
+  /// 模板正文（自由编排，支持变量占位：{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{明细}{旬段表}{1日}…{31日}）；
   /// 空 = 用下方结构化字段（表头信息行/明细粒度/明细列）生成
   String content = '';
+  /// Excel 式网格模板（行×列单元格，每格可放变量 + 对齐；非空时优先于 content/结构化渲染）
+  List<List<_GridCell>> grid = [];
   bool headClient = true;
   bool headPeriod = true;
   bool headSaleTotal = true;
@@ -1442,6 +1662,9 @@ class _XlsCfg {
         'name': name,
         'title': title,
         'content': content,
+        'grid': [
+          for (final row in grid) [for (final c in row) c.toJson()],
+        ],
         'headClient': headClient,
         'headPeriod': headPeriod,
         'headSaleTotal': headSaleTotal,
@@ -1459,6 +1682,16 @@ class _XlsCfg {
     name = '${j['name'] ?? '标准'}';
     title = '${j['title'] ?? '陶朱对账单'}';
     content = '${j['content'] ?? ''}';
+    final rawGrid = j['grid'];
+    if (rawGrid is List) {
+      grid = [
+        for (final row in rawGrid)
+          [
+            for (final c in (row as List? ?? []))
+              if (c is Map) _GridCell.fromJson(c),
+          ],
+      ];
+    }
     headClient = j['headClient'] != false;
     headPeriod = j['headPeriod'] != false;
     headSaleTotal = j['headSaleTotal'] != false;
