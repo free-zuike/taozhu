@@ -71,7 +71,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       final box = ctx.findRenderObject();
       if (box is! RenderBox) continue;
       final dy = box.localToGlobal(Offset.zero).dy;
-      if (dy < 0) continue; // 已滚过头顶
+      // 取离视口顶部最近的日期头（含已滚过头顶 dy<0 的，与交易页一致）——
+      // 否则大幅滚动后视口内无 dy>=0 的头 → 联动停摆（标签停留旧月）
       if (bestDy == null || dy < bestDy) {
         bestDy = dy;
         topKey = e.key;
