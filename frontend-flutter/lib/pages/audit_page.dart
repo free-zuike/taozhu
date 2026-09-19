@@ -99,7 +99,6 @@ class _AuditPageState extends State<AuditPage> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                // 首行：谁 · 做了什么（动作标签 + 用户名加粗 + 对象）
                                 Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -127,20 +126,14 @@ class _AuditPageState extends State<AuditPage> {
                                   ),
                                 Padding(
                                   padding: const EdgeInsets.only(top: 4, left: 2),
-                                  child: Text(
-                                    _fmtTime(l['created_at']),
-                                    style: TextStyle(fontSize: 11, color: c.textSub),
-                                  ),
-                                ),
-                                    ],
-                                  ),
+                                  child: Text(_fmtTime(l['created_at']), style: TextStyle(fontSize: 11, color: c.textSub)),
                                 ),
                               ],
                             ),
                           );
                         },
                       ),
-      ),
-    );
-  }
-}
+                    ),
+                  );
+                }
+              }
