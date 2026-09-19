@@ -1,6 +1,7 @@
 /// 对账单模板设置页（独立管理）：模板列表（新建/删除/切换）+ 组件式设计器（组件/网格/正文）
 /// + 实时预览（拉当月出货数据渲染，所见即所得）。与对账单导出共用公共模板库（statement_tmpl.dart）。
 import 'package:flutter/material.dart';
+import 'package:pluto_grid/pluto_grid.dart';
 import '../api.dart';
 import '../statement_tmpl.dart';
 import '../theme.dart';
@@ -17,6 +18,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   String _tab = 'comps'; // comps | grid | content
   bool _loading = true;
   final _contentCtrl = TextEditingController();
+  PlutoGridStateManager? _gridState; // 网格模板编辑状态（保存时回读）
 
   XlsCfg get _cur => _templates.firstWhere((t) => t.name == _selName, orElse: () => _templates.first);
 
@@ -52,6 +54,15 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   Future<void> _save() async {
     final cur = _cur;
     if (_tab == 'content') cur.content = _contentCtrl.text;
+    if (_tab == 'grid' && _gridState != null) {
+      // 从 PlutoGrid 读回（含追加行/编辑的单元格）
+      final rows = _gridState!.refRows;
+      final cols = cur.grid.isEmpty ? 3 : cur.grid[0].length;
+      cur.grid = [
+        for (final r in rows)
+          [for (var cc = 0; cc < cols; cc++) GridCell('${r.cells['c$cc']?.value ?? ''}')],
+      ];
+    }
     await saveTemplates(_templates, _selName);
     if (mounted) _pageToast(context, '模板「${cur.name}」已保存');
   }
@@ -287,10 +298,12 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                           ),
                         ),
                       )
-                    : SingleChildScrollView(
-                        padding: const EdgeInsets.all(16),
-                        child: _tab == 'grid' ? _gridEditor(c) : _compsEditor(c),
-                      ),
+                    : _tab == 'grid'
+                        ? _gridEditor(c) // PlutoGrid 自带滚动，需 Expanded 高度
+                        : SingleChildScrollView(
+                            padding: const EdgeInsets.all(16),
+                            child: _compsEditor(c),
+                          ),
               ),
             ]),
     );
@@ -331,58 +344,53 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
 
   Widget _gridEditor(TaozhuColors c) {
     final cur = _cur;
-    final rows = cur.grid.isEmpty ? 3 : cur.grid.length;
     final cols = cur.grid.isEmpty ? 3 : cur.grid[0].length;
     if (cur.grid.isEmpty) {
       cur.grid = [
-        for (var r = 0; r < rows; r++) [for (var cc = 0; cc < cols; cc++) GridCell()],
+        for (var r = 0; r < 3; r++) [for (var cc = 0; cc < cols; cc++) GridCell()],
       ];
     }
-    final ctrls = <String, TextEditingController>{};
-    TextEditingController ctrlFor(int r, int cc) =>
-        ctrls.putIfAbsent('$r-$cc', () => TextEditingController(text: cur.grid[r][cc].text));
+    final columns = <PlutoColumn>[
+      for (var cc = 0; cc < cols; cc++)
+        PlutoColumn(title: '${cc + 1} 列', field: 'c$cc', type: PlutoColumnType.text(), width: 110),
+    ];
+    final gridRows = [
+      for (var r = 0; r < cur.grid.length; r++)
+        PlutoRow(cells: {
+          for (var cc = 0; cc < cols; cc++) 'c$cc': PlutoCell(value: cur.grid[r][cc].text),
+        }),
+    ];
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Wrap(spacing: 6, children: [
-        OutlinedButton.icon(
-            icon: const Icon(Icons.add, size: 14), label: const Text('加行'),
-            onPressed: () => setState(() => cur.grid.add([for (var cc = 0; cc < cols; cc++) GridCell()]))),
-        OutlinedButton.icon(
-            icon: const Icon(Icons.remove, size: 14), label: const Text('删行'),
-            onPressed: cur.grid.length > 1 ? () => setState(() => cur.grid.removeLast()) : null),
-        OutlinedButton.icon(
-            icon: const Icon(Icons.playlist_add, size: 14), label: const Text('加列'),
-            onPressed: () => setState(() { for (final r in cur.grid) r.add(GridCell()); })),
-        OutlinedButton.icon(
-            icon: const Icon(Icons.playlist_remove, size: 14), label: const Text('删列'),
-            onPressed: cols > 1 ? () => setState(() { for (final r in cur.grid) r.removeLast(); }) : null),
-      ]),
-      const SizedBox(height: 8),
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Table(
-          border: TableBorder.all(color: Colors.black26, width: 0.5),
-          children: [
-            for (var r = 0; r < cur.grid.length; r++)
-              TableRow(children: [
-                for (var cc = 0; cc < cur.grid[r].length; cc++)
-                  Padding(
-                    padding: const EdgeInsets.all(2),
-                    child: SizedBox(
-                      width: 120,
-                      child: TextField(
-                        controller: ctrlFor(r, cc),
-                        style: const TextStyle(fontSize: 12),
-                        onChanged: (v) => cur.grid[r][cc].text = v,
-                        decoration: InputDecoration(
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                          border: const OutlineInputBorder(),
-                        ),
-                      ),
-                    ),
-                  ),
-              ]),
-          ],
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: Wrap(spacing: 6, runSpacing: 4, children: [
+          OutlinedButton.icon(
+              icon: const Icon(Icons.playlist_add, size: 14), label: const Text('加列'),
+              onPressed: () => setState(() {
+                for (final r in cur.grid) {
+                  r.add(GridCell());
+                }
+                _gridState = null;
+              })),
+          OutlinedButton.icon(
+              icon: const Icon(Icons.playlist_remove, size: 14), label: const Text('删列'),
+              onPressed: cols > 1
+                  ? () => setState(() {
+                      for (final r in cur.grid) {
+                        r.removeLast();
+                      }
+                      _gridState = null;
+                    })
+                  : null),
+          Text('双击单元格编辑；表格底部「+」追加行；保存时写回模板',
+              style: TextStyle(fontSize: 11, color: c.textSub)),
+        ]),
+      ),
+      Expanded(
+        child: PlutoGrid(
+          columns: columns,
+          rows: gridRows,
+          onLoaded: (e) => _gridState = e.stateManager,
         ),
       ),
     ]);
