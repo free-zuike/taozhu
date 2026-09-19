@@ -326,7 +326,7 @@ class _StatementPageState extends State<StatementPage> {
       for (var cc = 0; cc < row.length; cc++) {
         final a = row[cc].align;
         if (a == 'left') continue;
-        sheet.cell(CellIndex(row: ri, columnIndex: cc)).cellStyle = CellStyle(
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: cc, rowIndex: ri)).cellStyle = CellStyle(
               horizontalAlign: a == 'center' ? HorizontalAlign.Center : HorizontalAlign.Right,
             );
       }
