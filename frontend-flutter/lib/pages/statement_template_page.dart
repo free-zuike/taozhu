@@ -40,17 +40,29 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     }
   }
 
+  /// 从 PlutoGrid 回读编辑内容写回模板（预览/保存前必须调用，否则变量与增删行丢失）
+  void _flushGrid() {
+    final cur = _cur;
+    final st = _gridState;
+    if (st == null) return;
+    final rows = st.refRows;
+    final cols = cur.grid.isEmpty ? 3 : cur.grid[0].length;
+    final oldGrid = cur.grid;
+    cur.grid = [
+      for (var r = 0; r < rows.length; r++)
+        [
+          for (var cc = 0; cc < cols; cc++)
+            GridCell(
+              '${rows[r].cells['c$cc']?.value ?? ''}',
+              r < oldGrid.length && cc < oldGrid[r].length ? oldGrid[r][cc].align : 'left',
+            ),
+        ],
+    ];
+  }
+
   Future<void> _save() async {
     final cur = _cur;
-    if (_gridState != null) {
-      // 从 PlutoGrid 读回（含追加行/编辑的单元格）写回模板
-      final rows = _gridState!.refRows;
-      final cols = cur.grid.isEmpty ? 3 : cur.grid[0].length;
-      cur.grid = [
-        for (final r in rows)
-          [for (var cc = 0; cc < cols; cc++) GridCell('${r.cells['c$cc']?.value ?? ''}')],
-      ];
-    }
+    _flushGrid();
     if (cur.grid.isEmpty) {
       _pageToast(context, '网格为空，先填单元格或加行');
       return;
@@ -155,6 +167,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   }
 
   Future<void> _preview() async {
+    _flushGrid(); // 先回读 PlutoGrid 编辑内容，否则预览的是旧模板
     final td = await _previewData();
     if (!mounted) return;
     if (td == null) {
@@ -165,24 +178,30 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('预览：${_cur.name}'),
-        content: SingleChildScrollView(
-          child: Table(
-            border: TableBorder.all(color: Colors.black26, width: 0.5),
-            defaultColumnWidth: const IntrinsicColumnWidth(),
-            children: [
-              for (final row in renderTemplateRows(_cur, td))
-                TableRow(children: [
-                  for (final c in row)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                      child: Text(c.text,
-                          textAlign: c.align == 'center'
-                              ? TextAlign.center
-                              : (c.align == 'right' ? TextAlign.right : TextAlign.left),
-                          style: const TextStyle(fontSize: 11)),
-                    ),
-                ]),
-            ],
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Table(
+                border: TableBorder.all(color: Colors.black26, width: 0.5),
+                defaultColumnWidth: const IntrinsicColumnWidth(),
+                children: [
+                  for (final row in renderTemplateRows(_cur, td))
+                    TableRow(children: [
+                      for (final c in row)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                          child: Text(c.text,
+                              textAlign: c.align == 'center'
+                                  ? TextAlign.center
+                                  : (c.align == 'right' ? TextAlign.right : TextAlign.left),
+                              style: const TextStyle(fontSize: 11)),
+                        ),
+                    ]),
+                ],
+              ),
+            ),
           ),
         ),
         actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭'))],
@@ -231,17 +250,19 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
 
   Widget _gridEditor(TaozhuColors c) {
     final cur = _cur;
-    // 网格为唯一编辑形态：旧组件/正文模板在此转为网格（清空，改以 grid 渲染）
+    // 网格为唯一编辑形态：旧组件/正文模板进入编辑转为网格；空模板用默认多栏账单网格（避免空白边框）
     if (cur.comps.isNotEmpty || cur.content.trim().isNotEmpty) {
       cur.comps = [];
       cur.content = '';
     }
-    final cols = cur.grid.isEmpty ? 3 : cur.grid[0].length;
     if (cur.grid.isEmpty) {
       cur.grid = [
-        for (var r = 0; r < 3; r++) [for (var cc = 0; cc < cols; cc++) GridCell()],
+        [GridCell('{店铺}{年}年{月}月份账单', 'center')],
+        [GridCell('{月账单}', '')],
+        [GridCell('出货合计：{出货合计}　收款合计：{收款合计}　期末欠款：{期末欠款}', 'left')],
       ];
     }
+    final cols = cur.grid[0].length;
     final columns = <PlutoColumn>[
       for (var cc = 0; cc < cols; cc++)
         PlutoColumn(title: '${cc + 1} 列', field: 'c$cc', type: PlutoColumnType.text(), width: 110),
@@ -262,6 +283,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                 for (final r in cur.grid) {
                   r.add(GridCell());
                 }
+                cur.colAligns.add('left');
                 _gridState = null;
               })),
           OutlinedButton.icon(
@@ -271,10 +293,25 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                       for (final r in cur.grid) {
                         r.removeLast();
                       }
+                      if (cur.colAligns.length > cols - 1) cur.colAligns.removeLast();
                       _gridState = null;
                     })
                   : null),
-          Text('双击单元格编辑（可放 {店铺}{1日}…{31日}{明细} 变量）；表格底部「+」追加行',
+          // 每列对齐循环按钮（左→中→右），渲染时 colAligns 优先于单元格 align
+          for (var cc = 0; cc < cols; cc++)
+            ActionChip(
+              label: Text('${cc + 1}列 ${_alignTxt(cc < cur.colAligns.length ? cur.colAligns[cc] : '')}',
+                  style: const TextStyle(fontSize: 11)),
+              onPressed: () => setState(() {
+                while (cur.colAligns.length <= cc) {
+                  cur.colAligns.add('');
+                }
+                cur.colAligns[cc] = cur.colAligns[cc] == 'center'
+                    ? 'right'
+                    : (cur.colAligns[cc] == 'right' ? 'left' : 'center');
+              }),
+            ),
+          Text('双击单元格编辑（可放 {店铺}{年}{月}{日}{1日}…{31日}{明细}{月账单}）；表格底部「+」追加行；「{月账单}」= 整月分栏账单一格生成',
               style: TextStyle(fontSize: 11, color: c.textSub)),
         ]),
       ),
@@ -295,3 +332,6 @@ void _pageToast(BuildContext context, String msg) {
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
 }
+
+/// 对齐按钮显示文本
+String _alignTxt(String a) => a == 'center' ? '居中' : (a == 'right' ? '右' : '左');

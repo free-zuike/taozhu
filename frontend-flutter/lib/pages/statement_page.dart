@@ -226,6 +226,7 @@ class _StatementPageState extends State<StatementPage> {
   /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃）
   Widget _previewTplRows(List<List<GridCell>> rows) {
     return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
       child: Table(
         border: TableBorder.all(color: Colors.black26, width: 0.5),
         defaultColumnWidth: const IntrinsicColumnWidth(),
@@ -318,8 +319,18 @@ class _StatementPageState extends State<StatementPage> {
     excel.rename('Sheet1', '对账单');
     final sheet = excel['对账单'];
     final trows = renderTemplateRows(sel, _td(clientName));
+    var ri = 0;
     for (final row in trows) {
       sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
+      // 对齐样式（left/center/right → 单元格 horizontalAlign）
+      for (var cc = 0; cc < row.length; cc++) {
+        final a = row[cc].align;
+        if (a == 'left') continue;
+        sheet.cell(CellIndex(row: ri, columnIndex: cc)).cellStyle = CellStyle(
+              horizontalAlign: a == 'center' ? HorizontalAlign.Center : HorizontalAlign.Right,
+            );
+      }
+      ri++;
     }
     final bytes = excel.encode();
     if (bytes == null) {
