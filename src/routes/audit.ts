@@ -11,6 +11,18 @@ auditRouter.use('*', authMiddleware(), adminOnly());
 
 const MAX_KEEP = 500;
 
+/// 动作中文标签（前端显示用；action 值保持英文稳定——后续多语言按 Accept-Language 返回对应语言，不改存储）
+const ACTION_LABEL: Record<string, string> = {
+  login: '登录', create: '新增', update: '修改', delete: '删除',
+  export: '导出', import: '导入', rebuild: '重算',
+};
+/// 实体中文标签
+const ENTITY_LABEL: Record<string, string> = {
+  sale: '出货', purchase: '进货', sale_item: '出货商品', purchase_item: '进货商品',
+  payment: '收款', backup: '备份', stocks: '库存', category: '分类',
+  client: '店铺', item: '商品', payment_account: '收款方式', profile: '资料',
+};
+
 export interface AuditEntry {
   username: string;
   action: string;
@@ -47,5 +59,11 @@ auditRouter.get('/', async (c) => {
     `SELECT id, username, action, entity_type, entity_id, detail, created_at
      FROM audit_logs ${where} ORDER BY id DESC LIMIT ?`,
   ).bind(...params, limit).all();
-  return c.json({ logs: rows.results });
+  return c.json({
+    logs: rows.results.map((r) => ({
+      ...r,
+      action_label: ACTION_LABEL[String(r.action)] ?? String(r.action ?? ''),
+      entity_label: r.entity_type ? (ENTITY_LABEL[String(r.entity_type)] ?? String(r.entity_type)) : '',
+    })),
+  });
 });

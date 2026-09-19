@@ -426,7 +426,7 @@ export async function applyChange(
             await recordAudit(db, {
               username: String(p.created_by ?? 'sync'),
               action: 'create', entity_type: 'sale_item', entity_id: id,
-              detail: `添加出货商品行（同步）：${itemId} × ${qty}${String(p.unit ?? '')}`,
+              detail: `添加出货商品行（同步）：${p.item_name || itemId} × ${qty}${String(p.unit ?? '')}`,
             });
           } catch (_) {}
         }
@@ -482,7 +482,7 @@ export async function applyChange(
             await recordAudit(db, {
               username: String(p.created_by ?? 'sync'),
               action: 'create', entity_type: 'purchase_item', entity_id: id,
-              detail: `添加进货商品行（同步）：${itemId2} × ${qty2}${String(p.unit ?? '')}`,
+              detail: `添加进货商品行（同步）：${p.item_name || itemId2} × ${qty2}${String(p.unit ?? '')}`,
             });
           } catch (_) {}
         }

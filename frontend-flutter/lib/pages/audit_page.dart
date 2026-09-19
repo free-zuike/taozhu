@@ -52,10 +52,12 @@ class _AuditPageState extends State<AuditPage> {
   String _actionLabel(String a) {
     switch (a) {
       case 'login': return '登录';
+      case 'create': return '新增';
       case 'delete': return '删除';
       case 'update': return '修改';
       case 'export': return '导出';
       case 'import': return '导入';
+      case 'rebuild': return '重算';
       default: return a;
     }
   }
@@ -97,7 +99,10 @@ class _AuditPageState extends State<AuditPage> {
                                     color: c.primary.withOpacity(0.12),
                                     borderRadius: BorderRadius.circular(6),
                                   ),
-                                  child: Text(_actionLabel('${l['action'] ?? ''}'),
+                                  child: Text(
+                                      ('${l['action_label'] ?? ''}'.isNotEmpty
+                                          ? '${l['action_label']}'
+                                          : _actionLabel('${l['action'] ?? ''}')),
                                       style: TextStyle(fontSize: 12, color: c.primary)),
                                 ),
                                 const SizedBox(width: 10),
@@ -105,7 +110,11 @@ class _AuditPageState extends State<AuditPage> {
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text('${l['entity_type'] ?? ''}${l['entity_id'] != null ? ' ${l['entity_id']}' : ''}',
+                                      Text(
+                                          ('${l['entity_label'] ?? ''}'.isNotEmpty
+                                              ? '${l['entity_label']}'
+                                              : '${l['entity_type'] ?? ''}') +
+                                              ('${l['entity_id'] ?? ''}'.isNotEmpty ? ' ${l['entity_id']}' : ''),
                                           style: TextStyle(fontSize: 14, color: c.textMain, fontWeight: FontWeight.w600)),
                                       if ('${l['detail'] ?? ''}'.isNotEmpty)
                                         Padding(

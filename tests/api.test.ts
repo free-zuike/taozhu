@@ -533,7 +533,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string; min_supported: string };
-    expect(d.current).toBe('0.17.158');
+    expect(d.current).toBe('0.17.159');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
@@ -563,7 +563,7 @@ describe('强制更新门禁（x-app-version 低于最低支持版本 → 426）
   });
 
   it('携带当前版本头 → 放行；不带版本头（Web/小程序）→ 放行', async () => {
-    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.158' });
+    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.159' });
     expect(r1.status).toBe(200);
     const r2 = await call(env, 'GET', '/api/v1/clients', token);
     expect(r2.status).toBe(200);
@@ -1083,10 +1083,13 @@ describe('操作审计（audit_logs：登录/删除/导出留痕，admin 查看�
     await call(env, 'DELETE', `/api/v1/sales/${saleId}`, token);
 
     const d = (await (await call(env, 'GET', '/api/v1/audit', token)).json()) as {
-      logs: Array<{ username: string; action: string; entity_type: string | null; detail: string | null }>;
+      logs: Array<{ username: string; action: string; action_label?: string; entity_type: string | null; detail: string | null }>;
     };
     expect(d.logs.length).toBeGreaterThanOrEqual(2);
     expect(d.logs.some((l) => l.action === 'login' && l.username === 'boss')).toBe(true);
+    // 中文标签（为多语言预留：action 值保持英文稳定，label 供前端显示）
+    const loginLog = d.logs.find((l) => l.action === 'login');
+    expect(loginLog?.action_label).toBe('登录');
     expect(d.logs.some((l) => l.action === 'delete' && l.entity_type === 'sale' && l.entity_id === saleId)).toBe(true);
   });
 
