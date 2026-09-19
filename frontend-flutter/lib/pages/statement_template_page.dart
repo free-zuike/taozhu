@@ -53,7 +53,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     final cur = _cur;
     if (_tab == 'content') cur.content = _contentCtrl.text;
     await saveTemplates(_templates, _selName);
-    if (mounted) toast(context, '模板「${cur.name}」已保存');
+    if (mounted) _pageToast(context, '模板「${cur.name}」已保存');
   }
 
   Future<void> _addTemplate() async {
@@ -83,7 +83,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   Future<void> _deleteTemplate() async {
     final cur = _cur;
     if (cur.name == '标准' || cur.name == '按日汇总') {
-      toast(context, '内置模板不可删除');
+      _pageToast(context, '内置模板不可删除');
       return;
     }
     final ok = await showDialog<bool>(
@@ -153,7 +153,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
         ),
       );
     } catch (e) {
-      toast(context, '预览拉取数据失败：${e.toString().replaceFirst('Exception: ', '')}');
+      _pageToast(context, '预览拉取数据失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
 
@@ -390,7 +390,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
 }
 
 /// 轻量 toast（页面内提示，避免依赖全局 toast 上下文差异）
-void toast(BuildContext context, String msg) {
+void _pageToast(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));

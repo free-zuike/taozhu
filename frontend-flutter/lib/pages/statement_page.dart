@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:excel/excel.dart';
+import 'package:excel/excel.dart' hide Border;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -982,7 +982,7 @@ class _StatementPageState extends State<StatementPage> {
         border: TableBorder.all(color: Colors.black26, width: 0.5),
         defaultColumnWidth: const IntrinsicColumnWidth(),
         children: [
-          for (final row in grid)
+          for (final row in rows)
             TableRow(children: [
               for (final c in row)
                 Padding(
