@@ -183,4 +183,78 @@ describe('库存（stocks）', () => {
     };
     expect(sum.items[0].prices[0].stock).toBe(0);
   });
+
+  it('进销单位换算：进箱(折合袋)按计数单位入库、出货按袋扣减、行编辑/删除折算回滚、rebuild 折算', async () => {
+    // 商品：金针菇，计数单位=袋；价格行「箱」per=40（1 箱=40 袋）+「袋」per=null（出货按袋）
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '金针菇', count_unit: '袋',
+      prices: [
+        { unit: '箱', purchase_price: 30, sale_price: 40, per: 40 },
+        { unit: '袋', purchase_price: 0.75, sale_price: 1, per: null },
+      ],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ id: string; name: string; count_unit: string; prices: Array<{ id: string; unit: string; per: number | null }> }>;
+    };
+    const box = items.items.find((i) => i.name === '金针菇')!;
+    expect(box.count_unit).toBe('袋');
+    const boxPriceId = box.prices.find((p) => p.unit === '箱')!.id;
+    const bagPriceId = box.prices.find((p) => p.unit === '袋')!.id;
+    expect(box.prices.find((p) => p.unit === '箱')!.per).toBe(40);
+
+    // 进货 1 箱（记单显式 count_qty=40）→ 库存按计数单位「袋」+40
+    const buy = await call(env, 'POST', '/api/v1/purchases', token, {
+      items: [{ price_id: boxPriceId, quantity: 1, count_qty: 40 }],
+    });
+    expect(buy.status).toBe(201);
+    let stock = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind(box.id, '袋').first<{ quantity: number }>();
+    expect(stock?.quantity).toBe(40);
+    // 行记录 count_qty 落库
+    let row = await env.DB.prepare('SELECT count_qty FROM purchase_items WHERE item_id = ?').bind(box.id).first<{ count_qty: number | null }>();
+    expect(row?.count_qty).toBe(40);
+
+    // 出货 5 袋（用袋价格行，无折合按数量）→ 库存 35 袋
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, items: [{ price_id: bagPriceId, quantity: 5 }] });
+    stock = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind(box.id, '袋').first<{ quantity: number }>();
+    expect(stock?.quantity).toBe(35);
+    // 箱单位无库存（全部折算到袋）
+    const boxStock = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind(box.id, '箱').first<{ quantity: number }>();
+    expect(boxStock?.quantity ?? 0).toBe(0);
+
+    // 删除出货行 → 库存回滚到 40 袋（折算回滚）
+    const saleRow = await env.DB.prepare('SELECT id FROM sale_items WHERE item_id = ? LIMIT 1').bind(box.id).first<{ id: string }>();
+    await call(env, 'DELETE', `/api/v1/sales/items/${saleRow!.id}`, token);
+    stock = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind(box.id, '袋').first<{ quantity: number }>();
+    expect(stock?.quantity).toBe(40);
+
+    // 行编辑把折合数改为 30 → 库存 30 袋
+    const buyRow = await env.DB.prepare('SELECT id FROM purchase_items WHERE item_id = ? LIMIT 1').bind(box.id).first<{ id: string }>();
+    await call(env, 'PATCH', `/api/v1/purchases/items/${buyRow!.id}`, token, { count_qty: 30 });
+    stock = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind(box.id, '袋').first<{ quantity: number }>();
+    expect(stock?.quantity).toBe(30);
+
+    // rebuild 全量重算：从流水重建（进货 count_qty=30 袋）→ 30 袋
+    await call(env, 'POST', '/api/v1/stocks/rebuild', token);
+    stock = await env.DB.prepare('SELECT quantity FROM stocks WHERE item_id = ? AND unit = ?').bind(box.id, '袋').first<{ quantity: number }>();
+    expect(stock?.quantity).toBe(30);
+  });
+
+  it('比价口径：价格行 per 影响折合单价（进货页选规格时自动带出折合数）', async () => {
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '木耳', count_unit: '斤',
+      prices: [
+        { unit: '箱', purchase_price: 30, sale_price: 40, per: 10 },  // 30÷10=3 元/斤
+        { unit: '件', purchase_price: 56, sale_price: 60, per: 20 },  // 56÷20=2.8 元/斤（便宜）
+      ],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items/summary', token)).json()) as {
+      items: Array<{ prices: Array<{ unit: string; per: number | null }> }>;
+    };
+    const mp = items.items[0].prices;
+    expect(mp).toHaveLength(2);
+    const perBox = mp.find((p) => p.unit === '箱')!;
+    const perPiece = mp.find((p) => p.unit === '件')!;
+    expect(perBox.per).toBe(10);
+    expect(perPiece.per).toBe(20);
+  });
 });

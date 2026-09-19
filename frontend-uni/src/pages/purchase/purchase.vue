@@ -41,7 +41,7 @@ interface Item { id: string; name: string; prices: Price[] }
 interface Row {
   itemId: string; itemName: string; prices: Price[];
   priceId: string; priceLabel: string; unit: string;
-  quantity: string; purchasePrice: string;
+  quantity: string; purchasePrice: string; countQty: string;
 }
 
 const items = ref<Item[]>([]);
@@ -92,7 +92,7 @@ async function loadEdit() {
       rows.value.push({
         itemId: item.id, itemName: item.name, prices: item.prices,
         priceId: price.id, priceLabel: `${price.unit}（进 ¥${price.purchase_price}·库存${price.stock ?? 0}）`, unit: price.unit,
-        quantity: String(it.quantity), purchasePrice: String(it.purchase_price),
+        quantity: String(it.quantity), purchasePrice: String(it.purchase_price), countQty: it.count_qty ? String(it.count_qty) : '',
       });
     }
     if (rows.value.length === 0) {
@@ -130,7 +130,7 @@ async function copyLast() {
       rows.value.push({
         itemId: item.id, itemName: item.name, prices: item.prices,
         priceId: price.id, priceLabel: `${price.unit}（¥${price.purchase_price}·库存${(price as any).stock ?? 0}）`, unit: price.unit,
-        quantity: String(it.quantity), purchasePrice: String(it.purchase_price),
+        quantity: String(it.quantity), purchasePrice: String(it.purchase_price), countQty: it.count_qty ? String(it.count_qty) : '',
       });
     }
     if (rows.value.length === 0) addRow();
@@ -147,7 +147,7 @@ function onDate(e: { detail: { value: string } }) {
 }
 
 function addRow() {
-  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '' });
+  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '' });
 }
 
 function onItem(i: number, idx: number) {
@@ -179,7 +179,7 @@ async function submit() {
   try {
     const body = {
       happened_at: date.value,
-      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), purchase_price: Number(r.purchasePrice) || 0 })),
+      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, purchase_price: Number(r.purchasePrice) || 0 })),
     };
     if (editId.value) {
       await request(`/purchases/${editId.value}`, 'PATCH', body);

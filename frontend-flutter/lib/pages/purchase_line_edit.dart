@@ -20,6 +20,9 @@ Future<Map<String, dynamic>?> editPurchaseLine(
   final qtyCtrl = TextEditingController(text: '${line['quantity'] ?? ''}');
   final unitCtrl = TextEditingController(text: '${line['unit'] ?? ''}');
   final pp = (line['purchase_price'] as num?)?.toDouble() ?? 0;
+  final origCountQty = (line['count_qty'] as num?)?.toDouble();
+  final countCtrl = TextEditingController(
+      text: origCountQty != null && origCountQty > 0 ? origCountQty.toString() : '');
   final priceCtrl = TextEditingController(
       text: pp > 0 ? pp.toString() : '');
   final happenedAt = '${line['happened_at'] ?? ''}';
@@ -44,6 +47,15 @@ Future<Map<String, dynamic>?> editPurchaseLine(
               ),
               const SizedBox(height: 8),
               TextField(controller: unitCtrl, decoration: const InputDecoration(labelText: '单位（斤/件/箱…）')),
+              const SizedBox(height: 8),
+              TextField(
+                controller: countCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: '折合计数（可选）',
+                  helperText: '本单相当于多少个计数单位（如进 1 箱 → 填 40 袋），库存/备货按它统计；留空=按原单位',
+                ),
+              ),
               const SizedBox(height: 8),
               TextField(
                 controller: priceCtrl,
@@ -147,6 +159,8 @@ Future<Map<String, dynamic>?> editPurchaseLine(
     return null;
   }
   final unit = unitCtrl.text.trim().isEmpty ? '${line['unit'] ?? ''}' : unitCtrl.text.trim();
+  final countParsed = double.tryParse(countCtrl.text.trim());
+  final countQty = (countParsed != null && countParsed > 0) ? countParsed : null;
   // 进价 ≤ 0 或留空视为不改价（与服务端行级编辑口径一致：purchase_price > 0 才生效，否则沿用原价）
   final priceParsed = double.tryParse(priceCtrl.text.trim());
   final price = (priceParsed != null && priceParsed > 0) ? priceParsed : pp;
@@ -164,7 +178,8 @@ Future<Map<String, dynamic>?> editPurchaseLine(
   final origNote = '${line['note'] ?? ''}';
   final note = noteCtrl.text.trim();
   final unchanged =
-      (origQty != null && qty == origQty) && unit == origUnit && price == pp && date == origDate && note == origNote;
+      (origQty != null && qty == origQty) && unit == origUnit && price == pp && date == origDate && note == origNote &&
+      ((origCountQty == null || origCountQty <= 0) ? countQty == null : (countQty != null && countQty == origCountQty));
   if (unchanged) return null;
 
   try {
@@ -172,6 +187,7 @@ Future<Map<String, dynamic>?> editPurchaseLine(
       await Api.instance.patch('/purchases/items/$itemId', {
         'quantity': qty,
         'unit': unit,
+        'count_qty': countQty,
         'purchase_price': price,
         'happened_at': date,
         'note': note,
@@ -189,6 +205,7 @@ Future<Map<String, dynamic>?> editPurchaseLine(
       if ('${it['id']}' == itemId) {
         itMap['quantity'] = qty;
         itMap['unit'] = unit;
+        itMap['count_qty'] = countQty;
         itMap['purchase_price'] = price;
         itMap['amount'] = (qty * price * 100).round() / 100;
         itMap['happened_at'] = date;

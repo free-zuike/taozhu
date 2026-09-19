@@ -384,10 +384,10 @@ class _StocksPageState extends State<StocksPage> {
                                 ),
                               ),
                               title: Text('${s['item_name']}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                              subtitle: Text('单位 ${s['unit']} · 阈值 ${s['min_stock']}',
+                              subtitle: Text('还剩 ${s['quantity']} ${s['unit']} · 阈值 ${s['min_stock']} ${s['unit']}',
                                   style: TextStyle(fontSize: 12, color: _c.textSub)),
                               trailing: Text(
-                                '${s['quantity']}',
+                                '${s['quantity']} ${s['unit']}',
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w700,

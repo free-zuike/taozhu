@@ -32,8 +32,9 @@ class _ItemOption {
   final String id;
   final String name;
   final String category;
+  final String countUnit; // 商品计数单位（袋/个…，空=不折）
   final List<Map<String, dynamic>> prices;
-  _ItemOption(this.id, this.name, this.category, this.prices);
+  _ItemOption(this.id, this.name, this.category, this.prices, {this.countUnit = ''});
 }
 
 class _Row {
@@ -48,6 +49,8 @@ class _Row {
   String origSaleId = '';
   /// 行原备注（直编/编辑保存时保留，避免 payload 缺 note 清空服务端行备注）
   String note = '';
+  /// 本单折合计数数量（如卖 3 斤木瓜按个备货→填 2 个；空=不折按原单位。仅当商品配计数单位时生效）
+  double? countQty;
   /// 保存时构建的商品行 payload（去单据化：逐行入队 sale_item 用）
   Map<String, dynamic>? itemsPayload;
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
@@ -55,6 +58,7 @@ class _Row {
   final unitCtrl = TextEditingController();
   final qtyCtrl = TextEditingController();
   final saleCtrl = TextEditingController();
+  final countCtrl = TextEditingController(); // 折合计数（可选）
 }
 
 class _SalePageState extends State<SalePage> {
@@ -104,6 +108,7 @@ class _SalePageState extends State<SalePage> {
       r.unitCtrl.dispose();
       r.qtyCtrl.dispose();
       r.saleCtrl.dispose();
+      r.countCtrl.dispose();
     }
     super.dispose();
   }
@@ -136,6 +141,7 @@ class _SalePageState extends State<SalePage> {
                   e['name'] as String,
                   '${e['category'] ?? ''}',
                   ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
+                  countUnit: '${e['count_unit'] ?? ''}',
                 ))
             .toList()
           ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
@@ -169,6 +175,7 @@ class _SalePageState extends State<SalePage> {
               '${e['name'] ?? ''}',
               '${e['category'] ?? ''}',
               ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
+              countUnit: '${e['count_unit'] ?? ''}',
             ))
         .toList()
       ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
@@ -186,6 +193,14 @@ class _SalePageState extends State<SalePage> {
     // 编辑模式：商品目录就绪后预填原单据明细（本地库优先，离线也能回显）
     if (_editing) await _loadEdit();
         else if (widget.dateRows != null) await _loadDateRows();
+  }
+
+  /// 折合计数（未手填时按价格行规格 per 自动算：数量×per；无 per=按原数量）
+  double _autoCount(_Row row) {
+    final opt = row.itemId == null ? null : _items.where((x) => x.id == row.itemId).firstOrNull;
+    final price = opt?.prices.where((p) => p['id'] == row.priceId).firstOrNull;
+    final per = (price?['per'] as num?)?.toDouble() ?? 0;
+    return per > 0 ? (row.quantity * per * 100).round() / 100 : row.quantity;
   }
 
   /// 商品在本地频率表中的最大使用次数（按价格组合取峰值，0=无记录）
@@ -261,7 +276,11 @@ class _SalePageState extends State<SalePage> {
           ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
-          ..saleCtrl.text = sp.toString());
+          ..saleCtrl.text = sp.toString()
+          ..countQty = (double.tryParse('${it['count_qty'] ?? ''}') ?? 0) > 0 ? double.tryParse('${it['count_qty'] ?? ''}') : null);
+        if ((it['count_qty'] as num?)?.toDouble() != null && ((it['count_qty'] as num?)?.toDouble() ?? 0) > 0) {
+          _rows.last.countCtrl.text = '${it['count_qty']}';
+        }
         _rowSaleId['${it['id'] ?? ''}'] = _saleId;
       }
       if (_rows.isEmpty) _rows.add(_newRow());
@@ -323,7 +342,11 @@ class _SalePageState extends State<SalePage> {
           ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
-          ..saleCtrl.text = sp.toString());
+          ..saleCtrl.text = sp.toString()
+          ..countQty = (double.tryParse('${it['count_qty'] ?? ''}') ?? 0) > 0 ? double.tryParse('${it['count_qty'] ?? ''}') : null);
+        if ((it['count_qty'] as num?)?.toDouble() != null && ((it['count_qty'] as num?)?.toDouble() ?? 0) > 0) {
+          _rows.last.countCtrl.text = '${it['count_qty']}';
+        }
       }
       if (_rows.isEmpty) _rows.add(_newRow());
       if (skipped > 0) toast(context, '该日 $skipped 条商品已删除或价格停用，保存后将移除');
@@ -753,6 +776,7 @@ class _SalePageState extends State<SalePage> {
         'item_name': opt?.name ?? r.nameCtrl.text.trim(),
         'unit': r.unitCtrl.text.trim(),
         'quantity': r.quantity,
+        'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
         'sale_price': r.salePrice,
         'cost_price': price?['purchase_price'] ?? 0,
         'amount': amount,
@@ -781,6 +805,7 @@ class _SalePageState extends State<SalePage> {
             'id': r.rowId, // 保留原行 id（服务端重建明细时不换新 id，行级附件不孤儿化）
             'price_id': r.priceId,
             'quantity': r.quantity,
+            'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
             'sale_price': r.salePrice,
             'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
             'note': r.note,
@@ -1289,6 +1314,23 @@ class _SalePageState extends State<SalePage> {
               ),
             ],
           ),
+          // 折合计数输入（进销单位换算通用字段）：商品配了计数单位（袋/个…）且与当前单位不同时显示。
+          // 填"本单折合几个计数单位"（卖 3 斤木瓜按个备货 → 填 2 个），库存/备货按它累计——备货页显示"还剩几个"。
+          if (item != null && item.countUnit.isNotEmpty && item.countUnit != row.unitCtrl.text.trim())
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: TextField(
+                controller: row.countCtrl,
+                style: txtStyle,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: _fieldDec(
+                    label: '折合 ${item.countUnit} 数（本单相当于 ${row.countCtrl.text.trim().isEmpty ? _autoCount(row) : row.countCtrl.text.trim()} ${item.countUnit}；可改）'),
+                onChanged: (v) {
+                  row.countQty = double.tryParse(v);
+                  setState(() {});
+                },
+              ),
+            ),
         ],
       ),
     ));

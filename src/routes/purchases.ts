@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
-import { stockDelta } from '../lib/stock';
+import { stockDelta, stockDeltaFor } from '../lib/stock';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
 import { recordAudit } from './audit';
@@ -20,6 +20,7 @@ interface PurchaseItemInput {
   id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
   price_id: string;
   quantity: number;
+  count_qty?: number;        // 本单折合计数数量（金针菇进1箱填40袋→库存按袋+40；缺省=quantity 按原单位）
   purchase_price?: number;   // 可覆盖默认进价
   happened_at?: string;      // 行独立日期（缺省用单据日期）
   note?: string;             // 行级备注（缺省空）
@@ -51,8 +52,9 @@ purchasesRouter.post('/', async (c) => {
   if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
   const placeholders = priceIds.map(() => '?').join(',');
   const priceRows = await c.env.DB.prepare(
-    `SELECT id, item_id, unit, purchase_price FROM item_prices WHERE id IN (${placeholders})`,
-  ).bind(...priceIds).all<{ id: string; item_id: string; unit: string; purchase_price: number }>();
+    `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.per, i.count_unit
+     FROM item_prices p LEFT JOIN items i ON i.id = p.item_id WHERE p.id IN (${placeholders})`,
+  ).bind(...priceIds).all<{ id: string; item_id: string; unit: string; purchase_price: number; per?: number | null; count_unit?: string | null }>();
 
   const priceMap = new Map(priceRows.results.map((p) => [p.id, p]));
   const purchaseId = randomId();
@@ -73,14 +75,20 @@ purchasesRouter.post('/', async (c) => {
     const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
     const amount = Math.round(qty * effective * 100) / 100;
     total += amount;
+    // 折合计数数量：记单时显式填（count_qty）> 价格行规格 per（quantity×per）> 缺省 quantity（按原单位）
+    const countQty = Number(item.count_qty);
+    const per = Number(price.per ?? 0);
+    const effCount = Number.isFinite(countQty) && countQty > 0
+      ? countQty
+      : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).bind(randomId(), purchaseId, price.item_id, price.unit, qty, effective, amount,
+        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).bind(randomId(), purchaseId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount,
         item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null),
     );
-    // 进货增加库存
-    batch.push(stockDelta(c.env.DB, price.item_id, price.unit, qty));
+    // 进货增加库存（进销单位换算：折合过则按计数单位累计，否则按原单位）
+    batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
   }
 
   await c.env.DB.batch(batch);
@@ -205,16 +213,18 @@ purchasesRouter.post('/items/date', async (c) => {
 purchasesRouter.patch('/items/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => null) as {
-    quantity?: number; unit?: string; purchase_price?: number; happened_at?: string; note?: string;
+    quantity?: number; unit?: string; purchase_price?: number; happened_at?: string; note?: string; count_qty?: number;
   } | null;
   const row = await c.env.DB.prepare(
-    'SELECT id, purchase_id, item_id, unit, quantity, purchase_price, happened_at, note FROM purchase_items WHERE id = ?',
-  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number; purchase_price: number; happened_at: string | null; note: string | null }>();
+    `SELECT pi.id, pi.purchase_id, pi.item_id, pi.unit, pi.quantity, pi.count_qty, pi.purchase_price, pi.happened_at, pi.note, i.count_unit
+     FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.id = ?`,
+  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; purchase_price: number; happened_at: string | null; note: string | null; count_unit?: string | null }>();
   if (!row) return c.json({ error: '明细行不存在' }, 404);
 
   const qty = body?.quantity !== undefined ? Number(body.quantity) : row.quantity;
   if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
   const unit = body?.unit?.trim() || row.unit;
+  const countQty = body?.count_qty !== undefined ? Number(body.count_qty) : Number(row.count_qty ?? 0);
   const pp = body?.purchase_price !== undefined ? Number(body.purchase_price) : row.purchase_price;
   const purchasePrice = Number.isFinite(pp) && pp > 0 ? pp : row.purchase_price;
   const happenedAt = body?.happened_at?.trim() || row.happened_at || '';
@@ -223,11 +233,11 @@ purchasesRouter.patch('/items/:id', async (c) => {
 
   const amount = Math.round(qty * purchasePrice * 100) / 100;
   const batch: D1PreparedStatement[] = [
-    stockDelta(c.env.DB, row.item_id, row.unit, -row.quantity), // 进货增加恢复（旧值）
-    stockDelta(c.env.DB, row.item_id, unit, qty),               // 按新值重新增加（不变时净零）
+    stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1), // 回滚旧值
+    stockDeltaFor(c.env.DB, { item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, count_unit: row.count_unit }, 1),  // 按新值增加
     c.env.DB.prepare(
-      'UPDATE purchase_items SET quantity = ?, unit = ?, purchase_price = ?, amount = ?, happened_at = ?, note = ? WHERE id = ?',
-    ).bind(qty, unit, purchasePrice, amount, happenedAt || null, note, id),
+      'UPDATE purchase_items SET quantity = ?, unit = ?, count_qty = ?, purchase_price = ?, amount = ?, happened_at = ?, note = ? WHERE id = ?',
+    ).bind(qty, unit, countQty > 0 ? countQty : null, purchasePrice, amount, happenedAt || null, note, id),
   ];
   await c.env.DB.batch(batch);
   // 无头表：组装时 happened_at=明细行最大日期，无需再同步 head
@@ -235,9 +245,9 @@ purchasesRouter.patch('/items/:id', async (c) => {
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: purchaseId, payload: await buildPayload(c.env.DB, 'purchase', purchaseId), updated_by_username: c.get('user').username });
   await recordAudit(c.env.DB, {
     username: c.get('user').username, action: 'update', entity_type: 'purchase_item', entity_id: id,
-    detail: `修改进货商品行：${happenedAt ? `日期 ${happenedAt}` : ''} 数量 ${qty}${unit}${body?.purchase_price !== undefined ? ` 进价 ${purchasePrice}` : ''}`,
+    detail: `修改进货商品行：${happenedAt ? `日期 ${happenedAt}` : ''} 数量 ${qty}${unit}${countQty > 0 ? ` ${countQty}${row.count_unit ?? '计'}` : ''}${body?.purchase_price !== undefined ? ` 进价 ${purchasePrice}` : ''}`,
   });
-  return c.json({ id, purchase_id: purchaseId, item_id: row.item_id, unit, quantity: qty, purchase_price: purchasePrice, amount, happened_at: happenedAt || null });
+  return c.json({ id, purchase_id: purchaseId, item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, purchase_price: purchasePrice, amount, happened_at: happenedAt || null });
 });
 
 // PATCH /purchases/:id — 编辑进货记录（改日期/备注；传 items 则整体替换明细，原子事务）
@@ -264,17 +274,19 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
     if (!Array.isArray(items) || items.length === 0) return c.json({ error: '请至少添加一种商品' }, 400);
     // 编辑替换明细：先回滚原明细库存（进货加的减回），再按新明细增加
     const oldItems = await c.env.DB.prepare(
-      'SELECT item_id, unit, quantity FROM purchase_items WHERE purchase_id = ?').bind(id)
-      .all<{ item_id: string; unit: string; quantity: number }>();
+      `SELECT pi.item_id, pi.unit, pi.quantity, pi.count_qty, i.count_unit
+       FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`).bind(id)
+      .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
     for (const it of oldItems.results) {
-      batch.push(stockDelta(c.env.DB, it.item_id, it.unit, -it.quantity));
+      batch.push(stockDeltaFor(c.env.DB, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1));
     }
     const priceIds = items.map((i) => i.price_id);
     if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
     const placeholders = priceIds.map(() => '?').join(',');
     const priceRows = await c.env.DB.prepare(
-      `SELECT id, item_id, unit, purchase_price FROM item_prices WHERE id IN (${placeholders})`,
-    ).bind(...priceIds).all<{ id: string; item_id: string; unit: string; purchase_price: number }>();
+      `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.per, i.count_unit
+       FROM item_prices p LEFT JOIN items i ON i.id = p.item_id WHERE p.id IN (${placeholders})`,
+    ).bind(...priceIds).all<{ id: string; item_id: string; unit: string; purchase_price: number; per?: number | null; count_unit?: string | null }>();
     const priceMap = new Map(priceRows.results.map((p) => [p.id, p]));
     total = 0;
     for (const item of items) {
@@ -294,14 +306,18 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       const priceIn = Number(item.purchase_price);
       const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
       const amount = Math.round(qty * effective * 100) / 100;
+      // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity
+      const countQty = Number(item.count_qty);
+      const per = Number(price.per ?? 0);
+      const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(item.id ?? randomId(), id, price.item_id, price.unit, qty, effective, amount,
+          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).bind(item.id ?? randomId(), id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount,
           item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id),
       );
-      // 按新明细增加库存
-      batch.push(stockDelta(c.env.DB, price.item_id, price.unit, qty));
+      // 按新明细增加库存（进销单位换算：折合过则按计数单位累计）
+      batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
     }
   } else {
     const tot = await c.env.DB.prepare('SELECT COALESCE(SUM(amount),0) AS total FROM purchase_items WHERE purchase_id = ?').bind(id).first<{ total: number }>();
@@ -320,12 +336,13 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
 purchasesRouter.delete('/items/:id', async (c) => {
   const id = c.req.param('id');
   const row = await c.env.DB.prepare(
-    'SELECT id, purchase_id, item_id, unit, quantity FROM purchase_items WHERE id = ?',
-  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number }>();
+    `SELECT pi.id, pi.purchase_id, pi.item_id, pi.unit, pi.quantity, pi.count_qty, i.count_unit
+     FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.id = ?`,
+  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
   if (!row) return c.json({ error: '明细行不存在' }, 404);
   const purchaseId = row.purchase_id;
   const batch: D1PreparedStatement[] = [
-    stockDelta(c.env.DB, row.item_id, row.unit, -row.quantity), // 进货增加恢复
+    stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1), // 进货增加恢复
     c.env.DB.prepare('DELETE FROM purchase_items WHERE id = ?').bind(id),
   ];
   await c.env.DB.batch(batch);
@@ -352,8 +369,9 @@ purchasesRouter.delete('/items/:id', async (c) => {
 purchasesRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   const oldItems = await c.env.DB.prepare(
-    'SELECT item_id, unit, quantity FROM purchase_items WHERE purchase_id = ?').bind(id)
-    .all<{ item_id: string; unit: string; quantity: number }>();
+    `SELECT pi.item_id, pi.unit, pi.quantity, pi.count_qty, i.count_unit
+     FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`).bind(id)
+    .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
   // 行级凭证附件：删行前拿行 id 清理（行级附件按 purchase_item/{lineId}/ 存储）
   try {
     const lineRows = await c.env.DB.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
@@ -363,7 +381,7 @@ purchasesRouter.delete('/:id', adminOnly(), async (c) => {
     }
   } catch (_) {}
   const batch: D1PreparedStatement[] = oldItems.results
-    .map((it) => stockDelta(c.env.DB, it.item_id, it.unit, -it.quantity)); // 进货加的减回
+    .map((it) => stockDeltaFor(c.env.DB, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1)); // 进货加的减回
   batch.push(c.env.DB.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });

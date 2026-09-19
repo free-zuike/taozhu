@@ -28,6 +28,7 @@ function serialize(item: ItemRow & { category?: string | null; category_name?: s
     category: item.category ?? '',
     category_id: item.category_id ?? '',
     category_name: item.category_name ?? '',
+    count_unit: item.count_unit ?? '',
     prices: list,
   };
 }
@@ -56,8 +57,8 @@ itemsRouter.get('/', async (c) => {
 itemsRouter.get('/summary', async (c) => {
   const canSeeCost = c.get('user').role === 'admin';
   const rows = await c.env.DB.prepare(
-    `SELECT i.id, i.name, i.category,
-            (SELECT json_group_array(json_object('id', p.id, 'unit', p.unit, 'sale_price', p.sale_price, 'purchase_price', p.purchase_price,
+    `SELECT i.id, i.name, i.category, i.count_unit,
+            (SELECT json_group_array(json_object('id', p.id, 'unit', p.unit, 'sale_price', p.sale_price, 'purchase_price', p.purchase_price, 'per', p.per,
               'stock', COALESCE((SELECT CASE WHEN st.quantity < 0 THEN 0 ELSE st.quantity END FROM stocks st WHERE st.item_id = i.id AND st.unit = p.unit), 0)))
              FROM item_prices p WHERE p.item_id = i.id AND p.active = 1) AS prices
      FROM items i WHERE i.deleted_at IS NULL ORDER BY i.name`).all();
@@ -65,7 +66,7 @@ itemsRouter.get('/summary', async (c) => {
     const pr = (r as { prices: string | null }).prices;
     const list = pr ? (JSON.parse(pr) as Record<string, unknown>[]) : [];
     return {
-      id: r.id, name: r.name, category: r.category ?? '',
+      id: r.id, name: r.name, category: r.category ?? '', count_unit: (r as { count_unit: string | null }).count_unit ?? '',
       prices: canSeeCost ? list : list.map((p) => ({ ...p, purchase_price: 0 })),
     };
   });
@@ -85,11 +86,11 @@ itemsRouter.get('/:id', async (c) => {
   return c.json({ item: serialize(row as never, prices.results, canSeeCost) });
 });
 
-// POST /items — 新建商品（body: {name, category?, category_id?, prices:[{unit,purchase_price,sale_price}]}）
+// POST /items — 新建商品（body: {name, category?, category_id?, count_unit?, prices:[{unit,purchase_price,sale_price,per?}]}）
 itemsRouter.post('/', adminOnly(), async (c) => {
   const body = await c.req.json().catch(() => null) as {
-    name?: string; category?: string; category_id?: string;
-    prices?: Array<{ unit: string; purchase_price: number; sale_price: number }>;
+    name?: string; category?: string; category_id?: string; count_unit?: string;
+    prices?: Array<{ unit: string; purchase_price: number; sale_price: number; per?: number }>;
   } | null;
   const name = body?.name?.trim();
   if (!name) return c.json({ error: '商品名称必填' }, 400);
@@ -98,26 +99,27 @@ itemsRouter.post('/', adminOnly(), async (c) => {
     if (!cat) return c.json({ error: '商品分类不存在' }, 400);
   }
   const id = randomId();
-  await c.env.DB.prepare('INSERT INTO items (id, name, category, category_id) VALUES (?, ?, ?, ?)')
-    .bind(id, name, body?.category?.trim() ?? '', body?.category_id ?? null).run();
+  await c.env.DB.prepare('INSERT INTO items (id, name, category, category_id, count_unit) VALUES (?, ?, ?, ?, ?)')
+    .bind(id, name, body?.category?.trim() ?? '', body?.category_id ?? null, body?.count_unit?.trim() ?? '').run();
   const priceIds: string[] = [];
   for (const p of body?.prices ?? []) {
     const unit = p.unit?.trim();
     if (!unit) continue;
     const pid = randomId();
+    const per = Number(p.per);
     await c.env.DB.prepare(
-      'INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price) VALUES (?, ?, ?, ?, ?)')
-      .bind(pid, id, unit, Number(p.purchase_price) || 0, Number(p.sale_price) || 0).run();
+      'INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price, per) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(pid, id, unit, Number(p.purchase_price) || 0, Number(p.sale_price) || 0, per > 0 ? per : null).run();
     priceIds.push(pid);
   }
   await noteItemChange(c.env.DB, id, c.get('user').username);
-  return c.json({ id, name, category: body?.category?.trim() ?? '', category_id: body?.category_id ?? '', prices: priceIds }, 201);
+  return c.json({ id, name, category: body?.category?.trim() ?? '', category_id: body?.category_id ?? '', count_unit: body?.count_unit?.trim() ?? '', prices: priceIds }, 201);
 });
 
-// PATCH /items/:id — 改名称/分类
+// PATCH /items/:id — 改名称/分类/计数单位
 itemsRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json().catch(() => null) as { name?: string; category?: string; category_id?: string | null } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; category?: string; category_id?: string | null; count_unit?: string } | null;
   const item = await c.env.DB.prepare('SELECT * FROM items WHERE id = ? AND deleted_at IS NULL').bind(id).first<ItemRow>();
   if (!item) return c.json({ error: '商品不存在' }, 404);
   if (body?.category_id) {
@@ -125,15 +127,16 @@ itemsRouter.patch('/:id', adminOnly(), async (c) => {
     if (!cat) return c.json({ error: '商品分类不存在' }, 400);
   }
   const name = body?.name?.trim();
-  await c.env.DB.prepare('UPDATE items SET name = ?, category = ?, category_id = ? WHERE id = ?')
+  await c.env.DB.prepare('UPDATE items SET name = ?, category = ?, category_id = ?, count_unit = ? WHERE id = ?')
     .bind(
       name || item.name,
       body?.category?.trim() ?? item.category ?? '',
       body?.category_id !== undefined ? body.category_id : item.category_id,
+      body?.count_unit !== undefined ? body.count_unit.trim() : item.count_unit ?? '',
       id,
     ).run();
   await noteItemChange(c.env.DB, id, c.get('user').username);
-  return c.json({ id, name: name || item.name, category: body?.category?.trim() ?? item.category ?? '' });
+  return c.json({ id, name: name || item.name, category: body?.category?.trim() ?? item.category ?? '', count_unit: body?.count_unit !== undefined ? body.count_unit.trim() : item.count_unit ?? '' });
 });
 
 // DELETE /items/:id — 软删
@@ -146,33 +149,36 @@ itemsRouter.delete('/:id', adminOnly(), async (c) => {
   return c.body(null, 204);
 });
 
-// POST /items/:id/prices — 新增单位+双价
+// POST /items/:id/prices — 新增单位+双价（per：该单位 1 单位折合计数单位数，如 1 箱=40 袋；空=不折）
 itemsRouter.post('/:id/prices', adminOnly(), async (c) => {
   const itemId = c.req.param('id');
-  const body = await c.req.json().catch(() => null) as { unit?: string; purchase_price?: number; sale_price?: number } | null;
+  const body = await c.req.json().catch(() => null) as { unit?: string; purchase_price?: number; sale_price?: number; per?: number } | null;
   const unit = body?.unit?.trim();
   if (!unit) return c.json({ error: '单位必填' }, 400);
   const id = randomId();
+  const per = Number(body?.per);
   await c.env.DB.prepare(
-    'INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price) VALUES (?, ?, ?, ?, ?)')
-    .bind(id, itemId, unit, Number(body?.purchase_price) || 0, Number(body?.sale_price) || 0).run();
+    'INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price, per) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(id, itemId, unit, Number(body?.purchase_price) || 0, Number(body?.sale_price) || 0, per > 0 ? per : null).run();
   await noteItemChange(c.env.DB, itemId, c.get('user').username);
-  return c.json({ id, item_id: itemId, unit, purchase_price: Number(body?.purchase_price) || 0, sale_price: Number(body?.sale_price) || 0 }, 201);
+  return c.json({ id, item_id: itemId, unit, purchase_price: Number(body?.purchase_price) || 0, sale_price: Number(body?.sale_price) || 0, per: per > 0 ? per : null }, 201);
 });
 
-// PATCH /item-prices/:id — 改价
+// PATCH /item-prices/:id — 改价/改折合数
 itemsRouter.patch('/item-prices/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json().catch(() => null) as { unit?: string; purchase_price?: number; sale_price?: number; active?: number } | null;
+  const body = await c.req.json().catch(() => null) as { unit?: string; purchase_price?: number; sale_price?: number; active?: number; per?: number | null } | null;
   const price = await c.env.DB.prepare('SELECT * FROM item_prices WHERE id = ?').bind(id).first();
   if (!price) return c.json({ error: '价格不存在' }, 404);
+  const per = body?.per !== undefined ? (Number(body.per) > 0 ? Number(body.per) : null) : (price as { per: number | null }).per ?? null;
   await c.env.DB.prepare(
-    'UPDATE item_prices SET unit = ?, purchase_price = ?, sale_price = ?, active = ? WHERE id = ?')
+    'UPDATE item_prices SET unit = ?, purchase_price = ?, sale_price = ?, active = ?, per = ? WHERE id = ?')
     .bind(
       body?.unit?.trim() ?? (price as { unit: string }).unit,
       body?.purchase_price !== undefined ? Number(body.purchase_price) : (price as { purchase_price: number }).purchase_price,
       body?.sale_price !== undefined ? Number(body.sale_price) : (price as { sale_price: number }).sale_price,
       body?.active !== undefined ? Number(body.active) : 1,
+      per,
       id,
     ).run();
   await noteItemChange(c.env.DB, (price as { item_id: string }).item_id, c.get('user').username);

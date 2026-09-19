@@ -4,7 +4,7 @@
  *  - payload 为实体完整快照（admin 视角，pull 时按角色打码敏感价）；push 时服务端应用到业务表。
  *  - 单据（sale/purchase）upsert/delete 复用与在线路由一致的库存联动（stockDelta 进 batch）。
  */
-import { stockDelta } from './stock';
+import { stockDelta, stockDeltaFor } from './stock';
 import { randomId } from './password';
 import { notifyClients } from '../services/sync-hub';
 import { createStorage } from '../services/storage';
@@ -140,7 +140,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       return {
         id: r.id, sale_id: r.sale_id, client_id: r.client_id ?? '', item_id: r.item_id,
         item_name: r.item_name, item_category: r.item_category ?? '', unit: r.unit ?? '',
-        quantity: r.quantity ?? 0, sale_price: r.sale_price ?? 0, cost_price: r.cost_price ?? 0,
+        quantity: r.quantity ?? 0, count_qty: r.count_qty ?? null, sale_price: r.sale_price ?? 0, cost_price: r.cost_price ?? 0,
         amount: r.amount ?? 0, happened_at: r.happened_at ?? '', note: r.note ?? '',
         attachments: refs.results.map((x) => x.file_key),
       };
@@ -157,7 +157,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       return {
         id: r.id, purchase_id: r.purchase_id, item_id: r.item_id,
         item_name: r.item_name, item_category: r.item_category ?? '', unit: r.unit ?? '',
-        quantity: r.quantity ?? 0, purchase_price: r.purchase_price ?? 0,
+        quantity: r.quantity ?? 0, count_qty: r.count_qty ?? null, purchase_price: r.purchase_price ?? 0,
         amount: r.amount ?? 0, happened_at: r.happened_at ?? '', note: r.note ?? '',
         attachments: refs.results.map((x) => x.file_key),
       };
@@ -215,9 +215,11 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
   }
   // 去单据化：无 sales 头表（已物理删除），行即主记录，头字段由行聚合派生
   // 已有旧明细：回滚其库存（出货扣减恢复），再整体替换
-  const old = await db.prepare('SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)
-    .all<{ item_id: string; unit: string; quantity: number }>();
-  const batch: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, it.quantity));
+  const old = await db.prepare(
+    `SELECT si.item_id, si.unit, si.quantity, si.count_qty, i.count_unit
+     FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`).bind(id)
+    .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
+  const batch: D1PreparedStatement[] = old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1));
   batch.push(db.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
   for (const it of ((p.items as Record<string, any>[]) ?? [])) {
     const qty = Number(it.quantity) || 0;
@@ -226,12 +228,14 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
     if (qty <= 0 || itemId === '') continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.sale_price) || 0) * 100) / 100;
     const clientId = String(it.client_id ?? p.client_id ?? '');
+    const countQty = Number(it.count_qty);
+    const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : qty;
     batch.push(db.prepare(
-      'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(it.id ?? randomId(), id, clientId, itemId, it.unit ?? '', qty,
+      'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(it.id ?? randomId(), id, clientId, itemId, it.unit ?? '', qty, effCount === qty ? null : effCount,
       Number(it.sale_price) || 0, Number(it.cost_price) || 0, Math.round(amount * 100) / 100,
       it.happened_at || p.happened_at || null, it.note ?? ''));
-    batch.push(stockDelta(db, itemId, it.unit ?? '', -qty));
+    batch.push(stockDeltaFor(db, { item_id: itemId, unit: it.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: it.count_unit ?? null }, -1));
   }
   await db.batch(batch);
 }
@@ -243,9 +247,11 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
     throw new Error('进货单明细缺失（items 为空），保留服务器原明细');
   }
   // 去单据化：无 purchases 头表（已物理删除），行即主记录，头字段由行聚合派生
-  const old = await db.prepare('SELECT item_id, unit, quantity FROM purchase_items WHERE purchase_id = ?').bind(id)
-    .all<{ item_id: string; unit: string; quantity: number }>();
-  const batch: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, -it.quantity));
+  const old = await db.prepare(
+    `SELECT pi.item_id, pi.unit, pi.quantity, pi.count_qty, i.count_unit
+     FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`).bind(id)
+    .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
+  const batch: D1PreparedStatement[] = old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1));
   batch.push(db.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
   for (const it of ((p.items as Record<string, any>[]) ?? [])) {
     const qty = Number(it.quantity) || 0;
@@ -253,12 +259,14 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
     // 行级校验：数量 ≤0 或 item_id 为空（客户端坏行/脏数据）→ 跳过不插入，防 JOIN items 失败产出"无明细/未分类/价0"脏行
     if (qty <= 0 || itemId === '') continue;
     const amount = Number(it.amount) || Math.round(qty * (Number(it.purchase_price) || 0) * 100) / 100;
+    const countQty = Number(it.count_qty);
+    const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : qty;
     batch.push(db.prepare(
-      'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(it.id ?? randomId(), id, itemId, it.unit ?? '', qty,
+      'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(it.id ?? randomId(), id, itemId, it.unit ?? '', qty, effCount === qty ? null : effCount,
       Number(it.purchase_price) || 0, Math.round(amount * 100) / 100,
       it.happened_at || p.happened_at || null, it.note ?? ''));
-    batch.push(stockDelta(db, itemId, it.unit ?? '', qty));
+    batch.push(stockDeltaFor(db, { item_id: itemId, unit: it.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: it.count_unit ?? null }, 1));
   }
   await db.batch(batch);
 }
@@ -378,11 +386,13 @@ export async function applyChange(
       case 'sale_item': {
         // 行级出货记录（去单据化）：upsert 单行商品；delete 删行并级联清单据（防空壳）
         if (action === 'delete') {
-          const row = await db.prepare('SELECT sale_id, item_id, unit, quantity FROM sale_items WHERE id = ?').bind(id)
-            .first<{ sale_id: string; item_id: string; unit: string; quantity: number }>();
+          const row = await db.prepare(
+            `SELECT si.sale_id, si.item_id, si.unit, si.quantity, si.count_qty, i.count_unit
+             FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.id = ?`,
+          ).bind(id).first<{ sale_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
           if (row) {
             await db.batch([
-              stockDelta(db, row.item_id, row.unit, row.quantity),
+              stockDeltaFor(db, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, 1),
               db.prepare('DELETE FROM sale_items WHERE id = ?').bind(id),
             ]);
             const remain = await db.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE sale_id = ?').bind(row.sale_id).first<{ n: number }>();
@@ -400,24 +410,27 @@ export async function applyChange(
         if (qty <= 0 || itemId === '') return { ok: false, error: '出货商品缺数量或商品' };
         const saleId = String(p.sale_id ?? '');
         const amount = Number(p.amount) || Math.round(qty * (Number(p.sale_price) || 0) * 100) / 100;
+        const countQty = Number(p.count_qty);
+        const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : qty;
         // 库存联动：出货扣减（行级 upsert——App 主同步路径；旧行存在=修改，先恢复旧卖出量再按新扣）
         const oldRow = await db.prepare(
-          'SELECT item_id, unit, quantity FROM sale_items WHERE id = ?',
-        ).bind(id).first<{ item_id: string; unit: string; quantity: number }>();
+          `SELECT si.item_id, si.unit, si.quantity, si.count_qty, i.count_unit
+           FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.id = ?`,
+        ).bind(id).first<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
         const isNew = oldRow == null;
         const stock = oldRow
           ? [
-              stockDelta(db, oldRow.item_id, oldRow.unit, oldRow.quantity),
-              stockDelta(db, itemId, p.unit ?? '', -qty),
+              stockDeltaFor(db, { item_id: oldRow.item_id, unit: oldRow.unit, quantity: oldRow.quantity, count_qty: oldRow.count_qty, count_unit: oldRow.count_unit }, 1),
+              stockDeltaFor(db, { item_id: itemId, unit: p.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: oldRow.count_unit ?? null }, -1),
             ]
-          : [stockDelta(db, itemId, p.unit ?? '', -qty)];
+          : [stockDeltaFor(db, { item_id: itemId, unit: p.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: p.count_unit ?? null }, -1)];
         await db.batch([
           db.prepare(
-            `INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, client_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, client_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET sale_id = excluded.sale_id, item_id = excluded.item_id, unit = excluded.unit,
-               quantity = excluded.quantity, sale_price = excluded.sale_price, cost_price = excluded.cost_price,
+               quantity = excluded.quantity, count_qty = excluded.count_qty, sale_price = excluded.sale_price, cost_price = excluded.cost_price,
                amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note, client_id = excluded.client_id`,
-          ).bind(id, saleId, itemId, p.unit ?? '', qty,
+          ).bind(id, saleId, itemId, p.unit ?? '', qty, effCount === qty ? null : effCount,
             Number(p.sale_price) || 0, Number(p.cost_price) || 0, Math.round(amount * 100) / 100,
             p.happened_at || null, p.note ?? '', p.client_id ?? ''),
           ...stock,
@@ -440,11 +453,13 @@ export async function applyChange(
       }
       case 'purchase_item': {
         if (action === 'delete') {
-          const row = await db.prepare('SELECT purchase_id, item_id, unit, quantity FROM purchase_items WHERE id = ?').bind(id)
-            .first<{ purchase_id: string; item_id: string; unit: string; quantity: number }>();
+          const row = await db.prepare(
+            `SELECT pi.purchase_id, pi.item_id, pi.unit, pi.quantity, pi.count_qty, i.count_unit
+             FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.id = ?`,
+          ).bind(id).first<{ purchase_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
           if (row) {
             await db.batch([
-              stockDelta(db, row.item_id, row.unit, -row.quantity),
+              stockDeltaFor(db, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1),
               db.prepare('DELETE FROM purchase_items WHERE id = ?').bind(id),
             ]);
             const remain = await db.prepare('SELECT COUNT(*) AS n FROM purchase_items WHERE purchase_id = ?').bind(row.purchase_id).first<{ n: number }>();
@@ -461,24 +476,27 @@ export async function applyChange(
         if (qty2 <= 0 || itemId2 === '') return { ok: false, error: '进货商品缺数量或商品' };
         const purchaseId = String(p.purchase_id ?? '');
         const amount2 = Number(p.amount) || Math.round(qty2 * (Number(p.purchase_price) || 0) * 100) / 100;
+        const countQty2 = Number(p.count_qty);
+        const effCount2 = Number.isFinite(countQty2) && countQty2 > 0 ? countQty2 : qty2;
         // 库存联动：进货增加（行级 upsert——App 主同步路径；旧行存在=修改，先恢复旧进货量再按新加）
         const oldRow2 = await db.prepare(
-          'SELECT item_id, unit, quantity FROM purchase_items WHERE id = ?',
-        ).bind(id).first<{ item_id: string; unit: string; quantity: number }>();
+          `SELECT pi.item_id, pi.unit, pi.quantity, pi.count_qty, i.count_unit
+           FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.id = ?`,
+        ).bind(id).first<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
         const isNew2 = oldRow2 == null;
         const stock2 = oldRow2
           ? [
-              stockDelta(db, oldRow2.item_id, oldRow2.unit, -oldRow2.quantity),
-              stockDelta(db, itemId2, p.unit ?? '', qty2),
+              stockDeltaFor(db, { item_id: oldRow2.item_id, unit: oldRow2.unit, quantity: oldRow2.quantity, count_qty: oldRow2.count_qty, count_unit: oldRow2.count_unit }, -1),
+              stockDeltaFor(db, { item_id: itemId2, unit: p.unit ?? '', quantity: qty2, count_qty: effCount2 === qty2 ? null : effCount2, count_unit: oldRow2.count_unit ?? null }, 1),
             ]
-          : [stockDelta(db, itemId2, p.unit ?? '', qty2)];
+          : [stockDeltaFor(db, { item_id: itemId2, unit: p.unit ?? '', quantity: qty2, count_qty: effCount2 === qty2 ? null : effCount2, count_unit: p.count_unit ?? null }, 1)];
         await db.batch([
           db.prepare(
-            `INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET purchase_id = excluded.purchase_id, item_id = excluded.item_id, unit = excluded.unit,
-               quantity = excluded.quantity, purchase_price = excluded.purchase_price,
+               quantity = excluded.quantity, count_qty = excluded.count_qty, purchase_price = excluded.purchase_price,
                amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note`,
-          ).bind(id, purchaseId, itemId2, p.unit ?? '', qty2,
+          ).bind(id, purchaseId, itemId2, p.unit ?? '', qty2, effCount2 === qty2 ? null : effCount2,
             Number(p.purchase_price) || 0, Math.round(amount2 * 100) / 100,
             p.happened_at || null, p.note ?? ''),
           ...stock2,
@@ -501,8 +519,10 @@ export async function applyChange(
       }
       case 'sale':
         if (action === 'delete') {
-          const old = await db.prepare('SELECT item_id, unit, quantity FROM sale_items WHERE sale_id = ?').bind(id)
-            .all<{ item_id: string; unit: string; quantity: number }>();
+          const old = await db.prepare(
+            `SELECT si.item_id, si.unit, si.quantity, si.count_qty, i.count_unit
+             FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`).bind(id)
+            .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
           // R2 行级文件清理：删行前拿行 id（行级附件按 sale_item/{lineId}/ 存储）
           try {
             const lineRows = await db.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
@@ -511,7 +531,7 @@ export async function applyChange(
               await deleteEntityAttachments(env, 'sale_item', lr.id);
             }
           } catch (_) {}
-          const bt: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, it.quantity));
+          const bt: D1PreparedStatement[] = old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1));
           bt.push(db.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
           await db.batch(bt);
           await db.prepare(
@@ -530,8 +550,10 @@ export async function applyChange(
         break;
       case 'purchase':
         if (action === 'delete') {
-          const old = await db.prepare('SELECT item_id, unit, quantity FROM purchase_items WHERE purchase_id = ?').bind(id)
-            .all<{ item_id: string; unit: string; quantity: number }>();
+          const old = await db.prepare(
+            `SELECT pi.item_id, pi.unit, pi.quantity, pi.count_qty, i.count_unit
+             FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`).bind(id)
+            .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
           // R2 行级文件清理：删行前拿行 id（行级附件按 purchase_item/{lineId}/ 存储）
           try {
             const lineRows = await db.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
@@ -540,7 +562,7 @@ export async function applyChange(
               await deleteEntityAttachments(env, 'purchase_item', lr.id);
             }
           } catch (_) {}
-          const bt: D1PreparedStatement[] = old.results.map((it) => stockDelta(db, it.item_id, it.unit, -it.quantity));
+          const bt: D1PreparedStatement[] = old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1));
           bt.push(db.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
           await db.batch(bt);
           await db.prepare(

@@ -338,6 +338,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   final _nameCtrl = TextEditingController();
   late final List<Map<String, TextEditingController>> _priceRows;
   late final List<String?> _priceIds; // 与 _priceRows 平行：null=新增行（编辑模式下用于区分增/改/删）
+  final _countUnitCtrl = TextEditingController(); // 计数单位（袋/个…备货统计用；空=不折）
   List<Map<String, dynamic>> _cats = []; // 一级+二级全量（type=item）
   String? _topId; // 一级分类
   String? _subId; // 二级分类（依赖一级，可选）
@@ -347,10 +348,11 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   bool get _editing => widget.item != null;
 
   static Map<String, TextEditingController> _newRow(
-      [String unit = '', String buy = '', String sell = '']) => {
+      [String unit = '', String buy = '', String sell = '', String per = '']) => {
         'unit': TextEditingController(text: unit),
         'buy': TextEditingController(text: buy),
         'sell': TextEditingController(text: sell),
+        'per': TextEditingController(text: per),
       };
 
   @override
@@ -359,6 +361,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
     final item = widget.item;
     if (item != null) {
       _nameCtrl.text = '${item['name'] ?? ''}';
+      _countUnitCtrl.text = '${item['count_unit'] ?? ''}';
       final cid = '${item['category_id'] ?? ''}';
       _pendingCid = cid.isEmpty ? null : cid;
       final prices = ((item['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -367,7 +370,12 @@ class _ItemEditPageState extends State<_ItemEditPage> {
         _priceIds = [null];
       } else {
         _priceRows = prices
-            .map((p) => _newRow('${p['unit'] ?? ''}', '${p['purchase_price'] ?? ''}', '${p['sale_price'] ?? ''}'))
+            .map((p) => _newRow(
+                  '${p['unit'] ?? ''}',
+                  '${p['purchase_price'] ?? ''}',
+                  '${p['sale_price'] ?? ''}',
+                  '${p['per'] ?? ''}',
+                ))
             .toList();
         _priceIds = prices
             .map((p) => '${p['id'] ?? ''}'.isEmpty ? null : '${p['id']}')
@@ -420,10 +428,12 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   @override
   void dispose() {
     _nameCtrl.dispose();
+    _countUnitCtrl.dispose();
     for (final r in _priceRows) {
       r['unit']?.dispose();
       r['buy']?.dispose();
       r['sell']?.dispose();
+      r['per']?.dispose();
     }
     super.dispose();
   }
@@ -440,13 +450,15 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       final unit = _priceRows[i]['unit']!.text.trim();
       final buy = double.tryParse(_priceRows[i]['buy']!.text) ?? 0;
       final sell = double.tryParse(_priceRows[i]['sell']!.text) ?? 0;
+      final per = double.tryParse(_priceRows[i]['per']!.text) ?? 0;
       if (unit == '' || (buy <= 0 && sell <= 0)) continue;
-      rows.add({'unit': unit, 'buy': buy, 'sell': sell, 'priceId': _priceIds[i]});
+      rows.add({'unit': unit, 'buy': buy, 'sell': sell, 'per': per > 0 ? per : 0, 'priceId': _priceIds[i]});
     }
     if (rows.isEmpty) {
       toast(context, '请至少填写一个单位价格');
       return;
     }
+    final countUnit = _countUnitCtrl.text.trim();
     setState(() => _busy = true);
     final selId = _subId ?? _topId;
     final catName = selId == null
@@ -459,17 +471,17 @@ class _ItemEditPageState extends State<_ItemEditPage> {
         if (_editing) {
           final itemId = '${widget.item!['id']}';
           await Api.instance.patch('/items/$itemId', {
-            'name': name, 'category': catName, 'category_id': selId ?? '',
+            'name': name, 'category': catName, 'category_id': selId ?? '', 'count_unit': countUnit,
           });
           for (final r in rows) {
             final pid = r['priceId'] as String?;
             if (pid == null || pid.isEmpty) {
               await Api.instance.post('/items/$itemId/prices', {
-                'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell'],
+                'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell'], 'per': r['per'],
               });
             } else {
               await Api.instance.patch('/item-prices/$pid', {
-                'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell'],
+                'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell'], 'per': r['per'],
               });
             }
           }
@@ -481,10 +493,10 @@ class _ItemEditPageState extends State<_ItemEditPage> {
           }
         } else {
           await Api.instance.post('/items', {
-            'name': name, 'category': catName, 'category_id': selId ?? '',
+            'name': name, 'category': catName, 'category_id': selId ?? '', 'count_unit': countUnit,
             'prices': [
               for (final r in rows)
-                {'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell']},
+                {'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell'], 'per': r['per']},
             ],
           });
         }
@@ -504,12 +516,12 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       final pid = (r['priceId'] as String?) ?? 'pr${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
       pricesPayload.add({
         'id': pid, 'item_id': itemId, 'unit': r['unit'],
-        'purchase_price': r['buy'], 'sale_price': r['sell'], 'active': 1,
+        'purchase_price': r['buy'], 'sale_price': r['sell'], 'per': r['per'], 'active': 1,
       });
     }
     final payload = {
       'id': itemId, 'name': name, 'category': catName,
-      'category_id': selId ?? '', 'deleted_at': null,
+      'category_id': selId ?? '', 'count_unit': countUnit, 'deleted_at': null,
       'prices': pricesPayload,
     };
     await LocalDb.upsertOne('items', payload);
@@ -555,44 +567,65 @@ class _ItemEditPageState extends State<_ItemEditPage> {
             onChanged: _topId == null ? null : (v) => setState(() => _subId = v),
           ),
           const SizedBox(height: 16),
+          TextField(
+            controller: _countUnitCtrl,
+            decoration: const InputDecoration(
+              labelText: '计数单位（可选）',
+              helperText: '备货按它统计（金针菇填「袋」→ 库存显示还剩多少袋；木瓜填「个」→ 还剩多少个）。留空=不换算',
+            ),
+          ),
+          const SizedBox(height: 16),
           const Text('单位价格（可多组，如 斤/包/箱）', style: TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           for (int i = 0; i < _priceRows.length; i++)
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: Row(
+                child: Column(
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _priceRows[i]['unit'],
-                        decoration: const InputDecoration(labelText: '单位'),
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _priceRows[i]['unit'],
+                            decoration: const InputDecoration(labelText: '单位'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: _priceRows[i]['buy'],
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            decoration: const InputDecoration(labelText: '进价'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: _priceRows[i]['sell'],
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            decoration: const InputDecoration(labelText: '售价'),
+                          ),
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.close, color: _c.textSub),
+                          onPressed: _priceRows.length > 1
+                              ? () => setState(() {
+                                    _priceRows.removeAt(i);
+                                    _priceIds.removeAt(i);
+                                  })
+                              : null,
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _priceRows[i]['buy'],
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(labelText: '进价'),
+                    const SizedBox(height: 4),
+                    TextField(
+                      controller: _priceRows[i]['per'],
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: '每单位折合计数单位数（可选）',
+                        helperText: '1 箱=40 袋就填 40；记单时会自动带出、也可改；用于库存备货折算与比价',
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _priceRows[i]['sell'],
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(labelText: '售价'),
-                      ),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.close, color: _c.textSub),
-                      onPressed: _priceRows.length > 1
-                          ? () => setState(() {
-                                _priceRows.removeAt(i);
-                                _priceIds.removeAt(i);
-                              })
-                          : null,
                     ),
                   ],
                 ),

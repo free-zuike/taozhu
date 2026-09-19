@@ -83,6 +83,8 @@ stocksRouter.put('/', adminOnly(), async (c) => {
 
 // POST /stocks/rebuild — 全量重算库存：从进货(+)出货(−)流水重建（保留预警阈值）。
 // 用途：历史 App 行级同步路径在旧版（v0.17.144 前）无库存联动，此端点在升级后一次性回补存量。
+// 进销单位换算：商品有计数单位且行有折合数（count_qty）→ 库存按计数单位累计（金针菇进 1 箱 count_qty=40 → 库存 +40 袋）；
+// 未换算行（count_qty 空）与原行为不变。单位用商品计数单位（无则行单位），保证相同商品换算/未换算行归并到同一维度。
 stocksRouter.post('/rebuild', adminOnly(), async (c) => {
   const old = await c.env.DB.prepare('SELECT item_id, unit, min_stock FROM stocks')
     .all<{ item_id: string; unit: string; min_stock: number }>();
@@ -90,8 +92,11 @@ stocksRouter.post('/rebuild', adminOnly(), async (c) => {
   await c.env.DB.prepare('DELETE FROM stocks').run();
   const rows = await c.env.DB.prepare(
     `SELECT item_id, unit, SUM(qty) AS quantity FROM (
-       SELECT item_id, unit, quantity AS qty FROM purchase_items
-       UNION ALL SELECT item_id, unit, -quantity AS qty FROM sale_items
+       SELECT i.id AS item_id, COALESCE(NULLIF(i.count_unit, ''), pi.unit) AS unit, COALESCE(pi.count_qty, pi.quantity) AS qty
+         FROM purchase_items pi JOIN items i ON i.id = pi.item_id
+       UNION ALL
+       SELECT i.id AS item_id, COALESCE(NULLIF(i.count_unit, ''), si.unit) AS unit, -COALESCE(si.count_qty, si.quantity) AS qty
+         FROM sale_items si JOIN items i ON i.id = si.item_id
      ) GROUP BY item_id, unit`,
   ).all<{ item_id: string; unit: string; quantity: number }>();
   const batch = rows.results.map((r) => {

@@ -48,6 +48,7 @@ export interface ItemRow {
   name: string;
   category: string | null;
   category_id: string | null;
+  count_unit: string | null;
   deleted_at: string | null;
 }
 
@@ -57,5 +58,6 @@ export interface ItemPriceRow {
   unit: string;
   purchase_price: number;
   sale_price: number;
+  per: number | null;
   active: number;
 }

@@ -30,6 +30,7 @@ const DDL: string[] = [
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     category TEXT DEFAULT '',
+    count_unit TEXT DEFAULT '',
     deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
@@ -40,6 +41,7 @@ const DDL: string[] = [
     unit TEXT NOT NULL,
     purchase_price REAL NOT NULL DEFAULT 0,
     sale_price REAL NOT NULL DEFAULT 0,
+    per REAL,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
@@ -50,6 +52,7 @@ const DDL: string[] = [
     item_id TEXT NOT NULL,
     unit TEXT NOT NULL,
     quantity REAL NOT NULL CHECK (quantity > 0),
+    count_qty REAL,
     purchase_price REAL NOT NULL DEFAULT 0,
     amount REAL NOT NULL DEFAULT 0,
     happened_at TEXT,
@@ -67,6 +70,7 @@ const DDL: string[] = [
     client_id TEXT,
     unit TEXT NOT NULL,
     quantity REAL NOT NULL CHECK (quantity > 0),
+    count_qty REAL,
     sale_price REAL NOT NULL DEFAULT 0,
     cost_price REAL NOT NULL DEFAULT 0,
     amount REAL NOT NULL DEFAULT 0,
@@ -386,6 +390,18 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.68.0：明细行级备注 note（每行商品可加备注；历史行回退单据级备注）
     for (const t of ['sale_items', 'purchase_items'] as const) {
       await ensureColumn(db, t, 'note', "TEXT DEFAULT ''");
+    }
+    // v0.17.175.0 进销单位换算（通用字段，不依赖具体商品）：
+    // items.count_unit = 备货/库存计数单位（袋/个/份…，空=不折）；item_prices.per = 该价格行 1 单位折合计数单位数（1箱=40袋）
+    // sale/purchase_items.count_qty = 本单折合计数数量（如进 1 箱(per40) 记 count_qty=40；卖 5 袋记 5），空=NULL 按 quantity 兜底
+    await ensureColumn(db, 'items', 'count_unit', "TEXT DEFAULT ''");
+    // 老库无 item_prices 表（极端残缺库）→ ensureColumn 对不存在表会抛错：先查表存在再加列
+    const hasPricesTable = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'item_prices'").first()) != null;
+    if (hasPricesTable) {
+      await ensureColumn(db, 'item_prices', 'per', 'REAL');
+    }
+    for (const t of ['sale_items', 'purchase_items'] as const) {
+      await ensureColumn(db, t, 'count_qty', 'REAL');
     }
     for (const t of ['clients', 'items'] as const) {
       await ensureColumn(db, t, 'category_id', 'TEXT');
