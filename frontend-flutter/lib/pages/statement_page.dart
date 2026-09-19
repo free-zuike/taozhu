@@ -434,7 +434,7 @@ class _StatementPageState extends State<StatementPage> {
                       label: const Text('预览'),
                       onPressed: () {
                         // 网格模板优先（Excel 式：变量替换+对齐）；否则正文文本/结构化表格
-                        final useGrid = cfg.grid.isNotEmpty;
+                        final useGrid = _templateRows(cfg, clientName) != null; // 组件/网格模板优先
                         final contentLines = !useGrid && cfg.content.trim().isNotEmpty
                             ? _renderContentLines(cfg.content, clientName)
                             : null;
@@ -496,7 +496,7 @@ class _StatementPageState extends State<StatementPage> {
         title: const Text('导出预览'),
         content: SizedBox(
           width: 460,
-          child: cfg.grid.isNotEmpty
+          child: _templateRows(cfg, clientName) != null
               ? _gridPreview(cfg, clientName)
               : _previewTable(cfg, clientName),
         ),
@@ -520,10 +520,10 @@ class _StatementPageState extends State<StatementPage> {
     // 复用默认空 sheet 并改名，避免多余的 Sheet1（v0.17.142：导出只留一个"对账单"页）
     excel.rename('Sheet1', '对账单'); // excel 4.x rename 直接改名（返回 void），默认 sheet 恒存在
     final sheet = excel['对账单'];
-    // Excel 式网格模板：每格变量替换后逐行写入（内容与预览/打印同源；对齐样式后续补 cellStyle）
-    if (cfg.grid.isNotEmpty) {
-      final grid = _renderGrid(cfg, clientName);
-      for (final row in grid) {
+    // 组件/网格模板：统一渲染入口，每格变量替换后逐行写入（内容与预览/打印同源；对齐样式后续补 cellStyle）
+    final trows = _templateRows(cfg, clientName);
+    if (trows != null) {
+      for (final row in trows) {
         sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
       }
       return excel;
@@ -840,9 +840,16 @@ class _StatementPageState extends State<StatementPage> {
     return buf.toString();
   }
 
-  /// 网格模板预览（Excel 式：变量替换后按对齐渲染，所见即所得）
+  /// 模板统一渲染入口（组件 → 网格 → null；null 时用正文/结构化渲染）
+  List<List<_GridCell>>? _templateRows(_XlsCfg cfg, String clientName) {
+    if (cfg.comps.isNotEmpty) return _renderComps(cfg, clientName);
+    if (cfg.grid.isNotEmpty) return _renderGrid(cfg, clientName);
+    return null;
+  }
+
+  /// 网格/组件模板预览（Excel 式：变量替换后按对齐渲染，所见即所得）
   Widget _gridPreview(_XlsCfg cfg, String clientName) {
-    final grid = _renderGrid(cfg, clientName);
+    final rows = _templateRows(cfg, clientName) ?? [];
     return SingleChildScrollView(
       child: Table(
         border: TableBorder.all(color: Colors.black26, width: 0.5),
@@ -1171,6 +1178,74 @@ class _StatementPageState extends State<StatementPage> {
       for (final row in cfg.grid)
         [for (final c in row) _GridCell(_replaceVars(c.text, clientName), c.align)],
     ];
+  }
+
+  /// 渲染组件式模板（每个组件展开为表格行块；预览/导出/打印同源）
+  List<List<_GridCell>> _renderComps(_XlsCfg cfg, String clientName) {
+    final now = DateTime.now();
+    final today = '${now.year}年${now.month}月${now.day}日';
+    final rows = <List<_GridCell>>[];
+    final daily = _salesByDayOfMonth();
+    for (final c in cfg.comps) {
+      switch (c.type) {
+        case 'title':
+          rows.add([_GridCell(_replaceVars(c.text.isEmpty ? '对账单' : c.text, clientName), c.align)]);
+          break;
+        case 'fields':
+          rows.add([_GridCell('店铺：$clientName', 'left')]);
+          rows.add([_GridCell('账期：${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}', 'left')]);
+          rows.add([_GridCell('日期：$today', 'left')]);
+          break;
+        case 'stats':
+          rows.add([
+            _GridCell('出货合计\n¥${_saleTotal.toStringAsFixed(2)}', 'center'),
+            _GridCell('收款合计\n¥${_payTotal.toStringAsFixed(2)}', 'center'),
+            _GridCell('期末欠款\n¥${_debtEnd.toStringAsFixed(2)}', 'center'),
+          ]);
+          break;
+        case 'days':
+          rows.add([_GridCell('日期', 'center'), _GridCell('销售额', 'center')]);
+          double total = 0;
+          for (var i = 0; i < daily.length; i++) {
+            final v = daily[i];
+            total += v;
+            rows.add([_GridCell('${i + 1}日', 'left'), _GridCell('¥${v.toStringAsFixed(2)}', 'right')]);
+          }
+          rows.add([_GridCell('总计', 'right'), _GridCell('¥${total.toStringAsFixed(2)}', 'right')]);
+          break;
+        case 'detail':
+          rows.add([_GridCell('日期', 'center'), _GridCell('商品', 'center'), _GridCell('数量', 'center'), _GridCell('金额', 'center')]);
+          for (final s in _sales) {
+            final orderDate = _date(s['happened_at']);
+            final items = ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+            if (items.isEmpty) {
+              rows.add([
+                _GridCell(orderDate, 'left'),
+                _GridCell('${s['note'] ?? '（无明细）'}', 'left'),
+                _GridCell('', 'left'),
+                _GridCell('¥${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}', 'right'),
+              ]);
+              continue;
+            }
+            for (final it in items) {
+              final id = '${it['happened_at'] ?? ''}';
+              final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
+              rows.add([
+                _GridCell(d, 'left'),
+                _GridCell('${it['item_name'] ?? ''}', 'left'),
+                _GridCell('${it['quantity'] ?? ''}${it['unit'] ?? ''}', 'center'),
+                _GridCell('¥${((it['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}', 'right'),
+              ]);
+            }
+          }
+          break;
+        default: // text：自定义文本（可含变量、可换行）
+          for (final ln in _replaceVars(c.text, clientName).split('\n')) {
+            rows.add([_GridCell(ln, c.align)]);
+          }
+      }
+    }
+    return rows;
   }
 
   /// 变量：{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{明细}{旬段表}{1日}…{31日}
@@ -1636,6 +1711,21 @@ class _GridCell {
         align = '${j['a'] ?? 'left'}';
 }
 
+/// 对账单模板组件（组件式设计器）：按顺序渲染成表格块，预览/导出/打印同源
+/// type：title=标题 | fields=信息字段（店铺/账期/日期）| stats=统计（出货/收款/欠款）
+///       days=按日金额表（1-31 日逐行，自动当月天数）| detail=出货明细表 | text=自定义文本（可含变量）
+class _TmplComp {
+  _TmplComp({this.type = 'text', this.text = '', this.align = 'left'});
+  String type;
+  String text;
+  String align; // left | center | right
+  Map<String, dynamic> toJson() => {'t': type, 'x': text, 'a': align};
+  _TmplComp.fromJson(Map<String, dynamic> j)
+      : type = '${j['t'] ?? 'text'}',
+        text = '${j['x'] ?? ''}',
+        align = '${j['a'] ?? 'left'}';
+}
+
 class _XlsCfg {
   _XlsCfg();
 
@@ -1646,6 +1736,8 @@ class _XlsCfg {
   String content = '';
   /// Excel 式网格模板（行×列单元格，每格可放变量 + 对齐；非空时优先于 content/结构化渲染）
   List<List<_GridCell>> grid = [];
+  /// 组件式模板（有序组件列表：title/fields/stats/days/detail/text；非空时优先于 grid/content 渲染）
+  List<_TmplComp> comps = [];
   bool headClient = true;
   bool headPeriod = true;
   bool headSaleTotal = true;
@@ -1665,6 +1757,7 @@ class _XlsCfg {
         'grid': [
           for (final row in grid) [for (final c in row) c.toJson()],
         ],
+        'comps': [for (final c in comps) c.toJson()],
         'headClient': headClient,
         'headPeriod': headPeriod,
         'headSaleTotal': headSaleTotal,
@@ -1690,6 +1783,13 @@ class _XlsCfg {
             for (final c in (row as List? ?? []))
               if (c is Map) _GridCell.fromJson(Map<String, dynamic>.from(c)),
           ],
+      ];
+    }
+    final rawComps = j['comps'];
+    if (rawComps is List) {
+      comps = [
+        for (final c in rawComps)
+          if (c is Map) _TmplComp.fromJson(Map<String, dynamic>.from(c)),
       ];
     }
     headClient = j['headClient'] != false;
