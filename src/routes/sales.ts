@@ -210,6 +210,7 @@ salesRouter.post('/items/date', async (c) => {
   for (const sid of saleIds) {
     await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: sid, payload: await buildPayload(c.env.DB, 'sale', sid), updated_by_username: c.get('user').username });
   }
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'update', entity_type: 'sale_item', detail: `批量修改出货日期：${updates.length} 行` });
   return c.json({ updated: batch.length });
 });
 
@@ -267,6 +268,10 @@ salesRouter.patch('/items/:id', async (c) => {
   // 无头表：组装时 happened_at=明细行最大日期，无需再同步 head
   const saleId = row.sale_id;
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: c.get('user').username });
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'update', entity_type: 'sale_item', entity_id: id,
+    detail: `修改出货商品行：${happenedAt ? `日期 ${happenedAt}` : ''} 数量 ${qty}${unit}${body?.sale_price !== undefined ? ` 售价 ${salePrice}` : ''}`,
+  });
   return c.json({ id, sale_id: saleId, item_id: row.item_id, unit, quantity: qty, sale_price: salePrice, amount, happened_at: happenedAt || null });
 });
 
@@ -347,6 +352,10 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
   }
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'sale', id), updated_by_username: c.get('user').username });
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'update', entity_type: 'sale', entity_id: id,
+    detail: `修改出货记录${body?.happened_at ? `：日期 ${body.happened_at.trim()}` : ''}${body?.client_id ? ` 店铺 ${body.client_id}` : ''}${body?.items ? `（${body.items.length} 件商品）` : ''}`,
+  });
   return c.json({ id, client_id: clientId, happened_at: body?.happened_at?.trim() || '', note: body?.note?.trim() ?? '', total: Math.round(total * 100) / 100 });
 });
 

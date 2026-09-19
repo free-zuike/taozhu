@@ -197,6 +197,7 @@ purchasesRouter.post('/items/date', async (c) => {
   for (const pid of purchaseIds) {
     await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: pid, payload: await buildPayload(c.env.DB, 'purchase', pid), updated_by_username: c.get('user').username });
   }
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'update', entity_type: 'purchase_item', detail: `批量修改进货日期：${updates.length} 行` });
   return c.json({ updated: batch.length });
 });
 
@@ -232,6 +233,10 @@ purchasesRouter.patch('/items/:id', async (c) => {
   // 无头表：组装时 happened_at=明细行最大日期，无需再同步 head
   const purchaseId = row.purchase_id;
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: purchaseId, payload: await buildPayload(c.env.DB, 'purchase', purchaseId), updated_by_username: c.get('user').username });
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'update', entity_type: 'purchase_item', entity_id: id,
+    detail: `修改进货商品行：${happenedAt ? `日期 ${happenedAt}` : ''} 数量 ${qty}${unit}${body?.purchase_price !== undefined ? ` 进价 ${purchasePrice}` : ''}`,
+  });
   return c.json({ id, purchase_id: purchaseId, item_id: row.item_id, unit, quantity: qty, purchase_price: purchasePrice, amount, happened_at: happenedAt || null });
 });
 
@@ -304,6 +309,10 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
   }
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'purchase', id), updated_by_username: c.get('user').username });
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'update', entity_type: 'purchase', entity_id: id,
+    detail: `修改进货记录${body?.happened_at ? `：日期 ${body.happened_at.trim()}` : ''}${body?.items ? `（${body.items.length} 件商品）` : ''}`,
+  });
   return c.json({ id, happened_at: body?.happened_at?.trim() ?? '', note: body?.note?.trim() ?? '', total: Math.round(total * 100) / 100 });
 });
 
