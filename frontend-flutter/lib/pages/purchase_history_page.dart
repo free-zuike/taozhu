@@ -123,12 +123,15 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       month: _selMonth,
     );
     if (picked == null) return;
+    // 编程滚动期间禁用滚动联动，避免"选 9 月、滚动时被顶部 8 月日期头切回 8 月"
+    _scrollPicking = true;
     setState(() {
       _selYear = picked.year;
       _selMonth = picked.month;
       _filterByRange(_purchases); // 重算当月统计（列表全量不变）
     });
     _scrollToMonth();
+    Future.delayed(const Duration(milliseconds: 600), () => _scrollPicking = false);
   }
 
   /// 滚动到所选月份第一个日期头（月份选择器跳转；无该月数据则停留在原位）
@@ -230,34 +233,37 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     }).toList();
   }
 
-  /// 本地全量镜像按所选月份过滤（与网络接口的 date_from/date_to 一致），并汇总当月支出
+  /// 当月进货统计（行级口径：金额/天数/件数都按行日期归月度——单改商品日期到当月即计入，不被整单日期遮蔽）
   List<Map<String, dynamic>> _filterByRange(List<Map<String, dynamic>> rows) {
     final from = _fmt(DateTime(_selYear, _selMonth, 1));
     final to = _fmt(DateTime(_selYear, _selMonth + 1, 0));
-    final filtered = rows.where((x) {
-      final d = _date(x['happened_at']);
-      return d.isNotEmpty && d.compareTo(from) >= 0 && d.compareTo(to) <= 0;
-    }).toList();
-    // 当月进货统计：总额 + 天数（有进货的行日期数——按行日期去重，非整单数）+ 商品件数
-    _monthExpense = filtered.fold<double>(
-        0, (s, p) => s + ((p['total'] as num?)?.toDouble() ?? 0));
     final daySet = <String>{};
-    for (final p in filtered) {
+    double expense = 0;
+    var itemCount = 0;
+    for (final p in rows) {
       final orderDate = _date(p['happened_at']);
       final items = ((p['items'] as List?) ?? []).cast<Map<String, dynamic>>();
       if (items.isEmpty) {
-        daySet.add(orderDate);
+        if (orderDate.isNotEmpty && orderDate.compareTo(from) >= 0 && orderDate.compareTo(to) <= 0) {
+          daySet.add(orderDate);
+          expense += (p['total'] as num?)?.toDouble() ?? 0;
+          itemCount += 1;
+        }
         continue;
       }
       for (final it in items) {
         final id = '${it['happened_at'] ?? ''}';
-        daySet.add(id.length >= 10 ? id.substring(0, 10) : orderDate);
+        final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
+        if (d.isEmpty || d.compareTo(from) < 0 || d.compareTo(to) > 0) continue;
+        daySet.add(d);
+        expense += (it['amount'] as num?)?.toDouble() ?? 0;
+        itemCount += 1;
       }
     }
+    _monthExpense = (expense * 100).round() / 100;
     _monthCount = daySet.length;
-    _monthItems = filtered.fold<int>(
-        0, (s, p) => s + (((p['items'] as List?) ?? []).length));
-    return filtered;
+    _monthItems = itemCount;
+    return rows;
   }
 
   String _date(Object? v) {
