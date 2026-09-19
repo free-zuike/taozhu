@@ -20,6 +20,8 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   String _selName = '';
   bool _loading = true;
   PlutoGridStateManager? _gridState; // 网格编辑状态（保存时回读）
+  int _gridTick = 0; // 结构变化计数：PlutoGrid columns/rows 只在创建时生效，加列/行后 key 变化强制重建
+  String _view = 'edit'; // edit | preview（页内所见即所得切换）
 
   XlsCfg get _cur => _templates.firstWhere((t) => t.name == _selName, orElse: () => _templates.first);
 
@@ -166,49 +168,6 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     }
   }
 
-  Future<void> _preview() async {
-    _flushGrid(); // 先回读 PlutoGrid 编辑内容，否则预览的是旧模板
-    final td = await _previewData();
-    if (!mounted) return;
-    if (td == null) {
-      _pageToast(context, '无数据可预览（本地无记录且网络失败）');
-      return;
-    }
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('预览：${_cur.name}'),
-        content: SizedBox(
-          width: 560,
-          child: SingleChildScrollView(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Table(
-                border: TableBorder.all(color: Colors.black26, width: 0.5),
-                defaultColumnWidth: const IntrinsicColumnWidth(),
-                children: [
-                  for (final row in renderTemplateRows(_cur, td))
-                    TableRow(children: [
-                      for (final c in row)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                          child: Text(c.text,
-                              textAlign: c.align == 'center'
-                                  ? TextAlign.center
-                                  : (c.align == 'right' ? TextAlign.right : TextAlign.left),
-                              style: const TextStyle(fontSize: 11)),
-                        ),
-                    ]),
-                ],
-              ),
-            ),
-          ),
-        ),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭'))],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
@@ -230,6 +189,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                       onSelected: (_) => setState(() {
                         _selName = t.name;
                         _gridState = null;
+                        _view = 'edit';
                       }),
                     ),
                 ]),
@@ -239,7 +199,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                 child: Wrap(spacing: 8, children: [
                   OutlinedButton.icon(icon: const Icon(Icons.add, size: 16), label: const Text('新建模板'), onPressed: _addTemplate),
                   OutlinedButton.icon(icon: const Icon(Icons.delete_outline, size: 16), label: const Text('删除'), onPressed: _deleteTemplate),
-                  OutlinedButton.icon(icon: const Icon(Icons.visibility_outlined, size: 16), label: const Text('预览'), onPressed: _preview),
+                  Text('下方「编辑/预览」切换实时预览效果', style: TextStyle(fontSize: 11, color: c.textSub)),
                 ]),
               ),
               const Divider(height: 1),
@@ -273,30 +233,73 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
           for (var cc = 0; cc < cols; cc++) 'c$cc': PlutoCell(value: cur.grid[r][cc].text),
         }),
     ];
+    // 结构变化后强制重建（PlutoGrid columns/rows 只在创建时生效，setState 不会刷新）
+    void rebuild() => setState(() => _gridTick++);
+    void addCol() {
+      _flushGrid();
+      for (final r in cur.grid) {
+        r.add(GridCell());
+      }
+      cur.colAligns.add('left');
+      rebuild();
+    }
+    void delCol() {
+      if (cols <= 1) return;
+      _flushGrid();
+      for (final r in cur.grid) {
+        r.removeLast();
+      }
+      if (cur.colAligns.length > cols - 1) cur.colAligns.removeLast();
+      rebuild();
+    }
+    void addRow() {
+      _flushGrid();
+      cur.grid.add([for (var cc = 0; cc < cols; cc++) GridCell()]);
+      rebuild();
+    }
+    void delRow() {
+      if (cur.grid.length <= 1) return;
+      _flushGrid();
+      cur.grid.removeLast();
+      rebuild();
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
         child: Wrap(spacing: 6, runSpacing: 4, children: [
+          // 页内切换：编辑（Excel 式网格） / 预览（真实数据渲染）
+          SegmentedButton<String>(
+            style: ButtonStyle(
+              visualDensity: VisualDensity.compact,
+              textStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12)),
+            ),
+            segments: const [
+              ButtonSegment(value: 'edit', label: Text('编辑')),
+              ButtonSegment(value: 'preview', label: Text('预览')),
+            ],
+            selected: {_view},
+            onSelectionChanged: (s) {
+              if (s.first == 'edit') {
+                setState(() => _view = 'edit');
+              } else {
+                _flushGrid();
+                setState(() => _view = 'preview');
+              }
+            },
+          ),
+          const VerticalDivider(width: 12),
           OutlinedButton.icon(
               icon: const Icon(Icons.playlist_add, size: 14), label: const Text('加列'),
-              onPressed: () => setState(() {
-                for (final r in cur.grid) {
-                  r.add(GridCell());
-                }
-                cur.colAligns.add('left');
-                _gridState = null;
-              })),
+              onPressed: addCol),
           OutlinedButton.icon(
               icon: const Icon(Icons.playlist_remove, size: 14), label: const Text('删列'),
-              onPressed: cols > 1
-                  ? () => setState(() {
-                      for (final r in cur.grid) {
-                        r.removeLast();
-                      }
-                      if (cur.colAligns.length > cols - 1) cur.colAligns.removeLast();
-                      _gridState = null;
-                    })
-                  : null),
+              onPressed: cols > 1 ? delCol : null),
+          OutlinedButton.icon(
+              icon: const Icon(Icons.add_row_above, size: 14), label: const Text('加行'),
+              onPressed: addRow),
+          OutlinedButton.icon(
+              icon: const Icon(Icons.remove_row, size: 14), label: const Text('删行'),
+              onPressed: cur.grid.length > 1 ? delRow : null),
           // 每列对齐循环按钮（左→中→右），渲染时 colAligns 优先于单元格 align
           for (var cc = 0; cc < cols; cc++)
             ActionChip(
@@ -311,18 +314,62 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                     : (cur.colAligns[cc] == 'right' ? 'left' : 'center');
               }),
             ),
-          Text('双击单元格编辑（可放 {店铺}{年}{月}{日}{1日}…{31日}{明细}{月账单}）；表格底部「+」追加行；「{月账单}」= 整月分栏账单一格生成',
+          Text('双击单元格编辑；可放变量 {店铺}{年}{月}{日}{1日}…{31日}{明细}{月账单}；{月账单}=整月分栏账单一格生成',
               style: TextStyle(fontSize: 11, color: c.textSub)),
         ]),
       ),
       Expanded(
-        child: PlutoGrid(
-          columns: columns,
-          rows: gridRows,
-          onLoaded: (e) => _gridState = e.stateManager,
-        ),
+        child: _view == 'preview'
+            ? _previewPane(c)
+            : PlutoGrid(
+                key: ValueKey('grid-$_selName-$_gridTick'),
+                columns: columns,
+                rows: gridRows,
+                onLoaded: (e) => _gridState = e.stateManager,
+              ),
       ),
     ]);
+  }
+
+  /// 页内预览（所见即所得）：拉当月出货数据渲染当前模板（与导出/打印同源）
+  Widget _previewPane(TaozhuColors c) {
+    return FutureBuilder<TemplateData?>(
+      future: _previewData(),
+      builder: (ctx, snap) {
+        final td = snap.data;
+        if (snap.connectionState != ConnectionState.done || td == null) {
+          return const Center(child: Text('加载预览数据…', style: TextStyle(fontSize: 12)));
+        }
+        try {
+          final rows = renderTemplateRows(_cur, td);
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SingleChildScrollView(
+              child: Table(
+                border: TableBorder.all(color: Colors.black26, width: 0.5),
+                defaultColumnWidth: const IntrinsicColumnWidth(),
+                children: [
+                  for (final row in rows)
+                    TableRow(children: [
+                      for (final cell in row)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                          child: Text(cell.text,
+                              textAlign: cell.align == 'center'
+                                  ? TextAlign.center
+                                  : (cell.align == 'right' ? TextAlign.right : TextAlign.left),
+                              style: const TextStyle(fontSize: 11, color: c.textMain)),
+                        ),
+                    ]),
+                ],
+              ),
+            ),
+          );
+        } catch (_) {
+          return const Center(child: Text('预览渲染失败', style: TextStyle(fontSize: 12)));
+        }
+      },
+    );
   }
 }
 
