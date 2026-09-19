@@ -1,8 +1,11 @@
-/// 对账单模板设置页（独立管理）：模板列表（新建/删除/切换）+ 组件式设计器（组件/网格/正文）
-/// + 实时预览（拉当月出货数据渲染，所见即所得）。与对账单导出共用公共模板库（statement_tmpl.dart）。
+/// 对账单模板设置页（本地优先，离线可用）：只保留「网格模板」一种可编辑形态——
+/// 用现成 Excel 式网格组件 pluto_grid 编辑（单元格可放 {变量} 含 {1日}…{31日}），保存到本地（SharedPreferences）。
+/// 组件/正文旧模板仍可被导出渲染（renderTemplateRows 兼容），但编辑入口收敛为网格。
+/// 预览取本地镜像（原生）；Web 无本地库回退请求服务器。
 import 'package:flutter/material.dart';
 import 'package:pluto_grid/pluto_grid.dart';
 import '../api.dart';
+import '../local_db.dart';
 import '../statement_tmpl.dart';
 import '../theme.dart';
 
@@ -15,28 +18,15 @@ class StatementTemplatePage extends StatefulWidget {
 class _StatementTemplatePageState extends State<StatementTemplatePage> {
   List<XlsCfg> _templates = [];
   String _selName = '';
-  String _tab = 'comps'; // comps | grid | content
   bool _loading = true;
-  final _contentCtrl = TextEditingController();
-  PlutoGridStateManager? _gridState; // 网格模板编辑状态（保存时回读）
+  PlutoGridStateManager? _gridState; // 网格编辑状态（保存时回读）
 
   XlsCfg get _cur => _templates.firstWhere((t) => t.name == _selName, orElse: () => _templates.first);
-
-  static const _typeNames = <String, String>{
-    'title': '标题', 'fields': '信息字段', 'stats': '统计',
-    'days': '按日金额表（1-31）', 'detail': '出货明细', 'text': '自定义文本',
-  };
 
   @override
   void initState() {
     super.initState();
     _init();
-  }
-
-  @override
-  void dispose() {
-    _contentCtrl.dispose();
-    super.dispose();
   }
 
   Future<void> _init() async {
@@ -45,7 +35,6 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       setState(() {
         _templates = t;
         _selName = t.first.name;
-        _contentCtrl.text = _cur.content;
         _loading = false;
       });
     }
@@ -53,15 +42,18 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
 
   Future<void> _save() async {
     final cur = _cur;
-    if (_tab == 'content') cur.content = _contentCtrl.text;
-    if (_tab == 'grid' && _gridState != null) {
-      // 从 PlutoGrid 读回（含追加行/编辑的单元格）
+    if (_gridState != null) {
+      // 从 PlutoGrid 读回（含追加行/编辑的单元格）写回模板
       final rows = _gridState!.refRows;
       final cols = cur.grid.isEmpty ? 3 : cur.grid[0].length;
       cur.grid = [
         for (final r in rows)
           [for (var cc = 0; cc < cols; cc++) GridCell('${r.cells['c$cc']?.value ?? ''}')],
       ];
+    }
+    if (cur.grid.isEmpty) {
+      _pageToast(context, '网格为空，先填单元格或加行');
+      return;
     }
     await saveTemplates(_templates, _selName);
     if (mounted) _pageToast(context, '模板「${cur.name}」已保存');
@@ -86,7 +78,6 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     setState(() {
       _templates.add(XlsCfg()..name = name);
       _selName = name;
-      _contentCtrl.text = '';
     });
     await _save();
   }
@@ -116,120 +107,87 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     setState(() {
       _templates.removeWhere((t) => t.name == _selName);
       _selName = _templates.first.name;
-      _contentCtrl.text = _cur.content;
     });
     await _save();
   }
 
-  /// 预览：拉当月出货数据（Web/原生都走请求；主动刷新可接受）渲染模板
-  Future<void> _preview() async {
+  /// 预览数据：本地优先（原生读本地镜像，离线可用）；Web（无本地库）回退请求服务器当月出货
+  Future<TemplateData?> _previewData() async {
     final now = DateTime.now();
     final from = '${now.year}-${now.month.toString().padLeft(2, '0')}-01';
     final to = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    // 原生：本地镜像（整单 sales 含明细、payments）组装，零网络
+    try {
+      final all = await LocalDb.getAll('sales');
+      if (all.isNotEmpty) {
+        final inMonth = all.where((s) {
+          final d = '${s['happened_at'] ?? ''}';
+          return d.length >= 10 && d.substring(0, 7) == (from.length >= 7 ? from.substring(0, 7) : '');
+        }).toList();
+        final pays = await LocalDb.getAll('payments');
+        double saleTotal = 0, paidTotal = 0;
+        for (final s in all) {
+          for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+            saleTotal += (it['amount'] as num?)?.toDouble() ?? 0;
+          }
+        }
+        for (final p in pays) {
+          paidTotal += (p['amount'] as num?)?.toDouble() ?? 0;
+          paidTotal += (p['waived'] as num?)?.toDouble() ?? 0;
+        }
+        return TemplateData(
+          sales: inMonth,
+          from: from,
+          to: to,
+          clientName: '全部店铺',
+          debtEnd: saleTotal - paidTotal,
+        );
+      }
+    } catch (_) {}
+    // Web / 本地无镜像：请求服务器
     try {
       final d = await Api.instance.get('/sales?date_from=$from&date_to=$to&limit=1000');
       final sales = ((d['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
-      if (!mounted) return;
-      final td = TemplateData(
-        sales: sales,
-        from: from,
-        to: to,
-        clientName: '全部店铺',
-      );
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text('预览：${_cur.name}'),
-          content: SingleChildScrollView(
-            child: Table(
-              border: TableBorder.all(color: Colors.black26, width: 0.5),
-              defaultColumnWidth: const IntrinsicColumnWidth(),
-              children: [
-                for (final row in renderTemplateRows(_cur, td))
-                  TableRow(children: [
-                    for (final c in row)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                        child: Text(c.text,
-                            textAlign: c.align == 'center'
-                                ? TextAlign.center
-                                : (c.align == 'right' ? TextAlign.right : TextAlign.left),
-                            style: const TextStyle(fontSize: 11)),
-                      ),
-                  ]),
-              ],
-            ),
-          ),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭'))],
-        ),
-      );
-    } catch (e) {
-      _pageToast(context, '预览拉取数据失败：${e.toString().replaceFirst('Exception: ', '')}');
+      return TemplateData(sales: sales, from: from, to: to, clientName: '全部店铺');
+    } catch (_) {
+      return null;
     }
   }
 
-  void _moveComp(int i, int delta) {
-    final ni = i + delta;
-    if (ni < 0 || ni >= _cur.comps.length) return;
-    final t = _cur.comps.removeAt(i);
-    _cur.comps.insert(ni, t);
-  }
-
-  Future<void> _configComp(int i) async {
-    final c = _cur.comps[i];
-    final textCtrl = TextEditingController(text: c.text);
-    var align = c.align;
-    final ok = await showDialog<bool>(
+  Future<void> _preview() async {
+    final td = await _previewData();
+    if (!mounted) return;
+    if (td == null) {
+      _pageToast(context, '无数据可预览（本地无记录且网络失败）');
+      return;
+    }
+    showDialog<void>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setC) => AlertDialog(
-          title: Text('配置：${_typeNames[c.type] ?? c.type}'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            if (c.type == 'text' || c.type == 'title')
-              TextField(
-                controller: textCtrl,
-                maxLines: 3,
-                decoration: const InputDecoration(labelText: '内容（可含变量 {店铺}{明细}{1日}…）'),
-              ),
-            Wrap(spacing: 4, children: [
-              for (final a in const ['left', 'center', 'right'])
-                ChoiceChip(
-                  label: Text(a == 'left' ? '左' : a == 'center' ? '中' : '右'),
-                  selected: align == a,
-                  onSelected: (_) => setC(() => align = a),
-                ),
-            ]),
-          ]),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-            FilledButton(
-              onPressed: () {
-                c.text = textCtrl.text;
-                c.align = align;
-                Navigator.pop(ctx, true);
-              },
-              child: const Text('保存'),
-            ),
-          ],
+      builder: (ctx) => AlertDialog(
+        title: Text('预览：${_cur.name}'),
+        content: SingleChildScrollView(
+          child: Table(
+            border: TableBorder.all(color: Colors.black26, width: 0.5),
+            defaultColumnWidth: const IntrinsicColumnWidth(),
+            children: [
+              for (final row in renderTemplateRows(_cur, td))
+                TableRow(children: [
+                  for (final c in row)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      child: Text(c.text,
+                          textAlign: c.align == 'center'
+                              ? TextAlign.center
+                              : (c.align == 'right' ? TextAlign.right : TextAlign.left),
+                          style: const TextStyle(fontSize: 11)),
+                    ),
+                ]),
+            ],
+          ),
         ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭'))],
       ),
     );
-    if (ok == true) setState(() {});
-  }
-
-  Future<void> _addComp() async {
-    final type = await showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('添加组件'),
-        children: [
-          for (final e in _typeNames.entries)
-            SimpleDialogOption(onPressed: () => Navigator.pop(ctx, e.key), child: Text(e.value, style: const TextStyle(fontSize: 14))),
-        ],
-      ),
-    );
-    if (type == null) return;
-    setState(() => _cur.comps.add(TmplComp(type: type)));
   }
 
   @override
@@ -238,9 +196,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('对账单模板'),
-        actions: [
-          TextButton(onPressed: _save, child: const Text('保存')),
-        ],
+        actions: [TextButton(onPressed: _save, child: const Text('保存'))],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
@@ -254,7 +210,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                       selected: t.name == _selName,
                       onSelected: (_) => setState(() {
                         _selName = t.name;
-                        _contentCtrl.text = _cur.content;
+                        _gridState = null;
                       }),
                     ),
                 ]),
@@ -268,82 +224,18 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                 ]),
               ),
               const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'comps', label: Text('组件模板')),
-                      ButtonSegment(value: 'grid', label: Text('网格模板')),
-                      ButtonSegment(value: 'content', label: Text('自定义正文')),
-                    ],
-                    selected: {_tab},
-                    onSelectionChanged: (s) => setState(() => _tab = s.first),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: _tab == 'content'
-                    ? Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: TextField(
-                          controller: _contentCtrl,
-                          maxLines: null,
-                          expands: true,
-                          textAlignVertical: TextAlignVertical.top,
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
-                            hintText: '留空 = 用组件模板；或写正文（可含变量：{店铺}{账期}{日期}{出货合计}{期末欠款}{明细}{1日}…{31日}）',
-                          ),
-                        ),
-                      )
-                    : _tab == 'grid'
-                        ? _gridEditor(c) // PlutoGrid 自带滚动，需 Expanded 高度
-                        : SingleChildScrollView(
-                            padding: const EdgeInsets.all(16),
-                            child: _compsEditor(c),
-                          ),
-              ),
+              Expanded(child: _gridEditor(c)),
             ]),
     );
   }
 
-  Widget _compsEditor(TaozhuColors c) {
-    final cur = _cur;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      OutlinedButton.icon(
-          icon: const Icon(Icons.add, size: 16), label: const Text('添加组件'), onPressed: _addComp),
-      const SizedBox(height: 8),
-      for (var i = 0; i < cur.comps.length; i++)
-        Container(
-          margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-              color: c.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: c.divider)),
-          child: Row(children: [
-            Expanded(
-              child: InkWell(
-                onTap: () => _configComp(i),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('${i + 1}. ${_typeNames[cur.comps[i].type] ?? cur.comps[i].type}',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textMain)),
-                  if (cur.comps[i].text.isNotEmpty)
-                    Text('${cur.comps[i].text}', maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11, color: c.textSub)),
-                ]),
-              ),
-            ),
-            IconButton(iconSize: 18, icon: const Icon(Icons.arrow_upward), onPressed: () => setState(() => _moveComp(i, -1))),
-            IconButton(iconSize: 18, icon: const Icon(Icons.arrow_downward), onPressed: () => setState(() => _moveComp(i, 1))),
-            IconButton(iconSize: 18, icon: const Icon(Icons.close), onPressed: () => setState(() => cur.comps.removeAt(i))),
-          ]),
-        ),
-    ]);
-  }
-
   Widget _gridEditor(TaozhuColors c) {
     final cur = _cur;
+    // 网格为唯一编辑形态：旧组件/正文模板在此转为网格（清空，改以 grid 渲染）
+    if (cur.comps.isNotEmpty || cur.content.trim().isNotEmpty) {
+      cur.comps = [];
+      cur.content = '';
+    }
     final cols = cur.grid.isEmpty ? 3 : cur.grid[0].length;
     if (cur.grid.isEmpty) {
       cur.grid = [
@@ -382,7 +274,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                       _gridState = null;
                     })
                   : null),
-          Text('双击单元格编辑；表格底部「+」追加行；保存时写回模板',
+          Text('双击单元格编辑（可放 {店铺}{1日}…{31日}{明细} 变量）；表格底部「+」追加行',
               style: TextStyle(fontSize: 11, color: c.textSub)),
         ]),
       ),
@@ -397,7 +289,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   }
 }
 
-/// 轻量 toast（页面内提示，避免依赖全局 toast 上下文差异）
+/// 轻量提示（页面内）
 void _pageToast(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
