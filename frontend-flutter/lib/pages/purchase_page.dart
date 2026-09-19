@@ -35,6 +35,8 @@ class _PRow {
   String rowId = '';
   /// 日期栏批量直编：该行所属原进货单号（该日可能多单，各行保留各自单号，不能统一挂新单）
   String origPurchaseId = '';
+  /// 行原备注（直编/编辑保存时保留，避免 payload 缺 note 清空服务端行备注）
+  String note = '';
   /// 保存时构建的商品行 payload（去单据化：逐行入队 purchase_item 用）
   Map<String, dynamic>? itemsPayload;
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
@@ -210,6 +212,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..happenedAt = keepLineDate ? lineDate : ''
           ..rowId = '${it['id'] ?? ''}'
           ..origPurchaseId = _purchaseId
+          ..note = '${it['note'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -274,6 +277,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..happenedAt = keepLineDate ? lineDate : ''
           ..rowId = rowId
           ..origPurchaseId = origPurchaseId
+          ..note = '${it['note'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -608,6 +612,7 @@ class _PurchasePageState extends State<PurchasePage> {
         'purchase_price': r.purchasePrice,
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
+        'note': r.note, // 保留行原备注（payload 缺 note 会被同步 upsert 写成空）
       };
       r.itemsPayload = rowPayload;
       itemsPayload.add(rowPayload);
@@ -625,10 +630,12 @@ class _PurchasePageState extends State<PurchasePage> {
       final webItems = [
         for (final r in valid)
           {
+            'id': r.rowId, // 保留原行 id（服务端重建明细时不换新 id，行级附件不孤儿化）
             'price_id': r.priceId,
             'quantity': r.quantity,
             'purchase_price': r.purchasePrice,
             'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
+            'note': r.note,
           },
       ];
       try {
@@ -639,16 +646,18 @@ class _PurchasePageState extends State<PurchasePage> {
             (byOrder[oid] ??= []).add(r);
           }
           for (final e in byOrder.entries) {
+            // 批量直编只改日期/数量/价格：不传整单 note（防清空），items 逐行带原 id + 原行备注
             await Api.instance.patch('/purchases/${e.key}', {
               'happened_at': orderDate,
-              'note': _noteCtrl.text.trim(),
               'items': [
                 for (final r in e.value)
                   {
+                    'id': r.rowId,
                     'price_id': r.priceId,
                     'quantity': r.quantity,
                     'purchase_price': r.purchasePrice,
                     'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
+                    'note': r.note,
                   },
               ],
             });

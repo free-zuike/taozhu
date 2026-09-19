@@ -17,6 +17,7 @@ salesRouter.use('*', authMiddleware());
 const nowIso = () => new Date().toISOString();
 
 interface SaleItemInput {
+  id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
   price_id: string;          // item_prices.id
   quantity: number;
   sale_price?: number;       // 可覆盖默认售价
@@ -334,7 +335,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       batch.push(
         c.env.DB.prepare(
           'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(randomId(), id, clientId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
+        ).bind(item.id ?? randomId(), id, clientId, price.item_id, price.unit, qty, effectiveSale, price.purchase_price, amount,
           item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', c.get('user').id),
       );
       // 按新明细扣减库存

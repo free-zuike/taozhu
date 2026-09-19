@@ -17,6 +17,7 @@ purchasesRouter.use('*', authMiddleware());
 const nowIso = () => new Date().toISOString();
 
 interface PurchaseItemInput {
+  id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
   price_id: string;
   quantity: number;
   purchase_price?: number;   // 可覆盖默认进价
@@ -291,7 +292,7 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       batch.push(
         c.env.DB.prepare(
           'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, purchase_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(randomId(), id, price.item_id, price.unit, qty, effective, amount,
+        ).bind(item.id ?? randomId(), id, price.item_id, price.unit, qty, effective, amount,
           item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id),
       );
       // 按新明细增加库存
