@@ -184,7 +184,7 @@ class _BackupPageState extends State<BackupPage> {
 
   /// 从云端历史备份恢复（服务端直接读取合并导入，不覆盖现有数据）
   Future<void> _restoreBackup(Map<String, dynamic> b) async {
-    final name = '${b['name'] ?? ''}';
+    final name = '${b['name_display'] ?? b['name'] ?? ''}';
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -239,7 +239,7 @@ class _BackupPageState extends State<BackupPage> {
                     decoration: BoxDecoration(color: c.success.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
                     child: Icon(Icons.cloud_done_outlined, size: 20, color: c.success),
                   ),
-                  title: Text('${b['name'] ?? ''}', style: TextStyle(fontSize: 13, color: c.textMain)),
+                  title: Text('${b['name_display'] ?? b['name'] ?? ''}', style: TextStyle(fontSize: 13, color: c.textMain)),
                   subtitle: Text(_fmtSize((b['size'] as num?)?.toInt() ?? 0),
                       style: TextStyle(fontSize: 12, color: c.textSub)),
                   trailing: TextButton(

@@ -87,47 +87,51 @@ class _AuditPageState extends State<AuditPage> {
                         separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (ctx, i) {
                           final l = _logs[i];
+                          final actionTxt = ('${l['action_label'] ?? ''}'.isNotEmpty
+                              ? '${l['action_label']}'
+                              : _actionLabel('${l['action'] ?? ''}'));
+                          final entityTxt =
+                              ('${l['entity_label'] ?? ''}'.isNotEmpty ? '${l['entity_label']}' : '${l['entity_type'] ?? ''}') +
+                                  ('${l['entity_id'] ?? ''}'.isNotEmpty ? ' ${l['entity_id']}' : '');
                           return Container(
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                             decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
-                            child: Row(
+                            child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: c.primary.withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Text(
-                                      ('${l['action_label'] ?? ''}'.isNotEmpty
-                                          ? '${l['action_label']}'
-                                          : _actionLabel('${l['action'] ?? ''}')),
-                                      style: TextStyle(fontSize: 12, color: c.primary)),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                          ('${l['entity_label'] ?? ''}'.isNotEmpty
-                                              ? '${l['entity_label']}'
-                                              : '${l['entity_type'] ?? ''}') +
-                                              ('${l['entity_id'] ?? ''}'.isNotEmpty ? ' ${l['entity_id']}' : ''),
-                                          style: TextStyle(fontSize: 14, color: c.textMain, fontWeight: FontWeight.w600)),
-                                      if ('${l['detail'] ?? ''}'.isNotEmpty)
-                                        Padding(
-                                          padding: const EdgeInsets.only(top: 2),
-                                          child: Text('${l['detail']}', style: TextStyle(fontSize: 12, color: c.textSub)),
-                                        ),
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 3),
-                                        child: Text(
-                                          '${l['username'] ?? ''} · ${_fmtTime(l['created_at'])}',
-                                          style: TextStyle(fontSize: 11, color: c.textSub),
-                                        ),
+                                // 首行：谁 · 做了什么（动作标签 + 用户名加粗 + 对象）
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: c.primary.withOpacity(0.12),
+                                        borderRadius: BorderRadius.circular(6),
                                       ),
+                                      child: Text(actionTxt, style: TextStyle(fontSize: 12, color: c.primary)),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        '${l['username'] ?? ''} ${entityTxt.isNotEmpty ? '· $entityTxt' : ''}',
+                                        style: TextStyle(fontSize: 14, color: c.textMain, fontWeight: FontWeight.w700),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if ('${l['detail'] ?? ''}'.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4, left: 2),
+                                    child: Text('${l['detail']}', style: TextStyle(fontSize: 12, color: c.textSub)),
+                                  ),
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4, left: 2),
+                                  child: Text(
+                                    _fmtTime(l['created_at']),
+                                    style: TextStyle(fontSize: 11, color: c.textSub),
+                                  ),
+                                ),
                                     ],
                                   ),
                                 ),

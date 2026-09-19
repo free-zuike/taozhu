@@ -206,15 +206,28 @@ backupRouter.get('/files', async (c) => {
   const store = createStorage(c.env);
   const list = await store.list(BACKUP_PREFIX);
   const files = list.objects
-    .map((o) => ({
-      name: o.key.slice(BACKUP_PREFIX.length),
-      key: o.key,
-      size: o.size,
-      created_at: o.uploaded?.toISOString() ?? '',
-    }))
+    .map((o) => {
+      const name = o.key.slice(BACKUP_PREFIX.length).replace(/\.json$/, '');
+      return {
+        name: `${name}.json`,
+        name_display: formatBackupName(name),
+        key: o.key,
+        size: o.size,
+        created_at: o.uploaded?.toISOString() ?? '',
+      };
+    })
     .sort((a, b) => b.key.localeCompare(a.key));
   return c.json({ files });
 });
+
+/// 备份文件名统一显示：旧格式 YYYY-MM-DD（backup-2026-09-18）；新格式 YYYYMMDD-HHMMSSmmm → YYYY-MM-DD HH:MM:SS
+export function formatBackupName(name: string): string {
+  const old = /^(\d{4})-(\d{2})-(\d{2})$/.exec(name);
+  if (old) return `${old[1]}-${old[2]}-${old[3]}`;
+  const now = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\d{3}$/.exec(name);
+  if (now) return `${now[1]}-${now[2]}-${now[3]} ${now[4]}:${now[5]}:${now[6]}`;
+  return name;
+}
 
 // POST /backup/files/:key/restore — 从存储端历史备份恢复（服务端读取 → 合并导入；勿需下载再上传）
 backupRouter.post('/files/:key/restore', async (c) => {

@@ -313,6 +313,7 @@ export async function applyChange(
   db: D1Database,
   env: Env,
   ch: { entity_type: string; entity_sync_id: string; action: string; payload: unknown },
+  username?: string, // 同步发起者（push 认证用户）——审计"谁干的"用实际登录人，而非 payload.deep 空值
 ): Promise<{ ok: boolean; error?: string }> {
   const { entity_type, entity_sync_id: id, action } = ch;
   const p = (ch.payload ?? {}) as Record<string, any>;
@@ -423,10 +424,15 @@ export async function applyChange(
         ]);
         if (isNew) {
           try {
+            // 商品名：payload 缺失时查 items 表（避免显示行 id）；审计人=同步发起用户（真实登录人）
+            const nameRow = p.item_name
+              ? null
+              : await db.prepare('SELECT name FROM items WHERE id = ?').bind(itemId).first<{ name: string }>();
+            const itemName = p.item_name || nameRow?.name || itemId;
             await recordAudit(db, {
-              username: String(p.created_by ?? 'sync'),
+              username: username ?? String(p.created_by ?? 'sync'),
               action: 'create', entity_type: 'sale_item', entity_id: id,
-              detail: `添加出货商品行（同步）：${p.item_name || itemId} × ${qty}${String(p.unit ?? '')}`,
+              detail: `添加出货商品行（同步）：${itemName} × ${qty}${String(p.unit ?? '')}`,
             });
           } catch (_) {}
         }
@@ -479,10 +485,15 @@ export async function applyChange(
         ]);
         if (isNew2) {
           try {
+            // 商品名：payload 缺失时查 items 表；审计人=同步发起用户（真实登录人）
+            const nameRow2 = p.item_name
+              ? null
+              : await db.prepare('SELECT name FROM items WHERE id = ?').bind(itemId2).first<{ name: string }>();
+            const itemName2 = p.item_name || nameRow2?.name || itemId2;
             await recordAudit(db, {
-              username: String(p.created_by ?? 'sync'),
+              username: username ?? String(p.created_by ?? 'sync'),
               action: 'create', entity_type: 'purchase_item', entity_id: id,
-              detail: `添加进货商品行（同步）：${p.item_name || itemId2} × ${qty2}${String(p.unit ?? '')}`,
+              detail: `添加进货商品行（同步）：${itemName2} × ${qty2}${String(p.unit ?? '')}`,
             });
           } catch (_) {}
         }

@@ -72,7 +72,8 @@ syncRouter.post('/push', async (c) => {
     }
 
     // 应用到业务表（投影；含库存联动与附件引用差集 GC），成功后追加变更流
-    const applied = await applyChange(c.env.DB, c.env, { entity_type: entityType, entity_sync_id: id, action, payload: ch.payload ?? {} });
+    // username=push 认证用户 → 行级审计"谁干的"记实际登录人（同设备批量变更同人）
+    const applied = await applyChange(c.env.DB, c.env, { entity_type: entityType, entity_sync_id: id, action, payload: ch.payload ?? {} }, user.username);
     if (!applied.ok) {
       result.rejected += 1;
       if (result.conflict_samples.length < 10) {
