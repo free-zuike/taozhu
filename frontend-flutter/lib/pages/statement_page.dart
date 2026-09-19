@@ -1947,22 +1947,32 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
-  /// 按当前模板打印（对账单统一打印入口）：模板粒度映射服务端 /print/monthly
-  /// detail→逐单明细、daily→每日汇总、period→旬段汇总（1-10/11-20/21-30/31 日 8 列）、item→回落逐单明细
+  /// 按当前模板打印（对账单统一打印入口）：渲染模板行集合 → base64 编码 → 服务端 /print/template 按其排版输出
   Future<void> _printCurrent() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
-    final modeMap = {'detail': 'detail', 'daily': 'daily', 'item': 'detail', 'period': 'period'};
-    final mode = modeMap[_xls.mode] ?? 'detail';
-    final from = _fromCtrl.text.trim();
-    final month = from.length >= 7 ? from.substring(0, 7) : from;
+    final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
+    List<XlsCfg> templates;
+    try {
+      templates = await loadTemplates();
+      if (templates.isEmpty) templates = [XlsCfg()..name = '标准'];
+    } catch (_) {
+      templates = [XlsCfg()..name = '标准'];
+    }
+    final sel = templates.firstWhere((t) => t.name == _xls.name, orElse: () => templates.first);
+    final trows = renderTemplateRows(sel, _td(clientName));
+    final rowsJson = jsonEncode([
+      for (final row in trows) [for (final c in row) [c.text, c.align]],
+    ]);
+    final rowsB64 = base64Url.encode(utf8.encode(rowsJson));
+    final title = Uri.encodeQueryComponent('$clientName 对账单');
     try {
       final base = await Api.instance.getBase();
       final token = await Api.instance.getTokenValue() ?? '';
       final cid = _clientId ?? '';
-      await openPrintUrl('$base/api/v1/print/monthly?kind=sale&month=$month&mode=$mode&client_id=$cid&token=$token');
+      await openPrintUrl('$base/api/v1/print/template?title=$title&rows=$rowsB64&token=$token&client_id=$cid');
     } catch (e) {
       toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
     }

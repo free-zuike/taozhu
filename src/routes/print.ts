@@ -118,6 +118,41 @@ ${itemsHtml}
 ${String(first.note ?? '').trim() ? `<div class="note">备注：${esc(first.note)}</div>` : ''}`));
 });
 
+printRouter.get('/template', async (c) => {
+  const token = c.req.query('token') ?? '';
+  const payload = await verifyToken(c.env.JWT_SECRET, token);
+  if (!payload) return c.json({ error: '未授权' }, 401);
+  const title = c.req.query('title')?.trim() || '对账单';
+  const rowsB64 = c.req.query('rows') ?? '';
+  if (!rowsB64) return c.json({ error: 'rows 缺失' }, 400);
+  let rows: [string, string][][];
+  try {
+    const b64 = rowsB64.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(rowsB64.length / 4) * 4, '=');
+    const decoded = JSON.parse(atob(b64));
+    if (!Array.isArray(decoded)) return c.json({ error: 'rows 格式错误' }, 400);
+    rows = (decoded as unknown[][]).map((row) =>
+      (row as unknown[][]).map((cell) => {
+        const t = cell.length > 0 ? String(cell[0] ?? '') : '';
+        const a = cell.length > 1 ? String(cell[1] ?? 'left') : 'left';
+        return [t, a];
+      }),
+    );
+  } catch (_) {
+    return c.json({ error: 'rows 解码失败' }, 400);
+  }
+  const bodyRows = rows.map((row) =>
+    '          <tr>\n' +
+    row.map(([t, a]) => {
+      const ta = a === 'center' ? 'center' : a === 'right' ? 'right' : 'left';
+      return `            <td style="text-align:${ta}">${esc(t) || '&nbsp;'}</td>`;
+    }).join('\n') +
+    '\n          </tr>').join('\n');
+  return c.html(page(title, `<h1>${esc(title)}</h1>
+<table>
+${bodyRows}
+</table>`));
+});
+
 // GET /print/monthly?kind=sale|purchase&month=YYYY-MM&mode=detail|daily|period&client_id=&token=
 // 按月打印：detail=当月逐单明细分页（每单一页）；daily=每日汇总（日期/笔数/件数/金额）；
 // period=旬段汇总模板（标题"店名M月销售"居中 + 打印日期 + 1-10/11-20/21-30/31 日各配销售额列 + 总计）
