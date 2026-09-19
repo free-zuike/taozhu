@@ -1313,9 +1313,9 @@ class _LedgerPageState extends State<LedgerPage> {
         ),
       );
     }
-    // 按日期分组（流水：日期组头 + 行）——按日期升序，改日期后顺序正确
+    // 按日期分组（流水：日期组头 + 行）——按日期降序，最新日期在最上方
     final sortedRows = rows.toList()
-      ..sort((a, b) => _date(a['happened_at']).compareTo(_date(b['happened_at'])));
+      ..sort((a, b) => _date(b['happened_at']).compareTo(_date(a['happened_at'])));
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final r in sortedRows) {
       final d = _date(r['happened_at']);
@@ -1443,9 +1443,9 @@ class _LedgerPageState extends State<LedgerPage> {
         ),
       );
     }
-    // 按行日期分组（日期相同按店名排序）
+    // 按行日期分组（日期降序：最新日期在最上方；同日按店名排序）
     lines.sort((a, b) {
-      final x = '${a['date']}'.compareTo('${b['date']}');
+      final x = '${b['date']}'.compareTo('${a['date']}');
       return x != 0 ? x : '${a['client_name']}'.compareTo('${b['client_name']}');
     });
     final grouped = <String, List<Map<String, dynamic>>>{};

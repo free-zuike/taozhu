@@ -716,9 +716,9 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         });
       }
     }
-    // 按行日期分组（按日期升序——改行/单日期后列表按新日期顺序重排，非插入序）
+    // 按行日期分组（按日期降序：最新日期在最上方，向下滚动看更早）
     final sortedLines = lines.toList()
-      ..sort((a, b) => '${a['date']}'.compareTo('${b['date']}'));
+      ..sort((a, b) => '${b['date']}'.compareTo('${a['date']}'));
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final l in sortedLines) {
       (grouped['${l['date']}'] ??= []).add(l);

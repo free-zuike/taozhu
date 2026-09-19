@@ -1,6 +1,6 @@
 /** 操作审计：关键写操作留痕（谁在什么时候对哪个实体做了什么）。
- *  记录点：登录/登出、删除交易/进货/收款、修改价格/店铺、导入导出备份、用户管理、设置变更。
- *  仅追加不删除（保留最近 500 条，超出清理最旧，防无限增长）。 */
+ *  记录点：登录/登出、删除交易/进货/收款、添加出货/进货、导入导出备份、重算库存。
+ *  仅追加、不可删除、永久保留（操作量级小，无自动清理；无任何删除接口）。 */
 import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import type { AuthUser, Env } from '../types';
@@ -9,7 +9,8 @@ type V = { user: AuthUser };
 export const auditRouter = new Hono<{ Bindings: Env; Variables: V }>();
 auditRouter.use('*', authMiddleware(), adminOnly());
 
-const MAX_KEEP = 500;
+/// 审计保留时长（天）：半年以上记录按月清理（不按条数——审计短期留痕，半年内不可删）
+const KEEP_DAYS = 180;
 
 /// 动作中文标签（前端显示用；action 值保持英文稳定——后续多语言按 Accept-Language 返回对应语言，不改存储）
 const ACTION_LABEL: Record<string, string> = {
@@ -37,10 +38,9 @@ export async function recordAudit(db: D1Database, e: AuditEntry): Promise<void> 
     await db.prepare(
       'INSERT INTO audit_logs (username, action, entity_type, entity_id, detail) VALUES (?, ?, ?, ?, ?)',
     ).bind(e.username, e.action, e.entity_type ?? null, e.entity_id ?? null, e.detail ?? null).run();
-    // 超出上限清理最旧（低频操作，逐条删除可接受）
-    await db.prepare(
-      'DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT ?)',
-    ).bind(MAX_KEEP).run();
+    // 按月清理半年以上记录（审计短期留痕：半年内不可删；不按条数，created_at 同为 UTC ISO 字符串可比较）
+    await db.prepare('DELETE FROM audit_logs WHERE created_at < ?')
+      .bind(new Date(Date.now() - KEEP_DAYS * 86400 * 1000).toISOString()).run();
   } catch (_) {
     // 审计失败不阻断业务
   }
