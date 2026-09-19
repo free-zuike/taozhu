@@ -1688,7 +1688,7 @@ class _XlsCfg {
         for (final row in rawGrid)
           [
             for (final c in (row as List? ?? []))
-              if (c is Map) _GridCell.fromJson(c),
+              if (c is Map) _GridCell.fromJson(Map<String, dynamic>.from(c)),
           ],
       ];
     }
