@@ -63,32 +63,29 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
 
   void _syncMonthFromScroll() {
     if (!mounted || _scrollPicking) return;
-    // 优先取视口内（dy>=0）离顶部最近的日期头；全部滚过（无 dy>=0）时取最接近顶部的
-    // 负 dy 头（最后一个滚过的）——避免取到最远的最早头导致标签乱切
+    // 联动锚点 = 顶部"进货金额统计卡"栏位线（非视口最顶部）：取 dy 最接近该栏位的日期头——
+    // 9 月时 9 月初头正对统计卡栏位 → 标签 9 月；8 月 31 头只在视口顶部露头（未到栏位）不算，
+    // 直到它滚到统计卡栏位附近才切 8 月（符合"移动的位置是显示金额那一栏"）
+    const lineY = 130.0; // 统计卡栏位线（视口顶部往下；顶部=月份行+统计卡）
+    final viewportH = MediaQuery.of(context).size.height;
+    double? best;
     String? bestKey;
-    double? bestDy; // dy>=0 中最小
-    String? fbKey;
-    double? fbDy; // dy<0 中最大（最接近顶部）
     for (final e in _dateHeaderKeys.entries) {
       final ctx = e.value.currentContext;
       if (ctx == null) continue;
       final box = ctx.findRenderObject();
       if (box is! RenderBox) continue;
       final dy = box.localToGlobal(Offset.zero).dy;
-      if (dy >= 0) {
-        if (bestDy == null || dy < bestDy) {
-          bestDy = dy;
-          bestKey = e.key;
-        }
-      } else if (fbDy == null || dy > fbDy) {
-        fbDy = dy;
-        fbKey = e.key;
+      if (dy < -80 || dy > viewportH + 80) continue; // 视口附近（含刚滚出上一头）
+      final diff = (dy - lineY).abs();
+      if (best == null || diff < best) {
+        best = diff;
+        bestKey = e.key;
       }
     }
-    final topKey = bestKey ?? fbKey;
-    if (topKey == null || topKey.length < 7) return;
-    final y = int.tryParse(topKey.substring(0, 4));
-    final m = int.tryParse(topKey.substring(5, 7));
+    if (bestKey == null || bestKey.length < 7) return;
+    final y = int.tryParse(bestKey.substring(0, 4));
+    final m = int.tryParse(bestKey.substring(5, 7));
     if (y == null || m == null || m < 1 || m > 12) return;
     if (y == _selYear && m == _selMonth) return;
     setState(() {

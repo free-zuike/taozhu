@@ -215,31 +215,27 @@ class _LedgerPageState extends State<LedgerPage> {
 
   void _syncMonthFromScroll() {
     if (!mounted || _scrollPicking) return;
-    // 优先视口内（dy>=0）离顶部最近的日期头；全部滚过（无 dy>=0）时取最接近顶部的
-    // 负 dy 头（最后一个滚过的）——避免取到最远最早头导致标签乱切
+    // 联动锚点 = 顶部"月度结余卡"栏位线（非视口最顶部）：取 dy 最接近该栏位的日期头——
+    // 跨月边界轻微滑动（8/9 月相邻）时日期头只在视口顶部露头不算，滚到结余卡栏位附近才切
+    const lineY = 200.0; // 月度结余卡栏位线（视口顶部往下）
+    final viewportH = MediaQuery.of(context).size.height;
+    double? best;
     String? bestKey;
-    double? bestDy;
-    String? fbKey;
-    double? fbDy;
     for (final e in _dateHeaderKeys.entries) {
       final ctx = e.value.currentContext;
       final ro = ctx?.findRenderObject();
       if (ro is! RenderBox || !ro.attached) continue;
       final dy = ro.localToGlobal(Offset.zero).dy;
-      if (dy >= 0) {
-        if (bestDy == null || dy < bestDy) {
-          bestDy = dy;
-          bestKey = e.key;
-        }
-      } else if (fbDy == null || dy > fbDy) {
-        fbDy = dy;
-        fbKey = e.key;
+      if (dy < -80 || dy > viewportH + 80) continue; // 视口附近（含刚滚出上一头）
+      final diff = (dy - lineY).abs();
+      if (best == null || diff < best) {
+        best = diff;
+        bestKey = e.key;
       }
     }
-    final bestDate = bestKey ?? fbKey;
-    if (bestDate == null || bestDate.length < 7) return;
-    final y = int.tryParse(bestDate.substring(0, 4));
-    final m = int.tryParse(bestDate.substring(5, 7));
+    if (bestKey == null || bestKey.length < 7) return;
+    final y = int.tryParse(bestKey.substring(0, 4));
+    final m = int.tryParse(bestKey.substring(5, 7));
     if (y == null || m == null) return;
     if (y == _selYear && m == _selMonth) return;
     setState(() {
