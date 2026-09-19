@@ -37,7 +37,7 @@ class _PRow {
   String origPurchaseId = '';
   /// 行原备注（直编/编辑保存时保留，避免 payload 缺 note 清空服务端行备注）
   String note = '';
-  /// 本单折合计数数量（如金针菇进 1 箱填 40 袋→库存按袋+40；空=不折按原单位。仅当商品配计数单位时生效）
+  /// 本单折合计数数量（如进 1 大单位折合 N 个计数单位→库存按计数单位累计；空=不折按原单位。仅当商品配计数单位时生效）
   double? countQty;
   /// 保存时构建的商品行 payload（去单据化：逐行入队 purchase_item 用）
   Map<String, dynamic>? itemsPayload;
@@ -1106,7 +1106,7 @@ class _PurchasePageState extends State<PurchasePage> {
             ],
           ),
           // 折合计数输入（进销单位换算通用字段）：商品配了计数单位（袋/个…）且与当前单位不同时显示。
-          // 填"本单折合几个计数单位"（金针菇进 1 箱 → 填 40 袋），库存/备货按它累计——备货页显示"还剩几个"。
+          // 填"本单折合几个计数单位"（进 1 大单位 → 填折合出的计数单位数），库存/备货按它累计——备货页显示"还剩几个"。
           if (item != null && '${item['count_unit'] ?? ''}'.isNotEmpty && '${item['count_unit'] ?? ''}' != row.unitCtrl.text.trim())
             Padding(
               padding: const EdgeInsets.only(top: 6),

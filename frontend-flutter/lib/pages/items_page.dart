@@ -571,7 +571,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
             controller: _countUnitCtrl,
             decoration: const InputDecoration(
               labelText: '计数单位（可选）',
-              helperText: '备货按它统计（金针菇填「袋」→ 库存显示还剩多少袋；木瓜填「个」→ 还剩多少个）。留空=不换算',
+              helperText: '备货按它统计：进货按大单位/卖货按小单位时，库存折算成它显示剩余量（如 1 箱折成 40 袋 → 填「袋」）。留空=不换算',
             ),
           ),
           const SizedBox(height: 16),

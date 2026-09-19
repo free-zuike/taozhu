@@ -20,7 +20,7 @@ interface PurchaseItemInput {
   id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
   price_id: string;
   quantity: number;
-  count_qty?: number;        // 本单折合计数数量（金针菇进1箱填40袋→库存按袋+40；缺省=quantity 按原单位）
+  count_qty?: number;        // 本单折合计数数量（进 1 大单位折合 N 个计数单位→填 N，库存按计数单位累计；缺省=quantity 按原单位）
   purchase_price?: number;   // 可覆盖默认进价
   happened_at?: string;      // 行独立日期（缺省用单据日期）
   note?: string;             // 行级备注（缺省空）

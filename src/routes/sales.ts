@@ -20,7 +20,7 @@ interface SaleItemInput {
   id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
   price_id: string;          // item_prices.id
   quantity: number;
-  count_qty?: number;        // 本单折合计数数量（如卖 3 斤木瓜按个备货→填 2 个，库存按个扣；缺省=quantity 按原单位）
+  count_qty?: number;        // 本单折合计数数量（卖货按大单位称重、备货按小单位计数→填折合出的计数单位数，库存按计数单位扣；缺省=quantity 按原单位）
   sale_price?: number;       // 可覆盖默认售价
   happened_at?: string;      // 行独立日期（缺省用单据日期）
   note?: string;             // 行级备注（缺省空）

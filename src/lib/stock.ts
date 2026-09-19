@@ -29,7 +29,7 @@ export function stockUpsert(
 /**
  * 进销单位换算后的库存联动（通用，按字段折算、不含商品名逻辑）：
  * - 商品配了计数单位 count_unit 且与行单位不同，且本行折合数 count_qty（或价格行 per×quantity）≠ quantity
- *   → 库存按 (count_unit, countQty) 累计（金针菇进 1 箱 count_qty=40 → 库存 +40 袋）
+ *   → 库存按 (count_unit, countQty) 累计（进 1 大单位 count_qty=40 → 库存 +40 计数单位）
  * - 否则按原 (unit, quantity)（未折合商品行为不变）
  * sign=1 进货增加 / -1 出货扣减或回滚，delta 数量取折合后值。
  */
