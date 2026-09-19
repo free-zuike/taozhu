@@ -466,6 +466,12 @@ class _StatementPageState extends State<StatementPage> {
                       label: const Text('网格模板'),
                       onPressed: () => _gridEditorDialog(ctx, cfg, clientName),
                     ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.widgets_outlined, size: 16),
+                      label: const Text('组件模板'),
+                      onPressed: () => _compEditorDialog(ctx, cfg, clientName),
+                    ),
                   ],
                 ),
               ],
@@ -1019,7 +1025,146 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
-  /// 版式预览（所见即所得）：标题居中 + 表头信息行 + 明细表格 + 总计——与导出/打印同源排版
+  /// 组件式模板编辑器：添加/排序/配置组件（title/fields/stats/days/detail/text）+ 实时预览
+  Future<void> _compEditorDialog(BuildContext ctx, _XlsCfg cfg, String clientName) async {
+    const typeNames = <String, String>{
+      'title': '标题', 'fields': '信息字段', 'stats': '统计',
+      'days': '按日金额表（1-31）', 'detail': '出货明细', 'text': '自定义文本',
+    };
+    if (cfg.comps.isEmpty) {
+      cfg.comps = [
+        _TmplComp(type: 'title', text: '对账单', align: 'center'),
+        _TmplComp(type: 'fields'),
+        _TmplComp(type: 'days'),
+      ];
+    }
+    await showDialog<void>(
+      context: ctx,
+      builder: (dctx) => StatefulBuilder(
+        builder: (dctx, setDlg) {
+          void move(int i, int delta) {
+            final ni = i + delta;
+            if (ni < 0 || ni >= cfg.comps.length) return;
+            final t = cfg.comps.removeAt(i);
+            cfg.comps.insert(ni, t);
+          }
+          Future<void> addComp() async {
+            final type = await showDialog<String>(
+              context: dctx,
+              builder: (c3) => SimpleDialog(
+                title: const Text('添加组件'),
+                children: [
+                  for (final e in typeNames.entries)
+                    SimpleDialogOption(
+                      onPressed: () => Navigator.pop(c3, e.key),
+                      child: Text(e.value, style: const TextStyle(fontSize: 14)),
+                    ),
+                ],
+              ),
+            );
+            if (type == null) return;
+            setDlg(() => cfg.comps.add(_TmplComp(type: type)));
+          }
+          Future<void> config(int i) async {
+            final c = cfg.comps[i];
+            final textCtrl = TextEditingController(text: c.text);
+            var align = c.align;
+            await showDialog<void>(
+              context: dctx,
+              builder: (c4) => StatefulBuilder(
+                builder: (c4, setC) => AlertDialog(
+                  title: Text('配置：${typeNames[c.type] ?? c.type}'),
+                  content: Column(mainAxisSize: MainAxisSize.min, children: [
+                    if (c.type == 'text' || c.type == 'title')
+                      TextField(
+                        controller: textCtrl,
+                        maxLines: 3,
+                        decoration: const InputDecoration(labelText: '内容（可含变量 {店铺}{明细}{1日}…）'),
+                      ),
+                    Wrap(spacing: 4, children: [
+                      for (final a in const ['left', 'center', 'right'])
+                        ChoiceChip(
+                          label: Text(a == 'left' ? '左' : a == 'center' ? '中' : '右'),
+                          selected: align == a,
+                          onSelected: (_) => setC(() => align = a),
+                        ),
+                    ]),
+                  ]),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(c4), child: const Text('取消')),
+                    FilledButton(
+                      onPressed: () {
+                        c.text = textCtrl.text;
+                        c.align = align;
+                        Navigator.pop(c4);
+                      },
+                      child: const Text('保存'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+            setDlg(() {});
+          }
+          return AlertDialog(
+            title: const Text('组件模板编辑'),
+            scrollable: true,
+            content: SizedBox(
+              width: 430,
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Wrap(spacing: 6, runSpacing: 4, children: [
+                  OutlinedButton.icon(icon: const Icon(Icons.add, size: 16), label: const Text('添加组件'), onPressed: addComp),
+                  OutlinedButton.icon(
+                      icon: const Icon(Icons.visibility_outlined, size: 16), label: const Text('预览'),
+                      onPressed: () => showDialog<void>(
+                          context: dctx,
+                          builder: (c3) => AlertDialog(
+                              title: Text('预览：${cfg.name}'),
+                              content: SizedBox(width: 580, child: _gridPreview(cfg, clientName)),
+                              actions: [TextButton(onPressed: () => Navigator.pop(c3), child: const Text('关闭'))]))),
+                  const SizedBox(width: 4),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text('组件按顺序渲染：点条目配置、↑↓排序、×删除', style: TextStyle(fontSize: 11, color: _c.textSub)),
+                  ),
+                ]),
+                const SizedBox(height: 4),
+                for (var i = 0; i < cfg.comps.length; i++)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: _c.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: _c.divider)),
+                    child: Row(children: [
+                      Expanded(
+                        child: InkWell(
+                          onTap: () => config(i),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text('${i + 1}. ${typeNames[cfg.comps[i].type] ?? cfg.comps[i].type}',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _c.textMain)),
+                            if (cfg.comps[i].text.isNotEmpty)
+                              Text('${cfg.comps[i].text}', maxLines: 1, overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 11, color: _c.textSub)),
+                          ]),
+                        ),
+                      ),
+                      IconButton(iconSize: 18, icon: const Icon(Icons.arrow_upward), onPressed: () => setDlg(() => move(i, -1))),
+                      IconButton(iconSize: 18, icon: const Icon(Icons.arrow_downward), onPressed: () => setDlg(() => move(i, 1))),
+                      IconButton(iconSize: 18, icon: const Icon(Icons.close), onPressed: () => setDlg(() => cfg.comps.removeAt(i))),
+                    ]),
+                  ),
+              ]),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('完成')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+/// 版式预览（所见即所得）：标题居中 + 表头信息行 + 明细表格 + 总计——与导出/打印同源排版
   Widget _previewTable(_XlsCfg cfg, String clientName) {
     final infoRows = <String>[
       if (cfg.headClient) '客户：$clientName',
