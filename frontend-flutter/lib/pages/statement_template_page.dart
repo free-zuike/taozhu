@@ -295,10 +295,10 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
               icon: const Icon(Icons.playlist_remove, size: 14), label: const Text('删列'),
               onPressed: cols > 1 ? delCol : null),
           OutlinedButton.icon(
-              icon: const Icon(Icons.add_row_above, size: 14), label: const Text('加行'),
+              icon: const Icon(Icons.add, size: 14), label: const Text('加行'),
               onPressed: addRow),
           OutlinedButton.icon(
-              icon: const Icon(Icons.remove_row, size: 14), label: const Text('删行'),
+              icon: const Icon(Icons.remove, size: 14), label: const Text('删行'),
               onPressed: cur.grid.length > 1 ? delRow : null),
           // 每列对齐循环按钮（左→中→右），渲染时 colAligns 优先于单元格 align
           for (var cc = 0; cc < cols; cc++)
@@ -358,7 +358,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                               textAlign: cell.align == 'center'
                                   ? TextAlign.center
                                   : (cell.align == 'right' ? TextAlign.right : TextAlign.left),
-                              style: const TextStyle(fontSize: 11, color: c.textMain)),
+                              style: TextStyle(fontSize: 11, color: c.textMain)),
                         ),
                     ]),
                 ],
