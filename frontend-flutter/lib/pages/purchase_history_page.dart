@@ -63,21 +63,29 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
 
   void _syncMonthFromScroll() {
     if (!mounted || _scrollPicking) return;
-    String? topKey;
-    double? bestDy;
+    // 优先取视口内（dy>=0）离顶部最近的日期头；全部滚过（无 dy>=0）时取最接近顶部的
+    // 负 dy 头（最后一个滚过的）——避免取到最远的最早头导致标签乱切
+    String? bestKey;
+    double? bestDy; // dy>=0 中最小
+    String? fbKey;
+    double? fbDy; // dy<0 中最大（最接近顶部）
     for (final e in _dateHeaderKeys.entries) {
       final ctx = e.value.currentContext;
       if (ctx == null) continue;
       final box = ctx.findRenderObject();
       if (box is! RenderBox) continue;
       final dy = box.localToGlobal(Offset.zero).dy;
-      // 取离视口顶部最近的日期头（含已滚过头顶 dy<0 的，与交易页一致）——
-      // 否则大幅滚动后视口内无 dy>=0 的头 → 联动停摆（标签停留旧月）
-      if (bestDy == null || dy < bestDy) {
-        bestDy = dy;
-        topKey = e.key;
+      if (dy >= 0) {
+        if (bestDy == null || dy < bestDy) {
+          bestDy = dy;
+          bestKey = e.key;
+        }
+      } else if (fbDy == null || dy > fbDy) {
+        fbDy = dy;
+        fbKey = e.key;
       }
     }
+    final topKey = bestKey ?? fbKey;
     if (topKey == null || topKey.length < 7) return;
     final y = int.tryParse(topKey.substring(0, 4));
     final m = int.tryParse(topKey.substring(5, 7));

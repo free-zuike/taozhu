@@ -215,19 +215,28 @@ class _LedgerPageState extends State<LedgerPage> {
 
   void _syncMonthFromScroll() {
     if (!mounted || _scrollPicking) return;
-    // 找视口内最顶部的日期头：dy 最小且位于列表区域（取已挂载的 key 中 dy 最小者）
+    // 优先视口内（dy>=0）离顶部最近的日期头；全部滚过（无 dy>=0）时取最接近顶部的
+    // 负 dy 头（最后一个滚过的）——避免取到最远最早头导致标签乱切
+    String? bestKey;
     double? bestDy;
-    String? bestDate;
+    String? fbKey;
+    double? fbDy;
     for (final e in _dateHeaderKeys.entries) {
       final ctx = e.value.currentContext;
       final ro = ctx?.findRenderObject();
       if (ro is! RenderBox || !ro.attached) continue;
       final dy = ro.localToGlobal(Offset.zero).dy;
-      if (bestDy == null || dy < bestDy) {
-        bestDy = dy;
-        bestDate = e.key;
+      if (dy >= 0) {
+        if (bestDy == null || dy < bestDy) {
+          bestDy = dy;
+          bestKey = e.key;
+        }
+      } else if (fbDy == null || dy > fbDy) {
+        fbDy = dy;
+        fbKey = e.key;
       }
     }
+    final bestDate = bestKey ?? fbKey;
     if (bestDate == null || bestDate.length < 7) return;
     final y = int.tryParse(bestDate.substring(0, 4));
     final m = int.tryParse(bestDate.substring(5, 7));
