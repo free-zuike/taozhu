@@ -1,5 +1,5 @@
 /// Flutter 应用版本号（三位：主版本.功能版本.修复版本；微信不支持四段）——发版时递增，与 src/version.ts 语义同步
-const APP_VERSION = '0.17.179';
+const APP_VERSION = '0.17.180';
 const APP_NAME = '陶朱';
 
 /// 三位版本号比较：a < b ? true（版本号格式非法时按相等处理，不误伤）——与服务端 src/version.ts 同逻辑

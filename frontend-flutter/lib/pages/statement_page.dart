@@ -65,6 +65,10 @@ class _StatementPageState extends State<StatementPage> {
   _XlsCfg _xls = _XlsCfg();
   /// 全部模板（本机持久化：可添加/修改/删除；内置「标准」「旬段汇总」不可删）
   List<_XlsCfg> _templates = [];
+  /// 公共库模板（renderTemplateRows 渲染成品唯一数据源；开箱即用预设 + 用户模板）
+  List<XlsCfg> _pubTpls = [];
+  /// 当前选中的成品样式名（默认「标准」=多栏月账单，生成后直接展示无需设计）
+  String _selTplName = '标准';
 
   static String _fmt(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -144,16 +148,27 @@ class _StatementPageState extends State<StatementPage> {
     final cid = _clientId ?? '';
     setState(() => _loading = true);
     try {
+      // 并行拉数据 + 加载公共模板（成品预览/导出/打印同源）
       final results = await Future.wait([
         Api.instance.get('/sales?client_id=$cid&date_from=$from&date_to=$to&limit=1000'),
         Api.instance.get('/payments?client_id=$cid&date_from=$from&date_to=$to&limit=1000'),
         Api.instance.get('/stats/summary?start=$from&end=$to&client_id=$cid'),
       ]);
+      List<XlsCfg> tpls;
+      try {
+        tpls = await loadTemplates();
+        if (tpls.isEmpty) tpls = [XlsCfg()..name = '标准'];
+      } catch (_) {
+        tpls = [XlsCfg()..name = '标准'];
+      }
       if (!mounted) return;
       setState(() {
         _sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
         _payments = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
         _debtEnd = ((results[2]['debt'] as num?)?.toDouble() ?? 0);
+        _pubTpls = tpls;
+        // 首次选中「标准」（多栏月账单开箱即用）；用户之后手动切换则在 chips 中持久化
+        if (!tpls.any((t) => t.name == _selTplName)) _selTplName = tpls.first.name;
         _loading = false;
         _loaded = true;
       });
@@ -223,6 +238,16 @@ class _StatementPageState extends State<StatementPage> {
         debtEnd: _debtEnd,
       );
 
+  /// 当前选中成品样式（公共库模板；缺省第一条）
+  XlsCfg get _curPubTpl {
+    final t = _pubTpls.where((t) => t.name == _selTplName).firstOrNull;
+    return t ?? (_pubTpls.isNotEmpty ? _pubTpls.first : XlsCfg()..name = '标准');
+  }
+
+  /// 当前店铺名（成品标题用；全部店铺时为空串由默认模板兜底）
+  String get clientNameForTpl =>
+      _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '';
+
   /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃；加粗/底纹随行渲染）
   Widget _previewTplRows(List<List<GridCell>> rows) {
     return SingleChildScrollView(
@@ -249,13 +274,13 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
-  /// 导出对账单（模板化：选择模板 → 预览 → 导出；模板自定义在独立「模板设置」页）
+  /// 导出对账单（模板化：默认当前选中样式 → 预览 → 导出；样式在页面上方 chips 切换）
   Future<void> _exportTpl() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
-    final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
+    final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
     List<XlsCfg> templates;
     try {
       templates = await loadTemplates();
@@ -263,7 +288,13 @@ class _StatementPageState extends State<StatementPage> {
     } catch (_) {
       templates = [XlsCfg()..name = '标准'];
     }
-    String selName = templates.first.name;
+    // 默认跟随页面当前选中样式（开箱即用：页面上方已实时预览，此处只是确认导出）
+    if (_selTplName.isNotEmpty && templates.any((t) => t.name == _selTplName)) {
+      // 保持页面选择
+    }
+    String selName = _selTplName.isNotEmpty && templates.any((t) => t.name == _selTplName)
+        ? _selTplName
+        : templates.first.name;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -276,7 +307,7 @@ class _StatementPageState extends State<StatementPage> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('选择模板', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                const Text('选择样式', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
                 Wrap(spacing: 6, runSpacing: 4, children: [
                   for (final t in templates)
@@ -302,7 +333,7 @@ class _StatementPageState extends State<StatementPage> {
                         );
                       }),
                   const SizedBox(width: 12),
-                  Text('自定义模板请到对账单页底部「模板设置」', style: TextStyle(fontSize: 11, color: _c.textSub)),
+                  Text('需要调整样式？返回页面上方「样式」chips 选择', style: TextStyle(fontSize: 11, color: _c.textSub)),
                 ]),
               ],
             ),
@@ -315,6 +346,8 @@ class _StatementPageState extends State<StatementPage> {
       ),
     );
     if (ok != true || !mounted) return;
+    // 弹窗所选样式同步回页面（下次生成仍用该样式）
+    if (selName != _selTplName) setState(() => _selTplName = selName);
     final sel = templates.firstWhere((t) => t.name == selName, orElse: () => templates.first);
     final excel = Excel.createExcel();
     excel.rename('Sheet1', '对账单');
@@ -1852,6 +1885,34 @@ class _StatementPageState extends State<StatementPage> {
             ),
           ),
           if (_loaded) ...[
+            // 成品对账单（开箱即用）：样式 chips 切换 → 下方直接渲染模板成品，导出/打印同源
+            const SizedBox(height: 12),
+            const Text('对账单样式', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+            const SizedBox(height: 6),
+            Wrap(spacing: 6, runSpacing: 4, children: [
+              for (final t in _pubTpls.isEmpty ? [XlsCfg()..name = '标准'] : _pubTpls)
+                ChoiceChip(
+                  label: Text(t.name, style: const TextStyle(fontSize: 12)),
+                  selected: t.name == _selTplName,
+                  onSelected: (_) => setState(() => _selTplName = t.name),
+                ),
+            ]),
+            const SizedBox(height: 10),
+            Card(
+              elevation: 0,
+              color: c.card,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: c.divider),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: _previewTplRows(renderTemplateRows(_curPubTpl, _td(clientNameForTpl))),
+              ),
+            ),
+            if (_pubTpls.any((t) => t.name != _selTplName && t.name == '模板设置'))
+              Text('样式不足？请在下方「自定义模板」微调', style: TextStyle(fontSize: 11, color: c.textSub)),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -1952,22 +2013,14 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
-  /// 按当前模板打印（对账单统一打印入口）：渲染模板行集合 → base64 编码 → 服务端 /print/template 按其排版输出
+  /// 按当前样式打印（对账单统一打印入口）：渲染当前选中模板行集合 → base64 编码 → 服务端 /print/template 按其排版输出
   Future<void> _printCurrent() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
-    final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
-    List<XlsCfg> templates;
-    try {
-      templates = await loadTemplates();
-      if (templates.isEmpty) templates = [XlsCfg()..name = '标准'];
-    } catch (_) {
-      templates = [XlsCfg()..name = '标准'];
-    }
-    final sel = templates.firstWhere((t) => t.name == _xls.name, orElse: () => templates.first);
-    final trows = renderTemplateRows(sel, _td(clientName));
+    final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
+    final trows = renderTemplateRows(_curPubTpl, _td(clientName));
     final rowsJson = jsonEncode([
       for (final row in trows) [for (final c in row) [c.text, c.align, c.bold, c.bg]],
     ]);
