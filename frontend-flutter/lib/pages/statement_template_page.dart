@@ -21,7 +21,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   bool _loading = true;
   PlutoGridStateManager? _gridState; // 网格编辑状态（保存时回读）
   int _gridTick = 0; // 结构变化计数：PlutoGrid columns/rows 只在创建时生效，加列/行后 key 变化强制重建
-  String _view = 'preview'; // preview 默认（开箱即用先看效果） | edit（高级：网格编辑）
+  String _view = 'edit'; // edit 默认（Excel 式网格编辑，双击单元格、拖列宽、加行加列） | preview（真实数据渲染）
 
   XlsCfg get _cur => _templates.firstWhere((t) => t.name == _selName, orElse: () => _templates.first);
 
@@ -223,9 +223,21 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       ];
     }
     final cols = cur.grid[0].length;
+    // Excel 式列标题：A/B/C…Z/AA/AB…
+    String excelCol(int i) {
+      var n = i + 1;
+      var s = '';
+      while (n > 0) {
+        final r = (n - 1) % 26;
+        s = String.fromCharCode(65 + r) + s;
+        n = (n - 1) ~/ 26;
+      }
+      return s;
+    }
+
     final columns = <PlutoColumn>[
       for (var cc = 0; cc < cols; cc++)
-        PlutoColumn(title: '${cc + 1} 列', field: 'c$cc', type: PlutoColumnType.text(), width: 110),
+        PlutoColumn(title: excelCol(cc), field: 'c$cc', type: PlutoColumnType.text(), width: 110),
     ];
     final gridRows = [
       for (var r = 0; r < cur.grid.length; r++)
@@ -314,7 +326,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                     : (cur.colAligns[cc] == 'right' ? 'left' : 'center');
               }),
             ),
-          Text('双击单元格编辑；可放变量 {店铺}{年}{月}{日}{1日}…{31日}{明细}{月账单}；{月账单}=整月分栏账单一格生成',
+          Text('像 Excel 一样编辑：双击单元格输入文字/变量；加列/加行按钮调整表结构；点「A/B/C…」切换列对齐；「{月账单}」=整月分栏账单一格生成。完成点右上角「保存」',
               style: TextStyle(fontSize: 11, color: c.textSub)),
         ]),
       ),
