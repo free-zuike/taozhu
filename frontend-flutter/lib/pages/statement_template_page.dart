@@ -30,6 +30,13 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
 
   XlsCfg get _cur => _templates.firstWhere((t) => t.name == _selName, orElse: () => _templates.first);
 
+  /// 对齐解析：列级 colAligns 优先，否则单元格自身 align——与渲染库 renderTemplateRows 一致
+  /// （编辑/预览/导出/打印同一套对齐，杜绝"编辑居中但预览不居中"）
+  String _cellAlign(XlsCfg cfg, int col, String fallback) {
+    if (col < cfg.colAligns.length && cfg.colAligns[col].isNotEmpty) return cfg.colAligns[col];
+    return fallback;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -218,28 +225,30 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       while (cur.grid[r].length < colCount) cur.grid[r].add(GridCell());
     }
     void rebuild() => setState(() {});
-    void addCol() {
-      for (final r in cur.grid) {
-        r.add(GridCell());
-      }
-      cur.colAligns.add('left');
+    // 在指定位置插入/删除行、列（操作面板用；调用前要 flush 不做——TableView 直接改 cur.grid）
+    void insertRowAt(int r) {
+      final w = cur.grid[0].length;
+      cur.grid.insert(r, [for (var cc = 0; cc < w; cc++) GridCell()]);
       rebuild();
     }
-    void delCol() {
-      if (cols <= 1) return;
-      for (final r in cur.grid) {
-        r.removeLast();
-      }
-      if (cur.colAligns.length > cols - 1) cur.colAligns.removeLast();
-      rebuild();
-    }
-    void addRow() {
-      cur.grid.add([for (var cc = 0; cc < cur.grid[0].length; cc++) GridCell()]);
-      rebuild();
-    }
-    void delRow() {
+    void removeRowAt(int r) {
       if (cur.grid.length <= 1) return;
-      cur.grid.removeLast();
+      cur.grid.removeAt(r);
+      rebuild();
+    }
+    void insertColAt(int cc) {
+      for (var r = 0; r < cur.grid.length; r++) {
+        cur.grid[r].insert(cc, GridCell());
+      }
+      cur.colAligns.insert(cc, 'left');
+      rebuild();
+    }
+    void removeColAt(int cc) {
+      if (cur.grid[0].length <= 1) return;
+      for (var r = 0; r < cur.grid.length; r++) {
+        cur.grid[r].removeAt(cc);
+      }
+      if (cc < cur.colAligns.length) cur.colAligns.removeAt(cc);
       rebuild();
     }
     // 查找覆盖 (r,c) 的合并起点（含自身）
@@ -255,20 +264,207 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       }
       return null;
     }
-    // 单元格内容 widget：点击编辑/参与合并选择
+    // 单元格操作面板（Excel 式，一个入口收纳编辑/对齐/加粗/插入行列/合并/删除）：
+    // 点单元格弹出，不再顶部加一排按钮
+    Future<void> _showCellMenu(int r, int col) async {
+      setState(() => _selCell = (r: r, c: col));
+      final cell = cur.grid[r][col];
+      await showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        builder: (ctx) => SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('单元格 (${r + 1},${col + 1})',
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                // 行：插入/删除
+                Row(children: [
+                  Expanded(
+                      child: OutlinedButton.icon(
+                          icon: const Icon(Icons.arrow_upward, size: 16),
+                          label: const Text('上方插行'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            insertRowAt(r);
+                          })),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: OutlinedButton.icon(
+                          icon: const Icon(Icons.arrow_downward, size: 16),
+                          label: const Text('下方插行'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            insertRowAt(r + 1);
+                          })),
+                ]),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                      child: OutlinedButton.icon(
+                          icon: const Icon(Icons.arrow_back, size: 16),
+                          label: const Text('左侧插列'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            insertColAt(col);
+                          })),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: OutlinedButton.icon(
+                          icon: const Icon(Icons.arrow_forward, size: 16),
+                          label: const Text('右侧插列'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            insertColAt(col + 1);
+                          })),
+                ]),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                      child: OutlinedButton.icon(
+                          icon: const Icon(Icons.remove, size: 16),
+                          label: const Text('删除本行'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            removeRowAt(r);
+                          })),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: OutlinedButton.icon(
+                          icon: const Icon(Icons.close, size: 16),
+                          label: const Text('删除本列'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            removeColAt(col);
+                          })),
+                ]),
+                const Divider(height: 20),
+                // 行：编辑文本 / 加粗
+                Row(children: [
+                  Expanded(
+                      child: OutlinedButton.icon(
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                          label: const Text('编辑文本'),
+                          onPressed: () {
+                            final ctrl = TextEditingController(text: cell.text);
+                            showDialog<void>(
+                              context: ctx,
+                              builder: (dctx) => AlertDialog(
+                                title: const Text('编辑单元格'),
+                                content: TextField(controller: ctrl, autofocus: true, maxLines: 3),
+                                actions: [
+                                  TextButton(
+                                      onPressed: () => Navigator.pop(dctx),
+                                      child: const Text('取消')),
+                                  FilledButton(
+                                      onPressed: () {
+                                        cell.text = ctrl.text;
+                                        setState(() {});
+                                        Navigator.pop(dctx);
+                                      },
+                                      child: const Text('确定')),
+                                ],
+                              ),
+                            );
+                          })),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: OutlinedButton.icon(
+                          icon: Icon(
+                              cell.bold ? Icons.format_bold : Icons.format_bold_outlined,
+                              size: 16),
+                          label: const Text('加粗'),
+                          onPressed: () {
+                            cell.bold = !cell.bold;
+                            setState(() {});
+                            Navigator.pop(ctx);
+                          })),
+                ]),
+                const SizedBox(height: 8),
+                // 行：对齐（列级）—— 与渲染一致（colAligns 优先）
+                Row(children: [
+                  for (final (val, label, icon) in [
+                    ('left', '左对齐', Icons.format_align_left),
+                    ('center', '居中', Icons.format_align_center),
+                    ('right', '右对齐', Icons.format_align_right),
+                  ])
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 3),
+                        child: OutlinedButton.icon(
+                          icon: Icon(icon, size: 16),
+                          label: Text(label, style: const TextStyle(fontSize: 12)),
+                          onPressed: () {
+                            while (cur.colAligns.length <= col) cur.colAligns.add('');
+                            cur.colAligns[col] = val;
+                            setState(() {});
+                            Navigator.pop(ctx);
+                          },
+                        ),
+                      ),
+                    ),
+                ]),
+                const Divider(height: 20),
+                // 行：合并 / 取消合并
+                OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: c.primary,
+                      side: BorderSide(color: c.primary.withOpacity(0.5)),
+                    ),
+                    icon: const Icon(Icons.merge_type, size: 16),
+                    label: const Text('合并选中区域（点起点后点终点）'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      setState(() {
+                        _mergeMode = true;
+                        _mergeStart = null;
+                      });
+                      _pageToast(context, '请点第一格=起点，再点第二格=终点');
+                    }),
+                OutlinedButton.icon(
+                    icon: const Icon(Icons.merge_type, size: 16),
+                    label: const Text('取消全部合并'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      int cleared = 0;
+                      for (final row in cur.grid) {
+                        for (final cell in row) {
+                          if (cell.rowSpan > 1 || cell.colSpan > 1) {
+                            cell.rowSpan = 1;
+                            cell.colSpan = 1;
+                            cleared++;
+                          }
+                        }
+                      }
+                      setState(() {});
+                      _pageToast(context, cleared == 0 ? '当前没有合并单元格' : '已取消全部合并');
+                    }),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // 单元格内容 widget：点击=合并模式两步 / 否则弹出操作面板（Excel 式：编辑/对齐/加粗/插入行列/合并一体）
     Widget cellWidget(int r, int col) {
       final cell = (r < cur.grid.length && col < cur.grid[r].length) ? cur.grid[r][col] : GridCell();
+      final a = _cellAlign(cur, col, cell.align);
       final isSel = _selCell != null && _selCell!.r == r && _selCell!.c == col;
       return InkWell(
         onTap: () {
           if (_mergeMode) {
-            // 合并选择：第一次记录起点，第二次按矩形合并
+            // 合并两步：第一格=起点，第二格=终点（矩形真合并）
             if (_mergeStart == null) {
               setState(() {
                 _mergeStart = (r: r, c: col);
                 _selCell = (r: r, c: col);
               });
-              _pageToast(context, '已选起点 ($r,$col)，再点终点完成合并');
+              _pageToast(context, '已选起点，再点终点完成合并');
             } else {
               final s = _mergeStart!;
               final rMin = s.r < r ? s.r : r;
@@ -300,32 +496,12 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
             }
             return;
           }
-          setState(() => _selCell = (r: r, c: col));
-          // 点击编辑文本（对话框）
-          final ctrl = TextEditingController(text: cell.text);
-          showDialog<void>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: Text('编辑单元格 (${r + 1},${col + 1})'),
-              content: TextField(controller: ctrl, autofocus: true, maxLines: 3),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-                FilledButton(
-                  onPressed: () {
-                    cell.text = ctrl.text;
-                    setState(() {});
-                    Navigator.pop(ctx);
-                  },
-                  child: const Text('确定'),
-                ),
-              ],
-            ),
-          );
+          _showCellMenu(r, col);
         },
         child: Container(
-          alignment: cell.align == 'center'
+          alignment: a == 'center'
               ? Alignment.center
-              : (cell.align == 'right' ? Alignment.centerRight : Alignment.centerLeft),
+              : (a == 'right' ? Alignment.centerRight : Alignment.centerLeft),
           padding: const EdgeInsets.symmetric(horizontal: 6),
           color: cell.bg == 'grey'
               ? c.primary.withOpacity(0.08)
@@ -360,7 +536,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-        child: Wrap(spacing: 6, runSpacing: 4, children: [
+        child: Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
           // 页内切换：编辑（TableView Excel 式网格） / 预览（真实数据渲染）
           SegmentedButton<String>(
             style: ButtonStyle(
@@ -374,63 +550,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
             selected: {_view},
             onSelectionChanged: (s) => setState(() => _view = s.first),
           ),
-          const VerticalDivider(width: 12),
-          OutlinedButton.icon(
-              icon: const Icon(Icons.playlist_add, size: 14), label: const Text('加列'),
-              onPressed: addCol),
-          OutlinedButton.icon(
-              icon: const Icon(Icons.playlist_remove, size: 14), label: const Text('删列'),
-              onPressed: cols > 1 ? delCol : null),
-          OutlinedButton.icon(
-              icon: const Icon(Icons.add, size: 14), label: const Text('加行'),
-              onPressed: addRow),
-          OutlinedButton.icon(
-              icon: const Icon(Icons.remove, size: 14), label: const Text('删行'),
-              onPressed: cur.grid.length > 1 ? delRow : null),
-          // Excel 功能区：合并（真合并，TableView 原生可见）/ 取消合并 / 对齐
-          OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _mergeMode ? Colors.white : c.primary,
-                backgroundColor: _mergeMode ? c.primary : null,
-                side: BorderSide(color: c.primary.withOpacity(0.5)),
-              ),
-              icon: const Icon(Icons.merge_type, size: 14),
-              label: Text(_mergeMode ? '合并：点起点' : '合并'),
-              onPressed: () => setState(() {
-                _mergeMode = !_mergeMode;
-                _mergeStart = null;
-              })),
-          OutlinedButton.icon(
-              icon: const Icon(Icons.merge_type, size: 14), label: const Text('取消合并'),
-              onPressed: () {
-                int cleared = 0;
-                for (final row in cur.grid) {
-                  for (final cell in row) {
-                    if (cell.rowSpan > 1 || cell.colSpan > 1) {
-                      cell.rowSpan = 1;
-                      cell.colSpan = 1;
-                      cleared++;
-                    }
-                  }
-                }
-                setState(() {});
-                _pageToast(context, cleared == 0 ? '当前没有合并单元格' : '已取消全部合并');
-              }),
-          // 每列对齐循环按钮（左→中→右），渲染时 colAligns 优先于单元格 align
-          for (var cc = 0; cc < cols; cc++)
-            ActionChip(
-              label: Text('${cc + 1}列 ${_alignTxt(cc < cur.colAligns.length ? cur.colAligns[cc] : '')}',
-                  style: const TextStyle(fontSize: 11)),
-              onPressed: () => setState(() {
-                while (cur.colAligns.length <= cc) {
-                  cur.colAligns.add('');
-                }
-                cur.colAligns[cc] = cur.colAligns[cc] == 'center'
-                    ? 'right'
-                    : (cur.colAligns[cc] == 'right' ? 'left' : 'center');
-              }),
-            ),
-          Text('像 Excel 一样编辑：点单元格输入文字/变量；点「合并」后依次点两个角完成真合并（编辑界面可见）；加列/加行调整结构；「{月账单}」=整月分栏账单一格生成。完成点右上角「保存」',
+          Text('点单元格 = 编辑/对齐/加粗/插入行列/合并（Excel 操作方式）',
               style: TextStyle(fontSize: 11, color: c.textSub)),
         ]),
       ),
