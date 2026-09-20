@@ -2,7 +2,7 @@
 /// 用现成 Excel 式网格组件 pluto_grid 编辑（单元格可放 {变量} 含 {1日}…{31日}），保存到本地（SharedPreferences）。
 /// 组件/正文旧模板仍可被导出渲染（renderTemplateRows 兼容），但编辑入口收敛为网格。
 /// 预览取本地镜像（原生）；Web 无本地库回退请求服务器。
-import 'dart:math' show min;
+import 'dart:math' show min, max;
 import 'package:flutter/material.dart';
 import 'package:pluto_grid/pluto_grid.dart';
 import '../api.dart';
@@ -289,11 +289,11 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
         return;
       }
       final rowsIdx = sel.map((p) => p.rowIdx).toList();
-      final colIdx = sel.map((p) => Math.min(p.columnIdx, cols)).toList();
-      final rMin = rowsIdx.reduce((a, b) => Math.min(a, b));
-      final rMax = rowsIdx.reduce((a, b) => Math.max(a, b));
-      final cMin = colIdx.reduce((a, b) => Math.min(a, b));
-      final cMax = colIdx.reduce((a, b) => Math.max(a, b));
+      final colIdx = sel.map((p) => p.columnIndex).toList();
+      final rMin = rowsIdx.reduce(min);
+      final rMax = rowsIdx.reduce(max);
+      final cMin = colIdx.reduce(min);
+      final cMax = colIdx.reduce(max);
       // 只保留区域内的 rowSpan/colSpan 标记，被覆盖格清空文本
       int covered = 0;
       for (var r = rMin; r <= rMax; r++) {
