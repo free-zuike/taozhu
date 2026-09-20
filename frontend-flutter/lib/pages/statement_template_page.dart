@@ -288,8 +288,18 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
         _pageToast(context, '请先选择至少 2 个单元格（点住第一格拖到最后一格）再合并');
         return;
       }
-      final rowsIdx = sel.map((p) => p.rowIdx).toList();
-      final colIdx = sel.map((p) => p.columnIndex).toList();
+      // PlutoGridSelectingCellPosition 只有 field（列字段名 c0/c1…）与 rowIdx；列序号从 field 反查
+      int colOfField(String? f) {
+        final s = f ?? '';
+        if (s.startsWith('c')) {
+          final n = int.tryParse(s.substring(1));
+          if (n != null) return n;
+        }
+        return 0;
+      }
+
+      final rowsIdx = sel.map((p) => p.rowIdx ?? 0).toList();
+      final colIdx = sel.map((p) => colOfField(p.field)).toList();
       final rMin = rowsIdx.reduce(min);
       final rMax = rowsIdx.reduce(max);
       final cMin = colIdx.reduce(min);
