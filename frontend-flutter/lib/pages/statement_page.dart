@@ -69,6 +69,9 @@ class _StatementPageState extends State<StatementPage> {
   List<XlsCfg> _pubTpls = [];
   /// 当前选中的成品样式名（默认「标准」=多栏月账单，生成后直接展示无需设计）
   String _selTplName = '标准';
+  /// 排版工具条（可视化，无需进设计器）：标题对齐 + 字号
+  String _tplTitleAlign = 'center'; // 标题对齐：left | center | right
+  double _tplFontSize = 12; // 正文字号（标题自动 +2）
 
   static String _fmt(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -238,10 +241,25 @@ class _StatementPageState extends State<StatementPage> {
         debtEnd: _debtEnd,
       );
 
-  /// 当前选中成品样式（公共库模板；缺省第一条）
+  /// 当前选中成品样式（公共库模板；缺省第一条），应用排版工具条（标题对齐/字号）
   XlsCfg get _curPubTpl {
     final t = _pubTpls.where((t) => t.name == _selTplName).firstOrNull;
-    return t ?? (_pubTpls.isNotEmpty ? _pubTpls.first : XlsCfg()..name = '标准');
+    final base = t ?? (_pubTpls.isNotEmpty ? _pubTpls.first : XlsCfg()..name = '标准');
+    // 排版工具条覆盖：标题（首个非空文本行）对齐 + 全局字号（渲染时用 _previewTplRows fontSize 参数）
+    if (_tplTitleAlign != 'center') {
+      final copy = base.copy();
+      for (final row in copy.grid) {
+        final nonEmpty = row.where((c) => c.text.trim().isNotEmpty).toList();
+        if (nonEmpty.isNotEmpty) {
+          for (final c in nonEmpty) {
+            c.align = _tplTitleAlign;
+          }
+          break; // 只改标题行
+        }
+      }
+      return copy;
+    }
+    return base;
   }
 
   /// 当前店铺名（成品标题用；全部店铺时为空串由默认模板兜底）
@@ -249,7 +267,7 @@ class _StatementPageState extends State<StatementPage> {
       _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '';
 
   /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃；加粗/底纹随行渲染）
-  Widget _previewTplRows(List<List<GridCell>> rows) {
+  Widget _previewTplRows(List<List<GridCell>> rows, {double fontSize = 12}) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Table(
@@ -266,7 +284,9 @@ class _StatementPageState extends State<StatementPage> {
                       textAlign: c.align == 'center'
                           ? TextAlign.center
                           : (c.align == 'right' ? TextAlign.right : TextAlign.left),
-                      style: TextStyle(fontSize: 12, fontWeight: c.bold ? FontWeight.w700 : FontWeight.normal)),
+                      style: TextStyle(
+                          fontSize: c.bold ? fontSize + 2 : fontSize,
+                          fontWeight: c.bold ? FontWeight.w700 : FontWeight.normal)),
                 ),
             ]),
         ],
@@ -356,7 +376,7 @@ class _StatementPageState extends State<StatementPage> {
     var ri = 0;
     for (final row in trows) {
       sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
-      // 样式（加粗/底纹/对齐）→ 单元格 cellStyle，与预览/打印同源
+      // 样式（加粗/底纹/对齐/字号）→ 单元格 cellStyle，与预览/打印同源
       for (var cc = 0; cc < row.length; cc++) {
         final c = row[cc];
         if (c.align == 'left' && !c.bold && c.bg.isEmpty) continue;
@@ -366,6 +386,7 @@ class _StatementPageState extends State<StatementPage> {
                   : (c.align == 'right' ? HorizontalAlign.Right : HorizontalAlign.Left),
               bold: c.bold,
               backgroundColorHex: c.bg == 'grey' ? ExcelColor.grey100 : ExcelColor.none,
+              fontSize: c.bold ? _tplFontSize.toInt() + 2 : _tplFontSize.toInt(),
             );
       }
       ri++;
@@ -1897,6 +1918,39 @@ class _StatementPageState extends State<StatementPage> {
                   onSelected: (_) => setState(() => _selTplName = t.name),
                 ),
             ]),
+            // 排版工具条（可视化，无需写代码）：标题对齐 + 字号
+            const SizedBox(height: 6),
+            Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              Text('标题：', style: TextStyle(fontSize: 12, color: c.textSub)),
+              SegmentedButton<String>(
+                style: ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12)),
+                ),
+                segments: const [
+                  ButtonSegment(value: 'left', label: Text('左对齐')),
+                  ButtonSegment(value: 'center', label: Text('居中')),
+                  ButtonSegment(value: 'right', label: Text('右对齐')),
+                ],
+                selected: {_tplTitleAlign},
+                onSelectionChanged: (s) => setState(() => _tplTitleAlign = s.first),
+              ),
+              const SizedBox(width: 8),
+              Text('字号：', style: TextStyle(fontSize: 12, color: c.textSub)),
+              SegmentedButton<double>(
+                style: ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12)),
+                ),
+                segments: const [
+                  ButtonSegment(value: 10, label: Text('小')),
+                  ButtonSegment(value: 12, label: Text('中')),
+                  ButtonSegment(value: 14, label: Text('大')),
+                ],
+                selected: {_tplFontSize},
+                onSelectionChanged: (s) => setState(() => _tplFontSize = s.first),
+              ),
+            ]),
             const SizedBox(height: 10),
             Card(
               elevation: 0,
@@ -1908,7 +1962,9 @@ class _StatementPageState extends State<StatementPage> {
               clipBehavior: Clip.antiAlias,
               child: Padding(
                 padding: const EdgeInsets.all(10),
-                child: _previewTplRows(renderTemplateRows(_curPubTpl, _td(clientNameForTpl))),
+                child: _previewTplRows(
+                    renderTemplateRows(_curPubTpl, _td(clientNameForTpl)),
+                    fontSize: _tplFontSize),
               ),
             ),
             if (_pubTpls.any((t) => t.name != _selTplName && t.name == '模板设置'))
