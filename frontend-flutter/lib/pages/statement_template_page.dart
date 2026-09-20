@@ -256,25 +256,25 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       return null;
     }
     // 单元格内容 widget：点击编辑/参与合并选择
-    Widget cellWidget(int r, int c) {
-      final cell = (r < cur.grid.length && c < cur.grid[r].length) ? cur.grid[r][c] : GridCell();
-      final isSel = _selCell != null && _selCell!.r == r && _selCell!.c == c;
+    Widget cellWidget(int r, int col) {
+      final cell = (r < cur.grid.length && col < cur.grid[r].length) ? cur.grid[r][col] : GridCell();
+      final isSel = _selCell != null && _selCell!.r == r && _selCell!.c == col;
       return InkWell(
         onTap: () {
           if (_mergeMode) {
             // 合并选择：第一次记录起点，第二次按矩形合并
             if (_mergeStart == null) {
               setState(() {
-                _mergeStart = (r: r, c: c);
-                _selCell = (r: r, c: c);
+                _mergeStart = (r: r, c: col);
+                _selCell = (r: r, c: col);
               });
-              _pageToast(context, '已选起点 ($r,$c)，再点终点完成合并');
+              _pageToast(context, '已选起点 ($r,$col)，再点终点完成合并');
             } else {
               final s = _mergeStart!;
               final rMin = s.r < r ? s.r : r;
               final rMax = s.r > r ? s.r : r;
-              final cMin = s.c < c ? s.c : c;
-              final cMax = s.c > c ? s.c : c;
+              final cMin = s.c < col ? s.c : col;
+              final cMax = s.c > col ? s.c : col;
               if (rMin == rMax && cMin == cMax) {
                 setState(() {
                   _mergeStart = null;
@@ -300,13 +300,13 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
             }
             return;
           }
-          setState(() => _selCell = (r: r, c: c));
+          setState(() => _selCell = (r: r, c: col));
           // 点击编辑文本（对话框）
           final ctrl = TextEditingController(text: cell.text);
           showDialog<void>(
             context: context,
             builder: (ctx) => AlertDialog(
-              title: Text('编辑单元格 (${r + 1},${c + 1})'),
+              title: Text('编辑单元格 (${r + 1},${col + 1})'),
               content: TextField(controller: ctrl, autofocus: true, maxLines: 3),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
@@ -353,7 +353,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
           extent: const FixedTableSpanExtent(42),
           foregroundDecoration: TableSpanDecoration(
             border: TableSpanBorder(
-              bottom: BorderSide(color: c.divider.withOpacity(0.6), width: 0.5),
+              trailing: BorderSide(color: c.divider.withOpacity(0.6), width: 0.5),
             ),
           ),
         );
