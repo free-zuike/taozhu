@@ -430,17 +430,31 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
         .whereType<Map>()
         .map((e) => XlsCfg.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
-    if (list.isNotEmpty) return list;
+    // 清洗空模板（旧版残留：grid/comps/content 全空 → 渲染出只有边框的空表格=预览灰色）。
+    // 保留有效模板；全空时返回内置默认（标题+多栏月账单），保证列表第一条必有内容。
+    final valid = list.where(_hasContent).toList();
+    if (valid.isNotEmpty) return valid;
   }
   // 兼容旧单模板存储
   final old = p.getString('taozhu_stmt_xls_cfg');
   if (old != null && old.isNotEmpty) {
     try {
       final cfg = XlsCfg.fromJson(jsonDecode(old) as Map<String, dynamic>);
-      return [cfg..name = '标准', _periodTemplate()];
+      if (_hasContent(cfg)) return [cfg..name = '标准', _periodTemplate()];
     } catch (_) {}
   }
   return [_defaultTemplate(), _periodTemplate()];
+}
+
+/// 模板是否含可渲染内容（grid 有非空文本 或 comps 非空 或 content 非空）
+bool _hasContent(XlsCfg t) {
+  if (t.comps.isNotEmpty || t.content.trim().isNotEmpty) return true;
+  for (final row in t.grid) {
+    for (final c in row) {
+      if (c.text.trim().isNotEmpty) return true;
+    }
+  }
+  return false;
 }
 
 /// 内置默认模板（网格式，开箱即用）：标题 + 多栏月账单（对齐用户常见账单版式）
