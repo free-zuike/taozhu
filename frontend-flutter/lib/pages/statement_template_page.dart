@@ -1,10 +1,11 @@
 /// 对账单模板设置页（本地优先，离线可用）：只保留「网格模板」一种可编辑形态——
-/// 用现成 Excel 式网格组件 pluto_grid 编辑（单元格可放 {变量} 含 {1日}…{31日}），保存到本地（SharedPreferences）。
+/// 用 Flutter 官方表格组件 two_dimensional_scrollables（TableView，BSD-3 免费）编辑：
+/// 原生支持合并单元格（TableViewCell.rowMergeSpan/columnMergeSpan，编辑时真实可见合并），
+/// 单元格可放 {变量} 含 {1日}…{31日}，保存到本地（SharedPreferences）。
 /// 组件/正文旧模板仍可被导出渲染（renderTemplateRows 兼容），但编辑入口收敛为网格。
 /// 预览取本地镜像（原生）；Web 无本地库回退请求服务器。
-import 'dart:math' show min, max;
 import 'package:flutter/material.dart';
-import 'package:pluto_grid/pluto_grid.dart';
+import 'package:two_dimensional_scrollables/two_dimensional_scrollables.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../statement_tmpl.dart';
@@ -20,9 +21,12 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   List<XlsCfg> _templates = [];
   String _selName = '';
   bool _loading = true;
-  PlutoGridStateManager? _gridState; // 网格编辑状态（保存时回读）
-  int _gridTick = 0; // 结构变化计数：PlutoGrid columns/rows 只在创建时生效，加列/行后 key 变化强制重建
-  String _view = 'edit'; // edit 默认（Excel 式网格编辑，双击单元格、拖列宽、加行加列） | preview（真实数据渲染）
+  String _view = 'edit'; // edit 默认（TableView Excel 式网格，点击编辑/合并可见） | preview（真实数据渲染）
+  // 合并选择模式：点「合并」进入，依次点两个对角单元格完成矩形合并
+  bool _mergeMode = false;
+  ({int r, int c})? _mergeStart;
+  // 当前选中格（加粗/对齐/字号作用于它）
+  ({int r, int c})? _selCell;
 
   XlsCfg get _cur => _templates.firstWhere((t) => t.name == _selName, orElse: () => _templates.first);
 
@@ -43,29 +47,8 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     }
   }
 
-  /// 从 PlutoGrid 回读编辑内容写回模板（预览/保存前必须调用，否则变量与增删行丢失）
-  void _flushGrid() {
-    final cur = _cur;
-    final st = _gridState;
-    if (st == null) return;
-    final rows = st.refRows;
-    final cols = cur.grid.isEmpty ? 3 : cur.grid[0].length;
-    final oldGrid = cur.grid;
-    cur.grid = [
-      for (var r = 0; r < rows.length; r++)
-        [
-          for (var cc = 0; cc < cols; cc++)
-            GridCell(
-              '${rows[r].cells['c$cc']?.value ?? ''}',
-              r < oldGrid.length && cc < oldGrid[r].length ? oldGrid[r][cc].align : 'left',
-            ),
-        ],
-    ];
-  }
-
   Future<void> _save() async {
     final cur = _cur;
-    _flushGrid();
     if (cur.grid.isEmpty) {
       _pageToast(context, '网格为空，先填单元格或加行');
       return;
@@ -189,7 +172,9 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                       selected: t.name == _selName,
                       onSelected: (_) => setState(() {
                         _selName = t.name;
-                        _gridState = null;
+                        _mergeMode = false;
+                        _mergeStart = null;
+                        _selCell = null;
                         _view = 'edit';
                       }),
                     ),
@@ -223,33 +208,17 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
         [GridCell('出货合计：{出货合计}　收款合计：{收款合计}　期末欠款：{期末欠款}', 'left')],
       ];
     }
+    final rows = cur.grid.length;
     final cols = cur.grid[0].length;
-    // Excel 式列标题：A/B/C…Z/AA/AB…
-    String excelCol(int i) {
-      var n = i + 1;
-      var s = '';
-      while (n > 0) {
-        final r = (n - 1) % 26;
-        s = String.fromCharCode(65 + r) + s;
-        n = (n - 1) ~/ 26;
-      }
-      return s;
+    final rowCount = rows < 4 ? 4 : rows; // 最少展示 4 行，便于加内容
+    final colCount = cols < 3 ? 3 : cols; // 最少 3 列
+    // 扩展网格到最小行列（不落库，仅编辑视图展示）
+    for (var r = 0; r < rowCount; r++) {
+      if (r >= cur.grid.length) cur.grid.add([for (var cc = 0; cc < colCount; cc++) GridCell()]);
+      while (cur.grid[r].length < colCount) cur.grid[r].add(GridCell());
     }
-
-    final columns = <PlutoColumn>[
-      for (var cc = 0; cc < cols; cc++)
-        PlutoColumn(title: excelCol(cc), field: 'c$cc', type: PlutoColumnType.text(), width: 110),
-    ];
-    final gridRows = [
-      for (var r = 0; r < cur.grid.length; r++)
-        PlutoRow(cells: {
-          for (var cc = 0; cc < cols; cc++) 'c$cc': PlutoCell(value: cur.grid[r][cc].text),
-        }),
-    ];
-    // 结构变化后强制重建（PlutoGrid columns/rows 只在创建时生效，setState 不会刷新）
-    void rebuild() => setState(() => _gridTick++);
+    void rebuild() => setState(() {});
     void addCol() {
-      _flushGrid();
       for (final r in cur.grid) {
         r.add(GridCell());
       }
@@ -258,7 +227,6 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     }
     void delCol() {
       if (cols <= 1) return;
-      _flushGrid();
       for (final r in cur.grid) {
         r.removeLast();
       }
@@ -266,88 +234,134 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       rebuild();
     }
     void addRow() {
-      _flushGrid();
-      cur.grid.add([for (var cc = 0; cc < cols; cc++) GridCell()]);
+      cur.grid.add([for (var cc = 0; cc < cur.grid[0].length; cc++) GridCell()]);
       rebuild();
     }
     void delRow() {
       if (cur.grid.length <= 1) return;
-      _flushGrid();
       cur.grid.removeLast();
       rebuild();
     }
-    // 合并单元格（Excel 式）：把当前选中区域合并为单个格子 —— 左上角保留文本，
-    // 区域横向广度=colSpan、纵向高度=rowSpan，其余格 text 置空（渲染时被覆盖）。
-    // pluto_grid 原生不支持 cellSpan（官方 issue 未实现），用数据层 span + 渲染三端（预览/Excel/打印）自行合并。
-    void mergeCells() {
-      _flushGrid();
-      final st = _gridState;
-      if (st == null) return;
-      final sel = st.currentSelectingPositionList;
-      if (sel == null || sel.length < 2) {
-        _pageToast(context, '请先选择至少 2 个单元格（点住第一格拖到最后一格）再合并');
-        return;
-      }
-      // PlutoGridSelectingCellPosition 只有 field（列字段名 c0/c1…）与 rowIdx；列序号从 field 反查
-      int colOfField(String? f) {
-        final s = f ?? '';
-        if (s.startsWith('c')) {
-          final n = int.tryParse(s.substring(1));
-          if (n != null) return n;
-        }
-        return 0;
-      }
-
-      final rowsIdx = sel.map((p) => p.rowIdx ?? 0).toList();
-      final colIdx = sel.map((p) => colOfField(p.field)).toList();
-      final rMin = rowsIdx.reduce(min);
-      final rMax = rowsIdx.reduce(max);
-      final cMin = colIdx.reduce(min);
-      final cMax = colIdx.reduce(max);
-      // 只保留区域内的 rowSpan/colSpan 标记，被覆盖格清空文本
-      int covered = 0;
-      for (var r = rMin; r <= rMax; r++) {
-        for (var cc = cMin; cc <= cMax; cc++) {
-          if (r >= cur.grid.length || cc >= cur.grid[r].length) continue;
-          if (r == rMin && cc == cMin) continue;
-          cur.grid[r][cc].text = '';
-          covered++;
-        }
-      }
-      if (covered == 0) {
-        _pageToast(context, '所选区域无效（无覆盖格）');
-        return;
-      }
-      cur.grid[rMin][cMin].colSpan = cMax - cMin + 1;
-      cur.grid[rMin][cMin].rowSpan = rMax - rMin + 1;
-      rebuild();
-      _pageToast(context, '已合并 ${cMax - cMin + 1} 列 × ${rMax - rMin + 1} 行');
-    }
-    void unmergeCells() {
-      _flushGrid();
-      // 清空所有合并标记（恢复被覆盖格为可编辑空格）
-      int cleared = 0;
-      for (final row in cur.grid) {
-        for (final c in row) {
-          if (c.rowSpan > 1 || c.colSpan > 1) {
-            c.rowSpan = 1;
-            c.colSpan = 1;
-            cleared++;
+    // 查找覆盖 (r,c) 的合并起点（含自身）
+    ({int sr, int sc, int rs, int cs})? owner(int r, int c) {
+      for (var sr = 0; sr <= r && sr < cur.grid.length; sr++) {
+        for (var sc = 0; sc <= c && sc < cur.grid[sr].length; sc++) {
+          final cell = cur.grid[sr][sc];
+          if ((cell.rowSpan > 1 || cell.colSpan > 1) &&
+              r < sr + cell.rowSpan && c < sc + cell.colSpan) {
+            return (sr: sr, sc: sc, rs: cell.rowSpan, cs: cell.colSpan);
           }
         }
       }
-      if (cleared == 0) {
-        _pageToast(context, '当前模板没有合并单元格');
-        return;
-      }
-      rebuild();
-      _pageToast(context, '已取消全部合并');
+      return null;
     }
+    // 单元格内容 widget：点击编辑/参与合并选择
+    Widget cellWidget(int r, int c) {
+      final cell = (r < cur.grid.length && c < cur.grid[r].length) ? cur.grid[r][c] : GridCell();
+      final isSel = _selCell != null && _selCell!.r == r && _selCell!.c == c;
+      return InkWell(
+        onTap: () {
+          if (_mergeMode) {
+            // 合并选择：第一次记录起点，第二次按矩形合并
+            if (_mergeStart == null) {
+              setState(() {
+                _mergeStart = (r: r, c: c);
+                _selCell = (r: r, c: c);
+              });
+              _pageToast(context, '已选起点 ($r,$c)，再点终点完成合并');
+            } else {
+              final s = _mergeStart!;
+              final rMin = s.r < r ? s.r : r;
+              final rMax = s.r > r ? s.r : r;
+              final cMin = s.c < c ? s.c : c;
+              final cMax = s.c > c ? s.c : c;
+              if (rMin == rMax && cMin == cMax) {
+                setState(() {
+                  _mergeStart = null;
+                  _mergeMode = false;
+                });
+                _pageToast(context, '已取消合并选择');
+                return;
+              }
+              for (var rr = rMin; rr <= rMax; rr++) {
+                for (var cc = cMin; cc <= cMax; cc++) {
+                  if (rr == rMin && cc == cMin) continue;
+                  cur.grid[rr][cc].text = '';
+                }
+              }
+              cur.grid[rMin][cMin].colSpan = cMax - cMin + 1;
+              cur.grid[rMin][cMin].rowSpan = rMax - rMin + 1;
+              setState(() {
+                _mergeStart = null;
+                _mergeMode = false;
+                _selCell = null;
+              });
+              _pageToast(context, '已合并 ${cMax - cMin + 1} 列 × ${rMax - rMin + 1} 行');
+            }
+            return;
+          }
+          setState(() => _selCell = (r: r, c: c));
+          // 点击编辑文本（对话框）
+          final ctrl = TextEditingController(text: cell.text);
+          showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text('编辑单元格 (${r + 1},${c + 1})'),
+              content: TextField(controller: ctrl, autofocus: true, maxLines: 3),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+                FilledButton(
+                  onPressed: () {
+                    cell.text = ctrl.text;
+                    setState(() {});
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('确定'),
+                ),
+              ],
+            ),
+          );
+        },
+        child: Container(
+          alignment: cell.align == 'center'
+              ? Alignment.center
+              : (cell.align == 'right' ? Alignment.centerRight : Alignment.centerLeft),
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          color: cell.bg == 'grey'
+              ? c.primary.withOpacity(0.08)
+              : (isSel ? c.primary.withOpacity(0.12) : null),
+          child: Text(cell.text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal,
+                  color: cell.bg == 'grey' ? c.primary : c.textMain)),
+        ),
+      );
+    }
+    // 列/行 span（TableSpan）
+    TableSpan colSpan(int i) => TableSpan(
+          extent: const FixedTableSpanExtent(120),
+          foregroundDecoration: TableSpanDecoration(
+            border: TableSpanBorder(
+              trailing: BorderSide(color: c.divider.withOpacity(0.6), width: 0.5),
+            ),
+          ),
+        );
+    TableSpan rowSpan(int i) => TableSpan(
+          extent: const FixedTableSpanExtent(42),
+          foregroundDecoration: TableSpanDecoration(
+            border: TableSpanBorder(
+              bottom: BorderSide(color: c.divider.withOpacity(0.6), width: 0.5),
+            ),
+          ),
+        );
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
         child: Wrap(spacing: 6, runSpacing: 4, children: [
-          // 页内切换：编辑（Excel 式网格） / 预览（真实数据渲染）
+          // 页内切换：编辑（TableView Excel 式网格） / 预览（真实数据渲染）
           SegmentedButton<String>(
             style: ButtonStyle(
               visualDensity: VisualDensity.compact,
@@ -358,14 +372,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
               ButtonSegment(value: 'preview', label: Text('预览')),
             ],
             selected: {_view},
-            onSelectionChanged: (s) {
-              if (s.first == 'edit') {
-                setState(() => _view = 'edit');
-              } else {
-                _flushGrid();
-                setState(() => _view = 'preview');
-              }
-            },
+            onSelectionChanged: (s) => setState(() => _view = s.first),
           ),
           const VerticalDivider(width: 12),
           OutlinedButton.icon(
@@ -380,17 +387,35 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
           OutlinedButton.icon(
               icon: const Icon(Icons.remove, size: 14), label: const Text('删行'),
               onPressed: cur.grid.length > 1 ? delRow : null),
-          // Excel 功能区：合并 / 取消合并
+          // Excel 功能区：合并（真合并，TableView 原生可见）/ 取消合并 / 对齐
           OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
-                foregroundColor: c.primary,
+                foregroundColor: _mergeMode ? Colors.white : c.primary,
+                backgroundColor: _mergeMode ? c.primary : null,
                 side: BorderSide(color: c.primary.withOpacity(0.5)),
               ),
-              icon: const Icon(Icons.merge_type, size: 14), label: const Text('合并'),
-              onPressed: mergeCells),
+              icon: const Icon(Icons.merge_type, size: 14),
+              label: Text(_mergeMode ? '合并：点起点' : '合并'),
+              onPressed: () => setState(() {
+                _mergeMode = !_mergeMode;
+                _mergeStart = null;
+              })),
           OutlinedButton.icon(
               icon: const Icon(Icons.merge_type, size: 14), label: const Text('取消合并'),
-              onPressed: unmergeCells),
+              onPressed: () {
+                int cleared = 0;
+                for (final row in cur.grid) {
+                  for (final cell in row) {
+                    if (cell.rowSpan > 1 || cell.colSpan > 1) {
+                      cell.rowSpan = 1;
+                      cell.colSpan = 1;
+                      cleared++;
+                    }
+                  }
+                }
+                setState(() {});
+                _pageToast(context, cleared == 0 ? '当前没有合并单元格' : '已取消全部合并');
+              }),
           // 每列对齐循环按钮（左→中→右），渲染时 colAligns 优先于单元格 align
           for (var cc = 0; cc < cols; cc++)
             ActionChip(
@@ -405,18 +430,37 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                     : (cur.colAligns[cc] == 'right' ? 'left' : 'center');
               }),
             ),
-          Text('像 Excel 一样编辑：双击单元格输入文字/变量；加列/加行按钮调整表结构；点「A/B/C…」切换列对齐；「{月账单}」=整月分栏账单一格生成。完成点右上角「保存」',
+          Text('像 Excel 一样编辑：点单元格输入文字/变量；点「合并」后依次点两个角完成真合并（编辑界面可见）；加列/加行调整结构；「{月账单}」=整月分栏账单一格生成。完成点右上角「保存」',
               style: TextStyle(fontSize: 11, color: c.textSub)),
         ]),
       ),
       Expanded(
         child: _view == 'preview'
             ? _previewPane(c)
-            : PlutoGrid(
-                key: ValueKey('grid-$_selName-$_gridTick'),
-                columns: columns,
-                rows: gridRows,
-                onLoaded: (e) => _gridState = e.stateManager,
+            : TableView.builder(
+                columnCount: cur.grid[0].length,
+                rowCount: cur.grid.length,
+                columnBuilder: colSpan,
+                rowBuilder: rowSpan,
+                cellBuilder: (context, vicinity) {
+                  final r = vicinity.row;
+                  final cc = vicinity.column;
+                  if (r >= cur.grid.length || cc >= cur.grid[r].length) {
+                    return TableViewCell(child: cellWidget(r, cc));
+                  }
+                  final o = owner(r, cc);
+                  if (o != null) {
+                    // 合并区：起点返回内容，被覆盖格返回占位（带相同 merge 信息保证真合并渲染）
+                    return TableViewCell(
+                      rowMergeStart: o.sr,
+                      rowMergeSpan: o.rs,
+                      columnMergeStart: o.sc,
+                      columnMergeSpan: o.cs,
+                      child: (o.sr == r && o.sc == cc) ? cellWidget(r, cc) : const SizedBox.shrink(),
+                    );
+                  }
+                  return TableViewCell(child: cellWidget(r, cc));
+                },
               ),
       ),
     ]);
