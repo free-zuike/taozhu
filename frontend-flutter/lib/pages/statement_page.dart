@@ -266,19 +266,33 @@ class _StatementPageState extends State<StatementPage> {
   String get clientNameForTpl =>
       _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '';
 
+  /// 安全渲染成品（模板数据/渲染异常不整页灰屏，显示兜底提示）
+  Widget _renderTplSafe({double fontSize = 12}) {
+    try {
+      return _previewTplRows(
+          renderTemplateRows(_curPubTpl, _td(clientNameForTpl)),
+          fontSize: fontSize);
+    } catch (e) {
+      return Center(
+        child: Text('成品渲染失败：${e.toString().replaceFirst('Exception: ', '')}',
+            style: const TextStyle(fontSize: 12)),
+      );
+    }
+  }
+
   /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃；加粗/底纹随行渲染）
   Widget _previewTplRows(List<List<GridCell>> rows, {double fontSize = 12}) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Table(
-        border: TableBorder.all(color: const Color(0xFF9E9E9E), width: 0.5),
+        border: TableBorder.all(color: const Color(0xFFD9D9D9), width: 0.5),
         defaultColumnWidth: const IntrinsicColumnWidth(),
         children: [
           for (final row in rows)
             TableRow(children: [
               for (final c in row)
                 Container(
-                  color: c.bg == 'grey' ? const Color(0xFFF2F2F2) : null,
+                  color: c.bg == 'grey' ? _c.primary.withOpacity(0.08) : null,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                   child: Text(c.text,
                       textAlign: c.align == 'center'
@@ -286,7 +300,8 @@ class _StatementPageState extends State<StatementPage> {
                           : (c.align == 'right' ? TextAlign.right : TextAlign.left),
                       style: TextStyle(
                           fontSize: c.bold ? fontSize + 2 : fontSize,
-                          fontWeight: c.bold ? FontWeight.w700 : FontWeight.normal)),
+                          fontWeight: c.bold ? FontWeight.w700 : FontWeight.normal,
+                          color: c.bg == 'grey' ? _c.primary : null)),
                 ),
             ]),
         ],
@@ -1962,9 +1977,7 @@ class _StatementPageState extends State<StatementPage> {
               clipBehavior: Clip.antiAlias,
               child: Padding(
                 padding: const EdgeInsets.all(10),
-                child: _previewTplRows(
-                    renderTemplateRows(_curPubTpl, _td(clientNameForTpl)),
-                    fontSize: _tplFontSize),
+                child: _renderTplSafe(fontSize: _tplFontSize),
               ),
             ),
             if (_pubTpls.any((t) => t.name != _selTplName && t.name == '模板设置'))
@@ -1984,51 +1997,76 @@ class _StatementPageState extends State<StatementPage> {
             const SizedBox(height: 12),
             _statCard('期末欠款（累计）', '¥${_debtEnd.toStringAsFixed(2)}',
                 _debtEnd > 0 ? c.danger : c.success),
-            const SizedBox(height: 16),
-            const Text('出货明细', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-            const SizedBox(height: 8),
-            if (_sales.isEmpty)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text('周期内无出货', style: TextStyle(color: c.textSub)),
+            const SizedBox(height: 12),
+            // 出货明细（折叠，默认收起——页面聚焦成品预览，明细点开查看）
+            Card(
+              elevation: 0,
+              color: c.card,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: c.divider),
               ),
-            // 出货明细 = 商品明细（每件商品一行，不再按"单"汇总店铺/日期/笔数/总额）
-            for (final s in _sales)
-              for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>())
-                Card(
-                  child: ListTile(
-                    dense: true,
-                    leading: Icon(Icons.sell_outlined, size: 20, color: _c.primary),
-                    title: Text('${it['item_name'] ?? ''}'),
-                    subtitle: Text(
-                      '${_date(s['happened_at'])}'
-                      '${_clientId == null && '${s['client_name'] ?? ''}'.isNotEmpty ? ' · ${s['client_name']}' : ''}'
-                      ' · ${it['quantity'] ?? ''}${it['unit'] ?? ''} × ¥${(it['sale_price'] as num?)?.toStringAsFixed(2) ?? '-'}',
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
+                tilePadding: const EdgeInsets.symmetric(horizontal: 14),
+                title: Text('出货明细（${_sales.length} 单）',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                children: [
+                  if (_sales.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text('周期内无出货', style: TextStyle(color: c.textSub)),
                     ),
-                    trailing: Text('¥${(it['amount'] as num?)?.toStringAsFixed(2) ?? '-'}',
-                        style: TextStyle(fontWeight: FontWeight.w700, color: c.danger)),
-                  ),
-                ),
-            const SizedBox(height: 8),
-            const Text('收款明细', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-            const SizedBox(height: 8),
-            if (_payments.isEmpty)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text('周期内无收款', style: TextStyle(color: c.textSub)),
+                  for (final s in _sales)
+                    for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>())
+                      ListTile(
+                        dense: true,
+                        leading: Icon(Icons.sell_outlined, size: 20, color: _c.primary),
+                        title: Text('${it['item_name'] ?? ''}'),
+                        subtitle: Text(
+                          '${_date(s['happened_at'])}'
+                          '${_clientId == null && '${s['client_name'] ?? ''}'.isNotEmpty ? ' · ${s['client_name']}' : ''}'
+                          ' · ${it['quantity'] ?? ''}${it['unit'] ?? ''} × ¥${(it['sale_price'] as num?)?.toStringAsFixed(2) ?? '-'}',
+                        ),
+                        trailing: Text('¥${(it['amount'] as num?)?.toStringAsFixed(2) ?? '-'}',
+                            style: TextStyle(fontWeight: FontWeight.w700, color: c.danger)),
+                      ),
+                ],
               ),
-            for (final p in _payments)
-              Card(
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.check_circle_outline, size: 20, color: c.success),
-                  title: Text('${p['client_name'] ?? ''}'),
-                  subtitle: Text(
-                      '${_date(p['happened_at'])}${(p['method'] as String? ?? '').isNotEmpty ? ' · ${p['method']}' : ''}'),
-                  trailing: Text('¥${(p['amount'] as num?)?.toStringAsFixed(2) ?? '-'}',
-                      style: TextStyle(fontWeight: FontWeight.w700, color: c.success)),
-                ),
+            ),
+            const SizedBox(height: 8),
+            // 收款明细（折叠）
+            Card(
+              elevation: 0,
+              color: c.card,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: c.divider),
               ),
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
+                tilePadding: const EdgeInsets.symmetric(horizontal: 14),
+                title: Text('收款明细（${_payments.length} 笔）',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                children: [
+                  if (_payments.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text('周期内无收款', style: TextStyle(color: c.textSub)),
+                    ),
+                  for (final p in _payments)
+                    ListTile(
+                      dense: true,
+                      leading: Icon(Icons.check_circle_outline, size: 20, color: c.success),
+                      title: Text('${p['client_name'] ?? ''}'),
+                      subtitle: Text(
+                          '${_date(p['happened_at'])}${(p['method'] as String? ?? '').isNotEmpty ? ' · ${p['method']}' : ''}'),
+                      trailing: Text('¥${(p['amount'] as num?)?.toStringAsFixed(2) ?? '-'}',
+                          style: TextStyle(fontWeight: FontWeight.w700, color: c.success)),
+                    ),
+                ],
+              ),
+            ),
             const SizedBox(height: 8),
             // 导出 Excel（选模板 → 预览 → 导出；模板自定义在「模板设置」）
             OutlinedButton.icon(

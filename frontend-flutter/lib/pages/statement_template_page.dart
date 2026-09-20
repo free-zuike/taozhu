@@ -346,14 +346,14 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
             scrollDirection: Axis.horizontal,
             child: SingleChildScrollView(
               child: Table(
-                border: TableBorder.all(color: const Color(0xFF9E9E9E), width: 0.5),
+                border: TableBorder.all(color: const Color(0xFFD9D9D9), width: 0.5),
                 defaultColumnWidth: const IntrinsicColumnWidth(),
                 children: [
                   for (final row in rows)
                     TableRow(children: [
                       for (final cell in row)
                         Container(
-                          color: cell.bg == 'grey' ? const Color(0xFFF2F2F2) : null,
+                          color: cell.bg == 'grey' ? c.primary.withOpacity(0.08) : null,
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                           child: Text(cell.text,
                               textAlign: cell.align == 'center'
@@ -362,7 +362,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                               style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal,
-                                  color: c.textMain)),
+                                  color: cell.bg == 'grey' ? c.primary : c.textMain)),
                         ),
                     ]),
                 ],
