@@ -223,24 +223,25 @@ class _StatementPageState extends State<StatementPage> {
         debtEnd: _debtEnd,
       );
 
-  /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃）
+  /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃；加粗/底纹随行渲染）
   Widget _previewTplRows(List<List<GridCell>> rows) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Table(
-        border: TableBorder.all(color: Colors.black26, width: 0.5),
+        border: TableBorder.all(color: const Color(0xFF9E9E9E), width: 0.5),
         defaultColumnWidth: const IntrinsicColumnWidth(),
         children: [
           for (final row in rows)
             TableRow(children: [
               for (final c in row)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                Container(
+                  color: c.bg == 'grey' ? const Color(0xFFF2F2F2) : null,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                   child: Text(c.text,
                       textAlign: c.align == 'center'
                           ? TextAlign.center
                           : (c.align == 'right' ? TextAlign.right : TextAlign.left),
-                      style: const TextStyle(fontSize: 11)),
+                      style: TextStyle(fontSize: 12, fontWeight: c.bold ? FontWeight.w700 : FontWeight.normal)),
                 ),
             ]),
         ],
@@ -322,12 +323,16 @@ class _StatementPageState extends State<StatementPage> {
     var ri = 0;
     for (final row in trows) {
       sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
-      // 对齐样式（left/center/right → 单元格 horizontalAlign）
+      // 样式（加粗/底纹/对齐）→ 单元格 cellStyle，与预览/打印同源
       for (var cc = 0; cc < row.length; cc++) {
-        final a = row[cc].align;
-        if (a == 'left') continue;
+        final c = row[cc];
+        if (c.align == 'left' && !c.bold && c.bg.isEmpty) continue;
         sheet.cell(CellIndex.indexByColumnRow(columnIndex: cc, rowIndex: ri)).cellStyle = CellStyle(
-              horizontalAlign: a == 'center' ? HorizontalAlign.Center : HorizontalAlign.Right,
+              horizontalAlign: c.align == 'center'
+                  ? HorizontalAlign.Center
+                  : (c.align == 'right' ? HorizontalAlign.Right : HorizontalAlign.Left),
+              bold: c.bold,
+              backgroundColorHex: c.bg == 'grey' ? ExcelColor.grey100 : ExcelColor.none,
             );
       }
       ri++;
@@ -1964,7 +1969,7 @@ class _StatementPageState extends State<StatementPage> {
     final sel = templates.firstWhere((t) => t.name == _xls.name, orElse: () => templates.first);
     final trows = renderTemplateRows(sel, _td(clientName));
     final rowsJson = jsonEncode([
-      for (final row in trows) [for (final c in row) [c.text, c.align]],
+      for (final row in trows) [for (final c in row) [c.text, c.align, c.bold, c.bg]],
     ]);
     final rowsB64 = base64Url.encode(utf8.encode(rowsJson));
     final title = Uri.encodeQueryComponent('$clientName 对账单');

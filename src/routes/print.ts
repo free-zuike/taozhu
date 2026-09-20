@@ -125,7 +125,7 @@ printRouter.get('/template', async (c) => {
   const title = c.req.query('title')?.trim() || '对账单';
   const rowsB64 = c.req.query('rows') ?? '';
   if (!rowsB64) return c.json({ error: 'rows 缺失' }, 400);
-  let rows: [string, string][][];
+  let rows: [string, string, boolean?, string?][][];
   try {
     const b64 = rowsB64.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(rowsB64.length / 4) * 4, '=');
     const decoded = JSON.parse(atob(b64));
@@ -134,19 +134,23 @@ printRouter.get('/template', async (c) => {
       (row as unknown[][]).map((cell) => {
         const t = cell.length > 0 ? String(cell[0] ?? '') : '';
         const a = cell.length > 1 ? String(cell[1] ?? 'left') : 'left';
-        return [t, a];
+        const b = cell.length > 2 ? cell[2] === true : false;
+        const g = cell.length > 3 ? String(cell[3] ?? '') : '';
+        return [t, a, b, g];
       }),
     );
   } catch (_) {
     return c.json({ error: 'rows 解码失败' }, 400);
   }
   const bodyRows = rows.map((row) =>
-    '          <tr>\n' +
-    row.map(([t, a]) => {
+    '          <tr>' +
+    row.map(([t, a, b, g]) => {
       const ta = a === 'center' ? 'center' : a === 'right' ? 'right' : 'left';
-      return `            <td style="text-align:${ta}">${esc(t) || '&nbsp;'}</td>`;
-    }).join('\n') +
-    '\n          </tr>').join('\n');
+      const fw = b ? 'font-weight:700;' : '';
+      const bg = g === 'grey' ? 'background:#f2f2f2;' : '';
+      return `<td style="text-align:${ta};${fw}${bg}">${esc(t) || ''}</td>`;
+    }).join('') +
+    '</tr>').join('\n');
   return c.html(page(title, `<h1>${esc(title)}</h1>
 <table>
 ${bodyRows}

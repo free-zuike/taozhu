@@ -3,15 +3,19 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 网格单元格：文本（可含 {变量} 占位）+ 对齐（left/center/right）
+/// 网格单元格：文本（可含 {变量} 占位）+ 对齐（left/center/right）+ 样式（bold 加粗 / bg 底纹色名）
 class GridCell {
-  GridCell([this.text = '', this.align = 'left']);
+  GridCell([this.text = '', this.align = 'left', this.bold = false, this.bg = '']);
   String text;
   String align;
-  Map<String, dynamic> toJson() => {'t': text, 'a': align};
+  bool bold;
+  String bg; // 底纹色名：'grey'=浅灰（表头用）；空=无底纹
+  Map<String, dynamic> toJson() => {'t': text, 'a': align, 'b': bold, 'g': bg};
   GridCell.fromJson(Map<String, dynamic> j)
       : text = '${j['t'] ?? ''}',
-        align = '${j['a'] ?? 'left'}';
+        align = '${j['a'] ?? 'left'}',
+        bold = j['b'] == true,
+        bg = '${j['g'] ?? ''}';
 }
 
 /// 模板组件（组件式设计器）：按顺序渲染成表格块
@@ -284,11 +288,13 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10}) {
   final y = int.tryParse(d.from.length >= 4 ? d.from.substring(0, 4) : '') ?? DateTime.now().year;
   final m = int.tryParse(d.from.length >= 7 ? d.from.substring(5, 7) : '') ?? DateTime.now().month;
   final rows = <List<GridCell>>[
-    // 表头：每栏「日期 营业额」
+    // 标题（店铺 + N月账单，居中加粗）
+    [GridCell('${d.clientName}${m}月账单', 'center', true)],
+    // 表头：每栏「日期 营业额」加粗底纹
     [
       for (var cc = 0; cc < cols; cc++) ...[
-        GridCell('日期', 'center'),
-        GridCell('营业额', 'center'),
+        GridCell('日期', 'center', true, 'grey'),
+        GridCell('营业额', 'center', true, 'grey'),
       ],
     ],
   ];
@@ -306,7 +312,7 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10}) {
     }
     rows.add(line);
   }
-  // 栏底小计（用户示例：每栏营业额列下放金额，日期列留空）
+  // 栏底小计（用户示例：每栏营业额列下放金额，日期列留空；加粗）
   final subtotal = <GridCell>[];
   double grand = 0;
   for (var cc = 0; cc < cols; cc++) {
@@ -315,15 +321,15 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10}) {
       s += daily[dd];
     }
     grand += s;
-    subtotal.add(GridCell('', 'right'));
-    subtotal.add(GridCell(s.toStringAsFixed(2), 'right'));
+    subtotal.add(GridCell('', 'right', true));
+    subtotal.add(GridCell(s.toStringAsFixed(2), 'right', true));
   }
   rows.add(subtotal);
-  // 底部总计（跨栏，示例「总计 41349.81」尾部对齐）
+  // 底部总计（跨栏，示例「总计 41349.81」尾部对齐；加粗）
   rows.add([
-    GridCell('总计', 'right'),
+    GridCell('总计', 'right', true),
     for (var cc = 0; cc < cols * 2 - 2; cc++) GridCell('', ''),
-    GridCell(grand.toStringAsFixed(2), 'right'),
+    GridCell(grand.toStringAsFixed(2), 'right', true),
   ]);
   return rows;
 }
@@ -341,6 +347,8 @@ List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
         GridCell(
           _replaceVars(row[cc].text, d),
           cc < cfg.colAligns.length && cfg.colAligns[cc].isNotEmpty ? cfg.colAligns[cc] : row[cc].align,
+          row[cc].bold,
+          row[cc].bg,
         ),
     ]);
   }
@@ -435,21 +443,21 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
   return [_defaultTemplate(), _periodTemplate()];
 }
 
-/// 内置默认模板（网格式，开箱即用）：标题 + 多栏月账单
+/// 内置默认模板（网格式，开箱即用）：标题 + 多栏月账单（对齐用户常见账单版式）
+/// 标题（店铺+年月账单，居中加粗）+ {月账单} 一键生成日期×营业额 4 栏 + 小计 + 总计
 XlsCfg _defaultTemplate() => XlsCfg()
   ..name = '标准'
   ..grid = [
-    [GridCell('{店铺}{年}年{月}月份账单', 'center')],
+    [GridCell('{店铺}{年}年{月}月份账单', 'center', true)],
     [GridCell('{月账单}', '')],
-    [GridCell('出货合计：{出货合计}　收款合计：{收款合计}　期末欠款：{期末欠款}', 'left')],
   ];
 
-/// 内置按日汇总模板（网格式）：标题 + 信息字段 + 多栏月账单
+/// 内置按日汇总模板（网格式）：标题 + 多栏月账单
 XlsCfg _periodTemplate() => XlsCfg()
   ..name = '按日汇总'
   ..grid = [
-    [GridCell('对账单', 'center')],
-    [GridCell('店铺：{店铺}　账期：{账期}', 'left')],
+    [GridCell('对账单', 'center', true)],
+    [GridCell('{店铺}　{账期}', 'center')],
     [GridCell('{月账单}', '')],
   ];
 
