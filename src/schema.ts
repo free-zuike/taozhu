@@ -225,7 +225,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '2') {
+      if (meta?.value === '3') {
         schemaReady = true;
         return;
       }
@@ -462,8 +462,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       if (i >= 0) await db.prepare(DDL[i]).run();
     }
     // 迁移完成：写标记（INSERT OR REPLACE——老库首次部署后也置位，此后冷启动走快检）
+    // v0.17.175 进销单位换算新增三列（items.count_unit/item_prices.per/行 count_qty）→ 快检版本 +1：老库标记 '2' 会重新走全量迁移补齐新列
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '2')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '3')",
     ).run();
     schemaReady = true;
     } catch (err) {

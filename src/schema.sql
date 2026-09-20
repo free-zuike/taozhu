@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS items (
   name TEXT NOT NULL,
   category TEXT DEFAULT '',
   category_id TEXT,
+  count_unit TEXT DEFAULT '',
   deleted_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS item_prices (
   unit TEXT NOT NULL,
   purchase_price REAL NOT NULL DEFAULT 0,
   sale_price REAL NOT NULL DEFAULT 0,
+  per REAL,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -62,6 +64,7 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   item_id TEXT NOT NULL REFERENCES items(id),
   unit TEXT NOT NULL,
   quantity REAL NOT NULL CHECK (quantity > 0),
+  count_qty REAL,
   purchase_price REAL NOT NULL DEFAULT 0,
   amount REAL NOT NULL DEFAULT 0,
   happened_at TEXT,
@@ -81,6 +84,7 @@ CREATE TABLE IF NOT EXISTS sale_items (
   client_id TEXT,
   unit TEXT NOT NULL,
   quantity REAL NOT NULL CHECK (quantity > 0),
+  count_qty REAL,
   sale_price REAL NOT NULL DEFAULT 0,
   cost_price REAL NOT NULL DEFAULT 0,
   amount REAL NOT NULL DEFAULT 0,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
@@ -26,10 +27,10 @@ class _StocksPageState extends State<StocksPage> {
   @override
   void initState() {
     super.initState();
-    // 本地优先：页面加载只读缓存不访问网络；同步完成后（version 通知）再刷新库存。
-    // 库存数据以服务端为准（盘点/多端变动），进入页面即静默网络刷新一次（缓存秒开兜底）
+    // 本地优先：页面加载只读本地库镜像（零网络）；同步完成后（version 通知）再刷新。
+    // 库存以服务端为准（盘点/多端变动），但本地有 fullSync 写入的 stocks 镜像，先秒开再静默校准
     SyncService.version.addListener(_onSync);
-    _load(network: true);
+    _load();
   }
 
   @override
@@ -44,7 +45,29 @@ class _StocksPageState extends State<StocksPage> {
   }
 
   Future<void> _load({bool network = false, String q = '', bool below = false}) async {
-    // ① 缓存兜底秒开（离线/慢网先展示上次数据，不再无限转圈）
+    // 原生：零网络读本地库镜像（fullSync 写入的 stocks 行），离线/慢网秒开
+    if (!kIsWeb) {
+      try {
+        var local = await LocalDb.getAll('stocks');
+        if (q.isNotEmpty) {
+          local = local.where((s) => '${s['item_name'] ?? ''}'.contains(q)).toList();
+        }
+        if (below) {
+          local = local.where((s) => ((s['low'] == true))).toList();
+        }
+        local.sort((a, b) => '${a['item_name'] ?? ''}'.compareTo('${b['item_name'] ?? ''}'));
+        if (mounted) {
+          setState(() {
+            _stocks = local;
+            _loading = false;
+          });
+        }
+        if (!network) return; // 页面加载不加网络；同步完成（version 通知）传 network:true 才校准
+      } catch (_) {
+        setState(() => _loading = false);
+      }
+    }
+    // ① 缓存兜底秒开（Web/原生无本地镜像时先展示上次数据，不再无限转圈）
     if (!below && q.isEmpty) {
       final cached = await Api.instance.getCachedRaw('/stocks');
       if (cached != null && mounted) {
@@ -64,6 +87,12 @@ class _StocksPageState extends State<StocksPage> {
       final query = params.isEmpty ? '' : '?${params.join('&')}';
       final d = await Api.instance.get('/stocks$query');
       if (!below && q.isEmpty) await Api.instance.setCache('/stocks', d);
+      // 网络结果同时回写本地镜像（下次离线秒开）
+      if (!kIsWeb) {
+        try {
+          await LocalDb.putAll('stocks', ((d['stocks'] as List?) ?? []).cast<Map<String, dynamic>>());
+        } catch (_) {}
+      }
       if (!mounted) return;
       setState(() {
         _stocks = ((d['stocks'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -71,12 +100,19 @@ class _StocksPageState extends State<StocksPage> {
         _loading = false;
       });
     } catch (_) {
-      // 离线：本地缓存已展示，错误已记日志，不再弹提示
+      // 离线：本地镜像/缓存已展示，错误已记日志，不再弹提示
       setState(() => _loading = false);
     }
   }
 
-  Future<void> _refresh() => _load(network: true, q: '', below: _belowOnly);
+  Future<void> _refresh() async {
+    if (kIsWeb) {
+      await _load(network: true, q: '', below: _belowOnly);
+    } else {
+      // 原生下拉刷新：优先本地镜像，再静默网络校准（同步动作仍走同步状态页，此处仅展示刷新）
+      await _load(network: true, q: '', below: _belowOnly);
+    }
+  }
 
   /// 盘点阈值默认值：已有手设阈值（>0）保留；未设置且库存≥1 时自动带出建议值
   /// （后端 suggest_min = 近 30 天平均每笔出货量 × 40%，无出货记录为 0）；既不设也无建议 → 0
@@ -279,6 +315,26 @@ class _StocksPageState extends State<StocksPage> {
       ),
     );
     if (ok != true) return;
+    // 本地优先：原生端从本地行级流水（进货/出货，含换算 count_qty 折算）本地重算，不访问网络；
+    // Web 无本地库才走服务端全量重算端点。
+    if (!kIsWeb) {
+      try {
+        final rebuilt = await _localRebuild();
+        await LocalDb.putAll('stocks', rebuilt);
+        if (mounted) {
+          setState(() {
+            _stocks = rebuilt;
+            _loading = false;
+          });
+        }
+        toast(context, '已本地重算 ${rebuilt.length} 个商品库存');
+        SyncService.notifyStockChanged();
+        return;
+      } catch (e) {
+        toast(context, '本地重算失败：${e.toString().replaceFirst('Exception: ', '')}');
+        return;
+      }
+    }
     try {
       final r = await Api.instance.post('/stocks/rebuild', {});
       toast(context, '已重算 ${r['rebuilt'] ?? 0} 个商品库存');
@@ -287,6 +343,59 @@ class _StocksPageState extends State<StocksPage> {
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
+  }
+
+  /// 本地重算库存：从本地进货(+)出货(−)流水聚合（含单位换算 count_qty 折算、计数单位归并），保留旧阈值。
+  /// 与服务器 rebuild 口径一致：单位=商品计数单位（无则行单位），数量=count_qty（无则 quantity）。
+  Future<List<Map<String, dynamic>>> _localRebuild() async {
+    final items = await LocalDb.getAll('items');
+    final countUnitOf = {for (final it in items) '${it['id']}': '${it['count_unit'] ?? ''}'};
+    final nameOf = {for (final it in items) '${it['id']}': '${it['name'] ?? ''}'};
+    // old 阈值保留 key = item\0unit（按重算后的单位维度）
+    final oldStocks = await LocalDb.getAll('stocks');
+    final minMap = <String, double>{};
+    for (final s in oldStocks) {
+      minMap['${s['item_id']}\u0000${s['unit']}'] = ((s['min_stock'] as num?)?.toDouble() ?? 0);
+    }
+    // 聚合：进货 + / 出货 −（按 商品+计数单位 维度）
+    final agg = <String, double>{};
+    void add(String itemId, String rowUnit, double qty) {
+      final cu = countUnitOf[itemId]?.isNotEmpty == true ? countUnitOf[itemId]! : rowUnit;
+      final key = '$itemId\u0000$cu';
+      agg[key] = (agg[key] ?? 0) + qty;
+    }
+    for (final b in await LocalDb.getAll('purchase_items')) {
+      final qty = (double.tryParse('${b['count_qty'] ?? ''}') ?? 0) > 0
+          ? double.parse('${b['count_qty']}')
+          : ((b['quantity'] as num?)?.toDouble() ?? 0);
+      add('${b['item_id']}', '${b['unit'] ?? ''}', qty);
+    }
+    for (final s in await LocalDb.getAll('sale_items')) {
+      final qty = (double.tryParse('${s['count_qty'] ?? ''}') ?? 0) > 0
+          ? double.parse('${s['count_qty']}')
+          : ((s['quantity'] as num?)?.toDouble() ?? 0);
+      add('${s['item_id']}', '${s['unit'] ?? ''}', -qty);
+    }
+    final out = <Map<String, dynamic>>[];
+    for (final e in agg.entries) {
+      final sep = e.key.indexOf('\u0000');
+      final itemId = e.key.substring(0, sep);
+      final unit = e.key.substring(sep + 1);
+      final min = minMap[e.key] ?? 0;
+      out.add({
+        'id': null,
+        'item_id': itemId,
+        'unit': unit,
+        'item_name': nameOf[itemId] ?? '',
+        'quantity': e.value,
+        'min_stock': min,
+        'low': e.value < min,
+        'cost_price': 0,
+        'can_see_cost': true,
+      });
+    }
+    out.sort((a, b) => '${a['item_name'] ?? ''}'.compareTo('${b['item_name'] ?? ''}'));
+    return out;
   }
 
   @override
