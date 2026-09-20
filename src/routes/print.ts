@@ -128,7 +128,9 @@ printRouter.get('/template', async (c) => {
   let rows: [string, string, boolean?, string?][][];
   try {
     const b64 = rowsB64.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(rowsB64.length / 4) * 4, '=');
-    const decoded = JSON.parse(atob(b64));
+    // 前端是 utf8.encode + base64 编码的 UTF-8 字节；atob 返回 Latin-1 字符串会把中文误解码（寻牛→å¯»ç）
+    const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+    const decoded = JSON.parse(new TextDecoder('utf-8').decode(bytes));
     if (!Array.isArray(decoded)) return c.json({ error: 'rows 格式错误' }, 400);
     rows = (decoded as unknown[][]).map((row) =>
       (row as unknown[][]).map((cell) => {

@@ -21,7 +21,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   bool _loading = true;
   PlutoGridStateManager? _gridState; // 网格编辑状态（保存时回读）
   int _gridTick = 0; // 结构变化计数：PlutoGrid columns/rows 只在创建时生效，加列/行后 key 变化强制重建
-  String _view = 'edit'; // edit | preview（页内所见即所得切换）
+  String _view = 'preview'; // preview 默认（开箱即用先看效果） | edit（高级：网格编辑）
 
   XlsCfg get _cur => _templates.firstWhere((t) => t.name == _selName, orElse: () => _templates.first);
 
