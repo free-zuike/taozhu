@@ -266,19 +266,44 @@ class _StatementPageState extends State<StatementPage> {
   String get clientNameForTpl =>
       _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '';
 
-  /// 安全渲染成品（模板数据/渲染异常不整页灰屏，显示兜底提示）
+  /// 安全渲染成品（模板数据/渲染异常不整页灰屏）：渲染为空或异常 → 回退内置标准多栏账单，
+/// 保证预览区永远有可见内容（旧模板残留/空模板不再显示灰框）
   Widget _renderTplSafe({double fontSize = 12}) {
+    // 数据快照（一次取，避免多次重复组装）
+    final td = _td(clientNameForTpl);
+    List<List<GridCell>> rows;
     try {
-      return _previewTplRows(
-          renderTemplateRows(_curPubTpl, _td(clientNameForTpl)),
-          fontSize: fontSize);
-    } catch (e) {
-      return Center(
-        child: Text('成品渲染失败：${e.toString().replaceFirst('Exception: ', '')}',
-            style: const TextStyle(fontSize: 12)),
+      rows = renderTemplateRows(_curPubTpl, td);
+    } catch (_) {
+      rows = const [];
+    }
+    // 无有效内容（空模板/旧组件模板渲染空）→ 回退内置标准模板（标题+多栏月账单）
+    final hasText = rows.any((r) => r.any((c) => c.text.trim().isNotEmpty));
+    if (!hasText) {
+      try {
+        rows = renderTemplateRows(_fallbackTpl(), td);
+      } catch (_) {
+        rows = const [];
+      }
+    }
+    if (rows.isEmpty || !rows.any((r) => r.any((c) => c.text.trim().isNotEmpty))) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('暂无可用模板内容，请到「模板设置」选择或创建模板', style: TextStyle(fontSize: 12)),
+        ),
       );
     }
+    return _previewTplRows(rows, fontSize: fontSize);
   }
+
+  /// 内置标准模板（标题 + 多栏月账单；渲染兜底用，保证预览有内容）
+  XlsCfg _fallbackTpl() => XlsCfg()
+    ..name = '标准'
+    ..grid = [
+      [GridCell('{店铺}{年}年{月}月份账单', 'center', true)],
+      [GridCell('{月账单}', '')],
+    ];
 
   /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃；加粗/底纹随行渲染）
   Widget _previewTplRows(List<List<GridCell>> rows, {double fontSize = 12}) {
