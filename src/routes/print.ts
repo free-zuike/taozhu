@@ -125,7 +125,7 @@ printRouter.get('/template', async (c) => {
   const title = c.req.query('title')?.trim() || '对账单';
   const rowsB64 = c.req.query('rows') ?? '';
   if (!rowsB64) return c.json({ error: 'rows 缺失' }, 400);
-  let rows: [string, string, boolean?, string?][][];
+  let rows: [string, string, boolean, string, number, number][][];
   try {
     const b64 = rowsB64.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(rowsB64.length / 4) * 4, '=');
     // 前端是 utf8.encode + base64 编码的 UTF-8 字节；atob 返回 Latin-1 字符串会把中文误解码（寻牛→å¯»ç）
@@ -138,21 +138,32 @@ printRouter.get('/template', async (c) => {
         const a = cell.length > 1 ? String(cell[1] ?? 'left') : 'left';
         const b = cell.length > 2 ? cell[2] === true : false;
         const g = cell.length > 3 ? String(cell[3] ?? '') : '';
-        return [t, a, b, g];
+        const rs = cell.length > 4 ? Number(cell[4]) || 1 : 1;
+        const cs = cell.length > 5 ? Number(cell[5]) || 1 : 1;
+        return [t, a, b, g, rs, cs];
       }),
     );
   } catch (_) {
     return c.json({ error: 'rows 解码失败' }, 400);
   }
-  const bodyRows = rows.map((row) =>
-    '          <tr>' +
-    row.map(([t, a, b, g]) => {
+  // 合并单元格渲染：colSpan/rowSpan > 1 → 该格扩张，被覆盖的格跳过（空 td 占位防错位）
+  const covered = new Set<string>();
+  const bodyRows = rows.map((row, r) => {
+    if (covered.has(`r${r}`)) return ''; // 整行被上方 rowSpan 覆盖
+    const cells: string[] = [];
+    row.forEach((cell, c) => {
+      const [t, a, b, g, rs, cs] = cell;
+      if (covered.has(`${r}:${c}`)) return; // 已被左方 colSpan 覆盖
+      for (let rr = r; rr < r + rs; rr++) covered.add(`r${rr}`);
+      for (let cc = c; cc < c + cs; cc++) covered.add(`${r}:${cc}`);
       const ta = a === 'center' ? 'center' : a === 'right' ? 'right' : 'left';
       const fw = b ? 'font-weight:700;' : '';
       const bg = g === 'grey' ? 'background:#f2f2f2;' : '';
-      return `<td style="text-align:${ta};${fw}${bg}">${esc(t) || ''}</td>`;
-    }).join('') +
-    '</tr>').join('\n');
+      const span = `${rs > 1 ? `rowspan="${rs}" ` : ''}${cs > 1 ? `colspan="${cs}" ` : ''}`.trim();
+      cells.push(`<td ${span} style="text-align:${ta};${fw}${bg}">${esc(t) || ''}</td>`);
+    });
+    return cells.length ? '<tr>' + cells.join('') + '</tr>' : '';
+  }).filter((x) => x !== '').join('\n');
   return c.html(page(title, `<h1>${esc(title)}</h1>
 <table>
 ${bodyRows}

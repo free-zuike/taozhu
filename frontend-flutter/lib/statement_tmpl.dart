@@ -4,18 +4,23 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 网格单元格：文本（可含 {变量} 占位）+ 对齐（left/center/right）+ 样式（bold 加粗 / bg 底纹色名）
+/// + 合并（rowSpan/colSpan：>1 表示该格为合并区起点，向右/向下覆盖；被覆盖的格子 text 置空）
 class GridCell {
-  GridCell([this.text = '', this.align = 'left', this.bold = false, this.bg = '']);
+  GridCell([this.text = '', this.align = 'left', this.bold = false, this.bg = '', this.rowSpan = 1, this.colSpan = 1]);
   String text;
   String align;
   bool bold;
   String bg; // 底纹色名：'grey'=浅灰（表头用）；空=无底纹
-  Map<String, dynamic> toJson() => {'t': text, 'a': align, 'b': bold, 'g': bg};
+  int rowSpan; // 跨行数（1=不跨）
+  int colSpan; // 跨列数（1=不跨）
+  Map<String, dynamic> toJson() => {'t': text, 'a': align, 'b': bold, 'g': bg, 'rs': rowSpan, 'cs': colSpan};
   GridCell.fromJson(Map<String, dynamic> j)
       : text = '${j['t'] ?? ''}',
         align = '${j['a'] ?? 'left'}',
         bold = j['b'] == true,
-        bg = '${j['g'] ?? ''}';
+        bg = '${j['g'] ?? ''}',
+        rowSpan = (j['rs'] as num?)?.toInt() ?? 1,
+        colSpan = (j['cs'] as num?)?.toInt() ?? 1;
 }
 
 /// 模板组件（组件式设计器）：按顺序渲染成表格块

@@ -416,6 +416,31 @@ class _StatementPageState extends State<StatementPage> {
     var ri = 0;
     for (final row in trows) {
       sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
+      // 合并单元格（模板 colSpan/rowSpan → Excel 合并区域；被覆盖格文本为空自动并入）
+      for (var cc = 0; cc < row.length; cc++) {
+        final c = row[cc];
+        if (c.colSpan > 1 || c.rowSpan > 1) {
+          final endCol = cc + c.colSpan - 1;
+          final endRow = ri + c.rowSpan - 1;
+          // 未 append 的行先用占位补齐，保证 merge 范围合法
+          for (var fillR = ri + 1; fillR <= endRow; fillR++) {
+            if (fillR >= sheet.maxRows) {
+              sheet.appendRow([for (var k = 0; k <= endCol; k++) TextCellValue('')]);
+            } else {
+              for (var k = 0; k <= endCol; k++) {
+                final cellIdx = CellIndex.indexByColumnRow(columnIndex: k, rowIndex: fillR);
+                if (sheet.cell(cellIdx).value == null) {
+                  sheet.cell(cellIdx).value = TextCellValue('');
+                }
+              }
+            }
+          }
+          sheet.merge(
+            CellIndex.indexByColumnRow(columnIndex: cc, rowIndex: ri),
+            CellIndex.indexByColumnRow(columnIndex: endCol, rowIndex: endRow),
+          );
+        }
+      }
       // 样式（加粗/底纹/对齐/字号）→ 单元格 cellStyle，与预览/打印同源
       for (var cc = 0; cc < row.length; cc++) {
         final c = row[cc];
@@ -2141,7 +2166,7 @@ class _StatementPageState extends State<StatementPage> {
     final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
     final trows = renderTemplateRows(_curPubTpl, _td(clientName));
     final rowsJson = jsonEncode([
-      for (final row in trows) [for (final c in row) [c.text, c.align, c.bold, c.bg]],
+      for (final row in trows) [for (final c in row) [c.text, c.align, c.bold, c.bg, c.rowSpan, c.colSpan]],
     ]);
     final rowsB64 = base64Url.encode(utf8.encode(rowsJson));
     final title = Uri.encodeQueryComponent('$clientName 对账单');

@@ -2,6 +2,7 @@
 /// 用现成 Excel 式网格组件 pluto_grid 编辑（单元格可放 {变量} 含 {1日}…{31日}），保存到本地（SharedPreferences）。
 /// 组件/正文旧模板仍可被导出渲染（renderTemplateRows 兼容），但编辑入口收敛为网格。
 /// 预览取本地镜像（原生）；Web 无本地库回退请求服务器。
+import 'dart:math' show min;
 import 'package:flutter/material.dart';
 import 'package:pluto_grid/pluto_grid.dart';
 import '../api.dart';
@@ -275,6 +276,63 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       cur.grid.removeLast();
       rebuild();
     }
+    // 合并单元格（Excel 式）：把当前选中区域合并为单个格子 —— 左上角保留文本，
+    // 区域横向广度=colSpan、纵向高度=rowSpan，其余格 text 置空（渲染时被覆盖）。
+    // pluto_grid 原生不支持 cellSpan（官方 issue 未实现），用数据层 span + 渲染三端（预览/Excel/打印）自行合并。
+    void mergeCells() {
+      _flushGrid();
+      final st = _gridState;
+      if (st == null) return;
+      final sel = st.currentSelectingPositionList;
+      if (sel == null || sel.length < 2) {
+        _pageToast(context, '请先选择至少 2 个单元格（点住第一格拖到最后一格）再合并');
+        return;
+      }
+      final rowsIdx = sel.map((p) => p.rowIdx).toList();
+      final colIdx = sel.map((p) => Math.min(p.columnIdx, cols)).toList();
+      final rMin = rowsIdx.reduce((a, b) => Math.min(a, b));
+      final rMax = rowsIdx.reduce((a, b) => Math.max(a, b));
+      final cMin = colIdx.reduce((a, b) => Math.min(a, b));
+      final cMax = colIdx.reduce((a, b) => Math.max(a, b));
+      // 只保留区域内的 rowSpan/colSpan 标记，被覆盖格清空文本
+      int covered = 0;
+      for (var r = rMin; r <= rMax; r++) {
+        for (var cc = cMin; cc <= cMax; cc++) {
+          if (r >= cur.grid.length || cc >= cur.grid[r].length) continue;
+          if (r == rMin && cc == cMin) continue;
+          cur.grid[r][cc].text = '';
+          covered++;
+        }
+      }
+      if (covered == 0) {
+        _pageToast(context, '所选区域无效（无覆盖格）');
+        return;
+      }
+      cur.grid[rMin][cMin].colSpan = cMax - cMin + 1;
+      cur.grid[rMin][cMin].rowSpan = rMax - rMin + 1;
+      rebuild();
+      _pageToast(context, '已合并 ${cMax - cMin + 1} 列 × ${rMax - rMin + 1} 行');
+    }
+    void unmergeCells() {
+      _flushGrid();
+      // 清空所有合并标记（恢复被覆盖格为可编辑空格）
+      int cleared = 0;
+      for (final row in cur.grid) {
+        for (final c in row) {
+          if (c.rowSpan > 1 || c.colSpan > 1) {
+            c.rowSpan = 1;
+            c.colSpan = 1;
+            cleared++;
+          }
+        }
+      }
+      if (cleared == 0) {
+        _pageToast(context, '当前模板没有合并单元格');
+        return;
+      }
+      rebuild();
+      _pageToast(context, '已取消全部合并');
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -312,6 +370,17 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
           OutlinedButton.icon(
               icon: const Icon(Icons.remove, size: 14), label: const Text('删行'),
               onPressed: cur.grid.length > 1 ? delRow : null),
+          // Excel 功能区：合并 / 取消合并
+          OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: c.primary,
+                side: BorderSide(color: c.primary.withOpacity(0.5)),
+              ),
+              icon: const Icon(Icons.merge_type, size: 14), label: const Text('合并'),
+              onPressed: mergeCells),
+          OutlinedButton.icon(
+              icon: const Icon(Icons.merge_type, size: 14), label: const Text('取消合并'),
+              onPressed: unmergeCells),
           // 每列对齐循环按钮（左→中→右），渲染时 colAligns 优先于单元格 align
           for (var cc = 0; cc < cols; cc++)
             ActionChip(
