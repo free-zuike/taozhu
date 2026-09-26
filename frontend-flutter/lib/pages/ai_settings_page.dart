@@ -261,7 +261,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   }
 
   /// 单项能力测试的图标按钮（tooltip 说明，点击弹窗展示结果）
-  Widget _testBtn(TaozhuColors c, String cap, String label, IconData icon) {
+  Widget _testBtn(String cap, String label, IconData icon) {
     return SizedBox(
       width: 44,
       height: 40,
@@ -511,11 +511,11 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    _testBtn(c, 'text', '文字记账', Icons.text_fields),
+                    _testBtn('text', '文字记账', Icons.text_fields),
                     const SizedBox(width: 8),
-                    _testBtn(c, 'vision', '图片识别', Icons.image_outlined),
+                    _testBtn('vision', '图片识别', Icons.image_outlined),
                     const SizedBox(width: 8),
-                    _testBtn(c, 'speech', '语音记账', Icons.mic_outlined),
+                    _testBtn('speech', '语音记账', Icons.mic_outlined),
                   ],
                 ),
                 const SizedBox(height: 12),
