@@ -458,7 +458,8 @@ jobs:
           flutter create --org com.taozhu --project-name taozhu_app .
           # permission_handler_windows 0.2.x 用废弃 <experimental/coroutine>，新版 MSVC 18 报 C2338 硬错误；
           # 官方提示注入 _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS 抑制（CMake 目录级定义，插件子目录生效）
-          sed -i 's|include(flutter/generated_plugins.cmake)|add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)\n#include(flutter/generated_plugins.cmake)|' windows/CMakeLists.txt
+          # 注意：sed 的 \n 在 Git Bash 输出字面字符，必须用 i 插入命令（匹配行前插一行）
+          sed -i '/^include(flutter\/generated_plugins.cmake)$/i\add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' windows/CMakeLists.txt
           flutter build windows --release
 
       - name: Package & upload Windows
