@@ -1,4 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../api.dart';
 import '../sync_service.dart';
 import '../theme.dart';
@@ -64,36 +68,78 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  // 本地缓存键：服务端配置的脱敏镜像（无 Key 明文，仅 has_key 等），离线/弱网也能秒开
+  static const _cacheKey = 'ai_settings_cache_v1';
+
+  /// 把服务器返回的配置快照写入本地缓存（脱敏数据，可安全落盘）
+  Future<void> _writeCachedConfig(Map d) async {
     try {
-      final d = await Api.instance.get('/settings/ai');
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_cacheKey, jsonEncode(d));
+    } catch (_) {}
+  }
+
+  /// 读取本地缓存；无缓存/损坏返回 null
+  Future<Map?> _readCachedConfig() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final s = p.getString(_cacheKey);
+      if (s == null || s.isEmpty) return null;
+      final d = jsonDecode(s);
+      return d is Map ? d.cast<String, dynamic>() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 解析服务器返回的配置快照（providers + binding）到页面状态
+  void _applyConfig(Map d) {
+    _providers = ((d['providers'] as List?) ?? [])
+        .whereType<Map>()
+        .map((m) => m.cast<String, dynamic>())
+        .map((m) => _Provider(
+              id: '${m['id'] ?? ''}',
+              name: '${m['name'] ?? ''}',
+              isBuiltIn: (m['is_built_in'] as bool?) ?? false,
+              hasKey: (m['has_key'] as bool?) ?? false,
+              baseUrl: '${m['base_url'] ?? ''}',
+              textModel: '${m['text_model'] ?? ''}',
+              visionModel: '${m['vision_model'] ?? ''}',
+              audioModel: '${m['audio_model'] ?? ''}',
+            ))
+        .toList();
+    final b = (d['binding'] as Map?)?.cast<String, dynamic>() ?? {};
+    _textProviderId = '${b['textProviderId'] ?? 'zhipu_glm'}';
+    _visionProviderId = '${b['visionProviderId'] ?? 'zhipu_glm'}';
+    _speechProviderId = '${b['speechProviderId'] ?? 'zhipu_glm'}';
+  }
+
+  Future<void> _load() async {
+    // 本地优先：先渲染本地缓存（秒开不转圈），后台再拉服务器最新配置刷新
+    final cached = await _readCachedConfig();
+    if (cached != null) {
       if (!mounted) return;
       setState(() {
-        _providers = ((d['providers'] as List?) ?? [])
-            .whereType<Map>()
-            .map((m) => m.cast<String, dynamic>())
-            .map((m) => _Provider(
-                  id: '${m['id'] ?? ''}',
-                  name: '${m['name'] ?? ''}',
-                  isBuiltIn: (m['is_built_in'] as bool?) ?? false,
-                  hasKey: (m['has_key'] as bool?) ?? false,
-                  baseUrl: '${m['base_url'] ?? ''}',
-                  textModel: '${m['text_model'] ?? ''}',
-                  visionModel: '${m['vision_model'] ?? ''}',
-                  audioModel: '${m['audio_model'] ?? ''}',
-                ))
-            .toList();
-        final b = (d['binding'] as Map?)?.cast<String, dynamic>() ?? {};
-        _textProviderId = '${b['textProviderId'] ?? 'zhipu_glm'}';
-        _visionProviderId = '${b['visionProviderId'] ?? 'zhipu_glm'}';
-        _speechProviderId = '${b['speechProviderId'] ?? 'zhipu_glm'}';
+        _applyConfig(cached);
+        _loading = false;
+      });
+    }
+    try {
+      final d = await Api.instance.get('/settings/ai');
+      await _writeCachedConfig(d);
+      if (!mounted) return;
+      setState(() {
+        _applyConfig(d);
         _loading = false;
       });
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
+        // 有本地缓存可用时静默保留旧数据；无缓存（首次）才提示
+        if (cached == null) {
+          toast(context, e.toString().replaceFirst('Exception: ', ''));
+        }
       }
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -125,24 +171,12 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           'speechProviderId': _speechProviderId,
         },
       });
+      await _writeCachedConfig(d);
       if (!mounted) return;
       setState(() {
         _saving = false;
         _pendingKeys.clear();
-        _providers = ((d['providers'] as List?) ?? [])
-            .whereType<Map>()
-            .map((m) => m.cast<String, dynamic>())
-            .map((m) => _Provider(
-                  id: '${m['id'] ?? ''}',
-                  name: '${m['name'] ?? ''}',
-                  isBuiltIn: (m['is_built_in'] as bool?) ?? false,
-                  hasKey: (m['has_key'] as bool?) ?? false,
-                  baseUrl: '${m['base_url'] ?? ''}',
-                  textModel: '${m['text_model'] ?? ''}',
-                  visionModel: '${m['vision_model'] ?? ''}',
-                  audioModel: '${m['audio_model'] ?? ''}',
-                ))
-            .toList();
+        _applyConfig(d);
       });
       if (!quiet) toast(context, 'AI 配置已保存');
     } catch (e) {
@@ -224,6 +258,19 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     } finally {
       if (mounted) setState(() => _testing = false);
     }
+  }
+
+  /// 单项能力测试的图标按钮（tooltip 说明，点击弹窗展示结果）
+  Widget _testBtn(TaozhuColors c, String cap, String label, IconData icon) {
+    return SizedBox(
+      width: 44,
+      height: 40,
+      child: IconButton.filledTonal(
+        tooltip: '测试$label',
+        onPressed: _testing ? null : () => _testOne(cap, label),
+        icon: Icon(icon, size: 20),
+      ),
+    );
   }
 
   Future<void> _editProvider(_Provider p) async {
@@ -455,33 +502,20 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                 Row(
                   children: [
                     Expanded(
-                      child: OutlinedButton.icon(
+                      child: FilledButton.icon(
                         onPressed: _testing ? null : _testAll,
                         icon: _testing
                             ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Icon(Icons.wifi_tethering, size: 20),
-                        label: const Text('一键测试'),
+                            : const Icon(Icons.play_arrow_rounded, size: 20),
+                        label: Text(_testing ? '测试中…' : '一键测试'),
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _testing ? null : () => _testOne('text', '文字记账'),
-                        child: const Text('文字'),
-                      ),
-                    ),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _testing ? null : () => _testOne('vision', '图片识别'),
-                        child: const Text('图片'),
-                      ),
-                    ),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _testing ? null : () => _testOne('speech', '语音记账'),
-                        child: const Text('语音'),
-                      ),
-                    ),
+                    _testBtn(c, 'text', '文字记账', Icons.text_fields),
+                    const SizedBox(width: 8),
+                    _testBtn(c, 'vision', '图片识别', Icons.image_outlined),
+                    const SizedBox(width: 8),
+                    _testBtn(c, 'speech', '语音记账', Icons.mic_outlined),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -499,12 +533,29 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: c.primary.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(12),
+        gradient: LinearGradient(
+          colors: [c.primary.withOpacity(0.14), c.primary.withOpacity(0.05)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(14),
       ),
-      child: Text(
-        '配置后，出货/进货记单页的「AI 记账」可用：拍照识别单据、文字一句话记账、语音记账，识别结果自动匹配商品填行。',
-        style: TextStyle(fontSize: 13, color: c.textMain),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(color: c.primary, borderRadius: BorderRadius.circular(12)),
+            child: const Icon(Icons.auto_awesome, color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '配置后，出货/进货记单页的「AI 记账」可用：拍照识别单据、文字一句话记账、语音记账，识别结果自动匹配商品填行。',
+              style: TextStyle(fontSize: 13, color: c.textMain, height: 1.4),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -573,10 +624,17 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         child: Row(
           children: [
             Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(color: c.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
-              child: Icon(Icons.cloud_outlined, size: 20, color: c.primary),
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [c.primary, c.primary.withOpacity(0.6)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: const Icon(Icons.cloud_outlined, size: 20, color: Colors.white),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -596,10 +654,21 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                       ],
                     ],
                   ),
-                  const SizedBox(height: 3),
-                  Text(
-                    p.hasKey ? 'Key 已配置' : '未添加 Key',
-                    style: TextStyle(fontSize: 12, color: p.hasKey ? c.success : c.warning),
+                  const SizedBox(height: 5),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: (p.hasKey ? c.success : c.warning).withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      p.hasKey ? 'Key 已配置' : '未添加 Key',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: p.hasKey ? c.success : c.warning,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -630,14 +699,21 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
           Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(color: c.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
-            child: Icon(icon, size: 20, color: c.primary),
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [c.primary, c.primary.withOpacity(0.6)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(icon, size: 20, color: Colors.white),
           ),
           const SizedBox(width: 12),
           SizedBox(
@@ -645,19 +721,26 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
             child: Text(title, style: TextStyle(fontSize: 14, color: c.textMain)),
           ),
           Expanded(
-            child: DropdownButton<String>(
-              value: providerId,
-              isExpanded: true,
-              underline: const SizedBox.shrink(),
-              items: _providers
-                  .map((p) => DropdownMenuItem(
-                        value: p.id,
-                        child: Text(p.hasKey ? p.name : '${p.name}（未添加 Key）', overflow: TextOverflow.ellipsis),
-                      ))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) onChanged(v);
-              },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: c.divider.withOpacity(0.35),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: DropdownButton<String>(
+                value: providerId,
+                isExpanded: true,
+                underline: const SizedBox.shrink(),
+                items: _providers
+                    .map((p) => DropdownMenuItem(
+                          value: p.id,
+                          child: Text(p.hasKey ? p.name : '${p.name}（未添加 Key）', overflow: TextOverflow.ellipsis),
+                        ))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) onChanged(v);
+                },
+              ),
             ),
           ),
         ],
