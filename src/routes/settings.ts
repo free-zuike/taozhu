@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ZHIPU_PROVIDER, DEFAULT_BINDING, type AiConfig, type AiProviderConfig, type AiBinding } from '../services/ai-parse';
+import { notifyClients } from '../services/sync-hub';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -149,5 +150,7 @@ settingsRouter.put('/ai', async (c) => {
     }));
   }
   const cfg = await getAiConfig(c.env.DB);
+  // 广播 ai_config：其他端（App/Web）收到后重新拉取 AI 配置（不触发业务数据同步）
+  await notifyClients('ai_config');
   return c.json(sanitizeAiConfig(cfg));
 });

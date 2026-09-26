@@ -116,4 +116,11 @@ describe('系统设置（AI 配置）', () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('AI 识别设置');
   });
+
+  it('未配置 key 时测试 AI 返回提示（400）', async () => {
+    const res = await call(env, 'POST', '/api/v1/ai/test', token);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('AI 识别设置');
+  });
 });

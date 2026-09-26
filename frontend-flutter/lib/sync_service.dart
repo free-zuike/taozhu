@@ -57,6 +57,9 @@ class SyncService {
   /// 触发库存变更通知（stocks_page 保存/盘点成功后调用）
   static void notifyStockChanged() => stockChanged.notifyListeners();
 
+  /// AI 配置变更通知器：服务器广播 ai_config（其他端改了服务商/能力绑定）→ AI 设置页监听后重新拉取
+  static final ChangeNotifier aiConfigChanged = ChangeNotifier();
+
   static String? _deviceId;
   static bool _syncing = false;
   static Timer? _debounce;

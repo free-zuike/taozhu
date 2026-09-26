@@ -94,3 +94,22 @@ aiRouter.post('/parse-voice', async (c) => {
     return c.json({ error: msg }, 502);
   }
 });
+
+// POST /api/v1/ai/test — 连通性测试：用文字记账能力跑一条固定话术，验证 Key/地址/模型可用
+aiRouter.post('/test', async (c) => {
+  const cfg = await getAiConfig(c.env.DB);
+  const ep = capabilityEndpoint(cfg, 'text');
+  if (!ep.apiKey) {
+    return c.json({ error: 'AI 记账未启用：请先在「AI 识别设置」配置 API Key 并绑定文字记账能力' }, 400);
+  }
+  if (!ep.model) {
+    return c.json({ error: '文字记账模型为空：请在「AI 识别设置」该服务商的编辑弹窗中填写文字记账模型' }, 400);
+  }
+  try {
+    const items = await parseText(ep, '白菜2斤每斤3元，土豆1斤每斤5元', 'purchase');
+    return c.json({ ok: true, items, count: items.length });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : '测试失败';
+    return c.json({ error: msg }, 502);
+  }
+});

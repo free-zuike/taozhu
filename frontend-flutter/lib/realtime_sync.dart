@@ -10,6 +10,7 @@ import 'sync_service.dart';
 /// 服务端推送类型化消息（对齐参考架构 WS 分发模型）：
 /// - {type:'sync'}：业务实体变更 → 防抖触发增量同步（pull/push）
 /// - {type:'profile_change'}：资料/头像变更 → syncMyProfile（按头像版本比对下载）
+/// - {type:'ai_config'}：AI 配置（服务商/能力绑定）变更 → 通知 AI 设置页重新拉取
 /// 连接建立（首连/断线重连）后自动触发一次完整同步，冲刷离线期间累积的本地变更。
 /// 断线自动重连（指数退避 1/3/8/20/60s）。
 class RealtimeSync {
@@ -85,6 +86,9 @@ class RealtimeSync {
       final type = '${d['type'] ?? 'sync'}';
       if (type == 'profile_change') {
         _triggerProfile();
+      } else if (type == 'ai_config') {
+        // AI 配置变更：通知 AI 设置页等监听方重新拉取（不触发业务数据同步）
+        SyncService.aiConfigChanged.notifyListeners();
       } else {
         _trigger();
       }

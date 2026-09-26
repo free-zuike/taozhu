@@ -1,5 +1,6 @@
 /** 实时同步广播：Durable Object 持有在线 WebSocket 连接，数据变更后向所有客户端推送类型化消息，
- *  客户端按 type 分发：sync=实体变更触发增量拉取（pull）；profile_change=资料/头像变更触发 syncMyProfile。
+ *  客户端按 type 分发：sync=实体变更触发增量拉取（pull）；profile_change=资料/头像变更触发 syncMyProfile；
+ *  ai_config=AI 配置（服务商/能力绑定）变更触发 AI 设置页重新拉取。
  *  （消息类型化对齐参考架构：sync_change / profile_change / connected 分发模型） */
 
 /** 环境捕获：Workers 单实例所有请求共享同一绑定，首请求中间件记录后即可全局使用 */
@@ -10,8 +11,8 @@ export function setHubEnv(env: { SYNC_HUB: DurableObjectNamespace }): void {
 }
 
 /** 广播一次同步通知（变更流已写入后调用；失败静默，不影响主流程）
- *  type: sync=业务实体变更（默认）/ profile_change=用户资料（显示名/头像）变更 */
-export async function notifyClients(type: 'sync' | 'profile_change' = 'sync'): Promise<void> {
+ *  type: sync=业务实体变更（默认）/ profile_change=用户资料（显示名/头像）变更 / ai_config=AI 配置变更 */
+export async function notifyClients(type: 'sync' | 'profile_change' | 'ai_config' = 'sync'): Promise<void> {
   const hub = hubEnv?.SYNC_HUB;
   if (!hub) return;
   try {

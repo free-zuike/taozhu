@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
 
 /// AI 识别设置（仅老板）：多服务商 + 能力绑定（对齐参考项目架构）。
-/// providers：服务商列表（智谱 GLM 内置不可删，可添加/编辑/删除 OpenAI 兼容自定义服务商）；
-/// binding：文字记账/图片识别/语音记账各绑定一个服务商（可混用不同服务商的不同模型）。
+/// 两个 Tab：①服务商（智谱 GLM 内置不可删，可添加/编辑/删除 OpenAI 兼容自定义服务商；
+///           列表只显示名称与 Key 状态，模型在编辑弹窗里配置）
+///          ②能力绑定（文字记账/图片识别/语音记账各选一个服务商，可混用不同服务商的不同模型）。
+/// 服务器广播 ai_config（其他端改了配置）→ 本页监听 SyncService.aiConfigChanged 自动重新拉取。
 class AiSettingsPage extends StatefulWidget {
   const AiSettingsPage({super.key});
   @override
@@ -36,16 +39,29 @@ class _Provider {
 class _AiSettingsPageState extends State<AiSettingsPage> {
   bool _loading = true;
   bool _saving = false;
+  bool _testing = false;
+  String _tab = 'providers'; // 'providers' | 'binding'
 
   List<_Provider> _providers = [];
   String _textProviderId = 'zhipu_glm';
   String _visionProviderId = 'zhipu_glm';
   String _speechProviderId = 'zhipu_glm';
 
+  // 本次会话中用户填过的新 Key（PUT 时传给后端覆盖旧值）；'' = 清空
+  final Map<String, String> _pendingKeys = {};
+
   @override
   void initState() {
     super.initState();
     _load();
+    // 服务器广播 ai_config（其他端改了服务商/能力绑定）→ 自动重新拉取，无需退出重进
+    SyncService.aiConfigChanged.addListener(_load);
+  }
+
+  @override
+  void dispose() {
+    SyncService.aiConfigChanged.removeListener(_load);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -135,9 +151,25 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
   }
 
+  /// 连通性测试：后端用文字记账能力跑一条固定话术，验证 Key/地址/模型可用
+  Future<void> _testAi() async {
+    if (_testing) return;
+    setState(() => _testing = true);
+    try {
+      final d = await Api.instance.post('/ai/test');
+      final count = (d['count'] as num?)?.toInt() ?? 0;
+      final items = (d['items'] as List?) ?? [];
+      final names = items.take(5).map((e) => '${(e as Map)['name'] ?? ''}').where((s) => s.isNotEmpty).join('、');
+      toast(context, count > 0 ? 'AI 测试成功：识别出 $count 项商品（$names）' : 'AI 测试成功：返回为空，请检查模型是否支持该能力');
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
   Future<void> _editProvider(_Provider p) async {
-    // 编辑弹窗：名称（内置不可改）/ 地址 / 三个模型 / API Key（留空=保留原 Key，勾选清空=移除 Key）
-    final nameCtrl = TextEditingController(text: p.isBuiltIn ? p.name : p.name);
+    final nameCtrl = TextEditingController(text: p.name);
     final baseUrlCtrl = TextEditingController(text: p.baseUrl);
     final textModelCtrl = TextEditingController(text: p.textModel);
     final visionModelCtrl = TextEditingController(text: p.visionModel);
@@ -214,7 +246,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
     setState(() {
       final prov = _providers[idx];
-      // _Provider 字段 final 部分重建
       final updated = _Provider(
         id: prov.id,
         name: p.isBuiltIn ? prov.name : (nameCtrl.text.trim().isEmpty ? prov.name : nameCtrl.text.trim()),
@@ -231,9 +262,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     });
     await _save();
   }
-
-  // 本次会话中用户填过的新 Key（PUT 时传给后端覆盖旧值）；'__clear__' = 清空 Key
-  final Map<String, String> _pendingKeys = {};
 
   Future<void> _addProvider() async {
     final nameCtrl = TextEditingController();
@@ -344,27 +372,18 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               padding: const EdgeInsets.all(16),
               children: [
                 _intro(c),
-                const SizedBox(height: 18),
-                _groupTitle(c, '服务商（可添加多个，能力各自绑定）'),
-                _card(c, [
-                  for (final p in _providers) ..._providerTiles(c, p),
-                ]),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    onPressed: _addProvider,
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('添加服务商（硅基流动 / DeepSeek 等 OpenAI 兼容）'),
-                  ),
+                const SizedBox(height: 16),
+                // Tab 切换：服务商 / 能力绑定（分开显示，服务商多了不遮挡绑定）
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'providers', label: Text('服务商')),
+                    ButtonSegment(value: 'binding', label: Text('能力绑定')),
+                  ],
+                  selected: {_tab},
+                  onSelectionChanged: (s) => setState(() => _tab = s.first),
                 ),
-                const SizedBox(height: 18),
-                _groupTitle(c, '能力绑定（各能力用哪个服务商）'),
-                _card(c, [
-                  _bindingTile(c, Icons.text_fields_outlined, '文字记账', _textProviderId, (v) => setState(() => _textProviderId = v)),
-                  _bindingTile(c, Icons.image_outlined, '图片识别', _visionProviderId, (v) => setState(() => _visionProviderId = v)),
-                  _bindingTile(c, Icons.mic_outlined, '语音记账', _speechProviderId, (v) => setState(() => _speechProviderId = v)),
-                ]),
+                const SizedBox(height: 16),
+                if (_tab == 'providers') ..._providersSection(c) else _bindingSection(c),
                 const SizedBox(height: 24),
                 FilledButton.icon(
                   onPressed: _saving ? null : () => _save(),
@@ -372,6 +391,14 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.save_outlined),
                   label: Text(_saving ? '保存中…' : '保存 AI 配置'),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: _testing ? null : _testAi,
+                  icon: _testing
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.wifi_tethering, size: 20),
+                  label: Text(_testing ? '测试中…' : '测试 AI 配置（发一句话验证连通）'),
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -398,6 +425,35 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     );
   }
 
+  List<Widget> _providersSection(TaozhuColors c) {
+    return [
+      _groupTitle(c, '服务商（智谱内置 + 自定义 OpenAI 兼容）'),
+      _card(c, [
+        for (final p in _providers) ..._providerTiles(c, p),
+      ]),
+      const SizedBox(height: 10),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: _addProvider,
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('添加服务商（硅基流动 / DeepSeek 等）'),
+        ),
+      ),
+    ];
+  }
+
+  Widget _bindingSection(TaozhuColors c) {
+    return [
+      _groupTitle(c, '各能力用哪个服务商（可混用不同模型）'),
+      _card(c, [
+        _bindingTile(c, Icons.text_fields_outlined, '文字记账', _textProviderId, (v) => setState(() => _textProviderId = v)),
+        _bindingTile(c, Icons.image_outlined, '图片识别', _visionProviderId, (v) => setState(() => _visionProviderId = v)),
+        _bindingTile(c, Icons.mic_outlined, '语音记账', _speechProviderId, (v) => setState(() => _speechProviderId = v)),
+      ]),
+    ];
+  }
+
   Widget _groupTitle(TaozhuColors c, String t) {
     return Padding(
       padding: const EdgeInsets.only(left: 4, bottom: 8),
@@ -419,6 +475,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     );
   }
 
+  /// 服务商条目：只显示名称 + Key 状态（不显示模型名，避免长模型名影响查看；模型在编辑弹窗里配）
   List<Widget> _providerTiles(TaozhuColors c, _Provider p) {
     return [
       Padding(
@@ -451,13 +508,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    p.hasKey ? 'Key 已配置 · ${p.baseUrl}' : '未配置 Key · ${p.baseUrl}',
+                    p.hasKey ? 'Key 已配置' : '未添加 Key',
                     style: TextStyle(fontSize: 12, color: p.hasKey ? c.success : c.warning),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '图片 ${p.visionModel.isEmpty ? '—' : p.visionModel} · 文字 ${p.textModel.isEmpty ? '—' : p.textModel} · 语音 ${p.audioModel.isEmpty ? '—' : p.audioModel}',
-                    style: TextStyle(fontSize: 11, color: c.textSub),
                   ),
                 ],
               ),
@@ -510,7 +562,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               items: _providers
                   .map((p) => DropdownMenuItem(
                         value: p.id,
-                        child: Text(p.hasKey ? p.name : '${p.name}（未配置 Key）', overflow: TextOverflow.ellipsis),
+                        child: Text(p.hasKey ? p.name : '${p.name}（未添加 Key）', overflow: TextOverflow.ellipsis),
                       ))
                   .toList(),
               onChanged: (v) {
