@@ -3,30 +3,44 @@ import '../api.dart';
 import '../theme.dart';
 import 'router.dart';
 
-/// AI 识别设置（仅老板）：API 地址 / Key / 模型，供 AI 记账识别使用（智谱/OpenAI 兼容）。
-/// 数据存后端 settings 表（/settings/ai），Key 不入前端缓存（GET 不回显明文，仅 has_key）。
+/// AI 识别设置（仅老板）：多服务商 + 能力绑定（对齐参考项目架构）。
+/// providers：服务商列表（智谱 GLM 内置不可删，可添加/编辑/删除 OpenAI 兼容自定义服务商）；
+/// binding：文字记账/图片识别/语音记账各绑定一个服务商（可混用不同服务商的不同模型）。
 class AiSettingsPage extends StatefulWidget {
   const AiSettingsPage({super.key});
   @override
   State<AiSettingsPage> createState() => _AiSettingsPageState();
 }
 
+class _Provider {
+  _Provider({
+    required this.id,
+    required this.name,
+    required this.isBuiltIn,
+    required this.hasKey,
+    required this.baseUrl,
+    required this.textModel,
+    required this.visionModel,
+    required this.audioModel,
+  });
+  final String id;
+  final String name;
+  final bool isBuiltIn;
+  bool hasKey;
+  final String baseUrl;
+  final String textModel;
+  final String visionModel;
+  final String audioModel;
+}
+
 class _AiSettingsPageState extends State<AiSettingsPage> {
   bool _loading = true;
-  bool _hasKey = false;
   bool _saving = false;
 
-  // 回显值（不可变部分）：Key 占位提示 `已设置 ****` / 未设置
-  final _apiKeyCtrl = TextEditingController();
-  final _baseUrlCtrl = TextEditingController();
-  final _modelCtrl = TextEditingController();
-  final _textModelCtrl = TextEditingController();
-  final _audioModelCtrl = TextEditingController();
-
-  String _baseUrl = '';
-  String _model = '';
-  String _textModel = '';
-  String _audioModel = '';
+  List<_Provider> _providers = [];
+  String _textProviderId = 'zhipu_glm';
+  String _visionProviderId = 'zhipu_glm';
+  String _speechProviderId = 'zhipu_glm';
 
   @override
   void initState() {
@@ -34,30 +48,29 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     _load();
   }
 
-  @override
-  void dispose() {
-    _apiKeyCtrl.dispose();
-    _baseUrlCtrl.dispose();
-    _modelCtrl.dispose();
-    _textModelCtrl.dispose();
-    _audioModelCtrl.dispose();
-    super.dispose();
-  }
-
   Future<void> _load() async {
     try {
       final d = await Api.instance.get('/settings/ai');
       if (!mounted) return;
       setState(() {
-        _hasKey = (d['has_key'] as bool?) ?? false;
-        _baseUrl = '${d['base_url'] ?? ''}';
-        _model = '${d['model'] ?? ''}';
-        _textModel = '${d['text_model'] ?? ''}';
-        _audioModel = '${d['audio_model'] ?? ''}';
-        _baseUrlCtrl.text = _baseUrl;
-        _modelCtrl.text = _model;
-        _textModelCtrl.text = _textModel;
-        _audioModelCtrl.text = _audioModel;
+        _providers = ((d['providers'] as List?) ?? [])
+            .whereType<Map>()
+            .map((m) => m.cast<String, dynamic>())
+            .map((m) => _Provider(
+                  id: '${m['id'] ?? ''}',
+                  name: '${m['name'] ?? ''}',
+                  isBuiltIn: (m['is_built_in'] as bool?) ?? false,
+                  hasKey: (m['has_key'] as bool?) ?? false,
+                  baseUrl: '${m['base_url'] ?? ''}',
+                  textModel: '${m['text_model'] ?? ''}',
+                  visionModel: '${m['vision_model'] ?? ''}',
+                  audioModel: '${m['audio_model'] ?? ''}',
+                ))
+            .toList();
+        final b = (d['binding'] as Map?)?.cast<String, dynamic>() ?? {};
+        _textProviderId = '${b['textProviderId'] ?? 'zhipu_glm'}';
+        _visionProviderId = '${b['visionProviderId'] ?? 'zhipu_glm'}';
+        _speechProviderId = '${b['speechProviderId'] ?? 'zhipu_glm'}';
         _loading = false;
       });
     } catch (e) {
@@ -68,34 +81,256 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
   }
 
-  Future<void> _save() async {
-    // 清空 Key 输入 = 清除 Key（保持原值逻辑：不传 api_key 字段则不修改；传空串=清除）
-    final body = <String, dynamic>{};
-    final key = _apiKeyCtrl.text.trim();
-    if (key.isNotEmpty) body['api_key'] = key;
-    if (_hasKey && key.isEmpty) body['api_key'] = '';
-    if (_baseUrlCtrl.text.trim() != _baseUrl) body['base_url'] = _baseUrlCtrl.text.trim();
-    if (_modelCtrl.text.trim() != _model) body['model'] = _modelCtrl.text.trim();
-    if (_textModelCtrl.text.trim() != _textModel) body['text_model'] = _textModelCtrl.text.trim();
-    if (_audioModelCtrl.text.trim() != _audioModel) body['audio_model'] = _audioModelCtrl.text.trim();
-    if (body.isEmpty) {
-      toast(context, '没有需要保存的修改');
-      return;
-    }
+  Future<void> _save({bool quiet = false}) async {
+    if (_saving) return;
     setState(() => _saving = true);
     try {
-      final d = await Api.instance.put('/settings/ai', body);
+      final providersPayload = _providers.map((p) {
+        final m = <String, dynamic>{
+          'id': p.id,
+          'name': p.name,
+          'is_built_in': p.isBuiltIn,
+          'base_url': p.baseUrl,
+          'text_model': p.textModel,
+          'vision_model': p.visionModel,
+          'audio_model': p.audioModel,
+        };
+        // 本次会话编辑过 Key 的服务商才带上（undefined=后端保留旧值；''=清空；非空=覆盖）
+        if (_pendingKeys.containsKey(p.id)) {
+          m['api_key'] = _pendingKeys[p.id];
+        }
+        return m;
+      }).toList();
+      final d = await Api.instance.put('/settings/ai', {
+        'providers': providersPayload,
+        'binding': {
+          'textProviderId': _textProviderId,
+          'visionProviderId': _visionProviderId,
+          'speechProviderId': _speechProviderId,
+        },
+      });
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _hasKey = (d['has_key'] as bool?) ?? false;
-        _baseUrl = '${d['base_url'] ?? ''}';
+        _pendingKeys.clear();
+        _providers = ((d['providers'] as List?) ?? [])
+            .whereType<Map>()
+            .map((m) => m.cast<String, dynamic>())
+            .map((m) => _Provider(
+                  id: '${m['id'] ?? ''}',
+                  name: '${m['name'] ?? ''}',
+                  isBuiltIn: (m['is_built_in'] as bool?) ?? false,
+                  hasKey: (m['has_key'] as bool?) ?? false,
+                  baseUrl: '${m['base_url'] ?? ''}',
+                  textModel: '${m['text_model'] ?? ''}',
+                  visionModel: '${m['vision_model'] ?? ''}',
+                  audioModel: '${m['audio_model'] ?? ''}',
+                ))
+            .toList();
       });
-      toast(context, 'AI 配置已保存');
+      if (!quiet) toast(context, 'AI 配置已保存');
     } catch (e) {
       if (mounted) setState(() => _saving = false);
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
+  }
+
+  Future<void> _editProvider(_Provider p) async {
+    // 编辑弹窗：名称（内置不可改）/ 地址 / 三个模型 / API Key（留空=保留原 Key，勾选清空=移除 Key）
+    final nameCtrl = TextEditingController(text: p.isBuiltIn ? p.name : p.name);
+    final baseUrlCtrl = TextEditingController(text: p.baseUrl);
+    final textModelCtrl = TextEditingController(text: p.textModel);
+    final visionModelCtrl = TextEditingController(text: p.visionModel);
+    final audioModelCtrl = TextEditingController(text: p.audioModel);
+    final keyCtrl = TextEditingController();
+    bool clearKey = false;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(p.isBuiltIn ? p.name : '编辑服务商'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!p.isBuiltIn)
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: '服务商名称（如：硅基流动）'),
+                  ),
+                TextField(
+                  controller: baseUrlCtrl,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(labelText: 'API 地址', hintText: '如 https://open.bigmodel.cn/api/paas/v4'),
+                ),
+                TextField(
+                  controller: keyCtrl,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: 'API Key',
+                    hintText: p.hasKey ? '已设置（留空=不修改）' : '如 sk-…',
+                  ),
+                ),
+                if (p.hasKey)
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('清空该服务商的 Key', style: TextStyle(fontSize: 13)),
+                    value: clearKey,
+                    onChanged: (v) => setDialogState(() => clearKey = v ?? false),
+                  ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: visionModelCtrl,
+                  decoration: const InputDecoration(labelText: '图片识别模型', hintText: '如 glm-4v-flash（视觉）'),
+                ),
+                TextField(
+                  controller: textModelCtrl,
+                  decoration: const InputDecoration(labelText: '文字记账模型', hintText: '如 glm-4-flash（文本）'),
+                ),
+                TextField(
+                  controller: audioModelCtrl,
+                  decoration: const InputDecoration(labelText: '语音记账模型', hintText: '如 glm-4-voice（语音转文字）'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+
+    final idx = _providers.indexWhere((x) => x.id == p.id);
+    if (idx < 0) return;
+    final baseUrl = baseUrlCtrl.text.trim();
+    if (baseUrl.isEmpty) {
+      toast(context, 'API 地址不能为空');
+      return;
+    }
+    setState(() {
+      final prov = _providers[idx];
+      // _Provider 字段 final 部分重建
+      final updated = _Provider(
+        id: prov.id,
+        name: p.isBuiltIn ? prov.name : (nameCtrl.text.trim().isEmpty ? prov.name : nameCtrl.text.trim()),
+        isBuiltIn: prov.isBuiltIn,
+        hasKey: clearKey ? false : (keyCtrl.text.trim().isNotEmpty ? true : prov.hasKey),
+        baseUrl: baseUrl,
+        textModel: textModelCtrl.text.trim(),
+        visionModel: visionModelCtrl.text.trim(),
+        audioModel: audioModelCtrl.text.trim(),
+      );
+      _providers[idx] = updated;
+      // 保存时把新 Key 传给后端（undefined=保留 / 非空=覆盖）；勾选清空=传空串（后端清空）
+      _pendingKeys[updated.id] = clearKey ? '' : keyCtrl.text.trim();
+    });
+    await _save();
+  }
+
+  // 本次会话中用户填过的新 Key（PUT 时传给后端覆盖旧值）；'__clear__' = 清空 Key
+  final Map<String, String> _pendingKeys = {};
+
+  Future<void> _addProvider() async {
+    final nameCtrl = TextEditingController();
+    final baseUrlCtrl = TextEditingController(text: 'https://open.bigmodel.cn/api/paas/v4');
+    final keyCtrl = TextEditingController();
+    final visionModelCtrl = TextEditingController(text: 'glm-4v-flash');
+    final textModelCtrl = TextEditingController(text: 'glm-4-flash');
+    final audioModelCtrl = TextEditingController(text: 'glm-4-voice');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('添加服务商'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: '服务商名称（如：硅基流动 / DeepSeek）'),
+              ),
+              TextField(
+                controller: baseUrlCtrl,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(labelText: 'API 地址（OpenAI 兼容）'),
+              ),
+              TextField(
+                controller: keyCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'API Key'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: visionModelCtrl,
+                decoration: const InputDecoration(labelText: '图片识别模型', hintText: '留空=不支持该能力'),
+              ),
+              TextField(
+                controller: textModelCtrl,
+                decoration: const InputDecoration(labelText: '文字记账模型', hintText: '留空=不支持该能力'),
+              ),
+              TextField(
+                controller: audioModelCtrl,
+                decoration: const InputDecoration(labelText: '语音记账模型', hintText: '留空=不支持该能力'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('添加')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final name = nameCtrl.text.trim();
+    final baseUrl = baseUrlCtrl.text.trim();
+    if (name.isEmpty || baseUrl.isEmpty) {
+      toast(context, '名称与 API 地址必填');
+      return;
+    }
+    final id = 'custom_${DateTime.now().millisecondsSinceEpoch}';
+    setState(() {
+      _providers.add(_Provider(
+        id: id,
+        name: name,
+        isBuiltIn: false,
+        hasKey: keyCtrl.text.trim().isNotEmpty,
+        baseUrl: baseUrl,
+        textModel: textModelCtrl.text.trim(),
+        visionModel: visionModelCtrl.text.trim(),
+        audioModel: audioModelCtrl.text.trim(),
+      ));
+      _pendingKeys[id] = keyCtrl.text.trim();
+    });
+    await _save();
+  }
+
+  Future<void> _deleteProvider(_Provider p) async {
+    if (p.isBuiltIn) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除服务商'),
+        content: Text('确定删除「${p.name}」吗？绑定了该服务商的能力会回退到智谱 GLM。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() {
+      _providers.removeWhere((x) => x.id == p.id);
+      if (_textProviderId == p.id) _textProviderId = 'zhipu_glm';
+      if (_visionProviderId == p.id) _visionProviderId = 'zhipu_glm';
+      if (_speechProviderId == p.id) _speechProviderId = 'zhipu_glm';
+    });
+    await _save();
   }
 
   @override
@@ -110,27 +345,29 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               children: [
                 _intro(c),
                 const SizedBox(height: 18),
-                _groupTitle(c, 'API 配置'),
+                _groupTitle(c, '服务商（可添加多个，能力各自绑定）'),
                 _card(c, [
-                  _fieldTile(c, Icons.key_outlined, 'API Key', _apiKeyCtrl,
-                      hint: _hasKey ? '已设置（填新值可更换；清空并保存=删除 Key）' : '如智谱 API Key（sk-…）',
-                      obscure: true),
-                  _fieldTile(c, Icons.dns_outlined, 'API 地址', _baseUrlCtrl,
-                      hint: '默认智谱：https://open.bigmodel.cn/api/paas/v4，兼容 OpenAI 服务商可填自己的'),
+                  for (final p in _providers) ..._providerTiles(c, p),
                 ]),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: _addProvider,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('添加服务商（硅基流动 / DeepSeek 等 OpenAI 兼容）'),
+                  ),
+                ),
                 const SizedBox(height: 18),
-                _groupTitle(c, '模型（分能力）'),
+                _groupTitle(c, '能力绑定（各能力用哪个服务商）'),
                 _card(c, [
-                  _fieldTile(c, Icons.image_outlined, '图片识别模型', _modelCtrl,
-                      hint: '拍照识别单据：默认 glm-4v-flash'),
-                  _fieldTile(c, Icons.text_fields_outlined, '文字记账模型', _textModelCtrl,
-                      hint: '一句话文字记账：默认 glm-4-flash'),
-                  _fieldTile(c, Icons.mic_outlined, '语音记账模型', _audioModelCtrl,
-                      hint: '语音转文字：默认 glm-4-voice'),
+                  _bindingTile(c, Icons.text_fields_outlined, '文字记账', _textProviderId, (v) => setState(() => _textProviderId = v)),
+                  _bindingTile(c, Icons.image_outlined, '图片识别', _visionProviderId, (v) => setState(() => _visionProviderId = v)),
+                  _bindingTile(c, Icons.mic_outlined, '语音记账', _speechProviderId, (v) => setState(() => _speechProviderId = v)),
                 ]),
                 const SizedBox(height: 24),
                 FilledButton.icon(
-                  onPressed: _saving ? null : _save,
+                  onPressed: _saving ? null : () => _save(),
                   icon: _saving
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.save_outlined),
@@ -138,9 +375,10 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  '说明：AI 记账/识别为联网增强功能，需要网络并消耗您在模型服务商的额度；Key 仅保存在您的服务器，不会上传到本地以外。支持智谱 GLM 与硅基流动等 OpenAI 兼容服务（填对应地址+Key+模型名）。',
+                  '说明：AI 记账/识别为联网增强功能，需要网络并消耗您在模型服务商的额度；Key 仅保存在您的服务器，不回显明文。智谱 GLM 为内置服务商（不可删除），自定义服务商需 OpenAI 兼容接口（填地址+Key+模型名）。三种能力可分别绑定不同服务商，例如文字用智谱、语音用硅基流动。',
                   style: TextStyle(fontSize: 12, color: c.textSub),
                 ),
+                const SizedBox(height: 24),
               ],
             ),
     );
@@ -181,10 +419,76 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     );
   }
 
-  Widget _fieldTile(TaozhuColors c, IconData icon, String title, TextEditingController ctrl,
-      {String? hint, bool obscure = false}) {
+  List<Widget> _providerTiles(TaozhuColors c, _Provider p) {
+    return [
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: c.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+              child: Icon(Icons.cloud_outlined, size: 20, color: c.primary),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(p.name, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: c.textMain)),
+                      if (p.isBuiltIn) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(color: c.divider, borderRadius: BorderRadius.circular(6)),
+                          child: Text('内置', style: TextStyle(fontSize: 10, color: c.textSub)),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    p.hasKey ? 'Key 已配置 · ${p.baseUrl}' : '未配置 Key · ${p.baseUrl}',
+                    style: TextStyle(fontSize: 12, color: p.hasKey ? c.success : c.warning),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '图片 ${p.visionModel.isEmpty ? '—' : p.visionModel} · 文字 ${p.textModel.isEmpty ? '—' : p.textModel} · 语音 ${p.audioModel.isEmpty ? '—' : p.audioModel}',
+                    style: TextStyle(fontSize: 11, color: c.textSub),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: '编辑',
+              icon: const Icon(Icons.edit_outlined, size: 20),
+              onPressed: () => _editProvider(p),
+            ),
+            if (!p.isBuiltIn)
+              IconButton(
+                tooltip: '删除',
+                icon: const Icon(Icons.delete_outline, size: 20, color: Color(0xFFF56C6C)),
+                onPressed: () => _deleteProvider(p),
+              ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  Widget _bindingTile(TaozhuColors c, IconData icon, String title, String providerId, ValueChanged<String> onChanged) {
+    String providerName(String id) {
+      for (final p in _providers) {
+        if (p.id == id) return p.name;
+      }
+      return _providers.isEmpty ? '' : _providers.first.name;
+    }
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: Row(
         children: [
           Container(
@@ -194,15 +498,24 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
             child: Icon(icon, size: 20, color: c.primary),
           ),
           const SizedBox(width: 12),
+          SizedBox(
+            width: 84,
+            child: Text(title, style: TextStyle(fontSize: 14, color: c.textMain)),
+          ),
           Expanded(
-            child: TextField(
-              controller: ctrl,
-              obscureText: obscure,
-              decoration: InputDecoration(
-                labelText: title,
-                hintText: hint,
-                isDense: true,
-              ),
+            child: DropdownButton<String>(
+              value: providerId,
+              isExpanded: true,
+              underline: const SizedBox.shrink(),
+              items: _providers
+                  .map((p) => DropdownMenuItem(
+                        value: p.id,
+                        child: Text(p.hasKey ? p.name : '${p.name}（未配置 Key）', overflow: TextOverflow.ellipsis),
+                      ))
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) onChanged(v);
+              },
             ),
           ),
         ],

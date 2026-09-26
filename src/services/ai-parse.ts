@@ -122,13 +122,72 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** AI 配置（后台可设置，OpenAI 兼容；分能力模型，默认智谱免费模型） */
-export interface AiConfig {
+/** AI 配置（后台可设置）：多提供商 + 能力绑定（对齐参考项目架构）。
+ *  providers：服务商列表（智谱内置不可删，自定义 OpenAI 兼容服务商可增删改）；
+ *  binding：三种能力（文本/视觉/语音）各绑定一个服务商，可混用不同提供商的不同模型。
+ */
+export interface AiProviderConfig {
+  id: string;
+  name: string;
+  isBuiltIn: boolean;
   apiKey: string;
   baseUrl: string;
-  model: string;        // 视觉模型（拍照）
   textModel: string;    // 文本模型（一句话记账）
+  visionModel: string;  // 视觉模型（拍照识别）
   audioModel: string;   // 语音转文字模型（语音记账）
+}
+
+export interface AiBinding {
+  textProviderId: string;
+  visionProviderId: string;
+  speechProviderId: string;
+}
+
+export interface AiConfig {
+  providers: AiProviderConfig[];
+  binding: AiBinding;
+}
+
+/** 智谱 GLM 内置服务商（不可删除；参考项目内置默认） */
+export const ZHIPU_PROVIDER: AiProviderConfig = {
+  id: 'zhipu_glm',
+  name: '智谱GLM',
+  isBuiltIn: true,
+  apiKey: '',
+  baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+  textModel: 'glm-4-flash',
+  visionModel: 'glm-4v-flash',
+  audioModel: 'glm-4-voice',
+};
+
+export const DEFAULT_BINDING: AiBinding = {
+  textProviderId: 'zhipu_glm',
+  visionProviderId: 'zhipu_glm',
+  speechProviderId: 'zhipu_glm',
+};
+
+/** 某能力实际请求参数（baseUrl/apiKey/model；cap 为 'text'|'vision'|'speech'） */
+export interface CapabilityEndpoint {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+}
+
+/** 解析某能力绑定的服务商（未绑定/绑到不存在的服务商/无 Key → 回退智谱内置空 Key，便于统一报错提示） */
+export function providerForCapability(cfg: AiConfig, cap: 'text' | 'vision' | 'speech'): AiProviderConfig {
+  const id = cap === 'text' ? cfg.binding.textProviderId
+    : cap === 'vision' ? cfg.binding.visionProviderId
+    : cfg.binding.speechProviderId;
+  return cfg.providers.find((p) => p.id === id) ?? { ...ZHIPU_PROVIDER };
+}
+
+/** 提取某能力的实际请求参数（无 Key 时 apiKey 为空串，调用方据此提示） */
+export function capabilityEndpoint(cfg: AiConfig, cap: 'text' | 'vision' | 'speech'): CapabilityEndpoint {
+  const p = providerForCapability(cfg, cap);
+  const model = cap === 'text' ? p.textModel
+    : cap === 'vision' ? p.visionModel
+    : p.audioModel;
+  return { apiKey: p.apiKey.trim(), baseUrl: p.baseUrl, model };
 }
 
 export const DEFAULT_AI_CONFIG = {
@@ -138,24 +197,24 @@ export const DEFAULT_AI_CONFIG = {
 export const DEFAULT_TEXT_MODEL = 'glm-4-flash';
 export const DEFAULT_AUDIO_MODEL = 'glm-4-voice';
 
-/** 调用 OpenAI 兼容视觉模型做识别；未配置 key 抛错带提示 */
+/** 调用 OpenAI 兼容视觉模型做识别；endpoint 无 key 抛错带提示 */
 export async function parsePhoto(
-  config: AiConfig,
+  endpoint: CapabilityEndpoint,
   mime: string,
   imageBytes: Uint8Array,
   purpose: 'purchase' | 'sale',
 ): Promise<DraftItem[]> {
-  if (!config.apiKey.trim()) {
-    throw new Error('AI 拍照识别未启用：请老板在「系统设置」填写 API Key');
+  if (!endpoint.apiKey.trim()) {
+    throw new Error('AI 拍照识别未启用：请老板在「我的 → AI 识别设置」配置 API Key 并绑定图片识别能力');
   }
   const base64 = bytesToBase64(imageBytes);
-  const baseUrl = config.baseUrl.replace(/\/+$/, '');
-  const endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
-  const resp = await fetch(endpoint, {
+  const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
+  const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+  const resp = await fetch(chatUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey.trim()}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${endpoint.apiKey.trim()}` },
     body: JSON.stringify({
-      model: config.model,
+      model: endpoint.model || DEFAULT_AI_CONFIG.model,
       temperature: 0.1,
       messages: [
         {
@@ -181,22 +240,22 @@ export async function parsePhoto(
 
 /** 文本记账：一句话/一段文字 → 商品明细（用文本模型） */
 export async function parseText(
-  config: AiConfig,
+  endpoint: CapabilityEndpoint,
   text: string,
   purpose: 'purchase' | 'sale',
 ): Promise<DraftItem[]> {
-  if (!config.apiKey.trim()) {
-    throw new Error('AI 记账未启用：请老板在「系统设置」填写 API Key');
+  if (!endpoint.apiKey.trim()) {
+    throw new Error('AI 记账未启用：请老板在「我的 → AI 识别设置」配置 API Key 并绑定文字记账能力');
   }
   const trimmed = text.trim();
   if (!trimmed) return [];
-  const baseUrl = config.baseUrl.replace(/\/+$/, '');
-  const endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
-  const resp = await fetch(endpoint, {
+  const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
+  const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+  const resp = await fetch(chatUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey.trim()}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${endpoint.apiKey.trim()}` },
     body: JSON.stringify({
-      model: config.textModel || DEFAULT_TEXT_MODEL,
+      model: endpoint.model || DEFAULT_TEXT_MODEL,
       temperature: 0.1,
       messages: [
         { role: 'user', content: `${buildTextPrompt(purpose)}\n\n${trimmed}` },
@@ -216,22 +275,22 @@ export async function parseText(
 
 /** 语音转文字（OpenAI 兼容 /audio/transcriptions；multipart file+model） */
 export async function speechToText(
-  config: AiConfig,
+  endpoint: CapabilityEndpoint,
   mime: string,
   audioBytes: Uint8Array,
   filename: string,
 ): Promise<string> {
-  if (!config.apiKey.trim()) {
-    throw new Error('AI 语音记账未启用：请老板在「系统设置」填写 API Key');
+  if (!endpoint.apiKey.trim()) {
+    throw new Error('AI 语音记账未启用：请老板在「我的 → AI 识别设置」配置 API Key 并绑定语音记账能力');
   }
-  const baseUrl = config.baseUrl.replace(/\/+$/, '');
-  const endpoint = baseUrl.endsWith('/audio/transcriptions') ? baseUrl : `${baseUrl}/audio/transcriptions`;
+  const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
+  const sttUrl = baseUrl.endsWith('/audio/transcriptions') ? baseUrl : `${baseUrl}/audio/transcriptions`;
   const form = new FormData();
   form.append('file', new Blob([audioBytes], { type: mime || 'audio/webm' }), filename || 'audio.webm');
-  form.append('model', config.audioModel || DEFAULT_AUDIO_MODEL);
-  const resp = await fetch(endpoint, {
+  form.append('model', endpoint.model || DEFAULT_AUDIO_MODEL);
+  const resp = await fetch(sttUrl, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${config.apiKey.trim()}` },
+    headers: { Authorization: `Bearer ${endpoint.apiKey.trim()}` },
     body: form,
   });
   if (!resp.ok) {
@@ -244,15 +303,16 @@ export async function speechToText(
 
 /** 语音记账（语音转文字 → 文本解析），供 /ai/parse-voice 使用 */
 export async function parseVoice(
-  config: AiConfig,
+  sttEndpoint: CapabilityEndpoint,
+  textEndpoint: CapabilityEndpoint,
   mime: string,
   audioBytes: Uint8Array,
   filename: string,
   purpose: 'purchase' | 'sale',
 ): Promise<{ text: string; items: DraftItem[] }> {
-  const text = await speechToText(config, mime, audioBytes, filename);
+  const text = await speechToText(sttEndpoint, mime, audioBytes, filename);
   if (!text) return { text: '', items: [] };
-  const items = await parseText(config, text, purpose);
+  const items = await parseText(textEndpoint, text, purpose);
   return { text, items };
 }
 
