@@ -1,7 +1,11 @@
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:record/record.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../local_freq.dart';
@@ -657,44 +661,97 @@ class _SalePageState extends State<SalePage> {
       final bytes = await picked.readAsBytes();
       toast(context, '识别中…');
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=sale', bytes, 'photo.jpg');
-      final items = (d['items'] as List?) ?? [];
-      if (items.isEmpty) {
-        toast(context, '未识别到商品，请手动填写');
-        return;
-      }
-      var filled = 0;
-      for (final raw in items) {
-        final name = '${raw['name'] ?? ''}'.trim();
-        final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
-        final price = (raw['price'] as num?)?.toDouble() ?? 0;
-        final unit = '${raw['unit'] ?? ''}'.trim();
-        final match = _items
-            .where((it) => it.name == name || it.name.contains(name) || name.contains(it.name))
-            .firstOrNull;
-        if (match == null) continue;
-        Map<String, dynamic>? pr;
-        if (unit.isNotEmpty) {
-          pr = match.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
-        }
-        pr ??= match.prices.firstOrNull;
-        if (pr == null) continue;
-        setState(() {
-          final row = (_rows.length == 1 && _rows.first.itemId == null)
-              ? _rows.first
-              : (_rows..add(_Row()..happenedAt = _dateCtrl.text.trim())).last;
-          row.itemId = match.id;
-          row.priceId = pr!['id'] as String?;
-          row.quantity = qty;
-          row.salePrice = price > 0 ? price : (pr!['sale_price'] as num).toDouble();
-          row.qtyCtrl.text = qty.toString();
-          row.saleCtrl.text = (price > 0 ? price : (pr!['sale_price'] as num).toDouble()).toStringAsFixed(2);
-          filled++;
-        });
-      }
-      toast(context, filled > 0 ? '已导入 $filled 项商品' : '识别结果未匹配到已有商品，请手动填写');
+      _fillFromDrafts((d['items'] as List?) ?? []);
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
+  }
+
+  /// AI 文字记账：输入一句话（如"白菜50斤 3元一斤，土豆30斤 2元一斤"）→ 解析填行
+  Future<void> _aiText() async {
+    final ctrl = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('文字记账'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            hintText: '例：白菜50斤 3元一斤，土豆30斤 2元一斤，萝卜20斤 1.5元一斤',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('识别')),
+        ],
+      ),
+    );
+    if (text == null || text.isEmpty) return;
+    toast(context, '识别中…');
+    try {
+      final d = await Api.instance.post('/ai/parse-text?purpose=sale', {'text': text});
+      _fillFromDrafts((d['items'] as List?) ?? []);
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// AI 语音记账：录音 → 语音转文字 → 解析填行
+  Future<void> _aiVoice() async {
+    try {
+      _VoiceRecorder.takeContext = context;
+      final rec = _VoiceRecorder();
+      final audio = await rec.take();
+      _VoiceRecorder.takeContext = null;
+      if (audio == null) return;
+      toast(context, '识别中…');
+      final d = await Api.instance.uploadAudio('/ai/parse-voice?purpose=sale', audio.bytes, audio.name, audio.mime);
+      final text = '${d['text'] ?? ''}';
+      if (text.isNotEmpty) toast(context, '语音识别：$text');
+      _fillFromDrafts((d['items'] as List?) ?? []);
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// 识别结果 → 匹配已有商品填行（拍照/文字/语音共用）
+  void _fillFromDrafts(List<dynamic> items) {
+    if (items.isEmpty) {
+      toast(context, '未识别到商品，请手动填写');
+      return;
+    }
+    var filled = 0;
+    for (final raw in items) {
+      final name = '${raw['name'] ?? ''}'.trim();
+      final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
+      final price = (raw['price'] as num?)?.toDouble() ?? 0;
+      final unit = '${raw['unit'] ?? ''}'.trim();
+      final match = _items
+          .where((it) => it.name == name || it.name.contains(name) || name.contains(it.name))
+          .firstOrNull;
+      if (match == null) continue;
+      Map<String, dynamic>? pr;
+      if (unit.isNotEmpty) {
+        pr = match.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+      }
+      pr ??= match.prices.firstOrNull;
+      if (pr == null) continue;
+      setState(() {
+        final row = (_rows.length == 1 && _rows.first.itemId == null)
+            ? _rows.first
+            : (_rows..add(_Row()..happenedAt = _dateCtrl.text.trim())).last;
+        row.itemId = match.id;
+        row.priceId = pr!['id'] as String?;
+        row.quantity = qty;
+        row.salePrice = price > 0 ? price : (pr!['sale_price'] as num).toDouble();
+        row.qtyCtrl.text = qty.toString();
+        row.saleCtrl.text = (price > 0 ? price : (pr!['sale_price'] as num).toDouble()).toStringAsFixed(2);
+        filled++;
+      });
+    }
+    toast(context, filled > 0 ? '已导入 $filled 项商品' : '识别结果未匹配到已有商品，请手动填写');
   }
 
   Future<void> _submit() async {
@@ -1011,10 +1068,19 @@ class _SalePageState extends State<SalePage> {
             icon: const Icon(Icons.copy_all_outlined),
             onPressed: _busy ? null : _copyLast,
           ),
-          IconButton(
-            tooltip: 'AI 拍照识别',
-            icon: const Icon(Icons.camera_alt_outlined),
-            onPressed: _busy ? null : _aiParse,
+          PopupMenuButton<String>(
+            tooltip: 'AI 记账（拍照/文字/语音）',
+            icon: const Icon(Icons.auto_awesome_outlined),
+            onSelected: (v) {
+              if (v == 'photo') _aiParse();
+              if (v == 'text') _aiText();
+              if (v == 'voice') _aiVoice();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'photo', child: ListTile(leading: Icon(Icons.camera_alt_outlined), title: Text('拍照识别'), contentPadding: EdgeInsets.zero)),
+              PopupMenuItem(value: 'text', child: ListTile(leading: Icon(Icons.keyboard_outlined), title: Text('文字记账'), contentPadding: EdgeInsets.zero)),
+              PopupMenuItem(value: 'voice', child: ListTile(leading: Icon(Icons.mic_outlined), title: Text('语音记账'), contentPadding: EdgeInsets.zero)),
+            ],
           ),
         ],
       ),
@@ -1335,4 +1401,47 @@ class _SalePageState extends State<SalePage> {
       ),
     ));
   }
+}
+
+/// 录音工具：请求麦克风权限 → 弹窗开始/结束 → 返回录音字节。
+/// 用于 AI 语音记账（调用后端 /ai/parse-voice：语音转文字后解析商品）。
+class _VoiceRecorder {
+  Future<({Uint8List bytes, String name, String mime})?> take() async {
+    final perm = await Permission.microphone.request();
+    if (!perm.isGranted) {
+      if (takeContext != null) toast(takeContext!, '需要麦克风权限才能语音记账');
+      return null;
+    }
+    final rec = AudioRecorder();
+    final dir = await getTemporaryDirectory();
+    final path = '${dir.path}/taozhu_voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    final started = await rec.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
+    if (!started) return null;
+    var finished = false;
+    if (takeContext != null) {
+      await showDialog<void>(
+        context: takeContext!,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('语音记账'),
+          content: const Text('正在录音，说完点击「结束」'),
+          actions: [
+            FilledButton(
+              onPressed: () {
+                finished = true;
+                Navigator.pop(ctx);
+              },
+              child: const Text('结束'),
+            ),
+          ],
+        ),
+      );
+    }
+    await rec.stop();
+    if (!finished && takeContext != null) toast(takeContext!, '已停止录音');
+    final bytes = await XFile(path).readAsBytes();
+    return (bytes: bytes, name: 'voice.m4a', mime: 'audio/mp4');
+  }
+
+  static BuildContext? takeContext;
 }
