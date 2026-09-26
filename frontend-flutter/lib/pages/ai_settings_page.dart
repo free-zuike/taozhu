@@ -383,7 +383,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                   onSelectionChanged: (s) => setState(() => _tab = s.first),
                 ),
                 const SizedBox(height: 16),
-                if (_tab == 'providers') ..._providersSection(c) else _bindingSection(c),
+                if (_tab == 'providers') _providersSection(c) else _bindingSection(c),
                 const SizedBox(height: 24),
                 FilledButton.icon(
                   onPressed: _saving ? null : () => _save(),
@@ -425,22 +425,25 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     );
   }
 
-  List<Widget> _providersSection(TaozhuColors c) {
-    return [
-      _groupTitle(c, '服务商（智谱内置 + 自定义 OpenAI 兼容）'),
-      _card(c, [
-        for (final p in _providers) ..._providerTiles(c, p),
-      ]),
-      const SizedBox(height: 10),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: OutlinedButton.icon(
-          onPressed: _addProvider,
-          icon: const Icon(Icons.add, size: 18),
-          label: const Text('添加服务商（硅基流动 / DeepSeek 等）'),
+  Widget _providersSection(TaozhuColors c) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _groupTitle(c, '服务商（智谱内置 + 自定义 OpenAI 兼容）'),
+        _card(c, [
+          for (final p in _providers) ..._providerTiles(c, p),
+        ]),
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: _addProvider,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('添加服务商（硅基流动 / DeepSeek 等）'),
+          ),
         ),
-      ),
-    ];
+      ],
+    );
   }
 
   List<Widget> _bindingSection(TaozhuColors c) {
