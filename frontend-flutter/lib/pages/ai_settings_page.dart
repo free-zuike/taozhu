@@ -446,15 +446,18 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     );
   }
 
-  List<Widget> _bindingSection(TaozhuColors c) {
-    return [
-      _groupTitle(c, '各能力用哪个服务商（可混用不同模型）'),
-      _card(c, [
-        _bindingTile(c, Icons.text_fields_outlined, '文字记账', _textProviderId, (v) => setState(() => _textProviderId = v)),
-        _bindingTile(c, Icons.image_outlined, '图片识别', _visionProviderId, (v) => setState(() => _visionProviderId = v)),
-        _bindingTile(c, Icons.mic_outlined, '语音记账', _speechProviderId, (v) => setState(() => _speechProviderId = v)),
-      ]),
-    ];
+  Widget _bindingSection(TaozhuColors c) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _groupTitle(c, '各能力用哪个服务商（可混用不同模型）'),
+        _card(c, [
+          _bindingTile(c, Icons.text_fields_outlined, '文字记账', _textProviderId, (v) => setState(() => _textProviderId = v)),
+          _bindingTile(c, Icons.image_outlined, '图片识别', _visionProviderId, (v) => setState(() => _visionProviderId = v)),
+          _bindingTile(c, Icons.mic_outlined, '语音记账', _speechProviderId, (v) => setState(() => _speechProviderId = v)),
+        ]),
+      ],
+    );
   }
 
   Widget _groupTitle(TaozhuColors c, String t) {
