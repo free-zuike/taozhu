@@ -1207,8 +1207,7 @@ class _VoiceRecorder {
     final rec = AudioRecorder();
     final dir = await getTemporaryDirectory();
     final path = '${dir.path}/taozhu_voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-    final started = await rec.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
-    if (!started) return null;
+    await rec.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
     // 录音弹窗：开始 → 点击结束
     var finished = false;
     if (takeContext != null) {

@@ -379,7 +379,7 @@ class Api {
     }
     final url = '$base/api/v1$path';
     final req = http.MultipartRequest('POST', Uri.parse(url));
-    req.files.add(http.MultipartFile.fromBytes('audio', bytes, filename: filename, contentType: MediaType(mime.isEmpty ? 'audio/webm' : mime)));
+    req.files.add(http.MultipartFile.fromBytes('audio', bytes, filename: filename, contentType: MediaType.parse(mime.isEmpty ? 'audio/webm' : mime)));
     final t = await _token();
     if (t != null && t.isNotEmpty) req.headers['Authorization'] = 'Bearer $t';
     http.Response res;
