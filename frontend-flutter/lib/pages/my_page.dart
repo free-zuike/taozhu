@@ -16,6 +16,7 @@ import '../utils/update_sources.dart';
 import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
+import 'ai_settings_page.dart';
 import 'categories_page.dart';
 import 'clients_page.dart';
 import 'payments_page.dart';
@@ -1096,6 +1097,9 @@ class _MyPageState extends State<MyPage> {
             if (_role != 'staff')
               _item(Icons.backup_outlined, c.primary, '数据备份', '导出全库存档 / 从备份合并恢复',
                   () => goPage(context, const BackupPage())),
+            if (_role != 'staff')
+              _item(Icons.auto_awesome_outlined, c.primary, 'AI 识别设置', '配置 AI 记账 Key 与模型（拍照/文字/语音识别）',
+                  () => goPage(context, const AiSettingsPage())),
             _item(Icons.system_update_alt_outlined, c.primary, '检查更新',
                 kIsWeb ? 'Web 版随部署更新' : '对比最新版本，应用内下载安装', _checkUpdate),
             _item(Icons.dns_outlined, c.primary, '下载源管理', '官方 GitHub 直连 + 自定义镜像（手动测试启用）',
