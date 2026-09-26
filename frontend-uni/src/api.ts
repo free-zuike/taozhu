@@ -117,3 +117,28 @@ export function uploadAttachment(entity: string, id: string, filePath: string): 
 export function deleteAttachment(key: string): Promise<unknown> {
   return request(`/attachments?key=${encodeURIComponent(key)}`, 'DELETE');
 }
+
+/** AI 识别上传（uni.uploadFile multipart）：field=photo|audio，返回后端解析结果 {ok,items,...} */
+export function uploadAi<T = any>(path: string, field: string, filePath: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    uni.uploadFile({
+      url: `${getApiBase()}/api/v1${path}`,
+      filePath,
+      name: field,
+      header: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
+      success: (res) => {
+        try {
+          const d = JSON.parse(res.data) as { error?: string } | undefined;
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(res.data as T);
+          } else {
+            reject(new Error(d?.error || `识别失败(${res.statusCode})`));
+          }
+        } catch (e) {
+          reject(new Error('识别响应解析失败'));
+        }
+      },
+      fail: (err) => reject(new Error((err && (err as { errMsg?: string }).errMsg) || '上传失败')),
+    });
+  });
+}

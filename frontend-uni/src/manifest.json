@@ -2,7 +2,7 @@
     "name" : "陶朱",
     "appid" : "",
     "description" : "通用进销存记账（陶朱）",
-    "versionName" : "0.17.195",
+    "versionName" : "0.17.196",
     "versionCode" : "1",
     "transformPx" : false,
     /* 5+App特有相关 */
@@ -54,7 +54,12 @@
         "setting" : {
             "urlCheck" : false
         },
-        "usingComponents" : true
+        "usingComponents" : true,
+        "permission" : {
+            "scope.record" : {
+                "desc" : "用于 AI 语音记账（录音描述出货/进货）"
+            }
+        }
     },
     "mp-alipay" : {
         "usingComponents" : true
