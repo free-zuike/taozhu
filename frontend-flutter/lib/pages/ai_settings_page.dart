@@ -151,18 +151,76 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
   }
 
-  /// 连通性测试：后端用文字记账能力跑一条固定话术，验证 Key/地址/模型可用
-  Future<void> _testAi() async {
+  /// 单项能力测试（后端内置素材：文字固定话术 / 图片 64x64 测试图 / 语音静音 WAV）
+  /// 返回结果文案；异常则抛错信息。
+  Future<String> _testCapability(String capability) async {
+    final d = await Api.instance.post('/ai/test?capability=$capability');
+    if (capability == 'vision') {
+      final reply = '${d['reply'] ?? ''}'.trim();
+      return reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply';
+    }
+    if (capability == 'speech') {
+      return '语音转文字通道连通（静音测试素材）';
+    }
+    final count = (d['count'] as num?)?.toInt() ?? 0;
+    final items = (d['items'] as List?) ?? [];
+    final names = items.take(5).map((e) => '${(e as Map)['name'] ?? ''}').where((s) => s.isNotEmpty).join('、');
+    return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
+  }
+
+  /// 测试单个能力：弹窗显示结果
+  Future<void> _testOne(String capability, String label) async {
     if (_testing) return;
     setState(() => _testing = true);
     try {
-      final d = await Api.instance.post('/ai/test');
-      final count = (d['count'] as num?)?.toInt() ?? 0;
-      final items = (d['items'] as List?) ?? [];
-      final names = items.take(5).map((e) => '${(e as Map)['name'] ?? ''}').where((s) => s.isNotEmpty).join('、');
-      toast(context, count > 0 ? 'AI 测试成功：识别出 $count 项商品（$names）' : 'AI 测试成功：返回为空，请检查模型是否支持该能力');
+      final result = await _testCapability(capability);
+      if (!mounted) return;
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('测试$label'),
+          content: Text(result),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('好的'))],
+        ),
+      );
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
+  /// 一键测试：串行跑文字 → 图片 → 语音，汇总弹窗展示（参考项目：并行跑三项；串行便于逐项看结果）
+  Future<void> _testAll() async {
+    if (_testing) return;
+    setState(() => _testing = true);
+    final results = <String>[];
+    try {
+      for (final (cap, label) in [('text', '文字记账'), ('vision', '图片识别'), ('speech', '语音记账')]) {
+        try {
+          results.add('$label：${await _testCapability(cap)}');
+        } catch (e) {
+          results.add('$label：✗ ${e.toString().replaceFirst('Exception: ', '')}');
+        }
+      }
+      if (!mounted) return;
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('AI 一键测试结果'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: results.map((r) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(r, style: const TextStyle(fontSize: 13)),
+              )).toList(),
+            ),
+          ),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('好的'))],
+        ),
+      );
     } finally {
       if (mounted) setState(() => _testing = false);
     }
@@ -393,12 +451,38 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                   label: Text(_saving ? '保存中…' : '保存 AI 配置'),
                 ),
                 const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: _testing ? null : _testAi,
-                  icon: _testing
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.wifi_tethering, size: 20),
-                  label: Text(_testing ? '测试中…' : '测试 AI 配置（发一句话验证连通）'),
+                // 测试区：一键测全部 + 每项单独测试（对齐参考项目：文本/视觉/语音逐项验证）
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _testing ? null : _testAll,
+                        icon: _testing
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.wifi_tethering, size: 20),
+                        label: const Text('一键测试'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _testing ? null : () => _testOne('text', '文字记账'),
+                        child: const Text('文字'),
+                      ),
+                    ),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _testing ? null : () => _testOne('vision', '图片识别'),
+                        child: const Text('图片'),
+                      ),
+                    ),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _testing ? null : () => _testOne('speech', '语音记账'),
+                        child: const Text('语音'),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 Text(

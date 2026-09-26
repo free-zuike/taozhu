@@ -320,3 +320,76 @@ export async function parseVoice(
 export function aiNonce(): string {
   return randomId();
 }
+
+/** 测试用图片（64x64 红色 JPEG，对齐参考项目测试素材：仅验证视觉通道连通） */
+export const TEST_IMAGE_JPEG_B64 =
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkM' +
+  'EQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4I' +
+  'CA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4e' +
+  'Hh4eHh7/wAARCABAAEADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQF' +
+  'BgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEI' +
+  'I0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNk' +
+  'ZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLD' +
+  'xMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEB' +
+  'AQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJB' +
+  'UQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZH' +
+  'SElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaan' +
+  'qKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oA' +
+  'DAMBAAIRAxEAPwDyyiiivzo/ssKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiig' +
+  'AooooAKKKKACiiigAooooAKKKKACiiigAooooA//2Q==';
+
+/** 生成 1 秒 8kHz 16-bit 单声道静音 WAV（对齐参考项目测试素材：仅验证语音通道连通） */
+export function minimalWavBytes(): Uint8Array {
+  const sampleRate = 8000;
+  const numSamples = sampleRate; // 1 秒
+  const dataSize = numSamples * 2;
+  const fileSize = 36 + dataSize;
+  const le = (value: number, bytes: number): number[] => {
+    const out: number[] = [];
+    for (let i = 0; i < bytes; i++) out.push((value >> (8 * i)) & 0xff);
+    return out;
+  };
+  const buf: number[] = [];
+  buf.push(...[0x52, 0x49, 0x46, 0x46], ...le(fileSize, 4)); // "RIFF" + size
+  buf.push(...[0x57, 0x41, 0x56, 0x45]); // "WAVE"
+  buf.push(...[0x66, 0x6d, 0x74, 0x20], ...le(16, 4)); // "fmt " + chunk size
+  buf.push(...le(1, 2), ...le(1, 2)); // PCM + mono
+  buf.push(...le(sampleRate, 4), ...le(sampleRate * 2, 4)); // sample rate + byte rate
+  buf.push(...le(2, 2), ...le(16, 2)); // block align + bits per sample
+  buf.push(...[0x64, 0x61, 0x74, 0x61], ...le(dataSize, 4)); // "data" + size
+  for (let i = 0; i < numSamples; i++) buf.push(0x00, 0x00); // 静音
+  return Uint8Array.from(buf);
+}
+
+/** 视觉连通测试：发送内置测试图 + 描述 prompt，返回模型文本（非空=通道通） */
+export async function testVisionChannel(
+  endpoint: CapabilityEndpoint,
+): Promise<string> {
+  if (!endpoint.apiKey.trim()) throw new Error('图片识别能力未启用：请配置 API Key 并绑定图片识别能力');
+  const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
+  const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+  const imageBytes = Uint8Array.from(atob(TEST_IMAGE_JPEG_B64), (ch) => ch.charCodeAt(0));
+  const resp = await fetch(chatUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${endpoint.apiKey.trim()}` },
+    body: JSON.stringify({
+      model: endpoint.model || DEFAULT_AI_CONFIG.model,
+      temperature: 0.1,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${TEST_IMAGE_JPEG_B64}` } },
+            { type: 'text', text: '描述这张图片' },
+          ],
+        },
+      ],
+    }),
+  });
+  if (!resp.ok) {
+    const bodyText = await resp.text().catch(() => '');
+    throw new Error(`图片识别接口错误 HTTP ${resp.status}: ${bodyText.slice(0, 200)}`);
+  }
+  const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  return (data.choices?.[0]?.message?.content ?? '').trim();
+}

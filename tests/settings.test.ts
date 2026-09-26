@@ -123,4 +123,13 @@ describe('系统设置（AI 配置）', () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('AI 识别设置');
   });
+
+  it('未配置 key 时测试图片/语音能力也返回提示（400）', async () => {
+    const vision = await call(env, 'POST', '/api/v1/ai/test?capability=vision', token);
+    expect(vision.status).toBe(400);
+    expect(((await vision.json()) as { error: string }).error).toContain('图片识别');
+    const speech = await call(env, 'POST', '/api/v1/ai/test?capability=speech', token);
+    expect(speech.status).toBe(400);
+    expect(((await speech.json()) as { error: string }).error).toContain('语音');
+  });
 });

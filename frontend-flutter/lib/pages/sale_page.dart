@@ -652,11 +652,33 @@ class _SalePageState extends State<SalePage> {
 
   double get _total => _rows.fold(0, (s, r) => s + r.quantity * r.salePrice);
 
-  /// AI 拍照识别：拍照 → 后端解析 → 匹配已有商品填行
+  /// AI 拍照识别：拍照或从相册选图 → 后端解析 → 匹配已有商品填行
   Future<void> _aiParse() async {
     try {
+      final source = await showDialog<ImageSource>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('图片识别'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined, color: Color(0xFF409EFF)),
+                title: const Text('拍照'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined, color: Color(0xFF67C23A)),
+                title: const Text('从相册选择'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (source == null) return;
       final picked = await ImagePicker()
-          .pickImage(source: ImageSource.camera, maxWidth: 1600, imageQuality: 85);
+          .pickImage(source: source, maxWidth: 1600, imageQuality: 85);
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
       toast(context, '识别中…');

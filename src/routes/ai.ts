@@ -3,7 +3,15 @@
  *   POST /api/v1/ai/parse-voice（multipart 音频 → 语音转文字后再解析，语音记账） */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
-import { parsePhoto, parseText, parseVoice, capabilityEndpoint } from '../services/ai-parse';
+import {
+  parsePhoto,
+  parseText,
+  parseVoice,
+  speechToText,
+  capabilityEndpoint,
+  testVisionChannel,
+  minimalWavBytes,
+} from '../services/ai-parse';
 import { getAiConfig } from './settings';
 import type { AuthUser, Env } from '../types';
 
@@ -95,19 +103,46 @@ aiRouter.post('/parse-voice', async (c) => {
   }
 });
 
-// POST /api/v1/ai/test — 连通性测试：用文字记账能力跑一条固定话术，验证 Key/地址/模型可用
+// POST /api/v1/ai/test?capability=text|vision|speech — 连通性测试（对齐参考项目 validate 三能力）：
+//   用内置固定素材（文本话术 / 64x64 测试图 / 1 秒静音 WAV）各调一次对应模型，验证 Key/地址/模型可用。
+//   不传 capability = 仅测文字记账（兼容旧前端）。
 aiRouter.post('/test', async (c) => {
+  const capability = c.req.query('capability') || 'text';
   const cfg = await getAiConfig(c.env.DB);
-  const ep = capabilityEndpoint(cfg, 'text');
-  if (!ep.apiKey) {
-    return c.json({ error: 'AI 记账未启用：请先在「AI 识别设置」配置 API Key 并绑定文字记账能力' }, 400);
-  }
-  if (!ep.model) {
-    return c.json({ error: '文字记账模型为空：请在「AI 识别设置」该服务商的编辑弹窗中填写文字记账模型' }, 400);
-  }
   try {
+    if (capability === 'vision') {
+      const ep = capabilityEndpoint(cfg, 'vision');
+      if (!ep.apiKey) {
+        return c.json({ error: '图片识别能力未启用：请先在「AI 识别设置」配置 API Key 并绑定图片识别能力' }, 400);
+      }
+      if (!ep.model) {
+        return c.json({ error: '图片识别模型为空：请在「AI 识别设置」该服务商的编辑弹窗中填写图片识别模型' }, 400);
+      }
+      const reply = await testVisionChannel(ep);
+      return c.json({ ok: true, capability, reply });
+    }
+    if (capability === 'speech') {
+      const ep = capabilityEndpoint(cfg, 'speech');
+      if (!ep.apiKey) {
+        return c.json({ error: '语音记账能力未启用：请先在「AI 识别设置」配置 API Key 并绑定语音记账能力' }, 400);
+      }
+      if (!ep.model) {
+        return c.json({ error: '语音记账模型为空：请在「AI 识别设置」该服务商的编辑弹窗中填写语音记账模型' }, 400);
+      }
+      // 静音 WAV 只验证通道连通（参考项目：静音返回空也算成功）
+      await speechToText(ep, 'audio/wav', minimalWavBytes(), 'test.wav');
+      return c.json({ ok: true, capability });
+    }
+    // text（默认）：跑一条固定话术，验证文字记账通道 + 解析能力
+    const ep = capabilityEndpoint(cfg, 'text');
+    if (!ep.apiKey) {
+      return c.json({ error: 'AI 记账未启用：请先在「AI 识别设置」配置 API Key 并绑定文字记账能力' }, 400);
+    }
+    if (!ep.model) {
+      return c.json({ error: '文字记账模型为空：请在「AI 识别设置」该服务商的编辑弹窗中填写文字记账模型' }, 400);
+    }
     const items = await parseText(ep, '白菜2斤每斤3元，土豆1斤每斤5元', 'purchase');
-    return c.json({ ok: true, items, count: items.length });
+    return c.json({ ok: true, capability, items, count: items.length });
   } catch (err) {
     const msg = err instanceof Error ? err.message : '测试失败';
     return c.json({ error: msg }, 502);

@@ -533,7 +533,7 @@ describe('检查更新代理（/auth/latest-version）', () => {
     const res = await call(env, 'GET', '/api/v1/auth/latest-version');
     expect(res.status).toBe(200);
     const d = (await res.json()) as { current: string; latest: string; ready: boolean; building: boolean; source: string; notes: string; min_supported: string };
-    expect(d.current).toBe('0.17.203');
+    expect(d.current).toBe('0.17.204');
     expect(typeof d.latest).toBe('string');
     expect(typeof d.ready).toBe('boolean');
     expect(typeof d.building).toBe('boolean');
@@ -563,7 +563,7 @@ describe('强制更新门禁（x-app-version 低于最低支持版本 → 426）
   });
 
   it('携带当前版本头 → 放行；不带版本头（Web/小程序）→ 放行', async () => {
-    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.203' });
+    const r1 = await call(env, 'GET', '/api/v1/clients', token, undefined, { 'x-app-version': '0.17.204' });
     expect(r1.status).toBe(200);
     const r2 = await call(env, 'GET', '/api/v1/clients', token);
     expect(r2.status).toBe(200);
