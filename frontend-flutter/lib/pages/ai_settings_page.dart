@@ -443,7 +443,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     ];
   }
 
-  Widget _bindingSection(TaozhuColors c) {
+  List<Widget> _bindingSection(TaozhuColors c) {
     return [
       _groupTitle(c, '各能力用哪个服务商（可混用不同模型）'),
       _card(c, [
