@@ -1,7 +1,7 @@
 name: taozhu_app
 description: 陶朱 - 通用进销存记账（Flutter 真原生）
 publish_to: 'none'
-version: 0.17.205
+version: 0.17.206
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
