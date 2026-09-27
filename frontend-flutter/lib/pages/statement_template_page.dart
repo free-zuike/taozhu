@@ -164,7 +164,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('对账单模板'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [TextButton(onPressed: _save, child: const Text('保存'))],
       ),
       body: _loading

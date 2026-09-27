@@ -216,7 +216,7 @@ class _ItemsPageState extends State<ItemsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('商品管理'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           // 店员只读（隐藏新增入口）；新增统一在右上角（与店铺管理一致）
           if (!_isStaff)

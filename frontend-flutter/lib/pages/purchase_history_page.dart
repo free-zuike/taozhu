@@ -530,7 +530,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(), // 标题并入下方统计头（背景透出，顶部不占标题）
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 标题并入下方统计头（背景透出，顶部不占标题）
       body: Column(
         children: [
           if (_offline)

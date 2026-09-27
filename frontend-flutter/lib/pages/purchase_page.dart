@@ -920,7 +920,7 @@ class _PurchasePageState extends State<PurchasePage> {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       appBar: AppBar(
-        title: Text(_editing ? '编辑进货单' : '进货记单'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(
             tooltip: '复制上一单',

@@ -1127,7 +1127,7 @@ class _SalePageState extends State<SalePage> {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       appBar: AppBar(
-        title: Text(_editing ? '编辑出货单' : '出货记单'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(
             tooltip: '复制上一单',

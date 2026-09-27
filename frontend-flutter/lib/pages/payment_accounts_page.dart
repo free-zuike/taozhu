@@ -490,7 +490,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
     final c = _c;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('收款账户'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(tooltip: '新增账户', icon: const Icon(Icons.add), onPressed: _busy ? null : _add),
         ],

@@ -192,7 +192,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
     final colors = _c;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('分类管理'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(onPressed: () => _add(), icon: const Icon(Icons.add)),
         ],

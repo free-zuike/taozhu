@@ -1895,7 +1895,7 @@ class _StatementPageState extends State<StatementPage> {
     final c = _c;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('对账单'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(
             tooltip: '我的分享',

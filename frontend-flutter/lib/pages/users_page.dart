@@ -204,7 +204,7 @@ class _UsersPageState extends State<UsersPage> {
     }
     return Scaffold(
       appBar: AppBar(
-        title: const Text('账号管理'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(onPressed: () => _addOrEdit(), icon: const Icon(Icons.add)),
         ],

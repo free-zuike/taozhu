@@ -93,7 +93,7 @@ class _LogsPageState extends State<LogsPage> {
     final shown = _filter == 'all' ? _logs : _logs.where((e) => e.level == _filter).toList();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('日志'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(
             tooltip: '清空',
