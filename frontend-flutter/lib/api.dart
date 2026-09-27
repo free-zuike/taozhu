@@ -367,7 +367,7 @@ class Api {
 
   /// multipart 图片上传（AI 拍照识别：POST /ai/parse-photo，字段 photo）
   Future<Map<String, dynamic>> uploadPhoto(
-      String path, Uint8List bytes, String filename, String mime) async {
+      String path, Uint8List bytes, String filename, [String mime = '']) async {
     return _uploadMultipart(path, 'photo', bytes, filename, mime);
   }
 
@@ -409,7 +409,7 @@ class Api {
 
   /// 通用 multipart 单文件上传（photo/audio 等）
   Future<Map<String, dynamic>> _uploadMultipart(
-      String path, String field, Uint8List bytes, String filename, String mime) async {
+      String path, String field, Uint8List bytes, String filename, [String mime = '']) async {
     final base = await _base();
     if (base.isEmpty) {
       throw Exception('未配置服务器地址：请在登录页填写您的服务器地址（如 https://您的域名）');
@@ -417,11 +417,16 @@ class Api {
     final url = '$base/api/v1$path';
     final req = http.MultipartRequest('POST', Uri.parse(url));
     // 显式传真实 MIME（默认 http 包按 filename 扩展名推断，PNG 标成 JPEG 会让后端/模型解析失败）
+    final mediaType = mime.isEmpty
+        ? (filename.toLowerCase().endsWith('.png')
+            ? MediaType('image', 'png')
+            : (filename.toLowerCase().endsWith('.webp') ? MediaType('image', 'webp') : MediaType('image', 'jpeg')))
+        : MediaType.parse(mime);
     req.files.add(http.MultipartFile.fromBytes(
       field,
       bytes,
       filename: filename,
-      contentType: MediaType.parse(mime.isEmpty ? 'image/jpeg' : mime),
+      contentType: mediaType,
     ));
     final t = await _token();
     if (t != null && t.isNotEmpty) req.headers['Authorization'] = 'Bearer $t';
