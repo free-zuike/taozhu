@@ -614,8 +614,9 @@ async function removePayment(p: Record<string, any>) {
 .month-nav { display: flex; align-items: center; }
 .month-label { font-size: 28rpx; font-weight: bold; }
 .month-caret { font-size: 22rpx; color: #909399; margin-left: 6rpx; }
-/* 月度结余四列卡（对齐 App 月度卡） */
+/* 月度结余四列卡（对齐 App 月度卡：四列横排） */
 .month-card { display: flex; background: #fff; border-radius: 12rpx; padding: 20rpx 16rpx; margin-bottom: 16rpx; border: 1rpx solid #ebeef5; }
+.mcols { display: flex; } /* 四列容器：横排（缺此样式时 mcol 块级堆叠=竖排） */
 .mcol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6rpx; }
 .ml { font-size: 22rpx; color: #909399; }
 .mv { font-size: 30rpx; font-weight: bold; color: #303133; }

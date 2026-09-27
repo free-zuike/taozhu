@@ -264,7 +264,11 @@ class ThemeConfig extends ChangeNotifier {
     _presetId = id;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setString(_kPreset, id);
-    unawaited(_markThemeDirty());
+    if (kIsWeb) {
+      unawaited(pushTheme()); // Web 直连上传（跨端即时生效）
+    } else {
+      unawaited(_markThemeDirty()); // App 本地生效+标记，随同步上传
+    }
   }
 
   Future<void> setBgEnabled(bool v) async {
@@ -272,7 +276,11 @@ class ThemeConfig extends ChangeNotifier {
     _bgEnabled = v;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setBool(_kBg, v);
-    unawaited(_markThemeDirty());
+    if (kIsWeb) {
+      unawaited(pushTheme());
+    } else {
+      unawaited(_markThemeDirty());
+    }
   }
 
   Future<void> setSkin(String id) async {
@@ -280,7 +288,11 @@ class ThemeConfig extends ChangeNotifier {
     _skinId = id;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setString(_kSkin, id);
-    unawaited(_markThemeDirty());
+    if (kIsWeb) {
+      unawaited(pushTheme());
+    } else {
+      unawaited(_markThemeDirty());
+    }
   }
 
   bool _applyingServer = false; // 服务器应用中不回传，防跨端回环
@@ -296,9 +308,9 @@ class ThemeConfig extends ChangeNotifier {
   bool get themeDirty => _dirtyCache;
   bool _dirtyCache = false;
 
-  /// 同步时上传主题配置到服务器（由 SyncService.sync() 在同步入口调用）
+  /// 上传主题配置到服务器（Web 设置时直连；App 由 SyncService.sync() 在同步入口调用）
   Future<void> pushTheme() async {
-    if (_applyingServer || kIsWeb) return; // Web 直连保存，不走同步队列
+    if (_applyingServer) return;
     try {
       await Api.instance.put('/settings/theme_config',
           {'preset_id': _presetId, 'skin_id': _skinId, 'bg_enabled': _bgEnabled});
@@ -310,6 +322,8 @@ class ThemeConfig extends ChangeNotifier {
 
   /// 拉取服务器主题并应用（同步 pull / 其他端变更 WS 通知 theme_config）
   Future<void> pullTheme() async {
+    // 本地有未同步修改（用户刚切的主题）：不被服务器旧值覆盖，否则"切换后马上切回去"
+    if (_dirtyCache) return;
     _applyingServer = true;
     try {
       final d = await Api.instance.get('/settings/theme_config');
@@ -441,15 +455,15 @@ abstract class _BaseSkinPainter extends CustomPainter {
   final bool dark;
   final bool compact;
 
-  /// 底渐变：compact=主题色鲜亮版（图案对比强）；全屏=主题色浅版（不抢内容，但换主题色明显变化）
+  /// 底渐变：顶部浅（图案区）→ 底部深，自上而下明显渐变（换主题色变化显著）
   LinearGradient bottomGradient() {
     if (compact) {
-      final top = dark ? const Color(0xFF23262E) : Color.lerp(primary, Colors.white, 0.28)!;
-      final bottom = dark ? const Color(0xFF15181F) : Color.lerp(primary, Colors.white, 0.52)!;
+      final top = dark ? const Color(0xFF23262E) : Color.lerp(primary, Colors.white, 0.22)!;
+      final bottom = dark ? const Color(0xFF15181F) : Color.lerp(primary, Colors.white, 0.58)!;
       return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
     }
-    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.55)!;
-    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.42)!;
+    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.72)!;
+    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.34)!;
     return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
   }
 
@@ -482,13 +496,13 @@ class _CoinPainter extends _BaseSkinPainter {
       final stroke = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = cr * 0.13
-        ..color = ink(compact ? 0.62 : 0.4, 0.7);
+        ..color = ink(compact ? 0.62 : 0.4);
       canvas.drawCircle(Offset(cx, cy), cr, stroke);
       final hole = cr * 0.34;
       final holePaint = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = cr * 0.09
-        ..color = ink(compact ? 0.72 : 0.48, 0.5);
+        ..color = ink(compact ? 0.72 : 0.48);
       canvas.drawRect(Rect.fromCenter(center: Offset(cx, cy), width: hole * 2, height: hole * 2), holePaint);
     }
   }
@@ -508,18 +522,18 @@ class _BambooPainter extends _BaseSkinPainter {
       final topY = size.height * (compact ? 0.16 : 0.1);
       final h = size.height * (compact ? 0.62 : 0.4);
       final paint = Paint()
-        ..color = ink(compact ? 0.6 : 0.35, 0.68)
+        ..color = ink(compact ? 0.6 : 0.35)
         ..strokeWidth = w
         ..strokeCap = StrokeCap.round;
       canvas.drawLine(Offset(x, topY), Offset(x, topY + h), paint);
       final node = Paint()
-        ..color = ink(compact ? 0.5 : 0.3, 0.5)
+        ..color = ink(compact ? 0.5 : 0.3)
         ..strokeWidth = w * 0.28;
       for (var n = 0; n < 2; n++) {
         final ny = topY + h * (0.38 + n * 0.3);
         canvas.drawLine(Offset(x - w * 0.7, ny), Offset(x + w * 0.7, ny), node);
       }
-      final leaf = Paint()..color = ink(compact ? 0.72 : 0.48, 0.5);
+      final leaf = Paint()..color = ink(compact ? 0.72 : 0.48);
       for (var l = 0; l < 3; l++) {
         final lx = x + w * (0.6 + rnd.nextDouble() * 0.5);
         final ly = topY + h * (0.1 + rnd.nextDouble() * 0.3);
@@ -553,11 +567,11 @@ class _LedgerPainter extends _BaseSkinPainter {
       final frame = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = size.width * 0.009
-        ..color = ink(compact ? 0.68 : 0.42, 0.55);
+        ..color = ink(compact ? 0.68 : 0.42);
       final rect = Rect.fromCenter(center: Offset(cx, cy), width: w, height: h);
       canvas.drawRRect(RRect.fromRectAndRadius(rect, Radius.circular(w * 0.04)), frame);
       final line = Paint()
-        ..color = ink(compact ? 0.58 : 0.38, 0.5)
+        ..color = ink(compact ? 0.58 : 0.38)
         ..strokeWidth = size.width * 0.007;
       canvas.drawLine(Offset(cx - w * 0.3, cy - h * 0.3), Offset(cx + w * 0.3, cy - h * 0.3), line);
       for (var r = 0; r < 3; r++) {
@@ -580,7 +594,7 @@ class _FlowPainter extends _BaseSkinPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = size.width * (compact ? 0.03 : 0.02)
       ..strokeCap = StrokeCap.round
-      ..color = ink(compact ? 0.7 : 0.45, 0.5);
+      ..color = ink(compact ? 0.7 : 0.45);
     final path = Path()
       ..moveTo(size.width * 0.08, cy)
       ..cubicTo(size.width * 0.35, cy - size.height * (compact ? 0.2 : 0.12),
@@ -618,7 +632,7 @@ class _RipplePainter extends _BaseSkinPainter {
         final paint = Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = size.width * (compact ? 0.009 : 0.006)
-          ..color = ink((compact ? 0.52 : 0.32) - ring * 0.1, 0.65);
+          ..color = ink((compact ? 0.52 : 0.32) - ring * 0.1);
         canvas.drawCircle(Offset(cx, cy), r, paint);
       }
     }

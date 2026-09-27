@@ -201,7 +201,7 @@ function aiPhoto() {
       aiTip.value = 'AI 识别中…';
       try {
         const d = await uploadAi<{ items?: Array<Record<string, any>> }>(`/ai/parse-photo?purpose=sale`, 'photo', fp);
-        fillFromDrafts(d.items || []);
+        fillFromDrafts(d.items || [], String(d.client ?? ''), String(d.date ?? ''));;
       } catch (e) {
         uni.showToast({ title: (e as Error).message || '识别失败', icon: 'none' });
       } finally {
@@ -224,7 +224,7 @@ function aiText() {
       aiTip.value = 'AI 解析中…';
       try {
         const d = await request<{ items?: Array<Record<string, any>> }>(`/ai/parse-text?purpose=sale`, 'POST', { text });
-        fillFromDrafts(d.items || []);
+        fillFromDrafts(d.items || [], String(d.client ?? ''), String(d.date ?? ''));;
       } catch (e) {
         uni.showToast({ title: (e as Error).message || '识别失败', icon: 'none' });
       } finally {
@@ -259,7 +259,7 @@ function startVoiceRecord() {
     try {
       const d = await uploadAi<{ text?: string; items?: Array<Record<string, any>> }>(`/ai/parse-voice?purpose=sale`, 'audio', fp);
       if (d.text) uni.showToast({ title: `语音识别：${d.text}`, icon: 'none', duration: 2500 });
-      fillFromDrafts(d.items || []);
+      fillFromDrafts(d.items || [], String(d.client ?? ''), String(d.date ?? ''));;
     } catch (e) {
       uni.showToast({ title: (e as Error).message || '识别失败', icon: 'none' });
     } finally {
@@ -277,35 +277,56 @@ function startVoiceRecord() {
 }
 
 /// AI 识别结果 → 匹配已有商品填行（拍照/文字/语音共用）
-function fillFromDrafts(list: Array<Record<string, any>>) {
+function fillFromDrafts(list: Array<Record<string, any>>, client = '', date = '') {
+  // 店铺回填（识别出的购货单位/客户名匹配店铺列表，对齐 App：匹配失败只提示不自动建）
+  if (client) {
+    const c = clients.value.find((x) => x.name === client || x.name.includes(client) || client.includes(x.name));
+    if (c) { clientId.value = c.id; clientName.value = c.name; }
+    else uni.showToast({ title: `识别到店铺「${client}」，店铺列表未找到`, icon: 'none' });
+  }
+  // 日期回填（识别出的单据日期 YYYY-MM-DD）
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) date.value = date;
   if (!list || list.length === 0) {
     uni.showToast({ title: '未识别到商品，请手动填写', icon: 'none' });
     return;
   }
   let filled = 0;
+  let unmatched = 0;
   for (const raw of list) {
     const name = String(raw.name ?? '').trim();
     const qty = Number(raw.quantity) || 0;
     const price = Number(raw.price) || 0;
     const unit = String(raw.unit ?? '').trim();
     const match = items.value.find((it) => it.name === name || it.name.includes(name) || name.includes(it.name));
-    if (!match) continue;
-    const pr = (unit ? match.prices.find((p) => p.unit === unit) : undefined) || match.prices[0];
-    if (!pr) continue;
-    const row = rows.value.find((r) => !r.itemId) || rows.value[rows.value.length - 1];
-    if (row.itemId) rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '' });
-    const target = row.itemId ? rows.value[rows.value.length - 1] : row;
-    target.itemId = match.id;
-    target.itemName = match.name;
-    target.prices = match.prices;
-    target.priceId = pr.id;
-    target.unit = pr.unit;
-    target.priceLabel = `${pr.unit}（¥${pr.sale_price}·库存${pr.stock ?? 0}）`;
-    target.quantity = qty > 0 ? String(qty) : '1';
-    target.salePrice = price > 0 ? String(price) : String(pr.sale_price);
-    filled++;
+    let row = rows.value.find((r) => !r.itemId && !r.itemName);
+    if (!row) {
+      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '' });
+      row = rows.value[rows.value.length - 1];
+    }
+    if (match) {
+      const pr = (unit ? match.prices.find((p) => p.unit === unit) : undefined) || match.prices[0];
+      if (pr) {
+        row.itemId = match.id;
+        row.itemName = match.name;
+        row.prices = match.prices;
+        row.priceId = pr.id;
+        row.unit = pr.unit;
+        row.priceLabel = `${pr.unit}（¥${pr.sale_price}·库存${pr.stock ?? 0}）`;
+        row.quantity = qty > 0 ? String(qty) : '1';
+        row.salePrice = price > 0 ? String(price) : String(pr.sale_price);
+        filled++;
+        continue;
+      }
+    }
+    // 未匹配商品库（或单位无匹配）：名称/单位/数量/单价照填（是否入库由用户提交时决定，不自动建）
+    unmatched++;
+    row.itemId = '';
+    row.itemName = name;
+    row.unit = unit;
+    row.quantity = qty > 0 ? String(qty) : '1';
+    row.salePrice = price > 0 ? String(price) : '';
   }
-  uni.showToast({ title: filled > 0 ? `已导入 ${filled} 项商品，可修改后提交` : '识别结果未匹配到已有商品，请手动填写', icon: 'none' });
+  uni.showToast({ title: filled > 0 ? `已导入 ${filled} 项商品${unmatched > 0 ? `（${unmatched} 项不在商品库，名称已填入待确认）` : ''}，可修改后提交` : (unmatched > 0 ? `已填入 ${unmatched} 项商品名称（不在商品库），可修改后提交` : '识别结果未匹配到已有商品，请手动填写'), icon: 'none' });
 }
 function onDate(e: { detail: { value: string } }) {
   date.value = e.detail.value;
