@@ -123,7 +123,7 @@ ThemeData buildLightTheme(Color primary) {
     highlightColor: Colors.transparent,
     hoverColor: Colors.transparent,
     focusColor: Colors.transparent,
-    scaffoldBackgroundColor: Colors.transparent, // 全局背景（渐变/图案）由 MaterialApp.builder 提供
+    scaffoldBackgroundColor: const Color(0xFFF6F7F9), // 不透明：防止手势返回时透出下层页面（背景图案由页面内部层展示）
     // AppBar 透明：顶部状态栏+标题区透出背景图案（对齐"头部皮肤"形态，列表在 AppBar 之下滚动不穿透）
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
@@ -151,7 +151,7 @@ ThemeData buildDarkTheme(Color primary) {
     highlightColor: Colors.transparent,
     hoverColor: Colors.transparent,
     focusColor: Colors.transparent,
-    scaffoldBackgroundColor: Colors.transparent,
+    scaffoldBackgroundColor: const Color(0xFF17181C), // 不透明：防止手势返回时透出下层页面
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
@@ -301,6 +301,29 @@ Widget themeBackgroundWrap(BuildContext context, Widget? child) {
     painter: skin.build(preset.lightPrimary, dark),
     child: child,
   );
+}
+
+/// 页面内部背景层：渐变或图案皮肤（Scaffold 已不透明，页面如需露出背景在 body 底部垫此层）
+Widget themePageBackground(BuildContext context) {
+  final cfg = ThemeConfig.instance;
+  final dark = Theme.of(context).brightness == Brightness.dark;
+  if (!cfg.bgEnabled) {
+    return ColoredBox(color: dark ? const Color(0xFF17181C) : const Color(0xFFF5F7FA));
+  }
+  final preset = cfg.preset;
+  final skin = skinPatternById(cfg.skinId);
+  if (skin == null) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
+    );
+  }
+  return CustomPaint(painter: skin.build(preset.lightPrimary, dark), size: Size.infinite);
 }
 
 // ============ 背景图案皮肤（参考"主题背景"范式：图案随主题色派生，非照片） ============

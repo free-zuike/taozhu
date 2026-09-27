@@ -206,6 +206,17 @@ jobs:
           # ③ 应用显示名「陶朱」（新版模板写在 Manifest label；strings.xml 存在也一并改）
           sed -i 's|android:label="[^"]*"|android:label="陶朱"|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">陶朱</string>|; s|<string name="title_activity_main">.*</string>|<string name="title_activity_main">陶朱</string>|' android/app/src/main/res/values/strings.xml || true
+          # ③b 应用图标：陶朱 v21 自设计（铜钱+竹简；frontend-flutter/icons 各密度 PNG 替换 flutter 默认图标）
+          #     用整图替代 adaptive（mipmap-anydpi-v26 引用前景安全区会裁切圆形设计，删之走传统 PNG 图标）
+          rm -rf android/app/src/main/res/mipmap-anydpi-v26
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            case $d in
+              mdpi) S=48;; hdpi) S=72;; xhdpi) S=96;; xxhdpi) S=144;; xxxhdpi) S=192;;
+            esac
+            cp ../frontend-flutter/icons/ic_launcher_${S}.png android/app/src/main/res/mipmap-${d}/ic_launcher.png
+            cp ../frontend-flutter/icons/ic_launcher_${S}.png android/app/src/main/res/mipmap-${d}/ic_launcher_round.png 2>/dev/null || true
+          done
+          echo "App 图标替换 OK"
           # ④ 正式签名（复用与「陶朱」相同的 keystore）+ 关 R8（规避 release 闪退）
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/taozhu-release.keystore
           cat android-sign.gradle.kts >> android/app/build.gradle.kts

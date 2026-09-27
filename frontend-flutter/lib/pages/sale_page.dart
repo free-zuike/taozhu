@@ -753,7 +753,7 @@ class _SalePageState extends State<SalePage> {
 
   /// 识别结果 → 填店铺/日期 + 匹配已有商品填行（拍照/文字/语音共用）
   void _fillFromDrafts(List<dynamic> items, [String client = '', String date = '']) {
-    // 购货单位：识别出的客户/店铺名匹配页面店铺列表
+    // 购货单位：识别出的客户/店铺名匹配页面店铺列表（不自动新增——手写店铺名识别可能出错，避免污染店铺列表）
     if (client.isNotEmpty) {
       final m = _clients.where((cl) {
         final n = '${cl['name'] ?? ''}';
@@ -816,7 +816,7 @@ class _SalePageState extends State<SalePage> {
     }
     toast(context,
         filled > 0
-            ? (unmatched > 0 ? '已导入 $filled 项（$unmatched 项不在商品库，已填入名称待确认）' : '已导入 $filled 项商品')
+            ? '${client.isEmpty ? '' : '识别店铺「$client」·'}已导入 $filled 项商品${unmatched > 0 ? '（$unmatched 项不在商品库，名称已填入待确认）' : ''}'
             : '识别结果未匹配到已有商品，请手动填写');
   }
 
@@ -1249,7 +1249,7 @@ class _SalePageState extends State<SalePage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           DropdownButtonFormField<String>(
-            initialValue: _clientId,
+            value: _clientId, // 动态 value：识别回填店铺名后随 setState 立即显示（initialValue 只生效首帧）
             decoration: _fieldDec(icon: Icons.storefront, label: '店铺'),
             items: _clients
                 .map((c) => DropdownMenuItem(value: c['id'] as String, child: Text(c['name'] as String)))

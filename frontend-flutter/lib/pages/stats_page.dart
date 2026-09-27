@@ -382,7 +382,7 @@ class _StatsPageState extends State<StatsPage> {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final (start, end) = _viewRange;
     return Scaffold(
-      appBar: AppBar(title: const Text('统计报表')),
+      appBar: AppBar(), // 标题去掉：顶部让给统计块+背景透出
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(

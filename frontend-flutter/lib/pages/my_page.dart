@@ -1043,8 +1043,11 @@ class _MyPageState extends State<MyPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(title: const Text('我的')),
-      body: ListView(
+      appBar: AppBar(), // 标题去掉：顶部让给用户块+背景透出
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          ListView(
         padding: const EdgeInsets.all(16),
         children: [
           _userHeader(),
@@ -1149,6 +1152,8 @@ class _MyPageState extends State<MyPage> {
           ),
           const SizedBox(height: 16),
         ],
+        ),
+      ],
       ),
     );
   }
@@ -1176,56 +1181,57 @@ class _MyPageState extends State<MyPage> {
       );
     }
 
+    final h = DateTime.now().hour;
+    final greeting = h >= 5 && h < 12
+        ? '早上好'
+        : h >= 12 && h < 18
+            ? '下午好'
+            : h >= 18 && h < 23
+                ? '晚上好'
+                : '夜深了，注意休息';
+
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 54,
-                height: 54,
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  color: c.primary.withOpacity(0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: UserAvatar(
-                  size: 54,
-                  name: _username,
-                  localPath: _avatarLocalPath.isEmpty ? null : _avatarLocalPath,
-                  hasAvatar: _avatar && _avatarUrl.isNotEmpty,
-                  url: _avatarUrl,
-                  token: _avatarToken,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _username.isEmpty
-                          ? (_role == 'staff' ? '店员账号' : '老板账号')
-                          : _username,
-                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: c.textMain),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      '${_role == 'staff' ? '店员' : '老板'} · ${_base.isEmpty ? '未设置服务器地址' : _base}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: c.textSub),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          // 问候语：早上好/下午好/晚上好
+          Text(greeting,
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textSub)),
+          const SizedBox(height: 14),
+          // 头像：居中、稍大
+          Container(
+            width: 72,
+            height: 72,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: c.primary.withOpacity(0.12),
+              shape: BoxShape.circle,
+            ),
+            child: UserAvatar(
+              size: 72,
+              name: _username,
+              localPath: _avatarLocalPath.isEmpty ? null : _avatarLocalPath,
+              hasAvatar: _avatar && _avatarUrl.isNotEmpty,
+              url: _avatarUrl,
+              token: _avatarToken,
+            ),
+          ),
+          const SizedBox(height: 12),
+          // 名字：居中
+          Text(
+            _username.isEmpty ? (_role == 'staff' ? '店员账号' : '老板账号') : _username,
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.textMain),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${_role == 'staff' ? '店员' : '老板'} · ${_base.isEmpty ? '未设置服务器地址' : _base}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, color: c.textSub),
           ),
           // 统计三列（仅老板）：本地核算秒开；Web 直连核算
           if (_role != 'staff') ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
             Container(height: 1, color: c.divider),
             const SizedBox(height: 12),
             Row(
