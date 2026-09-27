@@ -293,14 +293,15 @@ authRouter.get('/latest-version', async (c) => {
   // 有版本差异即视为"有更新可提示"（ready=true）：下载依赖前端多源探测/大小校验/换源兜底，
   // 不再因 GitHub API 探测失败而报"无法连接更新源"——修复"有新版反而检查不可达"的问题。
   // 与部署版本一致视为无更新。
-  const probeVer = (v: string): VersionProbe | null =>
-    v ? { v, ready: true, building: false, source: 'backup' } : null;
+  const probeVer = (v: string, notes?: string): VersionProbe | null =>
+    v ? { v, ready: true, building: false, source: 'backup', notes: notes ?? '' } : null;
   const checkAsset = async (): Promise<VersionProbe | null> => {
     try {
       const r = await c.env.ASSETS.fetch(new Request(new URL('/latest.json', c.req.url)));
       if (!r.ok) return null;
-      const d = (await r.json()) as { version?: string };
-      return probeVer(String(d.version ?? '').trim());
+      const d = (await r.json()) as { version?: string; notes?: string };
+      // 部署时生成的 latest.json 带更新说明（GitHub API 被墙/限流时的备源，前端仍能展示 notes）
+      return probeVer(String(d.version ?? '').trim(), String(d.notes ?? '').trim());
     } catch {
       return null;
     }

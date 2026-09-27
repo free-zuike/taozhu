@@ -118,8 +118,15 @@ ThemeData buildLightTheme(Color primary) {
   return ThemeData(
     colorScheme: ColorScheme.fromSeed(seedColor: primary, primary: primary),
     useMaterial3: true,
-    scaffoldBackgroundColor: Colors.transparent, // 全局背景渐变由 MaterialApp.builder 提供
-    appBarTheme: const AppBarTheme(backgroundColor: Colors.white, elevation: 0.5, centerTitle: true),
+    scaffoldBackgroundColor: Colors.transparent, // 全局背景（渐变/图案）由 MaterialApp.builder 提供
+    // AppBar 透明：顶部状态栏+标题区透出背景图案（对齐"头部皮肤"形态，列表在 AppBar 之下滚动不穿透）
+    appBarTheme: AppBarTheme(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      centerTitle: true,
+      foregroundColor: primary,
+    ),
     inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
     cardTheme: CardThemeData(
       color: Colors.white,
@@ -136,7 +143,13 @@ ThemeData buildDarkTheme(Color primary) {
     colorScheme: ColorScheme.fromSeed(seedColor: primary, brightness: Brightness.dark, primary: primary),
     useMaterial3: true,
     scaffoldBackgroundColor: Colors.transparent,
-    appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF1E1E1E), elevation: 0.5, centerTitle: true),
+    appBarTheme: AppBarTheme(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      centerTitle: true,
+      foregroundColor: primary,
+    ),
     inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
     cardTheme: CardThemeData(
       color: const Color(0xFF1E1E1E),

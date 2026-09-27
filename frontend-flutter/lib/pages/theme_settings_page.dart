@@ -60,9 +60,13 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
               const SizedBox(height: 20),
               _groupTitle(c, '背景图案'),
               const SizedBox(height: 10),
-              Wrap(
-                spacing: 10,
-                runSpacing: 12,
+              GridView.count(
+                crossAxisCount: 2,
+                childAspectRatio: 1.5,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
                 children: [
                   _skinTile(cfg, '', '渐变', dark),
                   _skinTile(cfg, 'none', '纯色', dark),
@@ -99,25 +103,33 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
     }
     return InkWell(
       onTap: () => cfg.setSkin(id),
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(14),
       child: Container(
-        width: 104,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
+          color: c.card,
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: selected ? main : c.divider, width: selected ? 2 : 1),
         ),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
-              child: SizedBox(width: 104, height: 56, child: preview),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              child: SizedBox(height: 76, child: preview),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5),
+              padding: const EdgeInsets.symmetric(vertical: 7),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(name, style: TextStyle(fontSize: 12, color: c.textMain)),
+                  Text(
+                    name,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: c.textMain,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                  ),
                   if (selected) ...[
                     const SizedBox(width: 4),
                     Icon(Icons.check_circle, size: 14, color: main),
