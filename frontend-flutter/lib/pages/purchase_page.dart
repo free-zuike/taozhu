@@ -553,8 +553,11 @@ class _PurchasePageState extends State<PurchasePage> {
           .pickImage(source: source, maxWidth: 1600, imageQuality: 85);
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
+      // 按真实 MIME 上传（相册 PNG 若标成 JPEG，后端/模型会解析失败 1210）
+      final mime = picked.mimeType ?? 'image/jpeg';
+      final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
       toast(context, '识别中…');
-      final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.jpg');
+      final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
       _fillFromDrafts((d['items'] as List?) ?? []);
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));

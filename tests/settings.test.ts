@@ -132,4 +132,22 @@ describe('系统设置（AI 配置）', () => {
     expect(speech.status).toBe(400);
     expect(((await speech.json()) as { error: string }).error).toContain('语音');
   });
+
+  it('图片魔数不识别时返回格式提示（400，而非 1210）', async () => {
+    // 先配置智谱 key（否则未配置先 400，测不到魔数分支）
+    await call(env, 'PUT', '/api/v1/settings/ai', token, {
+      providers: [{ id: 'zhipu_glm', is_built_in: true, api_key: 'sk-test' }],
+      binding: { textProviderId: 'zhipu_glm', visionProviderId: 'zhipu_glm', speechProviderId: 'zhipu_glm' },
+    });
+    const fake = new Blob([new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])], { type: 'image/jpeg' });
+    const fd = new FormData();
+    fd.append('photo', fake, 'x.jpg');
+    const res = await app.request(
+      'http://localhost/api/v1/ai/parse-photo?purpose=purchase',
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd },
+      env as never,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('图片格式不支持');
+  });
 });

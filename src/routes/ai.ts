@@ -11,6 +11,7 @@ import {
   capabilityEndpoint,
   testVisionChannel,
   minimalWavBytes,
+  sniffImageMime,
 } from '../services/ai-parse';
 import { getAiConfig } from './settings';
 import type { AuthUser, Env } from '../types';
@@ -43,8 +44,13 @@ aiRouter.post('/parse-photo', async (c) => {
   if (file.size > 10 * 1024 * 1024) return c.json({ error: '图片过大（上限 10MB）' }, 400);
 
   const bytes = new Uint8Array(await file.arrayBuffer());
+  // 魔数识别真实格式（multipart Content-Type 可能被前端标错，如 PNG 标成 JPEG → 智谱 1210）
+  const mime = sniffImageMime(bytes);
+  if (!mime) {
+    return c.json({ error: '图片格式不支持：请使用 JPG/PNG/WEBP 图片（iPhone 的 HEIC 请先转成 JPG）' }, 400);
+  }
   try {
-    const drafts = await parsePhoto(ep, file.type, bytes, purpose);
+    const drafts = await parsePhoto(ep, mime, bytes, purpose);
     return c.json({ ok: true, purpose, items: drafts });
   } catch (err) {
     const msg = err instanceof Error ? err.message : '识别失败';

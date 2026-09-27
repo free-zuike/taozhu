@@ -122,6 +122,29 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
+/** 按文件魔数识别真实图片格式（不信 multipart 的 Content-Type，防 PNG 被标成 JPEG 触发 1210）。
+ *  支持：JPEG/PNG/WEBP/GIF/BMP；识别不出返回 null。 */
+export function sniffImageMime(bytes: Uint8Array): string | null {
+  if (bytes.length < 12) return null;
+  // JPEG: FF D8 FF
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  ) return 'image/png';
+  // WEBP: RIFF....WEBP
+  if (
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) return 'image/webp';
+  // GIF: 47 49 46 38
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif';
+  // BMP: 42 4D
+  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp';
+  return null;
+}
+
 /** AI 配置（后台可设置）：多提供商 + 能力绑定（对齐参考项目架构）。
  *  providers：服务商列表（智谱内置不可删，自定义 OpenAI 兼容服务商可增删改）；
  *  binding：三种能力（文本/视觉/语音）各绑定一个服务商，可混用不同提供商的不同模型。
