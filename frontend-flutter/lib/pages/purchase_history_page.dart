@@ -531,7 +531,10 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       appBar: AppBar(flexibleSpace: appBarBackground(context)), // 标题并入下方统计头（背景透出，顶部不占标题）
-      body: Column(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          Column(
         children: [
           if (_offline)
             Container(
@@ -630,6 +633,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                 : _buildList(),
           ),
         ],
+      ),
+      ],
       ),
     );
   }

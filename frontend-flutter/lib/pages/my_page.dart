@@ -1196,40 +1196,66 @@ class _MyPageState extends State<MyPage> {
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Column(
         children: [
-          // 问候语：早上好/下午好/晚上好
-          Text(greeting,
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textSub)),
-          const SizedBox(height: 14),
-          // 头像：居中、稍大
-          Container(
-            width: 72,
-            height: 72,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: c.primary.withOpacity(0.12),
-              shape: BoxShape.circle,
-            ),
-            child: UserAvatar(
-              size: 72,
-              name: _username,
-              localPath: _avatarLocalPath.isEmpty ? null : _avatarLocalPath,
-              hasAvatar: _avatar && _avatarUrl.isNotEmpty,
-              url: _avatarUrl,
-              token: _avatarToken,
-            ),
-          ),
-          const SizedBox(height: 12),
-          // 名字：居中
-          Text(
-            _username.isEmpty ? (_role == 'staff' ? '店员账号' : '老板账号') : _username,
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.textMain),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '${_role == 'staff' ? '店员' : '老板'} · ${_base.isEmpty ? '未设置服务器地址' : _base}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 12, color: c.textSub),
+          // 头像（左侧，放大）+ 问候语与用户名同一排（右侧）
+          Row(
+            children: [
+              Container(
+                width: 88,
+                height: 88,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: c.primary.withOpacity(0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: UserAvatar(
+                  size: 88,
+                  name: _username,
+                  localPath: _avatarLocalPath.isEmpty ? null : _avatarLocalPath,
+                  hasAvatar: _avatar && _avatarUrl.isNotEmpty,
+                  url: _avatarUrl,
+                  token: _avatarToken,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 问候语 + 用户名同一排
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        Text(greeting,
+                            style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: c.primary)),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _username.isEmpty
+                                ? (_role == 'staff' ? '店员账号' : '老板账号')
+                                : _username,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 19, fontWeight: FontWeight.w700, color: c.textMain),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${_role == 'staff' ? '店员' : '老板'} · ${_base.isEmpty ? '未设置服务器地址' : _base}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: c.textSub),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           // 统计三列（仅老板）：本地核算秒开；Web 直连核算
           if (_role != 'staff') ...[

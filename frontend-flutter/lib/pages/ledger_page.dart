@@ -1161,7 +1161,10 @@ class _LedgerPageState extends State<LedgerPage> {
             indicatorSize: TabBarIndicatorSize.label,
           ),
         ),
-        body: Column(
+        body: Stack(
+          children: [
+            Positioned.fill(child: themePageBackground(context)),
+            Column(
           children: [
             if (_offline)
               Container(
@@ -1254,6 +1257,8 @@ class _LedgerPageState extends State<LedgerPage> {
             ),
           ],
         ),
+        ],
+      ),
       ),
     );
   }
