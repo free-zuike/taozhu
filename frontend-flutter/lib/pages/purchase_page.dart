@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -559,6 +560,15 @@ class _PurchasePageState extends State<PurchasePage> {
       toast(context, '识别中…');
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
       _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+      // 识别原图自动作为本单凭证附件（与"整单凭证"同一关联，所有商品行可见）
+      if ((d['items'] as List?)?.isNotEmpty ?? false) {
+        unawaited(() async {
+          try {
+            await Api.instance.uploadPhoto('/attachments?entity=purchase&id=$_purchaseId', bytes, 'photo.$ext', mime);
+            if (mounted) toast(context, '识别图片已存为本单附件');
+          } catch (_) {}
+        }());
+      }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }

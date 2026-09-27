@@ -1047,12 +1047,8 @@ class _MyPageState extends State<MyPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _userCard(),
-          const SizedBox(height: 12),
-          // 统计卡（仅老板）：记账天数 / 当前店铺总笔数 / 店铺结余（原生本地核算秒开；Web 直连核算）
-          if (_role != 'staff')
-            _statsCard(),
-          if (_role != 'staff') const SizedBox(height: 18),
+          _userHeader(),
+          const SizedBox(height: 18),
           // 账号与同步（账号卡下方、经营上方）：同步状态 + 成员（账号设置+账号管理，移到同步下方）
           _card([
             // 同步状态：图标/颜色随状态区分（异常=红色警示，附件/变更待传=橙色，正常=同步图标）
@@ -1158,7 +1154,11 @@ class _MyPageState extends State<MyPage> {
   }
 
   /// 统计卡：记账天数 / 当前店铺总笔数 / 总账本结余（本地核算，三格并排）
-  Widget _statsCard() {
+  Widget _vsep(TaozhuColors c) => Container(width: 1, height: 30, color: c.divider);
+
+  /// 顶部用户块：头像+名字/角色/地址 与 记账天数/本店交易/店铺结余 合成一块。
+  /// 背景透明——直接露出底部主题背景图案（手势退出时透过能看到店铺等选项与背景）。
+  Widget _userHeader() {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     Widget cell(String label, String value, {Color? color}) {
       return Expanded(
@@ -1177,75 +1177,68 @@ class _MyPageState extends State<MyPage> {
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: BoxDecoration(
-        color: c.card,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          cell('记账天数', '$_bookDays'),
-          _vsep(c),
-          cell('本店交易', '$_curClientCount'),
-          _vsep(c),
-          cell('店铺结余', '¥${fmtMoney(_totalBalance)}',
-              color: _totalBalance >= 0 ? c.success : c.danger),
-        ],
-      ),
-    );
-  }
-
-  Widget _vsep(TaozhuColors c) => Container(width: 1, height: 30, color: c.divider);
-
-  /// 顶部用户卡：头像 + 用户名/角色 + 服务器地址
-  Widget _userCard() {
-    final c = Theme.of(context).extension<TaozhuColors>()!;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: c.card,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 52,
-            height: 52,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: c.primary.withOpacity(0.12),
-              shape: BoxShape.circle,
-            ),
-            child: UserAvatar(
-              size: 52,
-              name: _username,
-              localPath: _avatarLocalPath.isEmpty ? null : _avatarLocalPath,
-              hasAvatar: _avatar && _avatarUrl.isNotEmpty,
-              url: _avatarUrl,
-              token: _avatarToken,
-            ),
+          Row(
+            children: [
+              Container(
+                width: 54,
+                height: 54,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: c.primary.withOpacity(0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: UserAvatar(
+                  size: 54,
+                  name: _username,
+                  localPath: _avatarLocalPath.isEmpty ? null : _avatarLocalPath,
+                  hasAvatar: _avatar && _avatarUrl.isNotEmpty,
+                  url: _avatarUrl,
+                  token: _avatarToken,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _username.isEmpty
+                          ? (_role == 'staff' ? '店员账号' : '老板账号')
+                          : _username,
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: c.textMain),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${_role == 'staff' ? '店员' : '老板'} · ${_base.isEmpty ? '未设置服务器地址' : _base}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: c.textSub),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          // 统计三列（仅老板）：本地核算秒开；Web 直连核算
+          if (_role != 'staff') ...[
+            const SizedBox(height: 14),
+            Container(height: 1, color: c.divider),
+            const SizedBox(height: 12),
+            Row(
               children: [
-                Text(
-                  _username.isEmpty
-                      ? (_role == 'staff' ? '店员账号' : '老板账号')
-                      : _username,
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: c.textMain),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  '${_role == 'staff' ? '店员' : '老板'} · ${_base.isEmpty ? '未设置服务器地址' : _base}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12, color: c.textSub),
-                ),
+                cell('记账天数', '$_bookDays'),
+                _vsep(c),
+                cell('本店交易', '$_curClientCount'),
+                _vsep(c),
+                cell('店铺结余', '¥${fmtMoney(_totalBalance)}',
+                    color: _totalBalance >= 0 ? c.success : c.danger),
               ],
             ),
-          ),
+          ],
         ],
       ),
     );

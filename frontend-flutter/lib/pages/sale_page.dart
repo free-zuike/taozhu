@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -687,6 +688,15 @@ class _SalePageState extends State<SalePage> {
       toast(context, '识别中…');
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=sale', bytes, 'photo.$ext', mime);
       _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
+      // 识别原图自动作为本单凭证附件（与"整单凭证"同一关联，所有商品行可见）
+      if ((d['items'] as List?)?.isNotEmpty ?? false) {
+        unawaited(() async {
+          try {
+            await Api.instance.uploadPhoto('/attachments?entity=sale&id=$_saleId', bytes, 'photo.$ext', mime);
+            if (mounted) toast(context, '识别图片已存为本单附件');
+          } catch (_) {}
+        }());
+      }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -751,6 +761,8 @@ class _SalePageState extends State<SalePage> {
       }).firstOrNull;
       if (m != null) {
         setState(() => _clientId = '${m['id'] ?? ''}');
+      } else {
+        toast(context, '识别到店铺「$client」，店铺列表未找到（可在店铺管理中先添加）');
       }
     }
     // 日期：识别出的单据日期（YYYY-MM-DD）
