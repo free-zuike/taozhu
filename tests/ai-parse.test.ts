@@ -78,6 +78,14 @@ describe('normalizeInvoice', () => {
     expect(normalizeInvoice('')).toEqual({ client: '', date: '', items: [] });
     expect(normalizeInvoice('{"items":[]}')).toEqual({ client: '', date: '', items: [] });
   });
+
+  it('购货单位在顶层数组/items 首项内也能提取（AI 输出位置不定）', () => {
+    const inArr = normalizeInvoice('[{"client":"一席","date":"2026-08-15"},{"name":"白菜","quantity":2,"price":3}]');
+    expect(inArr.client).toBe('一席');
+    const inItems = normalizeInvoice('{"items":[{"client":"老王菜行","name":"土豆","quantity":5,"price":2}]}');
+    expect(inItems.client).toBe('老王菜行');
+    expect(inItems.items[0].name).toBe('土豆');
+  });
 });
 
 describe('buildAiPrompt', () => {

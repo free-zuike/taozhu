@@ -18,9 +18,11 @@ export interface InvoiceResult {
 /** 提示词：要求输出严格 JSON 明细（购货单位/日期/名称/单位/数量/单价） */
 export function buildAiPrompt(purpose: 'purchase' | 'sale'): string {
   const priceLabel = purpose === 'purchase' ? '进货单价' : '出货单价';
-  const clientLabel = purpose === 'purchase' ? '购货单位（进货单上的供货商/单位名）' : '购货单位（单据上的客户/店铺名）';
+  const clientLabel = purpose === 'purchase'
+    ? '购货单位（单据抬头/供货商名，如单据印"购货单位：一席"就填"一席"；没有就空字符串）'
+    : '购货单位（单据上的客户/店铺名，如抬头"购货单位：一席"就填"一席"；没有就空字符串）';
   return `请识别这张图中的单据（如购货单、小票、价签、进货单或白条）。输出严格 JSON，不要 Markdown 代码块，不要额外文字，结构如下：
-{"client":"${clientLabel}，没有就空字符串","date":"单据日期 YYYY-MM-DD，没有就空字符串","items":[{"name":"商品名称","unit":"单位（斤/公斤/件/包/箱/袋，若图上有单位就照抄）","quantity":数字,"price":数字（${priceLabel}，元）}]}
+{"client":"${clientLabel}","date":"单据日期 YYYY-MM-DD，没有就空字符串","items":[{"name":"商品名称","unit":"单位（斤/公斤/件/包/箱/袋，若图上有单位就照抄）","quantity":数字,"price":数字（${priceLabel}，元）}]}
 要求：1) 每项一行，数量只填数字（不包含单位）；2) 看不清的字段填 0 或空字符串；3) 若图片不是单据清单，输出 {"client":"","date":"","items":[]}。`;
 }
 
@@ -51,10 +53,22 @@ export function normalizeInvoice(raw: string): InvoiceResult {
   }
   let client = '';
   let date = '';
+  // 多层容错提取购货单位/日期：AI 可能把 client 放顶层对象、顶层数组项、或 items 首项里
+  const tryPick = (o: unknown) => {
+    if (o && typeof o === 'object' && !Array.isArray(o)) {
+      const rec = o as Record<string, unknown>;
+      if (!client) client = String(pick(rec, ['client', '购货单位', '供货商', '单位名称', '客户', '单位'])).trim();
+      if (!date) date = String(pick(rec, ['date', '单据日期', '日期', 'happened_at', 'time'])).trim();
+    }
+  };
   if (parsed && typeof parsed === 'object') {
-    const o = parsed as Record<string, unknown>;
-    client = String(pick(o, ['client', '购货单位', '供货商', '单位名称', '客户', '单位'])).trim();
-    date = String(pick(o, ['date', '单据日期', '日期', 'happened_at', 'time'])).trim();
+    tryPick(parsed);
+    if (Array.isArray(parsed)) {
+      for (const it of parsed) tryPick(it);
+    } else {
+      const inner = (parsed as Record<string, unknown>)['items'];
+      if (Array.isArray(inner)) tryPick(inner[0]);
+    }
   }
   return { client, date, items: normalizeDrafts(text) };
 }

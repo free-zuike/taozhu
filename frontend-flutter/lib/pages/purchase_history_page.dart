@@ -530,7 +530,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(title: const Text('进货记录')),
+      appBar: AppBar(), // 标题并入下方统计头（背景透出，顶部不占标题）
       body: Column(
         children: [
           if (_offline)
@@ -578,15 +578,10 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                   ],
                 ),
                 const SizedBox(height: 4),
-                // 进货统计卡：金额 + 笔数 + 商品件数（进货页既看出支也看进货量）
+                // 进货统计：金额 + 笔数 + 商品件数（与月份行合成一块，透明露出背景图案）
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-                  decoration: BoxDecoration(
-                    color: c.card,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: c.divider),
-                  ),
                   child: Row(
                     children: [
                       Expanded(

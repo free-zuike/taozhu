@@ -614,11 +614,7 @@ class _LedgerPageState extends State<LedgerPage> {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(14, 8, 10, 12),
-      decoration: BoxDecoration(
-        color: c.card,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: c.divider),
-      ),
+      // 透明：与店铺选择合成一块，露出主题背景图案
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1148,7 +1144,7 @@ class _LedgerPageState extends State<LedgerPage> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('交易'),
+          // 标题并入下方统计头（店铺+月度结余透明块，背景透出）
           actions: [
             IconButton(
               tooltip: '导出 CSV',
@@ -1204,11 +1200,7 @@ class _LedgerPageState extends State<LedgerPage> {
                         child: Container(
                           width: double.infinity,
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: c.field,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: c.primary.withOpacity(0.4)),
-                          ),
+                          // 透明：与月度结余合成一块，露出主题背景图案
                           child: Row(
                             children: [
                               Icon(Icons.store_outlined, size: 20, color: c.primary),
