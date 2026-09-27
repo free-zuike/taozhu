@@ -1117,28 +1117,6 @@ class _MyPageState extends State<MyPage> {
                   '登录 / 删除 / 修改 / 导入导出等关键操作留痕（仅老板）',
                   () => goPage(context, const AuditPage())),
           ]),
-          const SizedBox(height: 18),
-          _card([
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('主题', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _themeChip(ThemeMode.system, '跟随系统'),
-                      _themeChip(ThemeMode.light, '白天'),
-                      _themeChip(ThemeMode.dark, '黑夜'),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ]),
           const SizedBox(height: 24),
           Row(
             children: [
@@ -1297,23 +1275,6 @@ class _MyPageState extends State<MyPage> {
           ],
         ],
       ),
-    );
-  }
-
-  /// 主题选择胶囊（紧凑，Web/App 通用）
-  Widget _themeChip(ThemeMode mode, String label) {
-    final c = Theme.of(context).extension<TaozhuColors>()!;
-    final active = themeNotifier.value == mode;
-    return ChoiceChip(
-      label: Text(label, style: const TextStyle(fontSize: 13)),
-      selected: active,
-      selectedColor: c.primary.withOpacity(0.12),
-      side: BorderSide(color: active ? c.primary : c.divider),
-      labelStyle: TextStyle(
-          color: active ? c.primary : c.textMain,
-          fontWeight: active ? FontWeight.w600 : FontWeight.w400),
-      visualDensity: VisualDensity.compact,
-      onSelected: (_) => setThemeMode(mode),
     );
   }
 

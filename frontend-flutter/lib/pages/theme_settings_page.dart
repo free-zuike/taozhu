@@ -58,19 +58,75 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
                 onSelectionChanged: (s) => setThemeMode(s.first),
               ),
               const SizedBox(height: 20),
-              _groupTitle(c, '背景'),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('显示背景渐变', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('页面使用主题背景（静态背景）', style: TextStyle(fontSize: 12)),
-                value: cfg.bgEnabled,
-                onChanged: (v) => cfg.setBgEnabled(v),
-              ),
+              _groupTitle(c, '背景图案'),
               const SizedBox(height: 10),
-              _previewCard(c, preset, cfg.bgEnabled, dark),
+              Wrap(
+                spacing: 10,
+                runSpacing: 12,
+                children: [
+                  _skinTile(cfg, '', '渐变', dark),
+                  _skinTile(cfg, 'none', '纯色', dark),
+                  for (final s in kSkinPatterns) _skinTile(cfg, s.id, s.name, dark),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _previewCard(c, preset, cfg.skinId, dark),
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// 背景图案选项：渐变/纯色 + 各图案（迷你 CustomPaint 实时预览）
+  Widget _skinTile(ThemeConfig cfg, String id, String name, bool dark) {
+    final cur = cfg.skinId;
+    final selected = (cur.isEmpty && id.isEmpty) || cur == id;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    final main = cfg.preset.lightPrimary;
+    final skin = skinPatternById(id);
+    final Widget preview;
+    if (id.isEmpty) {
+      preview = Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(colors: cfg.preset.bgGradient, begin: Alignment.topCenter, end: Alignment.bottomCenter),
+        ),
+      );
+    } else if (id == 'none') {
+      preview = Container(color: dark ? const Color(0xFF17181C) : const Color(0xFFF5F7FA));
+    } else {
+      preview = CustomPaint(painter: skin!.build(main, dark), size: Size.infinite);
+    }
+    return InkWell(
+      onTap: () => cfg.setSkin(id),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 104,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: selected ? main : c.divider, width: selected ? 2 : 1),
+        ),
+        child: Column(
+          children: [
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+              child: SizedBox(width: 104, height: 56, child: preview),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(name, style: TextStyle(fontSize: 12, color: c.textMain)),
+                  if (selected) ...[
+                    const SizedBox(width: 4),
+                    Icon(Icons.check_circle, size: 14, color: main),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -127,23 +183,36 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
     );
   }
 
-  /// 实时预览：主题背景 + 卡片 + 按钮
-  Widget _previewCard(TaozhuColors c, ThemePreset preset, bool bgOn, bool dark) {
+  /// 实时预览：当前背景（渐变/图案） + 卡片 + 按钮
+  Widget _previewCard(TaozhuColors c, ThemePreset preset, String skinId, bool dark) {
     final main = dark ? preset.darkPrimary : preset.lightPrimary;
-    return Container(
-      height: 190,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        gradient: LinearGradient(
-          colors: bgOn
-              ? (dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient)
-              : [Theme.of(context).scaffoldBackgroundColor, Theme.of(context).scaffoldBackgroundColor],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
+    final Widget bg;
+    final skin = skinPatternById(skinId);
+    if (skinId == 'none') {
+      bg = Container(color: dark ? const Color(0xFF17181C) : const Color(0xFFF5F7FA));
+    } else if (skin != null) {
+      bg = CustomPaint(painter: skin.build(preset.lightPrimary, dark), size: Size.infinite);
+    } else {
+      bg = Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
         ),
-      ),
-      child: Column(
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: SizedBox(
+        height: 190,
+        child: Stack(
+          children: [
+            Positioned.fill(child: bg),
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -204,7 +273,8 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
               ),
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

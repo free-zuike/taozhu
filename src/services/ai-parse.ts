@@ -8,20 +8,55 @@ export interface DraftItem {
   price: number;
 }
 
-/** 提示词：要求输出严格 JSON 明细（名称/单位/数量/单价） */
+/** 整单识别结果：单据级购货单位/日期 + 商品明细 */
+export interface InvoiceResult {
+  client: string;
+  date: string;
+  items: DraftItem[];
+}
+
+/** 提示词：要求输出严格 JSON 明细（购货单位/日期/名称/单位/数量/单价） */
 export function buildAiPrompt(purpose: 'purchase' | 'sale'): string {
   const priceLabel = purpose === 'purchase' ? '进货单价' : '出货单价';
-  return `请识别这张图中的商品清单（如小票、价签、进货单或白条）。输出严格 JSON，不要 Markdown 代码块，不要额外文字，结构如下：
-{"items":[{"name":"商品名称","unit":"单位（斤/公斤/件/包/箱/袋，若图上有单位就照抄）","quantity":数字,"price":数字（${priceLabel}，元）}]}
-要求：1) 每项一行，数量只填数字（不包含单位）；2) 看不清的字段填 0；3) 若图片不是清单，输出 {"items":[]}。`;
+  const clientLabel = purpose === 'purchase' ? '购货单位（进货单上的供货商/单位名）' : '购货单位（单据上的客户/店铺名）';
+  return `请识别这张图中的单据（如购货单、小票、价签、进货单或白条）。输出严格 JSON，不要 Markdown 代码块，不要额外文字，结构如下：
+{"client":"${clientLabel}，没有就空字符串","date":"单据日期 YYYY-MM-DD，没有就空字符串","items":[{"name":"商品名称","unit":"单位（斤/公斤/件/包/箱/袋，若图上有单位就照抄）","quantity":数字,"price":数字（${priceLabel}，元）}]}
+要求：1) 每项一行，数量只填数字（不包含单位）；2) 看不清的字段填 0 或空字符串；3) 若图片不是单据清单，输出 {"client":"","date":"","items":[]}。`;
 }
 
 /** 文本记账提示词：一句话/一段描述 → 商品明细 JSON（参考实现对账思维对齐） */
 export function buildTextPrompt(purpose: 'purchase' | 'sale'): string {
   const verb = purpose === 'purchase' ? '进货' : '出货';
   return `你是${verb}记账助手。请从下面这段描述中提取商品清单。输出严格 JSON，不要 Markdown 代码块，不要额外文字，结构如下：
-{"items":[{"name":"商品名称","unit":"单位（斤/公斤/件/包/箱/袋，缺省留空）","quantity":数字,"price":数字（${verb}单价，元）}]}
-要求：1) 每项一行，数量只填数字（不包含单位）；2) 没提到的字段填 0 或空字符串；3) 数量/价格是"50斤3元一斤"这种说法时，quantity=50、price=3；4) 多笔用逗号或换行分开；5) 若描述不是商品清单，输出 {"items":[]}。`;
+{"client":"购货单位/客户名（描述里提到就填，没有就空字符串）","date":"单据日期 YYYY-MM-DD（描述里提到就填，没有就空字符串）","items":[{"name":"商品名称","unit":"单位（斤/公斤/件/包/箱/袋，缺省留空）","quantity":数字,"price":数字（${verb}单价，元）}]}
+要求：1) 每项一行，数量只填数字（不包含单位）；2) 没提到的字段填 0 或空字符串；3) 数量/价格是"50斤3元一斤"这种说法时，quantity=50、price=3；4) 多笔用逗号或换行分开；5) 若描述不是商品清单，输出 {"client":"","date":"","items":[]}。`;
+}
+
+/**
+ * 容错解析 LLM 输出 → 单据识别结果（购货单位/日期 + 明细）。
+ * 处理：Markdown 代码块、顶层数组/对象包装、中英文字段名、数量带单位文本。
+ */
+export function normalizeInvoice(raw: string): InvoiceResult {
+  if (!raw) return { client: '', date: '', items: [] };
+  let parsed: unknown = null;
+  let text = raw.trim().replace(/```(?:json)?/gi, '').trim();
+  for (const guess of [text, extractBalanced(text)]) {
+    if (!guess) continue;
+    try {
+      parsed = JSON.parse(guess);
+      break;
+    } catch {
+      /* try next */
+    }
+  }
+  let client = '';
+  let date = '';
+  if (parsed && typeof parsed === 'object') {
+    const o = parsed as Record<string, unknown>;
+    client = String(pick(o, ['client', '购货单位', '供货商', '单位名称', '客户', '单位'])).trim();
+    date = String(pick(o, ['date', '单据日期', '日期', 'happened_at', 'time'])).trim();
+  }
+  return { client, date, items: normalizeDrafts(text) };
 }
 
 /**
@@ -226,7 +261,7 @@ export async function parsePhoto(
   mime: string,
   imageBytes: Uint8Array,
   purpose: 'purchase' | 'sale',
-): Promise<DraftItem[]> {
+): Promise<InvoiceResult> {
   if (!endpoint.apiKey.trim()) {
     throw new Error('AI 拍照识别未启用：请老板在「我的 → AI 识别设置」配置 API Key 并绑定图片识别能力');
   }
@@ -258,7 +293,7 @@ export async function parsePhoto(
     choices?: Array<{ message?: { content?: string } }>;
   };
   const content = data.choices?.[0]?.message?.content ?? '';
-  return normalizeDrafts(content);
+  return normalizeInvoice(content);
 }
 
 /** 文本记账：一句话/一段文字 → 商品明细（用文本模型） */
@@ -266,12 +301,12 @@ export async function parseText(
   endpoint: CapabilityEndpoint,
   text: string,
   purpose: 'purchase' | 'sale',
-): Promise<DraftItem[]> {
+): Promise<InvoiceResult> {
   if (!endpoint.apiKey.trim()) {
     throw new Error('AI 记账未启用：请老板在「我的 → AI 识别设置」配置 API Key 并绑定文字记账能力');
   }
   const trimmed = text.trim();
-  if (!trimmed) return [];
+  if (!trimmed) return { client: '', date: '', items: [] };
   const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
   const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
   const resp = await fetch(chatUrl, {
@@ -293,7 +328,7 @@ export async function parseText(
     choices?: Array<{ message?: { content?: string } }>;
   };
   const content = data.choices?.[0]?.message?.content ?? '';
-  return normalizeDrafts(content);
+  return normalizeInvoice(content);
 }
 
 /** 语音转文字（OpenAI 兼容 /audio/transcriptions；multipart file+model） */
@@ -332,11 +367,11 @@ export async function parseVoice(
   audioBytes: Uint8Array,
   filename: string,
   purpose: 'purchase' | 'sale',
-): Promise<{ text: string; items: DraftItem[] }> {
+): Promise<{ text: string; client: string; date: string; items: DraftItem[] }> {
   const text = await speechToText(sttEndpoint, mime, audioBytes, filename);
-  if (!text) return { text: '', items: [] };
-  const items = await parseText(textEndpoint, text, purpose);
-  return { text, items };
+  if (!text) return { text: '', client: '', date: '', items: [] };
+  const inv = await parseText(textEndpoint, text, purpose);
+  return { text, client: inv.client, date: inv.date, items: inv.items };
 }
 
 /** 生成随机幂等键（复用既有 randomId 语义，避免重复 import 冲突） */

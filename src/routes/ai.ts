@@ -50,8 +50,8 @@ aiRouter.post('/parse-photo', async (c) => {
     return c.json({ error: '图片格式不支持：请使用 JPG/PNG/WEBP 图片（iPhone 的 HEIC 请先转成 JPG）' }, 400);
   }
   try {
-    const drafts = await parsePhoto(ep, mime, bytes, purpose);
-    return c.json({ ok: true, purpose, items: drafts });
+    const inv = await parsePhoto(ep, mime, bytes, purpose);
+    return c.json({ ok: true, purpose, client: inv.client, date: inv.date, items: inv.items });
   } catch (err) {
     const msg = err instanceof Error ? err.message : '识别失败';
     return c.json({ error: msg }, 502);
@@ -71,8 +71,8 @@ aiRouter.post('/parse-text', async (c) => {
   if (!text) return c.json({ error: '请输入要记账的文字（如：白菜50斤 3元一斤，土豆30斤 2元一斤）' }, 400);
   if (text.length > 2000) return c.json({ error: '文字过长（上限 2000 字）' }, 400);
   try {
-    const items = await parseText(ep, text, purpose);
-    return c.json({ ok: true, purpose, text, items });
+    const inv = await parseText(ep, text, purpose);
+    return c.json({ ok: true, purpose, text, client: inv.client, date: inv.date, items: inv.items });
   } catch (err) {
     const msg = err instanceof Error ? err.message : '识别失败';
     return c.json({ error: msg }, 502);
@@ -101,8 +101,8 @@ aiRouter.post('/parse-voice', async (c) => {
   if (file.size > 10 * 1024 * 1024) return c.json({ error: '音频过大（上限 10MB）' }, 400);
   const bytes = new Uint8Array(await file.arrayBuffer());
   try {
-    const { text, items } = await parseVoice(sttEp, textEp, file.type, bytes, file.name || 'audio.webm', purpose);
-    return c.json({ ok: true, purpose, text, items });
+    const { text, client, date, items } = await parseVoice(sttEp, textEp, file.type, bytes, file.name || 'audio.webm', purpose);
+    return c.json({ ok: true, purpose, text, client, date, items });
   } catch (err) {
     const msg = err instanceof Error ? err.message : '识别失败';
     return c.json({ error: msg }, 502);
@@ -147,8 +147,8 @@ aiRouter.post('/test', async (c) => {
     if (!ep.model) {
       return c.json({ error: '文字记账模型为空：请在「AI 识别设置」该服务商的编辑弹窗中填写文字记账模型' }, 400);
     }
-    const items = await parseText(ep, '白菜2斤每斤3元，土豆1斤每斤5元', 'purchase');
-    return c.json({ ok: true, capability, items, count: items.length });
+    const inv = await parseText(ep, '白菜2斤每斤3元，土豆1斤每斤5元', 'purchase');
+    return c.json({ ok: true, capability, items: inv.items, count: inv.items.length });
   } catch (err) {
     const msg = err instanceof Error ? err.message : '测试失败';
     return c.json({ error: msg }, 502);

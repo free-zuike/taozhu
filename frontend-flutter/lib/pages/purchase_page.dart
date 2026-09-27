@@ -558,7 +558,7 @@ class _PurchasePageState extends State<PurchasePage> {
       final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
       toast(context, '识别中…');
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
-      _fillFromDrafts((d['items'] as List?) ?? []);
+      _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -589,7 +589,7 @@ class _PurchasePageState extends State<PurchasePage> {
     toast(context, '识别中…');
     try {
       final d = await Api.instance.post('/ai/parse-text?purpose=purchase', {'text': text});
-      _fillFromDrafts((d['items'] as List?) ?? []);
+      _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -607,19 +607,25 @@ class _PurchasePageState extends State<PurchasePage> {
       final d = await Api.instance.uploadAudio('/ai/parse-voice?purpose=purchase', audio.bytes, audio.name, audio.mime);
       final text = '${d['text'] ?? ''}';
       if (text.isNotEmpty) toast(context, '语音识别：$text');
-      _fillFromDrafts((d['items'] as List?) ?? []);
+      _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
   /// 识别结果 → 匹配已有商品填行（拍照/文字/语音共用）
-  void _fillFromDrafts(List<dynamic> items) {
+  /// 识别结果 → 填日期 + 匹配已有商品填行（拍照/文字/语音共用；进货无购货单位字段）
+  void _fillFromDrafts(List<dynamic> items, [String date = '']) {
+    // 日期：识别出的单据日期（YYYY-MM-DD）
+    if (date.isNotEmpty && RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) {
+      _dateCtrl.text = date;
+    }
     if (items.isEmpty) {
       toast(context, '未识别到商品，请手动填写');
       return;
     }
     var filled = 0;
+    var unmatched = 0;
     for (final raw in items) {
       final name = '${raw['name'] ?? ''}'.trim();
       final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
@@ -630,28 +636,42 @@ class _PurchasePageState extends State<PurchasePage> {
               '${it['name']}'.contains(name) ||
               name.contains('${it['name']}'))
           .firstOrNull;
-      if (match == null) continue;
-      final prices = ((match['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
       Map<String, dynamic>? pr;
-      if (unit.isNotEmpty) {
-        pr = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+      if (match != null) {
+        if (unit.isNotEmpty) {
+          pr = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+        }
+        pr ??= prices.firstOrNull;
       }
-      pr ??= prices.firstOrNull;
-      if (pr == null) continue;
       setState(() {
-        final row = (_rows.length == 1 && _rows.first.itemId == null)
+        final row = (_rows.length == 1 && _rows.first.itemId == null && _rows.first.nameCtrl.text.trim().isEmpty)
             ? _rows.first
             : (_rows..add(_PRow()..happenedAt = _dateCtrl.text.trim())).last;
-        row.itemId = '${match['id']}';
-        row.priceId = pr!['id'] as String?;
-        row.quantity = qty;
-        row.purchasePrice = price > 0 ? price : (pr!['purchase_price'] as num).toDouble();
-        row.qtyCtrl.text = qty.toString();
-        row.priceCtrl.text = (price > 0 ? price : (pr!['purchase_price'] as num).toDouble()).toStringAsFixed(2);
+        if (match != null && pr != null) {
+          row.itemId = '${match['id']}';
+          row.priceId = pr!['id'] as String?;
+          row.quantity = qty;
+          row.purchasePrice = price > 0 ? price : (pr!['purchase_price'] as num).toDouble();
+          row.qtyCtrl.text = qty.toString();
+          row.priceCtrl.text = (price > 0 ? price : (pr!['purchase_price'] as num).toDouble()).toStringAsFixed(2);
+        } else {
+          // 识别出但商品库没有：名称/单位/数量/单价照填（提交时老板自动入库/店员提示添加）
+          unmatched++;
+          row.nameCtrl.text = name;
+          row.unitCtrl.text = unit;
+          row.quantity = qty;
+          row.purchasePrice = price;
+          row.qtyCtrl.text = qty.toString();
+          row.priceCtrl.text = price.toStringAsFixed(2);
+        }
         filled++;
       });
     }
-    toast(context, filled > 0 ? '已导入 $filled 项商品' : '识别结果未匹配到已有商品，请手动填写');
+    toast(context,
+        filled > 0
+            ? (unmatched > 0 ? '已导入 $filled 项（$unmatched 项不在商品库，已填入名称待确认）' : '已导入 $filled 项商品')
+            : '识别结果未匹配到已有商品，请手动填写');
   }
 
   Future<void> _submit() async {
