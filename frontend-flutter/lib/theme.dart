@@ -1,7 +1,11 @@
+import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'api.dart';
 
 /// 全局主题模式（跟随系统 / 白天 / 黑夜），MaterialApp 监听切换
 final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.system);
@@ -251,6 +255,7 @@ class ThemeConfig extends ChangeNotifier {
     _presetId = p.getString(_kPreset) ?? 'default';
     _bgEnabled = p.getBool(_kBg) ?? true;
     _skinId = p.getString(_kSkin) ?? '';
+    _dirtyCache = p.getBool(_kDirty) ?? false;
     notifyListeners();
   }
 
@@ -259,6 +264,7 @@ class ThemeConfig extends ChangeNotifier {
     _presetId = id;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setString(_kPreset, id);
+    unawaited(_markThemeDirty());
   }
 
   Future<void> setBgEnabled(bool v) async {
@@ -266,6 +272,7 @@ class ThemeConfig extends ChangeNotifier {
     _bgEnabled = v;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setBool(_kBg, v);
+    unawaited(_markThemeDirty());
   }
 
   Future<void> setSkin(String id) async {
@@ -273,6 +280,57 @@ class ThemeConfig extends ChangeNotifier {
     _skinId = id;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setString(_kSkin, id);
+    unawaited(_markThemeDirty());
+  }
+
+  bool _applyingServer = false; // 服务器应用中不回传，防跨端回环
+  static const _kDirty = 'theme_dirty';
+
+  /// 主题有本地未同步修改（随下次同步上传服务器；App 不直连写数据库）
+  Future<void> _markThemeDirty() async {
+    _dirtyCache = true;
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kDirty, true);
+  }
+
+  bool get themeDirty => _dirtyCache;
+  bool _dirtyCache = false;
+
+  /// 同步时上传主题配置到服务器（由 SyncService.sync() 在同步入口调用）
+  Future<void> pushTheme() async {
+    if (_applyingServer || kIsWeb) return; // Web 直连保存，不走同步队列
+    try {
+      await Api.instance.put('/settings/theme_config',
+          {'preset_id': _presetId, 'skin_id': _skinId, 'bg_enabled': _bgEnabled});
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(_kDirty, false);
+      _dirtyCache = false;
+    } catch (_) {}
+  }
+
+  /// 拉取服务器主题并应用（同步 pull / 其他端变更 WS 通知 theme_config）
+  Future<void> pullTheme() async {
+    _applyingServer = true;
+    try {
+      final d = await Api.instance.get('/settings/theme_config');
+      final pid = '${d['preset_id'] ?? ''}';
+      final sid = '${d['skin_id'] ?? ''}';
+      final bg = d['bg_enabled'] == true;
+      var changed = false;
+      if (pid.isNotEmpty && pid != _presetId) { _presetId = pid; changed = true; }
+      if (sid.isNotEmpty && sid != _skinId) { _skinId = sid; changed = true; }
+      if (bg != _bgEnabled) { _bgEnabled = bg; changed = true; }
+      if (changed) {
+        final p = await SharedPreferences.getInstance();
+        await p.setString(_kPreset, _presetId);
+        await p.setString(_kSkin, _skinId);
+        await p.setBool(_kBg, _bgEnabled);
+        notifyListeners();
+      }
+    } catch (_) {
+    } finally {
+      _applyingServer = false;
+    }
   }
 }
 
@@ -381,25 +439,25 @@ abstract class _BaseSkinPainter extends CustomPainter {
   final bool dark;
   final bool compact;
 
-  /// 底渐变：compact=主题色鲜亮版（图案对比强）；全屏=浅主题色（背景不抢内容）
+  /// 底渐变：compact=主题色鲜亮版（图案对比强）；全屏=主题色浅版（不抢内容，但换主题色明显变化）
   LinearGradient bottomGradient() {
     if (compact) {
       final top = dark ? const Color(0xFF23262E) : Color.lerp(primary, Colors.white, 0.28)!;
       final bottom = dark ? const Color(0xFF15181F) : Color.lerp(primary, Colors.white, 0.52)!;
       return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
     }
-    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.80)!;
-    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.60)!;
+    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.55)!;
+    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.42)!;
     return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
   }
 
-  /// 图案色：暗色=白系半透明；亮色=白混主题色（compact 默认更"白"对比强）
-  Color ink(double opacity, [double whiteMix = 0.72]) =>
+  /// 图案色：暗色=白系半透明；亮色=主题色为主（混白少，随主题色相明显变化）
+  Color ink(double opacity, [double whiteMix = 0.38]) =>
       dark ? Colors.white.withOpacity(opacity) : Color.lerp(primary, Colors.white, whiteMix)!.withOpacity(opacity);
 
-  /// 强调色（亮窗/花心等）：亮色=琥珀金，暗色=亮金
+  /// 强调色（亮窗/花心等）：随主题色派生（亮色=主题色压暗，暗色=主题色提亮）
   Color accent(double opacity) =>
-      dark ? const Color(0xFFFFD76A).withOpacity(opacity) : const Color(0xFFE0A62E).withOpacity(opacity);
+      dark ? Color.lerp(primary, Colors.white, 0.55)!.withOpacity(opacity) : Color.lerp(primary, Colors.black, 0.22)!.withOpacity(opacity);
 
   @override
   bool shouldRepaint(covariant _BaseSkinPainter old) =>

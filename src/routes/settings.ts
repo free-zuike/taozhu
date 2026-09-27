@@ -154,3 +154,29 @@ settingsRouter.put('/ai', async (c) => {
   await notifyClients('ai_config');
   return c.json(sanitizeAiConfig(cfg));
 });
+
+// ── 主题配置跨端同步：预设/图案/背景开关（App/Web 改 → 其他端 WS 收到后应用） ──
+const KEY_THEME = 'theme_config';
+
+settingsRouter.get('/theme_config', async (c) => {
+  const raw = await getSetting(c.env.DB, KEY_THEME);
+  let cfg: Record<string, string> = {};
+  if (raw) { try { cfg = JSON.parse(raw) as Record<string, string>; } catch (_) {} }
+  return c.json({
+    preset_id: cfg.preset_id ?? '',
+    skin_id: cfg.skin_id ?? '',
+    bg_enabled: cfg.bg_enabled === '1' || cfg.bg_enabled === 'true',
+  });
+});
+
+settingsRouter.put('/theme_config', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { preset_id?: string; skin_id?: string; bg_enabled?: boolean } | null;
+  if (!body) return c.json({ error: '参数错误' }, 400);
+  await upsertSetting(c.env.DB, KEY_THEME, JSON.stringify({
+    preset_id: body.preset_id ?? '',
+    skin_id: body.skin_id ?? '',
+    bg_enabled: body.bg_enabled ? '1' : '0',
+  }));
+  await notifyClients('theme_config');
+  return c.json({ ok: true });
+});

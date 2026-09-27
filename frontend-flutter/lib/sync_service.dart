@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
+import 'theme.dart';
 import 'avatar_cache.dart';
 import 'local_db.dart';
 import 'log.dart';
@@ -764,6 +765,8 @@ class SyncService {
       await downloadInUseAttachments();
       // ⑤ 资料（显示名/头像版本）同步对齐参考 sync() 编排：实体+附件完成后统一 syncMyProfile
       await syncMyProfile();
+      // ⑥ 主题配置随同步上传/拉取（App 不直连写数据库；Web 直连在设置页保存）
+      await _syncTheme();
     } catch (e) {
       _lastSyncFailed = true;
       appLog('sync', '同步失败: ${e.toString().split('\n').first}', level: 'error');
@@ -771,6 +774,18 @@ class SyncService {
     } finally {
       _setStatus(_lastSyncFailed ? 'error' : 'idle');
     }
+  }
+
+  /// 主题配置随同步上传/拉取：本地有未同步修改（dirty）→ 上传服务器并清标记；
+  /// 否则拉取服务器主题应用（他端/Web 改的跨端一致）。失败静默（本地主题仍生效）。
+  static Future<void> _syncTheme() async {
+    try {
+      if (ThemeConfig.instance.themeDirty) {
+        await ThemeConfig.instance.pushTheme();
+      } else {
+        await ThemeConfig.instance.pullTheme();
+      }
+    } catch (_) {}
   }
 
   /// 实体类型 → 本地 store 名映射

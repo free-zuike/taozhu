@@ -421,12 +421,9 @@ class _StatsPageState extends State<StatsPage> {
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
                         decoration: BoxDecoration(
-                          color: _surface,
+                          // 透明：露出主题背景图案
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: _primary.withOpacity(0.35)),
-                          boxShadow: [
-                            BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.05), blurRadius: 8, offset: const Offset(0, 2)),
-                          ],
                         ),
                         child: Row(
                           children: [
@@ -700,7 +697,12 @@ class _StatsPageState extends State<StatsPage> {
           SizedBox(
             width: itemW,
             child: Card(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              color: Colors.transparent, // 透明：露出主题背景图案
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(color: _primary.withOpacity(0.25)),
+              ),
               child: Padding(
                 padding: const EdgeInsets.all(14),
                 child: Column(
