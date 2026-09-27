@@ -296,12 +296,13 @@ Widget themeBackgroundWrap(BuildContext context, Widget? child) {
 
 // ============ 背景图案皮肤（参考"主题背景"范式：图案随主题色派生，非照片） ============
 
-/// 一款背景图案：id/名称/CustomPainter 工厂（画笔从主题主色派生浅淡配色）
+/// 一款背景图案：id/名称/CustomPainter 工厂（画笔从主题主色派生配色）。
+/// compact=true 用于缩略图/预览：底色鲜艳（对齐"头部皮肤=主题色底"）、图案对比强，一眼看清图形。
 class SkinPattern {
   const SkinPattern(this.id, this.name, this.build);
   final String id;
   final String name;
-  final CustomPainter Function(Color primary, bool dark) build;
+  final CustomPainter Function(Color primary, bool dark, {bool compact}) build;
 }
 
 /// 预置图案：城市 / 波浪 / 云朵 / 樱花 / 星辰
@@ -322,48 +323,64 @@ SkinPattern? skinPatternById(String id) {
 }
 
 abstract class _BaseSkinPainter extends CustomPainter {
-  _BaseSkinPainter(this.primary, this.dark);
+  _BaseSkinPainter(this.primary, this.dark, {this.compact = false});
   final Color primary;
   final bool dark;
+  final bool compact;
 
-  /// 底面色（上浅下深，暗色模式用深灰）
+  /// 底渐变：compact=主题色鲜亮版（图案对比强）；全屏=浅主题色（背景不抢内容）
   LinearGradient bottomGradient() {
-    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.94)!;
-    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.86)!;
+    if (compact) {
+      final top = dark ? const Color(0xFF23262E) : Color.lerp(primary, Colors.white, 0.28)!;
+      final bottom = dark ? const Color(0xFF15181F) : Color.lerp(primary, Colors.white, 0.52)!;
+      return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
+    }
+    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.80)!;
+    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.60)!;
     return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
   }
 
-  /// 图案主色系（暗色用白系半透明，亮色用主题色系低透明度）
-  Color ink(double opacity, [double whiteMix = 0.88]) =>
+  /// 图案色：暗色=白系半透明；亮色=白混主题色（compact 默认更"白"对比强）
+  Color ink(double opacity, [double whiteMix = 0.72]) =>
       dark ? Colors.white.withOpacity(opacity) : Color.lerp(primary, Colors.white, whiteMix)!.withOpacity(opacity);
+
+  /// 强调色（亮窗/花心等）：亮色=琥珀金，暗色=亮金
+  Color accent(double opacity) =>
+      dark ? const Color(0xFFFFD76A).withOpacity(opacity) : const Color(0xFFE0A62E).withOpacity(opacity);
 
   @override
   bool shouldRepaint(covariant _BaseSkinPainter old) =>
-      old.primary != primary || old.dark != dark;
+      old.primary != primary || old.dark != dark || old.compact != compact;
 }
 
 /// 城市：渐变底 + 月亮光晕 + 远近两层楼群 + 随机亮窗
 class _SkylinePainter extends _BaseSkinPainter {
-  _SkylinePainter(super.primary, super.dark);
+  _SkylinePainter(super.primary, super.dark, {super.compact});
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..shader = bottomGradient().createShader(Offset.zero & size));
-    // 月亮 + 光晕
-    final moonC = Offset(size.width * 0.8, size.height * 0.16);
-    canvas.drawCircle(moonC, size.height * 0.09, Paint()..color = ink(0.10, 0.96));
-    canvas.drawCircle(moonC, size.height * 0.05, Paint()..color = ink(0.5, 0.98));
     final rnd = Random(7);
-    // 远层楼群（淡）
-    _buildings(canvas, size, rnd, size.height * 0.58, 0.14, size.height * 0.10);
-    // 近层楼群（深一些，右侧留白给月亮）
-    _buildings(canvas, size, rnd, size.height * 0.72, 0.26, size.height * 0.13);
-    // 地平线
-    canvas.drawRect(Rect.fromLTWH(0, size.height * 0.78, size.width, size.height * 0.22), Paint()..color = ink(0.18, 0.9));
+    if (compact) {
+      // 缩略图：图案铺满、对比强（月亮+双楼群一眼可见）
+      canvas.drawCircle(Offset(size.width * 0.82, size.height * 0.18), size.height * 0.12, Paint()..color = ink(0.18, 0.98));
+      canvas.drawCircle(Offset(size.width * 0.82, size.height * 0.18), size.height * 0.06, Paint()..color = ink(0.7, 1));
+      _buildings(canvas, size, rnd, size.height * 0.68, 0.55, size.height * 0.24);
+      _buildings(canvas, size, rnd, size.height * 0.88, 0.75, size.height * 0.3);
+      canvas.drawRect(Rect.fromLTWH(0, size.height * 0.93, size.width, size.height * 0.07), Paint()..color = ink(0.6, 0.62));
+      return;
+    }
+    // 全屏：图案集中在顶部约 55%（对齐头部皮肤，内容区下方保持浅色）
+    canvas.drawCircle(Offset(size.width * 0.8, size.height * 0.1), size.height * 0.1, Paint()..color = ink(0.12, 0.98));
+    canvas.drawCircle(Offset(size.width * 0.8, size.height * 0.1), size.height * 0.045, Paint()..color = ink(0.45, 1));
+    _buildings(canvas, size, rnd, size.height * 0.34, 0.34, size.height * 0.16);
+    _buildings(canvas, size, rnd, size.height * 0.48, 0.5, size.height * 0.2);
+    canvas.drawRect(Rect.fromLTWH(0, size.height * 0.54, size.width, size.height * 0.46),
+        Paint()..shader = bottomGradient().createShader(Offset(0, size.height * 0.54) & Size(size.width, size.height * 0.46)));
   }
 
   void _buildings(Canvas canvas, Size size, Random rnd, double baseY, double opacity, double maxH) {
-    final paint = Paint()..color = ink(opacity, 0.9);
-    final win = Paint()..color = dark ? Colors.white54 : const Color(0xFFFFB84D).withOpacity(0.85);
+    final paint = Paint()..color = ink(opacity, 0.62);
+    final win = Paint()..color = accent(dark ? 0.9 : 0.95);
     double x = -size.width * 0.05;
     while (x < size.width * 1.05) {
       final w = size.width * (0.05 + rnd.nextDouble() * 0.07);
@@ -386,43 +403,46 @@ class _SkylinePainter extends _BaseSkinPainter {
 
 /// 波浪：多层正弦波纹（远近错落）+ 底部色带
 class _WavePainter extends _BaseSkinPainter {
-  _WavePainter(super.primary, super.dark);
+  _WavePainter(super.primary, super.dark, {super.compact});
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..shader = bottomGradient().createShader(Offset.zero & size));
+    final layers = compact ? <(double, double, double)>[(0.52, 0.18, 0.5), (0.72, 0.13, 0.66), (0.9, 0.09, 0.82)]
+        : <(double, double, double)>[(0.38, 0.13, 0.26), (0.56, 0.1, 0.38), (0.72, 0.07, 0.5)];
     final path = Path();
-    for (var layer = 0; layer < 3; layer++) {
+    for (final (baseY, amp, op) in layers) {
       path.reset();
-      final baseY = size.height * (0.62 + layer * 0.1);
-      final amp = size.height * (0.12 - layer * 0.03);
-      final wl = size.width / (2 + layer);
-      path.moveTo(0, baseY);
+      final wl = size.width / 2.2;
+      path.moveTo(0, size.height * baseY);
       for (double x = 0; x <= size.width; x += 4) {
-        path.lineTo(x, baseY + amp * sin((x / wl) * pi * 2 + layer * 1.3));
+        path.lineTo(x, size.height * baseY + size.height * amp * sin((x / wl) * pi * 2));
       }
       path.lineTo(size.width, size.height);
       path.lineTo(0, size.height);
       path.close();
-      canvas.drawPath(path, Paint()..color = ink(0.10 + layer * 0.06, 0.88));
+      canvas.drawPath(path, Paint()..color = ink(op, 0.6));
     }
-    // 高光细线
-    canvas.drawLine(Offset(0, size.height * 0.62), Offset(size.width, size.height * 0.62 + size.height * 0.015),
-        Paint()..color = ink(0.10, 0.96)..strokeWidth = 2);
+    // 波峰高光线
+    canvas.drawLine(
+        Offset(0, size.height * (compact ? 0.52 : 0.38)),
+        Offset(size.width, size.height * (compact ? 0.52 : 0.38) + size.height * 0.02),
+        Paint()..color = ink(0.5, 0.95)..strokeWidth = 2);
   }
 }
 
 /// 云朵：数朵低透明椭圆云（随机位置）缀在渐变底上
 class _CloudsPainter extends _BaseSkinPainter {
-  _CloudsPainter(super.primary, super.dark);
+  _CloudsPainter(super.primary, super.dark, {super.compact});
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..shader = bottomGradient().createShader(Offset.zero & size));
     final rnd = Random(21);
-    for (var i = 0; i < 6; i++) {
+    final n = compact ? 6 : 5;
+    for (var i = 0; i < n; i++) {
       final cx = rnd.nextDouble() * size.width;
-      final cy = size.height * (0.08 + rnd.nextDouble() * 0.55);
-      final s = size.width * (0.10 + rnd.nextDouble() * 0.10);
-      final p = Paint()..color = ink(0.10 + rnd.nextDouble() * 0.08, 0.94);
+      final cy = size.height * (compact ? 0.14 + rnd.nextDouble() * 0.7 : 0.08 + rnd.nextDouble() * 0.45);
+      final s = size.width * (compact ? 0.13 + rnd.nextDouble() * 0.08 : 0.08 + rnd.nextDouble() * 0.06);
+      final p = Paint()..color = ink(compact ? 0.42 + rnd.nextDouble() * 0.16 : 0.22 + rnd.nextDouble() * 0.1, 0.96);
       canvas.drawOval(Rect.fromCenter(center: Offset(cx, cy), width: s * 1.6, height: s * 0.6), p);
       canvas.drawOval(Rect.fromCenter(center: Offset(cx - s * 0.35, cy + s * 0.1), width: s * 1.0, height: s * 0.45), p);
       canvas.drawOval(Rect.fromCenter(center: Offset(cx + s * 0.38, cy + s * 0.12), width: s * 0.9, height: s * 0.4), p);
@@ -430,52 +450,55 @@ class _CloudsPainter extends _BaseSkinPainter {
   }
 }
 
-/// 樱花：主题色小花（五瓣圆点）+ 花蕊，随机散布下部
+/// 樱花：主题色小花（五瓣圆点）+ 花蕊，随机散布
 class _SakuraPainter extends _BaseSkinPainter {
-  _SakuraPainter(super.primary, super.dark);
+  _SakuraPainter(super.primary, super.dark, {super.compact});
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..shader = bottomGradient().createShader(Offset.zero & size));
     final rnd = Random(52);
-    for (var i = 0; i < 26; i++) {
+    final n = compact ? 24 : 20;
+    for (var i = 0; i < n; i++) {
       final cx = rnd.nextDouble() * size.width;
-      final cy = size.height * (0.35 + rnd.nextDouble() * 0.55);
-      final r = size.width * (0.010 + rnd.nextDouble() * 0.014);
-      final petal = Paint()..color = ink(0.16 + rnd.nextDouble() * 0.12, 0.82);
-      final center = Paint()..color = ink(0.35, 0.9);
-      // 五瓣：上下左右+中圆
+      final cy = size.height * (compact ? 0.3 + rnd.nextDouble() * 0.62 : 0.35 + rnd.nextDouble() * 0.5);
+      final r = size.width * (compact ? 0.013 + rnd.nextDouble() * 0.014 : 0.009 + rnd.nextDouble() * 0.011);
+      final petal = Paint()..color = ink(compact ? 0.5 + rnd.nextDouble() * 0.16 : 0.3 + rnd.nextDouble() * 0.12, 0.78);
+      final center = Paint()..color = accent(0.85);
       for (var k = 0; k < 5; k++) {
         final a = k * 2 * pi / 5;
         canvas.drawCircle(Offset(cx + cos(a) * r * 0.8, cy + sin(a) * r * 0.8), r * 0.55, petal);
       }
-      canvas.drawCircle(Offset(cx, cy), r * 0.35, center);
+      canvas.drawCircle(Offset(cx, cy), r * 0.32, center);
     }
   }
 }
 
 /// 星辰：深色渐变 + 大小星点（十字星光大星）
 class _StarsPainter extends _BaseSkinPainter {
-  _StarsPainter(super.primary, super.dark);
+  _StarsPainter(super.primary, super.dark, {super.compact});
   @override
   void paint(Canvas canvas, Size size) {
-    final top = dark ? const Color(0xFF14161C) : Color.lerp(primary, Colors.white, 0.90)!;
-    final bottom = dark ? const Color(0xFF0C0E12) : Color.lerp(primary, Colors.white, 0.80)!;
+    final top = dark ? const Color(0xFF14161C) : Color.lerp(primary, Colors.white, 0.62)!;
+    final bottom = dark ? const Color(0xFF0C0E12) : Color.lerp(primary, Colors.white, 0.38)!;
     canvas.drawRect(Offset.zero & size,
         Paint()..shader = LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter).createShader(Offset.zero & size));
     final rnd = Random(9);
-    for (var i = 0; i < 42; i++) {
+    final n = compact ? 52 : 40;
+    for (var i = 0; i < n; i++) {
       final cx = rnd.nextDouble() * size.width;
-      final cy = rnd.nextDouble() * size.height * 0.8;
-      final r = size.width * (0.004 + rnd.nextDouble() * 0.010);
-      canvas.drawCircle(Offset(cx, cy), r, Paint()..color = ink(0.25 + rnd.nextDouble() * 0.3, 0.95));
+      final cy = rnd.nextDouble() * size.height * 0.85;
+      final r = size.width * (compact ? 0.005 + rnd.nextDouble() * 0.011 : 0.004 + rnd.nextDouble() * 0.008);
+      canvas.drawCircle(Offset(cx, cy), r, Paint()..color = ink(compact ? 0.5 + rnd.nextDouble() * 0.3 : 0.3 + rnd.nextDouble() * 0.25, 0.98));
     }
-    // 三颗大星（十字星光）
-    for (final (fx, fy) in [(0.18, 0.2), (0.7, 0.12), (0.85, 0.4)]) {
+    // 大星（十字星光）
+    final big = compact ? [(0.18, 0.2), (0.72, 0.12), (0.85, 0.42), (0.4, 0.68)] : [(0.18, 0.2), (0.72, 0.12), (0.85, 0.42)];
+    for (final (fx, fy) in big) {
       final c = Offset(size.width * fx, size.height * fy);
-      final inkC = Paint()..color = ink(0.6, 0.98);
-      canvas.drawCircle(c, size.width * 0.014, inkC);
-      canvas.drawLine(c - Offset(size.width * 0.03, 0), c + Offset(size.width * 0.03, 0), inkC..strokeWidth = 1.5);
-      canvas.drawLine(c - Offset(0, size.width * 0.03), c + Offset(0, size.width * 0.03), inkC..strokeWidth = 1.5);
+      final inkC = Paint()..color = ink(compact ? 0.85 : 0.6, 1);
+      final cr = size.width * (compact ? 0.018 : 0.014);
+      canvas.drawCircle(c, cr, inkC);
+      canvas.drawLine(c - Offset(size.width * 0.04, 0), c + Offset(size.width * 0.04, 0), inkC..strokeWidth = 2);
+      canvas.drawLine(c - Offset(0, size.width * 0.04), c + Offset(0, size.width * 0.04), inkC..strokeWidth = 2);
     }
   }
 }

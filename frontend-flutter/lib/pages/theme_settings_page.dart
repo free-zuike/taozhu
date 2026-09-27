@@ -99,7 +99,7 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
     } else if (id == 'none') {
       preview = Container(color: dark ? const Color(0xFF17181C) : const Color(0xFFF5F7FA));
     } else {
-      preview = CustomPaint(painter: skin!.build(main, dark), size: Size.infinite);
+      preview = CustomPaint(painter: skin!.build(main, dark, compact: true), size: Size.infinite);
     }
     return InkWell(
       onTap: () => cfg.setSkin(id),
@@ -203,7 +203,7 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
     if (skinId == 'none') {
       bg = Container(color: dark ? const Color(0xFF17181C) : const Color(0xFFF5F7FA));
     } else if (skin != null) {
-      bg = CustomPaint(painter: skin.build(preset.lightPrimary, dark), size: Size.infinite);
+      bg = CustomPaint(painter: skin.build(preset.lightPrimary, dark, compact: true), size: Size.infinite);
     } else {
       bg = Container(
         decoration: BoxDecoration(
