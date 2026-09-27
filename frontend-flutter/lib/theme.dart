@@ -316,6 +316,8 @@ class ThemeConfig extends ChangeNotifier {
       final pid = '${d['preset_id'] ?? ''}';
       final sid = '${d['skin_id'] ?? ''}';
       final bg = d['bg_enabled'] == true;
+      // 服务器无主题配置（从未设置过）→ 不覆盖本地：否则 bg_enabled 空值会关闭本地已开启的背景
+      if (pid.isEmpty && sid.isEmpty) return;
       var changed = false;
       if (pid.isNotEmpty && pid != _presetId) { _presetId = pid; changed = true; }
       if (sid.isNotEmpty && sid != _skinId) { _skinId = sid; changed = true; }
