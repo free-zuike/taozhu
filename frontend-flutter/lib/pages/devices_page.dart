@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
+import 'router.dart';
 
 class DevicesPage extends StatefulWidget {
   const DevicesPage({super.key});
