@@ -273,9 +273,12 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
               ),
             ),
           ),
-          ],
-        ),
+        ],
       ),
-    );
+    ),
+        ],
+      ),
+    ),
+  );
   }
 }
