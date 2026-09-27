@@ -241,13 +241,15 @@ class _StatsPageState extends State<StatsPage> {
       final local = await Future.wait(paths.map((p) => _localFor(p, start, end)));
       final detail = await localSaleDetail(start, end, _clientId, kind: _kind);
       if (!mounted) return;
+      // 本地有数据：用本地镜像（本地优先）；本地空（未同步过）继续走网络兜底，避免"打开统计没数据"
+      final hasLocal = local.any((x) => x != null && '${x}'.trim() != '[]' && '${x}'.trim() != '{}');
       setState(() {
         _saleDetail = detail;
       });
       _applyStats(isYear, local);
       _loadedOnce = true;
       _loading = false;
-      return;
+      if (hasLocal) return;
     }
     try {
       final results = await Future.wait(paths.map((p) => Api.instance.get(p)));

@@ -94,9 +94,8 @@ export function normalizeDrafts(raw: string): DraftItem[] {
     }
   }
   const list = unwrapItems(parsed);
-  return list
-    .map(normalizeOne)
-    .filter((d): d is DraftItem => d.name.trim().length > 0);
+  // 保留 name 空行（AI 可能只识别出数量/单价无名称）：前端照填数量/单价到输入框，名称留空由用户补/确认
+  return list.map(normalizeOne);
 }
 
 function extractBalanced(s: string): string | null {

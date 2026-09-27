@@ -7,7 +7,8 @@ import { authMiddleware } from '../middleware/auth';
 import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
 import { APP_NAME, APP_VERSION, MIN_SUPPORTED_VERSION } from '../version';
-import { recordAudit } from './audit';
+import { clientTypeOf, recordAudit } from './audit';
+import { upsertDevice } from './devices';
 import type { Env, UserRow } from '../types';
 
 export const authRouter = new Hono<{ Bindings: Env; Variables: { user: UserRow } }>();
@@ -64,7 +65,15 @@ authRouter.post('/login', async (c) => {
     }
   }
   await clearLoginFails(c.env.DB, failKey);
-  await recordAudit(c.env.DB, { username: user.username, action: 'login', detail: `登录成功（${user.role}${user.totp_enabled ? '，两步验证' : ''}）` });
+  // 审计记录操作端（App/Web/小程序）+ 登录设备 upsert（设备管理页可见）
+  const ua = c.req.header('user-agent') ?? '';
+  const clientType = clientTypeOf(ua);
+  const uaL = ua.toLowerCase();
+  const platform = uaL.includes('android') ? 'Android' : uaL.includes('iphone') || uaL.includes('ipad') ? 'iOS' : clientType === 'app' ? 'App' : clientType === 'miniprogram' ? '小程序' : 'Web';
+  await recordAudit(c.env.DB, { username: user.username, action: 'login', detail: `登录成功（${user.role}${user.totp_enabled ? '，两步验证' : ''}）`, clientType });
+  try {
+    await upsertDevice(c.env.DB, user.id, `${platform}端`, platform);
+  } catch (_) { /* 设备记录失败不阻断登录 */ }
   const token = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role });
   return c.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });

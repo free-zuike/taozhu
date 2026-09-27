@@ -20,6 +20,7 @@ import 'ai_settings_page.dart';
 import 'theme_settings_page.dart';
 import 'categories_page.dart';
 import 'clients_page.dart';
+import 'devices_page.dart';
 import 'payments_page.dart';
 import 'statement_page.dart';
 import 'sync_panel_page.dart';
@@ -1065,6 +1066,9 @@ class _MyPageState extends State<MyPage> {
                 () => Navigator.of(context)
                     .push(MaterialPageRoute(builder: (_) => const MembersPage()))
                     .then((_) => _loadProfile())),
+            _item(Icons.devices_outlined, c.primary, '设备管理', '登录设备列表，可删除',
+                () => Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const DevicesPage()))),
           ]),
           const SizedBox(height: 18),
           // 店员账号：仅送货视角，隐藏经营类功能（收款/对账/店铺管理）

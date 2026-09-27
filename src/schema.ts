@@ -175,9 +175,20 @@ const DDL: string[] = [
     entity_type TEXT,
     entity_id TEXT,
     detail TEXT,
+    client_type TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at DESC)`,
+  // 登录设备表：登录时 upsert（设备名/平台/最后活跃），设备管理页可查看/删除
+  `CREATE TABLE IF NOT EXISTS devices (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_name TEXT NOT NULL,
+    platform TEXT,
+    last_active_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_devices_user ON devices (user_id)`,
   // 建表迁移标记：已初始化的库冷启动只查这一行即跳过下方 20+ 次 PRAGMA（首请求提速，避免 Web 首访超时）
   `CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
@@ -316,6 +327,16 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     ).first<{ name: string }>();
     if (!auditTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS audit_logs'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
+    }
+    // v0.17.222.0：审计记录操作端（App/Web/小程序）；新表 DDL 已含，老表补列
+    await ensureColumn(db, 'audit_logs', 'client_type', 'TEXT');
+    // 登录设备表：无则建（幂等）
+    const devTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'devices'",
+    ).first<{ name: string }>();
+    if (!devTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS devices'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
     }
     // 首次使用（空表）自动写入默认账户（现金/微信/支付宝/银行卡/转账），用户可后续增删改；

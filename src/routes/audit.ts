@@ -30,14 +30,24 @@ export interface AuditEntry {
   entity_type?: string;
   entity_id?: string;
   detail?: string;
+  clientType?: string;
+}
+
+/** 从 User-Agent 识别操作端：App / 小程序 / Web */
+export function clientTypeOf(ua: string | null | undefined): string {
+  const s = (ua ?? '').toLowerCase();
+  if (!s) return 'web';
+  if (s.includes('taozhu-app') || s.includes('dart')) return 'app';
+  if (s.includes('miniprogram') || s.includes('micromessenger')) return 'miniprogram';
+  return 'web';
 }
 
 /** 记录一条审计（best-effort：失败不阻断业务操作） */
 export async function recordAudit(db: D1Database, e: AuditEntry): Promise<void> {
   try {
     await db.prepare(
-      'INSERT INTO audit_logs (username, action, entity_type, entity_id, detail) VALUES (?, ?, ?, ?, ?)',
-    ).bind(e.username, e.action, e.entity_type ?? null, e.entity_id ?? null, e.detail ?? null).run();
+      'INSERT INTO audit_logs (username, action, entity_type, entity_id, detail, client_type) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind(e.username, e.action, e.entity_type ?? null, e.entity_id ?? null, e.detail ?? null, e.clientType ?? null).run();
     // 按月清理半年以上记录（审计短期留痕：半年内不可删；不按条数，created_at 同为 UTC ISO 字符串可比较）
     await db.prepare('DELETE FROM audit_logs WHERE created_at < ?')
       .bind(new Date(Date.now() - KEEP_DAYS * 86400 * 1000).toISOString()).run();
@@ -56,7 +66,7 @@ auditRouter.get('/', async (c) => {
   if (entityType) { where += ' AND entity_type = ?'; params.push(entityType); }
   if (action) { where += ' AND action = ?'; params.push(action); }
   const rows = await c.env.DB.prepare(
-    `SELECT id, username, action, entity_type, entity_id, detail, created_at
+    `SELECT id, username, action, entity_type, entity_id, detail, client_type, created_at
      FROM audit_logs ${where} ORDER BY id DESC LIMIT ?`,
   ).bind(...params, limit).all();
   return c.json({

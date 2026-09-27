@@ -111,6 +111,36 @@ class _AuditPageState extends State<AuditPage> {
                                       child: Text(actionTxt, style: TextStyle(fontSize: 12, color: c.primary)),
                                     ),
                                     const SizedBox(width: 8),
+                                    if ('${l['client_type'] ?? ''}'.isNotEmpty) ...[
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: ('${l['client_type']}' == 'app'
+                                                  ? c.primary
+                                                  : '${l['client_type']}' == 'miniprogram'
+                                                      ? c.warning
+                                                      : c.success)
+                                              .withOpacity(0.12),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          '${l['client_type']}' == 'app'
+                                              ? 'App'
+                                              : '${l['client_type']}' == 'miniprogram'
+                                                  ? '小程序'
+                                                  : 'Web',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: '${l['client_type']}' == 'app'
+                                                ? c.primary
+                                                : '${l['client_type']}' == 'miniprogram'
+                                                    ? c.warning
+                                                    : c.success,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                    ],
                                     Expanded(
                                       child: Text(
                                         '${l['username'] ?? ''} ${entityTxt.isNotEmpty ? '· $entityTxt' : ''}',

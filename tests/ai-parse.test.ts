@@ -45,10 +45,11 @@ describe('normalizeDrafts', () => {
     expect(normalizeDrafts('完全不是 JSON')).toEqual([]);
   });
 
-  it('缺名称的项被过滤', () => {
+  it('缺名称的项保留（数量/单价照填，名称留空由用户补）', () => {
     const drafts = normalizeDrafts('{"items":[{"name":"","quantity":1},{"name":"豆皮","quantity":2}]}');
-    expect(drafts).toHaveLength(1);
-    expect(drafts[0].name).toBe('豆皮');
+    expect(drafts).toHaveLength(2);
+    expect(drafts[0].name).toBe('');
+    expect(drafts[1].name).toBe('豆皮');
   });
 });
 

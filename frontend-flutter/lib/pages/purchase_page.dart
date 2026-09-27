@@ -558,16 +558,19 @@ class _PurchasePageState extends State<PurchasePage> {
       final mime = picked.mimeType ?? 'image/jpeg';
       final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
       toast(context, '识别中…');
+      // 并行：识别 + 原图上传为本单附件（总等待=max 而非 sum，缩短感知等待）
+      final attachFuture = Api.instance
+          .uploadPhoto('/attachments?entity=purchase&id=$_purchaseId', bytes, 'photo.$ext', mime)
+          .then((_) => true)
+          .catchError((_) => false);
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
       _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
-      // 识别原图自动作为本单凭证附件（与"整单凭证"同一关联，所有商品行可见）
+      // 识别原图附件上传完成提示（与识别并行发起，此时多半已完成）
       if ((d['items'] as List?)?.isNotEmpty ?? false) {
-        unawaited(() async {
-          try {
-            await Api.instance.uploadPhoto('/attachments?entity=purchase&id=$_purchaseId', bytes, 'photo.$ext', mime);
-            if (mounted) toast(context, '识别图片已存为本单附件');
-          } catch (_) {}
-        }());
+        final ok = await attachFuture;
+        if (mounted) {
+          toast(context, ok ? '识别图片已存为本单附件' : '附件上传失败，可稍后在凭证处手动添加');
+        }
       }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -685,14 +688,31 @@ class _PurchasePageState extends State<PurchasePage> {
   }
 
   Future<void> _submit() async {
-    // 名称手动输入但未入库的新商品：老板自动入库（静默），店员提示找老板添加
-    for (final r in _rows) {
-      final name = r.nameCtrl.text.trim();
-      if (name.isNotEmpty && r.itemId == null) {
-        if (_isStaff) {
-          toast(context, '「$name」不在商品库，请让老板先添加');
-          return;
-        }
+    // 名称手动输入但未入库的新商品：弹窗让用户决定是否加入商品库（不再静默自动入库）
+    final newNames = _rows
+        .where((r) => r.nameCtrl.text.trim().isNotEmpty && r.itemId == null)
+        .map((r) => r.nameCtrl.text.trim())
+        .toList();
+    if (newNames.isNotEmpty) {
+      if (_isStaff) {
+        toast(context, '「${newNames.join('、')}」不在商品库，请让老板先添加');
+        return;
+      }
+      final add = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('新商品入库'),
+          content: Text('「${newNames.join('、')}」不在商品库，是否加入？\n（不加入则本次无法提交）'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('不加入')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('加入商品库')),
+          ],
+        ),
+      );
+      if (add != true) return;
+      for (final r in _rows) {
+        final name = r.nameCtrl.text.trim();
+        if (name.isEmpty || r.itemId != null) continue;
         final id = await _createItem(name,
             unit: r.unitCtrl.text.trim(), price: r.purchasePrice, category: '');
         if (id == null) return;

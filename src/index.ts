@@ -22,6 +22,7 @@ import { printRouter } from './routes/print';
 import { syncRouter } from './routes/sync';
 import { meRouter } from './routes/me';
 import { auditRouter } from './routes/audit';
+import { devicesRouter } from './routes/devices';
 import { ensureSchema } from './schema';
 import { verifyToken } from './lib/jwt';
 import { setHubEnv, SyncHub } from './services/sync-hub';
@@ -81,6 +82,7 @@ app.route('/api/v1/backup', backupRouter);
 app.route('/api/v1/share', shareRouter);
 app.route('/api/v1/me', meRouter);
 app.route('/api/v1/audit', auditRouter);
+app.route('/api/v1/devices', devicesRouter);
 app.route('/api/v1/print', printRouter);
 
 // 实时同步 WebSocket（token 走查询参数：浏览器 WebSocket 无法自定义请求头）。

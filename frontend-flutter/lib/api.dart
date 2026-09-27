@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart' show MediaType;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'log.dart';
 import 'version.dart';
@@ -134,6 +135,7 @@ class Api {
     final headers = <String, String>{};
     final t = await _token();
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
+    headers['x-client'] = kIsWeb ? 'taozhu-web' : 'taozhu-app'; // 操作端标识（审计/设备）
     final res = await http.get(Uri.parse(url), headers: headers);
     if (res.statusCode == 404) return null;
     if (res.statusCode == 401) {
@@ -203,6 +205,7 @@ class Api {
     final t = await _token();
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
     headers['x-app-version'] = APP_VERSION;
+    headers['x-client'] = kIsWeb ? 'taozhu-web' : 'taozhu-app'; // 操作端标识（审计/设备）
 
     // 发起一次请求（按方法分发）；8s 超时防止网络不可达时页面无限转圈
     Future<http.Response> doReq() async {
@@ -292,6 +295,7 @@ class Api {
     final t = await _token();
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
     headers['x-app-version'] = APP_VERSION;
+    headers['x-client'] = kIsWeb ? 'taozhu-web' : 'taozhu-app'; // 操作端标识（审计/设备）
     final res = await http.get(Uri.parse(url), headers: headers);
     if (res.statusCode == 401) {
       await clearToken();
