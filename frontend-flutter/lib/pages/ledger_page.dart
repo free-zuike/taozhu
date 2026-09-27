@@ -1145,13 +1145,6 @@ class _LedgerPageState extends State<LedgerPage> {
       child: Scaffold(
         appBar: AppBar(
           // 标题并入下方统计头（店铺+月度结余透明块，背景透出）
-          actions: [
-            IconButton(
-              tooltip: '导出 CSV',
-              icon: const Icon(Icons.file_download_outlined),
-              onPressed: _exportCsv,
-            ),
-          ],
           bottom: TabBar(
             tabs: _isStaff
                 ? const [Tab(text: '出货')]

@@ -333,7 +333,7 @@ class _ClientsPageState extends State<ClientsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('店铺'),
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(onPressed: () => _edit(), icon: const Icon(Icons.add)),
         ],

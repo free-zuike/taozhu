@@ -259,7 +259,7 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(title: const Text('下载源管理')),
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
         children: [

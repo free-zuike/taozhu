@@ -534,7 +534,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_editing ? '编辑商品' : '新增商品')),
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

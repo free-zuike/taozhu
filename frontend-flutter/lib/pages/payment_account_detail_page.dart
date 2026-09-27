@@ -92,7 +92,7 @@ class _PaymentAccountDetailPageState extends State<PaymentAccountDetailPage> {
   Widget build(BuildContext context) {
     final c = _c;
     return Scaffold(
-      appBar: AppBar(title: Text(widget.accountName)),
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(

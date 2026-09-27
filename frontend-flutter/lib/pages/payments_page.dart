@@ -347,7 +347,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('收款结账')),
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(

@@ -430,7 +430,7 @@ class _CleanupPageState extends State<CleanupPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(title: const Text('存储清理')),
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: Column(
         children: [
           // 统计卡

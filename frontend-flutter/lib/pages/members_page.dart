@@ -19,7 +19,7 @@ class _MembersPageState extends State<MembersPage> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('成员'),
+          flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
           bottom: TabBar(
             labelColor: c.primary,
             indicatorColor: c.primary,

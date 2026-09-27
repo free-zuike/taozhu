@@ -382,12 +382,16 @@ class _StatsPageState extends State<StatsPage> {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final (start, end) = _viewRange;
     return Scaffold(
-      appBar: AppBar(), // 标题去掉：顶部让给统计块+背景透出
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
+      // 无 AppBar：顶部整块露出主题背景
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          SafeArea(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
                   // 出货 / 进货 统计切换
@@ -483,6 +487,9 @@ class _StatsPageState extends State<StatsPage> {
                 ],
               ),
             ),
+            ),
+        ],
+      ),
     );
   }
 

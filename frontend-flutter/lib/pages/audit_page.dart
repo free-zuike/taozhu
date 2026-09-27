@@ -66,7 +66,7 @@ class _AuditPageState extends State<AuditPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(title: const Text('操作审计')),
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: RefreshIndicator(
         onRefresh: _load,
         child: _loading

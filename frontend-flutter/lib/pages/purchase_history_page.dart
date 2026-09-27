@@ -574,7 +574,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                     ),
                     const Spacer(),
                     // 与交易页一致：去左右箭头，点标题弹滚轮选择；列表上下滑动月份联动
-                    Icon(Icons.unfold_more, size: 16, color: c.textSub),
                   ],
                 ),
                 const SizedBox(height: 4),

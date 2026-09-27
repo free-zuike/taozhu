@@ -326,6 +326,27 @@ Widget themePageBackground(BuildContext context) {
   return CustomPaint(painter: skin.build(preset.lightPrimary, dark), size: Size.infinite);
 }
 
+/// AppBar 背景层：图案/渐变（AppBar 透明 + flexibleSpace，顶部露出主题背景而非纯色占位）
+Widget appBarBackground(BuildContext context) {
+  final cfg = ThemeConfig.instance;
+  final dark = Theme.of(context).brightness == Brightness.dark;
+  if (!cfg.bgEnabled) return const SizedBox.shrink();
+  final preset = cfg.preset;
+  final skin = skinPatternById(cfg.skinId);
+  if (skin == null) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
+    );
+  }
+  return CustomPaint(painter: skin.build(preset.lightPrimary, dark), size: Size.infinite);
+}
+
 // ============ 背景图案皮肤（参考"主题背景"范式：图案随主题色派生，非照片） ============
 
 /// 一款背景图案：id/名称/CustomPainter 工厂（画笔从主题主色派生配色）。

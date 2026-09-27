@@ -470,7 +470,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(title: const Text('AI 识别设置')),
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(

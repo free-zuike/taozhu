@@ -211,7 +211,7 @@ class _BackupPageState extends State<BackupPage> {
   Widget build(BuildContext context) {
     final c = _c;
     return Scaffold(
-      appBar: AppBar(title: const Text('数据备份')),
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

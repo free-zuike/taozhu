@@ -372,7 +372,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
             ],
           );
     if (widget.embed) return body; // 「成员」页 Tab 嵌入（无 AppBar）
-    return Scaffold(appBar: AppBar(title: const Text('账号设置')), body: body);
+    return Scaffold(appBar: AppBar(flexibleSpace: appBarBackground(context)), body: body);
   }
 
   Widget _headerCard(TaozhuColors c) {

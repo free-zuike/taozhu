@@ -1043,11 +1043,12 @@ class _MyPageState extends State<MyPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(), // 标题去掉：顶部让给用户块+背景透出
+      // 无 AppBar：顶部整块露出主题背景（SafeArea 避让状态栏）
       body: Stack(
         children: [
           Positioned.fill(child: themePageBackground(context)),
-          ListView(
+          SafeArea(
+            child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           _userHeader(),
@@ -1153,6 +1154,7 @@ class _MyPageState extends State<MyPage> {
           const SizedBox(height: 16),
         ],
         ),
+      ),
       ],
       ),
     );

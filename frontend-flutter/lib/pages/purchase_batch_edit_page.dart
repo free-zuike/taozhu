@@ -190,7 +190,7 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.date} 进货商品')),
+      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
         children: [
