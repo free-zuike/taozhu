@@ -39,8 +39,6 @@ export function setApiBase(url: string) {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
-import { APP_VERSION } from './version';
-
 /** 设备标识：首次生成随机 id（每台设备独立自报；服务器设备列表按此归并） */
 const DEVICE_KEY = 'taozhu_device_id';
 export function getDeviceId(): string {
