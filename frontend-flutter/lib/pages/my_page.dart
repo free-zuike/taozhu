@@ -80,8 +80,8 @@ class _MyPageState extends State<MyPage> {
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _role = r);
     });
-    // 主题跨端同步：Web 直连拉取应用；App 由 SyncService.sync() 随同步上传/拉取（不直连）
-    if (kIsWeb) ThemeConfig.instance.pullTheme();
+    // 主题跨端同步：进入我的页拉取服务器主题应用（Web/App 一致；本地有未同步修改时 pullTheme 内部跳过）
+    ThemeConfig.instance.pullTheme();
     // 进入应用即监听同步状态：同步开始/结束实时刷新「同步状态」子标题，无需进面板才看到。
     // 启动同步由 BottomShell 发起，可能已在进行中 → 先读当前状态，避免错过"同步中"通知
     _syncing = SyncService.syncStatus == 'syncing';

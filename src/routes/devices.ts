@@ -22,9 +22,16 @@ export async function upsertDevice(
   ).bind(id, userId, deviceName, platform).run();
 }
 
-// GET /devices — 当前账号登录设备列表（倒序：最近活跃在前）
+// GET /devices — 当前账号登录设备列表（倒序：最近活跃在前）；进入即记录当前设备（老会话无登录记录也可见）
 devicesRouter.get('/', async (c) => {
   const { id } = c.get('user');
+  const ua = c.req.header('user-agent') ?? '';
+  const uaL = ua.toLowerCase();
+  const platform = uaL.includes('android') ? 'Android'
+    : uaL.includes('iphone') || uaL.includes('ipad') ? 'iOS'
+    : uaL.includes('micromessenger') ? '小程序'
+    : uaL.includes('dart') ? 'App' : 'Web';
+  await upsertDevice(c.env.DB, id, `${platform}端`, platform).catch(() => {});
   const rows = await c.env.DB.prepare(
     'SELECT id, device_name, platform, last_active_at, created_at FROM devices WHERE user_id = ? ORDER BY last_active_at DESC',
   ).bind(id).all();
