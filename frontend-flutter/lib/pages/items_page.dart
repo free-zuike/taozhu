@@ -216,6 +216,7 @@ class _ItemsPageState extends State<ItemsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           // 店员只读（隐藏新增入口）；新增统一在右上角（与店铺管理一致）
@@ -546,7 +547,9 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
+      appBar: AppBar(
+        toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
+        flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

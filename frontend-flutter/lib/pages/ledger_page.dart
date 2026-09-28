@@ -1141,7 +1141,8 @@ class _LedgerPageState extends State<LedgerPage> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
+        toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
+        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
           // 标题并入下方统计头（店铺+月度结余透明块，背景透出）
           bottom: TabBar(
             tabs: _isStaff

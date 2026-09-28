@@ -264,11 +264,8 @@ class ThemeConfig extends ChangeNotifier {
     _presetId = id;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setString(_kPreset, id);
-    if (kIsWeb) {
-      unawaited(pushTheme()); // Web 直连上传（跨端即时生效）
-    } else {
-      unawaited(_markThemeDirty()); // App 本地生效+标记，随同步上传
-    }
+    unawaited(_markThemeDirty()); // dirty 防 pullTheme 立即拉旧值覆盖（跳回）
+    unawaited(pushTheme()); // Web/App 都立即上传：跨端即时同步（App 与 Web 同 AI 配置模式）
   }
 
   Future<void> setBgEnabled(bool v) async {
@@ -276,11 +273,8 @@ class ThemeConfig extends ChangeNotifier {
     _bgEnabled = v;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setBool(_kBg, v);
-    if (kIsWeb) {
-      unawaited(pushTheme());
-    } else {
-      unawaited(_markThemeDirty());
-    }
+    unawaited(_markThemeDirty());
+    unawaited(pushTheme());
   }
 
   Future<void> setSkin(String id) async {
@@ -288,11 +282,8 @@ class ThemeConfig extends ChangeNotifier {
     _skinId = id;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setString(_kSkin, id);
-    if (kIsWeb) {
-      unawaited(pushTheme());
-    } else {
-      unawaited(_markThemeDirty());
-    }
+    unawaited(_markThemeDirty());
+    unawaited(pushTheme());
   }
 
   bool _applyingServer = false; // 服务器应用中不回传，防跨端回环

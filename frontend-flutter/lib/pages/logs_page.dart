@@ -93,6 +93,7 @@ class _LogsPageState extends State<LogsPage> {
     final shown = _filter == 'all' ? _logs : _logs.where((e) => e.level == _filter).toList();
     return Scaffold(
       appBar: AppBar(
+        toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(
