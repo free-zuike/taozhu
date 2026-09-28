@@ -654,6 +654,11 @@ class _SalePageState extends State<SalePage> {
   double get _total => _rows.fold(0, (s, r) => s + r.quantity * r.salePrice);
 
   /// AI 拍照识别：拍照或从相册选图 → 后端解析 → 匹配已有商品填行
+  // 识别原图：识别成功暂存本地，提交交易成功后才上传为本单附件（避免取消/放弃留孤儿附件）
+  Uint8List? _pendingPhoto;
+  String _pendingMime = 'image/jpeg';
+  String _pendingExt = 'jpg';
+
   Future<void> _aiParse() async {
     try {
       final source = await showDialog<ImageSource>(
@@ -686,23 +691,29 @@ class _SalePageState extends State<SalePage> {
       final mime = picked.mimeType ?? 'image/jpeg';
       final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
       toast(context, '识别中…');
-      // 并行：识别 + 原图上传为本单附件（总等待=max 而非 sum，缩短感知等待）
-      final attachFuture = Api.instance
-          .uploadPhoto('/attachments?entity=sale&id=$_saleId', bytes, 'photo.$ext', mime)
-          .then((_) => true)
-          .catchError((_) => false);
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=sale', bytes, 'photo.$ext', mime);
       _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
-      // 识别原图附件上传完成提示（与识别并行发起，此时多半已完成）
-      if ((d['items'] as List?)?.isNotEmpty ?? false) {
-        final ok = await attachFuture;
-        if (mounted) {
-          toast(context, ok ? '识别图片已存为本单附件' : '附件上传失败，可稍后在凭证处手动添加');
-        }
-      }
+      // 识别原图暂存本地：提交交易成功后才上传为本单附件（避免取消/放弃留云端孤儿附件）
+      setState(() {
+        _pendingPhoto = bytes;
+        _pendingMime = mime;
+        _pendingExt = ext;
+      });
+      toast(context, '识别完成（原图将在提交后一并保存为本单附件）');
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
+  }
+
+  /// 提交成功后上传识别原图为本单附件（失败静默，可稍后在凭证处手动添加）
+  Future<void> _uploadPending(String saleId) async {
+    final img = _pendingPhoto;
+    if (img == null) return;
+    _pendingPhoto = null;
+    try {
+      await Api.instance.uploadPhoto('/attachments?entity=sale&id=$saleId', img, 'photo.$_pendingExt', _pendingMime);
+      if (mounted) toast(context, '识别图片已存为本单附件');
+    } catch (_) {}
   }
 
   /// AI 文字记账：输入一句话（如"白菜50斤 3元一斤，土豆30斤 2元一斤"）→ 解析填行
@@ -991,6 +1002,8 @@ class _SalePageState extends State<SalePage> {
           });
         }
         toast(context, '已保存');
+        // 提交成功后才上传识别原图附件
+        unawaited(_uploadPending(saleId));
       } catch (e) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       } finally {
@@ -1044,6 +1057,8 @@ class _SalePageState extends State<SalePage> {
       await Freq.saveLastQty(r.priceId ?? '', r.quantity);
     }
     toast(context, _editing ? '已保存，正在同步' : '已提交，合计 ¥${_total.toStringAsFixed(2)}');
+    // 提交成功后才上传识别原图附件（App 本地写完入队后）
+    unawaited(_uploadPending(saleId));
     if (mounted) Navigator.pop(context, true);
     if (mounted) setState(() => _busy = false);
   }

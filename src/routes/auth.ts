@@ -72,7 +72,10 @@ authRouter.post('/login', async (c) => {
   const platform = uaL.includes('android') ? 'Android' : uaL.includes('iphone') || uaL.includes('ipad') ? 'iOS' : clientType === 'app' ? 'App' : clientType === 'miniprogram' ? '小程序' : 'Web';
   await recordAudit(c.env.DB, { username: user.username, action: 'login', detail: `登录成功（${user.role}${user.totp_enabled ? '，两步验证' : ''}）`, clientType });
   try {
-    await upsertDevice(c.env.DB, user.id, `${platform}端`, platform);
+    const devId = c.req.header('x-device-id') ?? '';
+    const devIp = c.req.header('CF-Connecting-IP') ?? c.req.header('x-forwarded-for') ?? '';
+    const devVer = c.req.header('x-app-version') ?? '';
+    await upsertDevice(c.env.DB, user.id, devId, `${platform}端`, platform, devIp, devVer);
   } catch (_) { /* 设备记录失败不阻断登录 */ }
   const token = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role });
   return c.json({ token, user: { id: user.id, username: user.username, role: user.role } });

@@ -258,10 +258,22 @@ class _ItemsPageState extends State<ItemsPage> {
                       children: [
                   for (final it in _items)
                     Card(
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12), side: BorderSide(color: _c.divider)),
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                        padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
                         child: Row(
                           children: [
+                            Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                  color: _c.primary.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(10)),
+                              child: const Icon(Icons.inventory_2_outlined, color: Color(0xFF409EFF), size: 22),
+                            ),
+                            const SizedBox(width: 12),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,

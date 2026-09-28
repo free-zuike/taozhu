@@ -179,12 +179,14 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at DESC)`,
-  // 登录设备表：登录时 upsert（设备名/平台/最后活跃），设备管理页可查看/删除
+  // 登录设备表：每台设备独立记录（前端设备唯一 id + 平台端 + IP + App 版本 + 最后活跃），设备管理页可查看/删除
   `CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     device_name TEXT NOT NULL,
     platform TEXT,
+    ip TEXT,
+    version TEXT,
     last_active_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
@@ -236,7 +238,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '4') {
+      if (meta?.value === '5') {
         schemaReady = true;
         return;
       }
@@ -331,7 +333,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     // v0.17.222.0：审计记录操作端（App/Web/小程序）；新表 DDL 已含，老表补列
     await ensureColumn(db, 'audit_logs', 'client_type', 'TEXT');
-    // 登录设备表：无则建（幂等）
+    // 登录设备表：无则建（幂等；必须先建表再加列）
     const devTable = await db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'devices'",
     ).first<{ name: string }>();
@@ -339,6 +341,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS devices'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
     }
+    // v0.17.229.0：设备记录 IP/版本（设备管理显示）；老表补列
+    await ensureColumn(db, 'devices', 'ip', 'TEXT');
+    await ensureColumn(db, 'devices', 'version', 'TEXT');
     // 首次使用（空表）自动写入默认账户（现金/微信/支付宝/银行卡/转账），用户可后续增删改；
     // 空表才插，避免覆盖用户已自定义的列表
     const paCount = await db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>();
@@ -484,10 +489,10 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     // 迁移完成：写标记（INSERT OR REPLACE——老库首次部署后也置位，此后冷启动走快检）
     // v0.17.175 进销单位换算新增三列（items.count_unit/item_prices.per/行 count_qty）→
-    // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→ 快检版本 +1：
-    // 老库标记 '3' 会重新走全量迁移补齐新表/新列（否则 audit/devices 接口 SELECT 500）
+    // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
+    // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '4')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '5')",
     ).run();
     schemaReady = true;
     } catch (err) {

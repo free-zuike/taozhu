@@ -248,10 +248,19 @@ class _CategoriesPageState extends State<CategoriesPage> {
     final isParent = _childrenOf('${c['id']}').isNotEmpty;
     final collapsed = _collapsed.contains('${c['id']}');
     return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12), side: BorderSide(color: _c.divider)),
       child: ListTile(
         contentPadding: EdgeInsets.only(left: indent ? 32 : 16, right: 8),
-        leading: Icon(indent ? Icons.subdirectory_arrow_right : (isParent ? Icons.folder : Icons.label_outline),
-            color: _c.primary, size: 20),
+        leading: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+              color: _c.primary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+          child: Icon(indent ? Icons.subdirectory_arrow_right : (isParent ? Icons.folder : Icons.label_outline),
+              color: _c.primary, size: 22),
+        ),
         title: Text('${c['name']}', style: TextStyle(fontWeight: indent ? FontWeight.w400 : FontWeight.w600)),
         // 一级分类可点击折叠/展开子分类（有子分类时显示箭头）
         onTap: isParent && !indent

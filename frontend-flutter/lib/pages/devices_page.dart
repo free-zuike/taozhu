@@ -130,8 +130,10 @@ class _DevicesPageState extends State<DevicesPage> {
                                   Text('${dev['device_name'] ?? ''}',
                                       style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: c.textMain)),
                                   const SizedBox(height: 3),
-                                  Text('最近活跃：${_shortTime('${dev['last_active_at'] ?? ''}')}',
-                                      style: TextStyle(fontSize: 12, color: c.textSub)),
+                                  Text(
+                                    '最近活跃：${_shortTime('${dev['last_active_at'] ?? ''}')}${'${dev['ip'] ?? ''}'.isNotEmpty ? ' · IP ${dev['ip']}' : ''}${'${dev['version'] ?? ''}'.isNotEmpty ? ' · v${dev['version']}' : ''}',
+                                    style: TextStyle(fontSize: 12, color: c.textSub),
+                                  ),
                                 ],
                               ),
                             ),

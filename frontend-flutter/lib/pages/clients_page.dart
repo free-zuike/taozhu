@@ -366,7 +366,18 @@ class _ClientsPageState extends State<ClientsPage> {
                       children: [
                   for (final c in _clients)
                     Card(
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12), side: BorderSide(color: _c.divider)),
                       child: ListTile(
+                        leading: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                              color: const Color(0xFF409EFF).withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10)),
+                          child: const Icon(Icons.store_outlined, color: Color(0xFF409EFF), size: 22),
+                        ),
                         title: Text('${c['name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text([
                           if ('${c['category_name'] ?? ''}'.isNotEmpty) '${c['category_name']}'

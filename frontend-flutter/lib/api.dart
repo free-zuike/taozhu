@@ -1,5 +1,6 @@
 /// API 封装：服务器地址可手动设置 + token + 401/426 处理（http 包，三端通用）
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart' show MediaType;
@@ -7,6 +8,22 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'log.dart';
 import 'version.dart';
+
+/// 设备唯一 id（首次生成存本地）：设备管理按台上报/区分（x-device-id 头）
+String? _devIdCache;
+Future<String> deviceId() async {
+  if (_devIdCache != null) return _devIdCache!;
+  final p = await SharedPreferences.getInstance();
+  var id = p.getString('taozhu_device_id') ?? '';
+  if (id.isEmpty) {
+    final rnd = Random();
+    id = 'dev-${DateTime.now().microsecondsSinceEpoch.toRadixString(16)}-'
+        '${List.generate(8, (_) => rnd.nextInt(256).toRadixString(16).padLeft(2, '0')).join()}';
+    await p.setString('taozhu_device_id', id);
+  }
+  _devIdCache = id;
+  return id;
+}
 
 /// GET 请求短缓存条目：进行中的 Future + 完成结果/错误（3 秒内复用）
 class _GetEntry {
@@ -136,6 +153,7 @@ class Api {
     final t = await _token();
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
     headers['x-client'] = kIsWeb ? 'taozhu-web' : 'taozhu-app'; // 操作端标识（审计/设备）
+    headers['x-device-id'] = await deviceId(); // 设备唯一 id（设备管理按台上报）
     final res = await http.get(Uri.parse(url), headers: headers);
     if (res.statusCode == 404) return null;
     if (res.statusCode == 401) {
@@ -206,6 +224,7 @@ class Api {
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
     headers['x-app-version'] = APP_VERSION;
     headers['x-client'] = kIsWeb ? 'taozhu-web' : 'taozhu-app'; // 操作端标识（审计/设备）
+    headers['x-device-id'] = await deviceId(); // 设备唯一 id（设备管理按台上报）
 
     // 发起一次请求（按方法分发）；8s 超时防止网络不可达时页面无限转圈
     Future<http.Response> doReq() async {
@@ -296,6 +315,7 @@ class Api {
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
     headers['x-app-version'] = APP_VERSION;
     headers['x-client'] = kIsWeb ? 'taozhu-web' : 'taozhu-app'; // 操作端标识（审计/设备）
+    headers['x-device-id'] = await deviceId(); // 设备唯一 id（设备管理按台上报）
     final res = await http.get(Uri.parse(url), headers: headers);
     if (res.statusCode == 401) {
       await clearToken();
