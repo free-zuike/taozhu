@@ -63,7 +63,17 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
                 onSelectionChanged: (s) => setThemeMode(s.first),
               ),
               const SizedBox(height: 20),
-              _groupTitle(c, '背景图案'),
+              // 背景图案开关：关闭=仅渐变（图案层不绘制）；开启=显示所选图案铺满页面
+              Row(
+                children: [
+                  _groupTitle(c, '背景图案'),
+                  const Spacer(),
+                  Switch(value: cfg.bgEnabled, onChanged: (v) => cfg.setBgEnabled(v)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(cfg.bgEnabled ? '背景图案已开启，页面铺满所选图案' : '背景图案已关闭，仅显示渐变底色',
+                  style: TextStyle(fontSize: 11, color: c.textSub)),
               const SizedBox(height: 10),
               GridView.count(
                 crossAxisCount: 2,

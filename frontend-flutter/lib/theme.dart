@@ -280,8 +280,13 @@ class ThemeConfig extends ChangeNotifier {
   Future<void> setSkin(String id) async {
     if (id == _skinId) return;
     _skinId = id;
+    // 选择任何背景（渐变/图案/纯色）都视为"要背景"：自动开启背景开关，
+    // 否则 bgEnabled=false 时背景层只画渐变不画图案（"只有颜色没有图案"根因）
+    _bgEnabled = true;
     notifyListeners();
-    await (await SharedPreferences.getInstance()).setString(_kSkin, id);
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_kSkin, id);
+    await p.setBool(_kBg, true);
     unawaited(_markThemeDirty());
     unawaited(pushTheme());
   }

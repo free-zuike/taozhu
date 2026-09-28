@@ -571,12 +571,19 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Row(children: [
-                              Text('$_selYear年$_selMonth月',
-                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: c.primary)),
-                              const SizedBox(width: 2),
-                              Icon(Icons.expand_more, size: 16, color: c.textSub),
-                            ]),
+                            // 年月两层：上边年份、下边月份（对齐交易页形态）
+                            Text('$_selYear年',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSub)),
+                            const SizedBox(height: 1),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('$_selMonth月',
+                                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: c.primary)),
+                                const SizedBox(width: 2),
+                                Icon(Icons.expand_more, size: 16, color: c.textSub),
+                              ],
+                            ),
                             const SizedBox(height: 2),
                             Text('点击切换', style: TextStyle(fontSize: 10, color: c.textSub)),
                           ],
