@@ -96,56 +96,74 @@ class _DevicesPageState extends State<DevicesPage> {
                       ),
                     ],
                   )
-                : ListView.separated(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: _devices.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (ctx, i) {
-                      final dev = _devices[i];
-                      final platform = '${dev['platform'] ?? ''}';
-                      final icon = platform == 'Web'
-                          ? Icons.language
-                          : platform == '小程序'
-                              ? Icons.phone_iphone
-                              : Icons.smartphone;
-                      return Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
-                        child: Row(
+                : ListView(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    children: [
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Table(
+                          defaultColumnWidth: const FixedColumnWidth(120),
+                          border: TableBorder.all(color: c.divider.withValues(alpha: 0.4), width: 0.6),
                           children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: c.primary.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Icon(icon, size: 20, color: c.primary),
+                            // 表头
+                            TableRow(
+                              decoration: BoxDecoration(color: c.primary.withValues(alpha: 0.08)),
+                              children: [
+                                for (final h in ['设备', '平台', 'IP', '版本', '最近活跃', ''])
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    child: Text(h,
+                                        style: TextStyle(
+                                            fontSize: 13, fontWeight: FontWeight.w700, color: c.textMain)),
+                                  ),
+                              ],
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                            for (final dev in _devices)
+                              TableRow(
+                                decoration: BoxDecoration(color: c.card.withValues(alpha: 0.6)),
                                 children: [
-                                  Text('${dev['device_name'] ?? ''}',
-                                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: c.textMain)),
-                                  const SizedBox(height: 3),
-                                  Text(
-                                    '最近活跃：${_shortTime('${dev['last_active_at'] ?? ''}')}${'${dev['ip'] ?? ''}'.isNotEmpty ? ' · IP ${dev['ip']}' : ''}${'${dev['version'] ?? ''}'.isNotEmpty ? ' · v${dev['version']}' : ''}',
-                                    style: TextStyle(fontSize: 12, color: c.textSub),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    child: Text('${dev['device_name'] ?? ''}',
+                                        style: TextStyle(
+                                            fontSize: 13, fontWeight: FontWeight.w600, color: c.textMain)),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    child: Text('${dev['platform'] ?? ''}', style: TextStyle(fontSize: 12, color: c.textSub)),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    child: Text('${dev['ip'] ?? ''}', style: TextStyle(fontSize: 12, color: c.textSub)),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    child: Text('${dev['version'] ?? ''}'.isNotEmpty ? 'v${dev['version']}' : '',
+                                        style: TextStyle(fontSize: 12, color: c.textSub)),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    child: Text(_shortTime('${dev['last_active_at'] ?? ''}'),
+                                        style: TextStyle(fontSize: 12, color: c.textSub)),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                    child: InkWell(
+                                      borderRadius: BorderRadius.circular(6),
+                                      onTap: _busy ? null : () => _remove(dev),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(4),
+                                        child: Icon(Icons.delete_outline, size: 18, color: const Color(0xFFEF4444)),
+                                      ),
+                                    ),
                                   ),
                                 ],
                               ),
-                            ),
-                            IconButton(
-                              tooltip: '删除设备',
-                              icon: const Icon(Icons.delete_outline, color: Color(0xFFEF4444)),
-                              onPressed: _busy ? null : () => _remove(dev),
-                            ),
                           ],
                         ),
-                      );
-                    },
+                      ),
+                    ],
                   ),
       ),
     );

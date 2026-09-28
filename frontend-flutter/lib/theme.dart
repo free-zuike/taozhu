@@ -462,8 +462,8 @@ abstract class _BaseSkinPainter extends CustomPainter {
       final bottom = dark ? const Color(0xFF15181F) : Color.lerp(primary, Colors.white, 0.58)!;
       return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
     }
-    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.72)!;
-    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.34)!;
+    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.58)!;
+    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.26)!;
     return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
   }
 

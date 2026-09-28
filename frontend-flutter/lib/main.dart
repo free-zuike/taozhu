@@ -14,8 +14,16 @@ void main() async {
   runApp(const TaoZhuApp());
 }
 
-class TaoZhuApp extends StatelessWidget {
+class TaoZhuApp extends StatefulWidget {
   const TaoZhuApp({super.key});
+  @override
+  State<TaoZhuApp> createState() => _TaoZhuAppState();
+}
+
+class _TaoZhuAppState extends State<TaoZhuApp> {
+  // 一次性创建（不在 build 里新建 Future）：主题变化触发 MaterialApp 重建时
+  // FutureBuilder 不重置 → 导航栈/当前页面保留（否则整棵树换 loading 跳回首页）
+  late final Future<bool> _tokenFuture = Api.instance.hasToken();
 
   @override
   Widget build(BuildContext context) {
@@ -40,7 +48,7 @@ class TaoZhuApp extends StatelessWidget {
           supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
           locale: const Locale('zh', 'CN'),
           home: FutureBuilder<bool>(
-            future: Api.instance.hasToken(),
+            future: _tokenFuture,
             builder: (context, snap) {
               if (snap.connectionState != ConnectionState.done) {
                 return const Scaffold(body: Center(child: CircularProgressIndicator()));

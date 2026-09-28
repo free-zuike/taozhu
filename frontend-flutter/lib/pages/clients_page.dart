@@ -369,46 +369,91 @@ class _ClientsPageState extends State<ClientsPage> {
                       elevation: 0,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12), side: BorderSide(color: _c.divider)),
-                      child: ListTile(
-                        leading: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                              color: const Color(0xFF409EFF).withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(10)),
-                          child: const Icon(Icons.store_outlined, color: Color(0xFF409EFF), size: 22),
-                        ),
-                        title: Text('${c['name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: Text([
-                          if ('${c['category_name'] ?? ''}'.isNotEmpty) '${c['category_name']}'
-                          else if ('${_catNameById['${c['category_id'] ?? ''}'] ?? ''}'.isNotEmpty)
-                            '${_catNameById['${c['category_id'] ?? ''}']}',
-                          if (((c['month_start_day'] as num?) ?? 1) > 1) '每月 ${c['month_start_day']} 日起算',
-                          if ('${c['first_book_date'] ?? ''}'.isNotEmpty)
-                            '记账 ${_bookDays('${c['first_book_date']}')} 天（自 ${c['first_book_date']}）',
-                        ].join(' · ')),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 8, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.end,
+                            Row(children: [
+                              Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                    color: const Color(0xFF409EFF).withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(10)),
+                                child: const Icon(Icons.store_outlined, color: Color(0xFF409EFF), size: 22),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('${c['name']}',
+                                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                                    if ('${c['category_name'] ?? ''}'.isNotEmpty ||
+                                        '${_catNameById['${c['category_id'] ?? ''}'] ?? ''}'.isNotEmpty)
+                                      Text(
+                                        '${c['category_name'] ?? ''}'.isNotEmpty
+                                            ? '${c['category_name']}'
+                                            : '${_catNameById['${c['category_id'] ?? ''}']}',
+                                        style: TextStyle(fontSize: 11, color: _c.textSub)),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.edit_outlined, size: 20, color: Color(0xFF409EFF)),
+                                onPressed: () => _edit(c),
+                              ),
+                              IconButton(
+                                icon: Icon(Icons.delete_outline, size: 20, color: _c.danger),
+                                onPressed: () => _delete(c),
+                              ),
+                            ]),
+                            const SizedBox(height: 6),
+                            Container(height: 1, color: _c.divider),
+                            const SizedBox(height: 10),
+                            // 三格统计（对齐收款账户卡布局）：记账天数 / 欠款 / 周期
+                            Row(
                               children: [
-                                Text('欠款', style: TextStyle(fontSize: 11, color: _c.textSub)),
-                                Text('¥${_debt(c).toStringAsFixed(2)}',
-                                    style: TextStyle(
-                                        color: _debt(c) > 0 ? _c.danger : _c.success,
-                                        fontWeight: FontWeight.w600)),
+                                Expanded(
+                                  child: Column(children: [
+                                    Text('${_bookDays('${c['first_book_date'] ?? ''}')} 天',
+                                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _c.textMain)),
+                                    const SizedBox(height: 2),
+                                    Text('记账天数', style: TextStyle(fontSize: 11, color: _c.textSub)),
+                                  ]),
+                                ),
+                                Container(width: 1, height: 28, color: _c.divider),
+                                Expanded(
+                                  child: Column(children: [
+                                    Text('¥${_debt(c).toStringAsFixed(2)}',
+                                        style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w700,
+                                            color: _debt(c) > 0 ? _c.danger : _c.success)),
+                                    const SizedBox(height: 2),
+                                    Text('欠款', style: TextStyle(fontSize: 11, color: _c.textSub)),
+                                  ]),
+                                ),
+                                Container(width: 1, height: 28, color: _c.divider),
+                                Expanded(
+                                  child: Column(children: [
+                                    Text(((c['month_start_day'] as num?) ?? 1) > 1
+                                            ? '每月 ${c['month_start_day']} 日'
+                                            : '自然月',
+                                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _c.textMain)),
+                                    const SizedBox(height: 2),
+                                    Text('周期', style: TextStyle(fontSize: 11, color: _c.textSub)),
+                                  ]),
+                                ),
                               ],
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.edit_outlined, size: 20),
-                              onPressed: () => _edit(c),
-                            ),
-                            IconButton(
-                              icon: Icon(Icons.delete_outline, size: 20, color: _c.danger),
-                              onPressed: () => _delete(c),
-                            ),
+                            if ('${c['first_book_date'] ?? ''}'.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text('记账起始 ${c['first_book_date']}',
+                                  style: TextStyle(fontSize: 11, color: _c.textSub)),
+                            ],
                           ],
                         ),
                       ),
