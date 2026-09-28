@@ -85,14 +85,14 @@ function restore(b: BackupItem) {
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; }
-.tip { font-size: 22rpx; color: #909399; margin: 20rpx 8rpx 28rpx; line-height: 1.6; }
-.group-title { font-size: 25rpx; color: #909399; margin: 8rpx 8rpx 16rpx; display: flex; align-items: center; }
+.tip { font-size: 22rpx; color: var(--text-sub); margin: 20rpx 8rpx 28rpx; line-height: 1.6; }
+.group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; display: flex; align-items: center; }
 .badge { display: inline-block; background: #eaf1fb; color: var(--primary); border-radius: 999rpx; padding: 2rpx 14rpx; font-size: 20rpx; margin-left: 12rpx; }
-.empty { background: #fff; border-radius: 20rpx; text-align: center; color: #c0c4cc; padding: 60rpx 0; font-size: 26rpx; }
+.empty { background: var(--card-bg); border-radius: 20rpx; text-align: center; color: #c0c4cc; padding: 60rpx 0; font-size: 26rpx; }
 .list { display: flex; flex-direction: column; gap: 16rpx; }
-.card { background: #fff; border-radius: 20rpx; padding: 24rpx; display: flex; align-items: center; justify-content: space-between; }
+.card { background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; display: flex; align-items: center; justify-content: space-between; }
 .info { display: flex; flex-direction: column; gap: 6rpx; }
-.b-name { font-size: 28rpx; font-weight: 600; color: #303133; }
-.b-size { font-size: 22rpx; color: #909399; }
+.b-name { font-size: 28rpx; font-weight: 600; color: var(--text-main); }
+.b-size { font-size: 22rpx; color: var(--text-sub); }
 .op { font-size: 26rpx; color: var(--primary); padding: 8rpx 20rpx; }
 </style>

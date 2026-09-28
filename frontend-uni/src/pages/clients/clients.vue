@@ -116,19 +116,19 @@ async function remove(id: string) {
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
-.card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; }
 .left { flex: 1; min-width: 0; }
 .name { font-size: 30rpx; font-weight: bold; display: block; }
-.meta { font-size: 24rpx; color: #909399; display: block; margin-top: 6rpx; }
+.meta { font-size: 24rpx; color: var(--text-sub); display: block; margin-top: 6rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
-.debt { margin-top: 16rpx; font-size: 26rpx; color: #606266; }
+.debt { margin-top: 16rpx; font-size: 26rpx; color: var(--text-sub); }
 .debt-num { font-weight: bold; font-size: 32rpx; }
 .red { color: #f56c6c; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
+.sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
-.ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

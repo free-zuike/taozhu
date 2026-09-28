@@ -15,6 +15,7 @@
             <text class="d-name">{{ d.device_name }}</text>
             <text class="d-sub">{{ d.platform }}<template v-if="d.version"> · v{{ d.version }}</template></text>
           </view>
+          <text :class="['state', online(d.last_active_at) ? 'on' : 'off']">{{ online(d.last_active_at) ? '在线' : '离线' }}</text>
           <text class="del" @click="remove(d)">删除</text>
         </view>
         <view class="meta">
@@ -40,6 +41,15 @@ const devices = ref<Device[]>([]);
 const loading = ref(true);
 
 const shortTime = (iso: string) => (iso && iso.length >= 16 ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}` : iso || '');
+
+/** 在线判定：最近活跃 5 分钟内=在线（设备请求均更新 last_active_at） */
+const online = (iso: string) => {
+  if (!iso) return false;
+  const t = new Date(iso.replace('Z', '')).getTime() + (iso.endsWith('Z') ? 0 : 0);
+  if (isNaN(t)) return false;
+  const last = Date.parse(iso);
+  return !isNaN(last) && Date.now() - last < 5 * 60 * 1000;
+};
 
 onShow(async () => {
   load();
@@ -85,12 +95,12 @@ function remove(d: Device) {
       radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
-.loading { text-align: center; color: #909399; padding: 80rpx 0; font-size: 26rpx; }
+.loading { text-align: center; color: var(--text-sub); padding: 80rpx 0; font-size: 26rpx; }
 .empty { display: flex; flex-direction: column; align-items: center; padding: 120rpx 0; gap: 12rpx; }
-.empty-tx { font-size: 28rpx; color: #909399; }
+.empty-tx { font-size: 28rpx; color: var(--text-sub); }
 .empty-sub { font-size: 22rpx; color: #c0c4cc; }
 .list { display: flex; flex-direction: column; gap: 20rpx; }
-.card { background: #fff; border-radius: 20rpx; padding: 24rpx; }
+.card { background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; }
 .head { display: flex; align-items: center; gap: 20rpx; }
 .d-icon {
   width: 72rpx; height: 72rpx; border-radius: 18rpx; background: #eaf1fb;
@@ -98,10 +108,13 @@ function remove(d: Device) {
 }
 .d-emoji { font-size: 34rpx; }
 .d-info { flex: 1; display: flex; flex-direction: column; gap: 4rpx; }
-.d-name { font-size: 30rpx; font-weight: bold; color: #303133; }
-.d-sub { font-size: 22rpx; color: #909399; }
+.d-name { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
+.d-sub { font-size: 22rpx; color: var(--text-sub); }
+.state { font-size: 20rpx; padding: 4rpx 14rpx; border-radius: 999rpx; flex-shrink: 0; }
+.state.on { background: #e8f7ee; color: #22c55e; }
+.state.off { background: #fdf3e7; color: #e6a23c; }
 .del { font-size: 26rpx; color: #f56c6c; padding: 8rpx 16rpx; }
-.meta { display: flex; align-items: center; gap: 12rpx; margin-top: 20rpx; padding-top: 20rpx; border-top: 1rpx solid #f5f5f5; }
-.m-label { font-size: 22rpx; color: #909399; }
-.m-value { font-size: 24rpx; color: #303133; font-weight: 600; }
+.meta { display: flex; align-items: center; gap: 12rpx; margin-top: 20rpx; padding-top: 20rpx; border-top: 1rpx solid var(--divider); }
+.m-label { font-size: 22rpx; color: var(--text-sub); }
+.m-value { font-size: 24rpx; color: var(--text-main); font-weight: 600; }
 </style>

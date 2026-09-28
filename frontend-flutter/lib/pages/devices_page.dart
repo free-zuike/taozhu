@@ -114,6 +114,10 @@ class _DevicesPageState extends State<DevicesPage> {
                               : Icons.smartphone;
                       final ip = '${dev['ip'] ?? ''}';
                       final ver = '${dev['version'] ?? ''}';
+                      // 在线判定：最近活跃 5 分钟内=在线（设备请求均更新 last_active_at）
+                      final lastActive = DateTime.tryParse('${dev['last_active_at'] ?? ''}');
+                      final online = lastActive != null &&
+                          DateTime.now().difference(lastActive).inMinutes < 5;
                       return Card(
                         elevation: 0,
                         shape: RoundedRectangleBorder(
@@ -145,6 +149,18 @@ class _DevicesPageState extends State<DevicesPage> {
                                           style: TextStyle(fontSize: 11, color: c.textSub)),
                                     ],
                                   ),
+                                ),
+                                // 在线/离线状态胶囊
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: online
+                                        ? c.success.withValues(alpha: 0.12)
+                                        : c.warning.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(online ? '在线' : '离线',
+                                      style: TextStyle(fontSize: 11, color: online ? c.success : c.warning)),
                                 ),
                                 IconButton(
                                   tooltip: '删除设备',

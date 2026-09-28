@@ -120,22 +120,22 @@ async function testAll() {
 
 <style>
 .page { padding: 24rpx; background: linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%); min-height: 100vh; }
-.group-title { font-size: 25rpx; color: #909399; margin: 8rpx 8rpx 16rpx; }
-.card { background: #fff; border-radius: 20rpx; padding: 8rpx 24rpx; margin-bottom: 24rpx; }
+.group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; }
+.card { background: var(--card-bg); border-radius: 20rpx; padding: 8rpx 24rpx; margin-bottom: 24rpx; }
 .p-head { padding: 20rpx 0 8rpx; }
 .p-info { display: flex; align-items: center; gap: 14rpx; }
-.p-name { font-size: 28rpx; color: #303133; }
+.p-name { font-size: 28rpx; color: var(--text-main); }
 .p-state { font-size: 20rpx; padding: 4rpx 14rpx; border-radius: 999rpx; }
 .p-state.ok { background: #e8f7ee; color: #67c23a; }
 .p-state.no { background: #fdf3e7; color: #e6a23c; }
 .p-id { font-size: 22rpx; color: #c0c4cc; }
 .f-row { display: flex; align-items: center; gap: 16rpx; padding: 14rpx 0 20rpx; }
-.f-lb { font-size: 24rpx; color: #909399; width: 120rpx; flex-shrink: 0; }
-.f-ipt { flex: 1; background: #f5f7fa; border-radius: 12rpx; padding: 12rpx 20rpx; font-size: 26rpx; }
-.b-row { display: flex; align-items: center; justify-content: space-between; padding: 22rpx 0; border-bottom: 1rpx solid #f5f5f5; }
+.f-lb { font-size: 24rpx; color: var(--text-sub); width: 120rpx; flex-shrink: 0; }
+.f-ipt { flex: 1; background: var(--input-bg); border-radius: 12rpx; padding: 12rpx 20rpx; font-size: 26rpx; }
+.b-row { display: flex; align-items: center; justify-content: space-between; padding: 22rpx 0; border-bottom: 1rpx solid var(--divider); }
 .b-row:last-child { border-bottom: none; }
-.r-tx { font-size: 28rpx; color: #303133; }
+.r-tx { font-size: 28rpx; color: var(--text-main); }
 .r-pick { font-size: 26rpx; color: var(--primary); font-weight: 600; }
 .btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; margin-top: 16rpx; }
-.btn.ghost { background: #fff; color: var(--primary); border: 2rpx solid var(--primary); margin-top: 16rpx; }
+.btn.ghost { background: var(--card-bg); color: var(--primary); border: 2rpx solid var(--primary); margin-top: 16rpx; }
 </style>

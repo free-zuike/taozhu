@@ -40,16 +40,16 @@ function go(url: string) {
       radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
-.tip { color: #909399; font-size: 26rpx; margin-bottom: 24rpx; }
+.tip { color: var(--text-sub); font-size: 26rpx; margin-bottom: 24rpx; }
 .grid { display: flex; flex-wrap: wrap; justify-content: space-between; }
 .cell {
-  width: 48%; background: #fff; border-radius: 16rpx; padding: 40rpx 0 36rpx;
+  width: 48%; background: var(--card-bg); border-radius: 16rpx; padding: 40rpx 0 36rpx;
   display: flex; flex-direction: column; align-items: center; gap: 12rpx;
   box-sizing: border-box; margin-bottom: 20rpx;
 }
 .cell .ic { font-size: 72rpx; line-height: 1; }
-.cell .tx { font-size: 30rpx; font-weight: bold; color: #303133; }
-.cell .sub { font-size: 24rpx; color: #909399; }
+.cell .tx { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
+.cell .sub { font-size: 24rpx; color: var(--text-sub); }
 .sale { border: 2rpx solid var(--primary); }
 .buy { border: 2rpx solid #67c23a; }
 </style>

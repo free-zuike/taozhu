@@ -813,6 +813,8 @@ class _SalePageState extends State<SalePage> {
           row.priceId = pr!['id'] as String?;
           row.quantity = qty;
           row.salePrice = price > 0 ? price : (pr!['sale_price'] as num).toDouble();
+          row.nameCtrl.text = match.name; // 识别命中商品库：名称也回填（否则输入框空白）
+          row.unitCtrl.text = unit;
           row.qtyCtrl.text = qty.toString();
           row.saleCtrl.text = (price > 0 ? price : (pr!['sale_price'] as num).toDouble()).toStringAsFixed(2);
         } else {

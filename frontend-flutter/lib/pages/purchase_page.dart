@@ -677,6 +677,8 @@ class _PurchasePageState extends State<PurchasePage> {
           row.priceId = pr!['id'] as String?;
           row.quantity = qty;
           row.purchasePrice = price > 0 ? price : (pr!['purchase_price'] as num).toDouble();
+          row.nameCtrl.text = '${match['name']}'; // 识别命中商品库：名称也回填（否则输入框空白）
+          row.unitCtrl.text = unit;
           row.qtyCtrl.text = qty.toString();
           row.priceCtrl.text = (price > 0 ? price : (pr!['purchase_price'] as num).toDouble()).toStringAsFixed(2);
         } else {

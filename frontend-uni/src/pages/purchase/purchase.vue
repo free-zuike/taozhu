@@ -364,25 +364,25 @@ async function submit() {
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .head-row { display: flex; gap: 12rpx; align-items: flex-start; margin-bottom: 16rpx; }
-.head-row .field { flex: 1; background: #fff; border-radius: 12rpx; padding: 24rpx; }
+.head-row .field { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }
-.copy-btn { flex-shrink: 0; background: #fff; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
-.ai-btn { flex-shrink: 0; background: #fff; color: #7c4dff; border: 1rpx solid #7c4dff; border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
+.copy-btn { flex-shrink: 0; background: var(--card-bg); color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
+.ai-btn { flex-shrink: 0; background: var(--card-bg); color: #7c4dff; border: 1rpx solid #7c4dff; border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
 .ai-tip { background: #f0ecff; color: #7c4dff; border-radius: 12rpx; padding: 16rpx 24rpx; margin-bottom: 16rpx; font-size: 26rpx; }
-.field { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
+.field { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .field-inner { display: flex; justify-content: space-between; }
-.label { color: #909399; }
-.value { color: #303133; }
+.label { color: var(--text-sub); }
+.value { color: var(--text-main); }
 .row {
   display: flex; align-items: center; gap: 12rpx;
-  background: #fff; border-radius: 12rpx; padding: 16rpx; margin-bottom: 12rpx;
+  background: var(--card-bg); border-radius: 12rpx; padding: 16rpx; margin-bottom: 12rpx;
 }
 .picker { flex: 1; min-width: 0; }
 .mini-field {
-  background: #f5f7fa; border-radius: 8rpx; padding: 12rpx; font-size: 24rpx; text-align: center;
+  background: var(--input-bg); border-radius: 8rpx; padding: 12rpx; font-size: 24rpx; text-align: center;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-.num { width: 90rpx; background: #f5f7fa; border-radius: 8rpx; padding: 12rpx; font-size: 24rpx; text-align: center; }
+.num { width: 90rpx; background: var(--input-bg); border-radius: 8rpx; padding: 12rpx; font-size: 24rpx; text-align: center; }
 .amt { width: 110rpx; font-size: 24rpx; color: #f56c6c; }
 .del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; }
 .footer { display: flex; justify-content: space-between; align-items: center; margin: 20rpx 0; }

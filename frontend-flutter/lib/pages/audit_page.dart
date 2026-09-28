@@ -42,6 +42,36 @@ class _AuditPageState extends State<AuditPage> {
     }
   }
 
+  /// 手动删除单条审计记录（确认后调 DELETE /audit/:id，删除后刷新列表）
+  Future<void> _deleteLog(Map<String, dynamic> l) async {
+    final id = '${l['id'] ?? ''}';
+    if (id.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除该条审计？'),
+        content: Text('将删除「${l['username'] ?? ''} · ${'${l['detail'] ?? l['action_label'] ?? l['action'] ?? ''}'}」记录。\n删除后不可恢复。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).extension<TaozhuColors>()!.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await Api.instance.delete('/audit/$id');
+      toast(context, '已删除');
+      _load();
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   String _fmtTime(Object? v) {
     final t = DateTime.tryParse('$v')?.toLocal();
     if (t == null) return '$v';
@@ -150,6 +180,14 @@ class _AuditPageState extends State<AuditPage> {
                                         '${l['username'] ?? ''} ${entityTxt.isNotEmpty ? '· $entityTxt' : ''}',
                                         style: TextStyle(fontSize: 14, color: c.textMain, fontWeight: FontWeight.w700),
                                       ),
+                                    ),
+                                    // 手动删除单条审计（仅老板，确认后调 DELETE /audit/:id）
+                                    IconButton(
+                                      tooltip: '删除',
+                                      icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFEF4444)),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      onPressed: () => _deleteLog(l),
                                     ),
                                   ],
                                 ),

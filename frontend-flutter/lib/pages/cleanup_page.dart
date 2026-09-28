@@ -250,6 +250,10 @@ class _CleanupPageState extends State<CleanupPage> {
         // 误列为孤儿"的根因之一）。
         try {
           final du = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
+          // 关键：以服务器引用表为"在用"权威——清掉上面本地库/服务器单据并集的影响。
+          // 否则 AI 识别未提交的本地孤儿副本因本地单据仍在而被判"在用"，永远扫不出
+          //（本地附件数与云端对不上，用户场景：本地 6 / 服务器 2）。
+          inUse.clear();
           final inUseFiles = <String>{}; // "entity/id/file" 三元组集合（文件级精确比对）
           for (final a in ((du['attachments'] as List?) ?? []).cast<Map<String, dynamic>>()) {
             final entity = '${a['entity'] ?? ''}';

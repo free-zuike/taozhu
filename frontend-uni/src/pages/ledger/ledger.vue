@@ -619,29 +619,29 @@ async function removePayment(p: Record<string, any>) {
       radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
-.filter-bar { display: flex; justify-content: space-between; align-items: center; background: #fff; border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; }
+.filter-bar { display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; }
 .month-nav { display: flex; align-items: center; }
 .month-label { font-size: 28rpx; font-weight: bold; }
-.month-caret { font-size: 22rpx; color: #909399; margin-left: 6rpx; }
+.month-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 6rpx; }
 /* 月度结余四列卡（对齐 App 月度卡：四列横排） */
-.month-card { display: flex; background: #fff; border-radius: 12rpx; padding: 20rpx 16rpx; margin-bottom: 16rpx; border: 1rpx solid #ebeef5; }
+.month-card { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 20rpx 16rpx; margin-bottom: 16rpx; border: 1rpx solid #ebeef5; }
 .mcols { display: flex; } /* 四列容器：横排（缺此样式时 mcol 块级堆叠=竖排） */
 .mcol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6rpx; }
-.ml { font-size: 22rpx; color: #909399; }
-.mv { font-size: 30rpx; font-weight: bold; color: #303133; }
+.ml { font-size: 22rpx; color: var(--text-sub); }
+.mv { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
 .client-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
-.seg { display: flex; background: #fff; border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
-.seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: #909399; }
+.seg { display: flex; background: var(--card-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
+.seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }
-.card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }
-.sub { font-size: 26rpx; color: #909399; margin-bottom: 12rpx; }
-.line { display: flex; justify-content: space-between; align-items: center; padding: 10rpx 0; border-top: 1rpx solid #f5f5f5; }
+.sub { font-size: 26rpx; color: var(--text-sub); margin-bottom: 12rpx; }
+.line { display: flex; justify-content: space-between; align-items: center; padding: 10rpx 0; border-top: 1rpx solid var(--divider); }
 .line-left { flex: 1; min-width: 0; }
-.line-name { font-size: 27rpx; color: #303133; display: block; }
-.line-meta { font-size: 22rpx; color: #909399; margin-top: 2rpx; display: block; }
+.line-name { font-size: 27rpx; color: var(--text-main); display: block; }
+.line-meta { font-size: 22rpx; color: var(--text-sub); margin-top: 2rpx; display: block; }
 .line-amt { font-size: 27rpx; font-weight: bold; color: #f56c6c; margin-left: 16rpx; }
 .ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
 .op { color: var(--primary); font-size: 26rpx; }
@@ -649,13 +649,13 @@ async function removePayment(p: Record<string, any>) {
 .tip-longpress { color: #c0c4cc; font-size: 22rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
+.sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
-.ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .field { margin-bottom: 16rpx; }
-.field-inner { display: flex; justify-content: space-between; padding: 18rpx 20rpx; background: #f5f7fa; border-radius: 10rpx; }
-.label { color: #909399; font-size: 28rpx; }
-.value { color: #303133; font-size: 28rpx; }
+.field-inner { display: flex; justify-content: space-between; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; }
+.label { color: var(--text-sub); font-size: 28rpx; }
+.value { color: var(--text-main); font-size: 28rpx; }
 .placeholder { color: #c0c4cc; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 /* 附件弹层 */

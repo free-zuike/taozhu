@@ -110,13 +110,13 @@ async function onYear(e: { detail: { value: number } }) {
       radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
-.card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .card-title { display: flex; justify-content: space-between; align-items: center; font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .year-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
 .row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid #f0f0f0; }
 .left { flex: 1; min-width: 0; }
 .name { font-size: 28rpx; display: block; }
-.meta { font-size: 22rpx; color: #909399; display: block; margin-top: 4rpx; }
+.meta { font-size: 22rpx; color: var(--text-sub); display: block; margin-top: 4rpx; }
 .debt { font-size: 28rpx; font-weight: bold; }
 .pay { font-size: 28rpx; font-weight: bold; }
 .red { color: #f56c6c; }

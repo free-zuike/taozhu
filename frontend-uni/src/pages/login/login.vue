@@ -106,14 +106,14 @@ async function submit() {
 }
 .ver {
   font-size: 24rpx;
-  color: #909399;
+  color: var(--text-sub);
   font-weight: normal;
 }
 .form {
   width: 600rpx;
 }
 .ipt {
-  background: #fff;
+  background: var(--card-bg);
   border-radius: 12rpx;
   padding: 20rpx 24rpx;
   margin-bottom: 24rpx;

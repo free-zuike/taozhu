@@ -125,23 +125,23 @@ async function save() {
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .toolbar { display: flex; align-items: center; gap: 16rpx; margin-bottom: 16rpx; }
-.search { flex: 1; background: #fff; border-radius: 12rpx; padding: 16rpx 24rpx; font-size: 28rpx; }
-.pill { padding: 12rpx 24rpx; background: #fff; border-radius: 24rpx; font-size: 26rpx; color: #909399; border: 1rpx solid #eee; }
+.search { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 24rpx; font-size: 28rpx; }
+.pill { padding: 12rpx 24rpx; background: var(--card-bg); border-radius: 24rpx; font-size: 26rpx; color: var(--text-sub); border: 1rpx solid #eee; }
 .pill.active { color: #f56c6c; border-color: #f56c6c; background: #fef0f0; }
 .total { font-size: 26rpx; color: #67c23a; font-weight: bold; margin-bottom: 12rpx; }
-.card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .qty { font-size: 32rpx; font-weight: bold; color: #67c23a; }
 .qty.low { color: #f56c6c; }
-.sub { font-size: 24rpx; color: #909399; margin-bottom: 8rpx; }
+.sub { font-size: 24rpx; color: var(--text-sub); margin-bottom: 8rpx; }
 .ops { display: flex; justify-content: flex-end; }
 .op { color: var(--primary); font-size: 26rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
+.sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
-.form-item { font-size: 28rpx; color: #303133; margin-bottom: 16rpx; }
-.ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.form-item { font-size: 28rpx; color: var(--text-main); margin-bottom: 16rpx; }
+.ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

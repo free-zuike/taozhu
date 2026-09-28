@@ -1,6 +1,6 @@
 /** 操作审计：关键写操作留痕（谁在什么时候对哪个实体做了什么）。
  *  记录点：登录/登出、删除交易/进货/收款、添加出货/进货、导入导出备份、重算库存。
- *  仅追加、不可删除、永久保留（操作量级小，无自动清理；无任何删除接口）。 */
+ *  仅追加、自动清理半年以上记录；支持老板手动删除单条。 */
 import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import type { AuthUser, Env } from '../types';
@@ -76,4 +76,12 @@ auditRouter.get('/', async (c) => {
       entity_label: r.entity_type ? (ENTITY_LABEL[String(r.entity_type)] ?? String(r.entity_type)) : '',
     })),
   });
+});
+
+// DELETE /audit/:id — 手动删除单条审计记录（仅老板；如老板误操作/需清理敏感留痕）
+auditRouter.delete('/:id', async (c) => {
+  const id = c.req.param('id'); // 数字 id；CLOUDFLARE D1 integer
+  if (!/^\d+$/.test(id)) return c.json({ error: '参数错误' }, 400);
+  const r = await c.env.DB.prepare('DELETE FROM audit_logs WHERE id = ?').bind(Number(id)).run();
+  return c.json({ deleted: r.meta.changes ?? 0 });
 });

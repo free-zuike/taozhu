@@ -308,22 +308,22 @@ async function removeAttach(key: string) {
       radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
-.month-card { background: #fff; border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; border: 1rpx solid #ebeef5; }
+.month-card { background: var(--card-bg); border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; border: 1rpx solid #ebeef5; }
 .month-head { display: flex; align-items: center; justify-content: center; margin-bottom: 14rpx; }
-.month-label { font-size: 30rpx; font-weight: bold; color: #303133; }
-.month-caret { font-size: 22rpx; color: #909399; margin-left: 6rpx; }
+.month-label { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
+.month-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 6rpx; }
 .mexpense { display: flex; justify-content: space-between; align-items: center; }
-.ml { font-size: 24rpx; color: #909399; }
+.ml { font-size: 24rpx; color: var(--text-sub); }
 .mv { font-size: 34rpx; font-weight: bold; }
 .red { color: #f56c6c; }
-.card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }
-.line { display: flex; justify-content: space-between; align-items: center; padding: 10rpx 0; border-top: 1rpx solid #f5f5f5; }
+.line { display: flex; justify-content: space-between; align-items: center; padding: 10rpx 0; border-top: 1rpx solid var(--divider); }
 .line-left { flex: 1; min-width: 0; }
-.line-name { font-size: 27rpx; color: #303133; display: block; }
-.line-meta { font-size: 22rpx; color: #909399; margin-top: 2rpx; display: block; }
+.line-name { font-size: 27rpx; color: var(--text-main); display: block; }
+.line-meta { font-size: 22rpx; color: var(--text-sub); margin-top: 2rpx; display: block; }
 .line-amt { font-size: 27rpx; font-weight: bold; color: #f56c6c; margin-left: 16rpx; }
 .ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
 .op { color: var(--primary); font-size: 26rpx; }
@@ -331,9 +331,9 @@ async function removeAttach(key: string) {
 .tip-longpress { color: #c0c4cc; font-size: 22rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
+.sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
-.ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid #f0f0f0; }

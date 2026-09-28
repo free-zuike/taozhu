@@ -143,31 +143,31 @@ function go(url: string) {
 /* 两列网格：小程序对 flex gap / calc(50% - x) 兼容性差，用 48% + space-between 最稳 */
 .cards { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
 .card {
-  width: 48%; background: #fff; border-radius: 12rpx;
+  width: 48%; background: var(--card-bg); border-radius: 12rpx;
   padding: 22rpx 20rpx; box-sizing: border-box; margin-bottom: 16rpx;
 }
-.cl { display: block; color: #909399; font-size: 26rpx; margin-bottom: 10rpx; }
+.cl { display: block; color: var(--text-sub); font-size: 26rpx; margin-bottom: 10rpx; }
 .cv { font-size: 38rpx; font-weight: bold; }
 .green { color: #67c23a; }
 .red { color: #f56c6c; }
 .entries { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
-.entry { width: 30%; background: #fff; border-radius: 16rpx; padding: 24rpx 0 20rpx; margin-bottom: 16rpx; display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
+.entry { width: 30%; background: var(--card-bg); border-radius: 16rpx; padding: 24rpx 0 20rpx; margin-bottom: 16rpx; display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
 .e-ic { font-size: 44rpx; line-height: 1; }
-.e-tx { font-size: 24rpx; color: #303133; }
+.e-tx { font-size: 24rpx; color: var(--text-main); }
 .e-blue { color: var(--primary); } .e-green { color: #67c23a; } .e-orange { color: #e6a23c; }
 .e-purple { color: #9b59b6; } .e-red { color: #f56c6c; } .e-cyan { color: #17a2b8; }
-.e-amber { color: #f39c12; } .e-gray { color: #909399; }
-.list { background: #fff; border-radius: 12rpx; padding: 24rpx; }
+.e-amber { color: #f39c12; } .e-gray { color: var(--text-sub); }
+.list { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .list-title { font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .list-row { display: flex; justify-content: space-between; padding: 16rpx 0; border-bottom: 1rpx solid #f0f0f0; }
 .lr-name { font-size: 28rpx; }
 .lr-debt { font-size: 28rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 30rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
+.sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
-.server-cur { font-size: 24rpx; color: #909399; margin-bottom: 16rpx; word-break: break-all; }
-.ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.server-cur { font-size: 24rpx; color: var(--text-sub); margin-bottom: 16rpx; word-break: break-all; }
+.ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
-.btn-cancel { background: #f5f7fa; color: #909399; border-radius: 12rpx; font-size: 30rpx; }
+.btn-cancel { background: var(--input-bg); color: var(--text-sub); border-radius: 12rpx; font-size: 30rpx; }
 </style>

@@ -203,26 +203,26 @@ function copyCsv() {
       radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
       radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
       linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
-.card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
+.card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
 .field { margin-bottom: 20rpx; }
 .field-inner { display: flex; justify-content: space-between; }
-.label { color: #909399; font-size: 26rpx; }
+.label { color: var(--text-sub); font-size: 26rpx; }
 .value { font-size: 28rpx; }
-.seg { display: flex; background: #f5f7fa; border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
-.seg-item { flex: 1; text-align: center; padding: 16rpx; font-size: 26rpx; color: #909399; }
+.seg { display: flex; background: var(--input-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
+.seg-item { flex: 1; text-align: center; padding: 16rpx; font-size: 26rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }
 .dates { display: flex; align-items: center; gap: 12rpx; margin-bottom: 20rpx; }
-.ipt { flex: 1; background: #f5f7fa; border-radius: 10rpx; padding: 16rpx 20rpx; font-size: 26rpx; }
-.to { color: #909399; }
+.ipt { flex: 1; background: var(--input-bg); border-radius: 10rpx; padding: 16rpx 20rpx; font-size: 26rpx; }
+.to { color: var(--text-sub); }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 20rpx; }
-.btn-copy { background: #fff; border: 1rpx solid var(--primary); color: var(--primary); border-radius: 12rpx; font-size: 28rpx; margin-top: 12rpx; }
+.btn-copy { background: var(--card-bg); border: 1rpx solid var(--primary); color: var(--primary); border-radius: 12rpx; font-size: 28rpx; margin-top: 12rpx; }
 .stat { display: flex; justify-content: space-between; padding: 12rpx 0; font-size: 28rpx; }
 .red { color: #f56c6c; }
 .green { color: #67c23a; }
-.list { background: #fff; border-radius: 12rpx; padding: 24rpx; }
+.list { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .list-title { font-size: 30rpx; font-weight: bold; margin: 20rpx 0 12rpx; }
 .list-row { display: flex; justify-content: space-between; padding: 14rpx 0; border-bottom: 1rpx solid #f0f0f0; font-size: 26rpx; }
-.lr-l { color: #303133; }
+.lr-l { color: var(--text-main); }
 .lr-r { font-weight: bold; }
 .empty { color: #c0c4cc; text-align: center; padding: 24rpx 0; font-size: 26rpx; }
 </style>

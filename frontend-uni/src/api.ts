@@ -2,6 +2,7 @@
  * uni-app 版 API 封装：uni.request 统一请求 + 服务器地址可手动设置 + token + 401 处理。
  * 小程序/App/H5 三端通用（uni 跨端 API）。
  */
+import { APP_VERSION } from './version';
 
 const TOKEN_KEY = 'taozhu_token';
 const BASE_KEY = 'taozhu_api_base';
@@ -38,6 +39,19 @@ export function setApiBase(url: string) {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
+import { APP_VERSION } from './version';
+
+/** 设备标识：首次生成随机 id（每台设备独立自报；服务器设备列表按此归并） */
+const DEVICE_KEY = 'taozhu_device_id';
+export function getDeviceId(): string {
+  let id = (uni.getStorageSync(DEVICE_KEY) as string) || '';
+  if (!id) {
+    id = `dev-${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+    uni.setStorageSync(DEVICE_KEY, id);
+  }
+  return id;
+}
+
 /** 通用请求：成功返回 data；失败 reject Error（message 为后端 error 字段或通用文案） */
 export function request<T = any>(path: string, method: Method = 'GET', data?: unknown): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -47,6 +61,8 @@ export function request<T = any>(path: string, method: Method = 'GET', data?: un
       data,
       header: {
         'Content-Type': 'application/json',
+        'x-app-version': APP_VERSION,
+        'x-device-id': getDeviceId(),
         ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
       },
       success: (res) => {

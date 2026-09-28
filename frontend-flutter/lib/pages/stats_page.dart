@@ -168,8 +168,8 @@ class _StatsPageState extends State<StatsPage> {
         // 上一结账周期（按店铺起始日）
         return _periodOf(_msd, DateTime(now.year, now.month - 1, now.day.clamp(1, 28)));
       case 'rolling':
-        // 最近 30 天（区间快捷，与顶部「月」视图不重复）
-        return (_fmtDate(DateTime(now.year, now.month, now.day - 30)), _fmtDate(now));
+        // 当月（1 号至今天；用户要求「当月」而非近 30 天窗口）
+        return (_fmtDate(DateTime(now.year, now.month, 1)), _fmtDate(now));
       case 'custom':
         if (_customStart != null && _customEnd != null) {
           return (_fmtDate(_customStart!), _fmtDate(_customEnd!));
@@ -235,8 +235,8 @@ class _StatsPageState extends State<StatsPage> {
       // 仅首次（从未渲染过）显示 loading；已有数据时静默刷新，避免页面空白跳动
       setState(() => _loading = true);
     }
-    if (!network && !kIsWeb) return;
-    // 原生：本地镜像即时聚合（本地优先，零网络秒开；数据由同步驱动刷新，切换店铺/周期立即重算）
+    // 原生：本地镜像即时聚合（本地优先，零网络秒开；数据由同步驱动刷新，切换店铺/周期立即重算。
+    // 注意：页面首载也必须执行本地聚合（不能提前 return），否则统计一直空白需手动点击才显示）
     if (!kIsWeb) {
       final local = await Future.wait(paths.map((p) => _localFor(p, start, end)));
       final detail = await localSaleDetail(start, end, _clientId, kind: _kind);
@@ -443,7 +443,7 @@ class _StatsPageState extends State<StatsPage> {
                     ),
                     const SizedBox(height: 12),
                   ],
-                  // 快捷区间：统一一行（今日 / 最近30天 / 自定义），无重复模式切换
+                  // 快捷区间：统一一行（今日 / 当月 / 自定义），无重复模式切换
                   _quickBar(),
                   const SizedBox(height: 6),
                   Text('$start ~ $end（${_spanDays} 天${_mode == 'range' && _msd > 1 ? ' · 每月 $_msd 日起算' : ''}）',
@@ -554,7 +554,7 @@ class _StatsPageState extends State<StatsPage> {
       runSpacing: 8,
       children: [
         _pill('今日', 'today'),
-        _pill('最近30天', 'rolling'),
+        _pill('当月', 'rolling'),
         _pill('自定义', 'custom', icon: Icons.date_range),
       ],
     );
