@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
 
@@ -19,6 +20,18 @@ class _AuditPageState extends State<AuditPage> {
   void initState() {
     super.initState();
     _load();
+    // 实时刷新：其他端删除审计 → 后端 WS sync 通知 → 本页自动重拉（无需手动刷新）
+    SyncService.version.addListener(_onSync);
+  }
+
+  @override
+  void dispose() {
+    SyncService.version.removeListener(_onSync);
+    super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) _load();
   }
 
   Future<void> _load() async {
@@ -64,8 +77,13 @@ class _AuditPageState extends State<AuditPage> {
     );
     if (ok != true) return;
     try {
-      await Api.instance.delete('/audit/$id');
-      toast(context, '已删除');
+      final r = await Api.instance.delete('/audit/$id');
+      final deleted = (r['deleted'] as num?)?.toInt() ?? 0;
+      if (deleted > 0) {
+        toast(context, '已删除');
+      } else {
+        toast(context, '删除失败：记录不存在或已被删除');
+      }
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));

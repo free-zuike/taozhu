@@ -33,7 +33,7 @@
 import { useThemeVars } from '../../theme';
 const tv = useThemeVars();
 import { ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { onShow, onHide } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
 
 type Device = { id: string; device_name: string; platform: string; ip?: string; version?: string; last_active_at: string };
@@ -53,7 +53,18 @@ const online = (iso: string) => {
 
 onShow(async () => {
   load();
+  // 在线状态按时间衰减（5 分钟窗口），周期性刷新让"在线/离线"及时翻转
+  timer = setInterval(() => {
+    load();
+  }, 60000);
 });
+
+onHide(() => {
+  if (timer) clearInterval(timer);
+  timer = null;
+});
+
+let timer: ReturnType<typeof setInterval> | null = null;
 
 async function load() {
   loading.value = true;
@@ -87,14 +98,7 @@ function remove(d: Device) {
 </script>
 
 <style>
-.page {
-  background:
-      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
-      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
-      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
-      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
-      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
-      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
+.page { background: var(--page-bg); min-height: 100vh; }
 .loading { text-align: center; color: var(--text-sub); padding: 80rpx 0; font-size: 26rpx; }
 .empty { display: flex; flex-direction: column; align-items: center; padding: 120rpx 0; gap: 12rpx; }
 .empty-tx { font-size: 28rpx; color: var(--text-sub); }

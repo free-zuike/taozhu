@@ -130,14 +130,7 @@ async function remove(c: Cat) {
 </script>
 
 <style>
-.page {
-  background:
-      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
-      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
-      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
-      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
-      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
-      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
+.page { background: var(--page-bg); min-height: 100vh; }
 .seg { display: flex; background: var(--card-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }

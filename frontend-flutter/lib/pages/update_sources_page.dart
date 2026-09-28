@@ -54,6 +54,8 @@ class _UpdateSourcesPageState extends State<UpdateSourcesPage> {
   /// 把某源设为指定（主要下载通道；官方直连在国内网络多数不可达，指定镜像优先使用）
   Future<void> _setSpecified(String url) async {
     _specified = url;
+    // 先立即刷新图标（pin 实心/空心），再持久化——避免点击/取消后图标不换、退出才生效
+    setState(() {});
     await _persist();
     toast(context, url.isEmpty ? '已取消指定，恢复官方优先' : '已设为指定下载源');
   }

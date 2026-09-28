@@ -37,7 +37,7 @@
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
-import { useThemeVars, setThemePrimary, setThemeMode, getThemeMode, type ThemeMode } from '../../theme';
+import { useThemeVars, setThemePrimary, setThemeMode, setThemeSkin, getThemeMode, getThemeSkin, type ThemeMode } from '../../theme';
 
 const tv = useThemeVars();
 const modes: Array<{ id: ThemeMode; name: string }> = [
@@ -63,7 +63,7 @@ const skins = [
   { id: 'ripple', name: '涟漪', preview: 'radial-gradient(circle at 35% 40%, transparent 0 10rpx, #fff 10rpx 14rpx, transparent 15rpx), radial-gradient(circle at 70% 65%, transparent 0 6rpx, #fff 6rpx 9rpx, transparent 10rpx), #409EFF' },
 ];
 const cur = ref('default');
-const curSkin = ref('');
+const curSkin = ref(getThemeSkin());
 const saving = ref(false);
 
 onShow(async () => {
@@ -84,6 +84,7 @@ async function save() {
     const c = presets.find((p) => p.id === cur.value);
     if (c) setThemePrimary(c.color);
     setThemeMode(mode.value);
+    setThemeSkin(curSkin.value);
     tv.value = useThemeVars().value;
     uni.showToast({ title: '已保存，本页与其他端同步生效', icon: 'none' });
   } catch (e) {
@@ -95,7 +96,7 @@ async function save() {
 </script>
 
 <style>
-.page { padding: 24rpx; background: linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%); min-height: 100vh; }
+.page { padding: 24rpx; background: var(--page-bg); min-height: 100vh; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 20rpx; }
 .presets { display: flex; flex-wrap: wrap; gap: 20rpx; background: var(--card-bg); border-radius: 20rpx; padding: 32rpx 24rpx; margin-bottom: 24rpx; }
 .mode-row { display: flex; gap: 16rpx; background: var(--card-bg); border-radius: 20rpx; padding: 20rpx 24rpx; margin-bottom: 24rpx; }

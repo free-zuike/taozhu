@@ -116,14 +116,7 @@ async function save() {
 </script>
 
 <style>
-.page {
-  background:
-      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
-      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
-      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
-      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
-      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
-      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
+.page { background: var(--page-bg); min-height: 100vh; }
 .toolbar { display: flex; align-items: center; gap: 16rpx; margin-bottom: 16rpx; }
 .search { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 24rpx; font-size: 28rpx; }
 .pill { padding: 12rpx 24rpx; background: var(--card-bg); border-radius: 24rpx; font-size: 26rpx; color: var(--text-sub); border: 1rpx solid #eee; }

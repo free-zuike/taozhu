@@ -76,14 +76,7 @@ function restore(b: BackupItem) {
 </script>
 
 <style>
-.page {
-  background:
-      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
-      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
-      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
-      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
-      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
-      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
+.page { background: var(--page-bg); min-height: 100vh; }
 .btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; }
 .tip { font-size: 22rpx; color: var(--text-sub); margin: 20rpx 8rpx 28rpx; line-height: 1.6; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; display: flex; align-items: center; }

@@ -38,6 +38,8 @@ export function setApiBase(url: string) {
 }
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+/** uni.request 接受的 method（PATCH 运行时可用但类型未列——调用处已有 as 转换） */
+type UniMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'OPTIONS' | 'HEAD' | 'TRACE' | 'CONNECT';
 
 /** 设备标识：首次生成随机 id（每台设备独立自报；服务器设备列表按此归并） */
 const DEVICE_KEY = 'taozhu_device_id';
@@ -51,11 +53,11 @@ export function getDeviceId(): string {
 }
 
 /** 通用请求：成功返回 data；失败 reject Error（message 为后端 error 字段或通用文案） */
-export function request<T = any>(path: string, method: Method = 'GET', data?: unknown): Promise<T> {
+export function request<T = any>(path: string, method: UniMethod = 'GET', data?: Record<string, unknown> | string | ArrayBuffer): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     uni.request({
       url: `${getApiBase()}/api/v1${path}`,
-      method,
+      method: method as never, // PATCH 运行时支持但 uni 类型未列，绕过类型检查
       data,
       header: {
         'Content-Type': 'application/json',
@@ -87,9 +89,9 @@ export function request<T = any>(path: string, method: Method = 'GET', data?: un
 
 // 便捷方法
 export const get = <T = any>(path: string) => request<T>(path, 'GET');
-export const post = <T = any>(path: string, data?: unknown) => request<T>(path, 'POST', data);
-export const put = <T = any>(path: string, data?: unknown) => request<T>(path, 'PUT', data);
-export const patch = <T = any>(path: string, data?: unknown) => request<T>(path, 'PATCH', data);
+export const post = <T = any>(path: string, data?: Record<string, unknown> | string | ArrayBuffer) => request<T>(path, 'POST', data);
+export const put = <T = any>(path: string, data?: Record<string, unknown> | string | ArrayBuffer) => request<T>(path, 'PUT', data);
+export const patch = <T = any>(path: string, data?: Record<string, unknown> | string | ArrayBuffer) => request<T>(path, 'PATCH', data);
 export const del = <T = any>(path: string) => request<T>(path, 'DELETE');
 
 /** 附件列表：GET /attachments?entity=&id= → { attachments: [{key,url,size}] } */

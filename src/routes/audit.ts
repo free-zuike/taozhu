@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import type { AuthUser, Env } from '../types';
+import { notifyClients } from '../services/sync-hub';
 
 type V = { user: AuthUser };
 export const auditRouter = new Hono<{ Bindings: Env; Variables: V }>();
@@ -83,5 +84,7 @@ auditRouter.delete('/:id', async (c) => {
   const id = c.req.param('id'); // 数字 id；CLOUDFLARE D1 integer
   if (!/^\d+$/.test(id)) return c.json({ error: '参数错误' }, 400);
   const r = await c.env.DB.prepare('DELETE FROM audit_logs WHERE id = ?').bind(Number(id)).run();
+  // 广播审计变更：其他端（Web/App）收到 WS sync 通知后实时刷新列表（不依赖手动刷新）
+  if ((r.meta.changes ?? 0) > 0) await notifyClients().catch(() => {});
   return c.json({ deleted: r.meta.changes ?? 0 });
 });

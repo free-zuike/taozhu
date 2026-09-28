@@ -244,17 +244,15 @@ class _CleanupPageState extends State<CleanupPage> {
         } catch (_) {}
         // ③ 服务器在用附件（引用判定：交易引用的附件文件 = 在用）：
         // /attachments/in-use 返回规范化三元组 {entity,id,file}（后端 attachment_refs 引用表为权威
-        // + R2 扫描兜底历史存量）。主扫描按"目录 entity/id"与"文件级三元组"双重比对——
-        // 交易引用过的附件副本绝不出现在可清理列表。这里直接用三元组构建 entity→id 集合
-        // （不再用正则解析 key：历史根级前缀 sale/s1/a.jpg 前端正则匹配失败是"在用附件被
-        // 误列为孤儿"的根因之一）。
+        // + R2 扫描兜底历史存量）。这里直接用三元组构建 entity→id 集合与文件级三元组集合——
+        // 交易引用过的附件副本绝不出现在可清理列表。
+        final inUseFiles = <String>{}; // "entity/id/file" 三元组集合（文件级精确比对）
         try {
           final du = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
           // 关键：以服务器引用表为"在用"权威——清掉上面本地库/服务器单据并集的影响。
           // 否则 AI 识别未提交的本地孤儿副本因本地单据仍在而被判"在用"，永远扫不出
           //（本地附件数与云端对不上，用户场景：本地 6 / 服务器 2）。
           inUse.clear();
-          final inUseFiles = <String>{}; // "entity/id/file" 三元组集合（文件级精确比对）
           for (final a in ((du['attachments'] as List?) ?? []).cast<Map<String, dynamic>>()) {
             final entity = '${a['entity'] ?? ''}';
             final id = '${a['id'] ?? ''}';
@@ -279,12 +277,21 @@ class _CleanupPageState extends State<CleanupPage> {
               if (id is! Directory) continue;
               final idName = id.uri.pathSegments.last;
               if (idName.isEmpty) continue;
-              // 在用实体 → 跳过（附件仍在单据上使用，不属可清理）
-              if ((inUse[entityName] ?? {}).contains(idName)) continue;
+              // 在用判定：在线时按「文件级三元组」精确比对（服务器引用表的 file 才是在用）——
+              // 同一单据目录里可能部分文件已在云端清理（引用缺失）→ 这些孤儿文件必须列出，
+              // 不能按「目录级实体在用」整目录跳过（否则本地 6 / 服务器 2 的孤儿永远扫不出）。
+              final entityInUse = (inUse[entityName] ?? {}).contains(idName);
               await for (final f in id.list(followLinks: false)) {
                 if (f is! File) continue;
-                final rel = '$entityName/$idName/${f.uri.pathSegments.last}';
-                files.add(_CacheFile(rel, await f.length(), f.path));
+                final fileName = f.uri.pathSegments.last;
+                final rel = '$entityName/$idName/$fileName';
+                final fileInUse = inUseFiles.contains(rel);
+                // 在线：文件不在服务器引用三元组 → 孤儿可清理；离线兜底：实体在用则整目录保守跳过
+                if (inUseFiles.isNotEmpty) {
+                  if (!fileInUse) files.add(_CacheFile(rel, await f.length(), f.path));
+                } else if (!entityInUse) {
+                  files.add(_CacheFile(rel, await f.length(), f.path));
+                }
               }
             }
           }

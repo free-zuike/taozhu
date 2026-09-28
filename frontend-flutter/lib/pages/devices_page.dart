@@ -1,6 +1,8 @@
-/// 设备管理：登录设备列表（名称/平台/最后活跃），可删除（下次该设备登录重新记录）
+/// 设备管理：登录设备列表（名称/平台/最后活跃/在线状态），可删除（下次该设备登录重新记录）
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
 
@@ -14,11 +16,29 @@ class _DevicesPageState extends State<DevicesPage> {
   List<Map<String, dynamic>> _devices = [];
   bool _loading = true;
   bool _busy = false;
+  Timer? _ticker;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // 其他端设备变更（新增/删除）→ WS sync 通知 → 实时刷新
+    SyncService.version.addListener(_onSync);
+    // 在线状态按时间衰减（5 分钟窗口），周期性重渲染让"在线/离线"及时翻转
+    _ticker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    SyncService.version.removeListener(_onSync);
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) _load();
   }
 
   Future<void> _load() async {
