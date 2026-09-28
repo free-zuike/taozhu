@@ -1,6 +1,6 @@
 /** 认证端点：登录 / 当前用户 / 首次管理员引导 / 个人资料（改名/改密/头像）/ 两步验证（TOTP） */
 import { Hono } from 'hono';
-import { signToken } from '../lib/jwt';
+import { signToken, verifyToken } from '../lib/jwt';
 import { hashPassword, randomId, verifyPassword } from '../lib/password';
 import { randomSecret, verifyTotp } from '../lib/totp';
 import { authMiddleware } from '../middleware/auth';
@@ -225,10 +225,15 @@ authRouter.post('/avatar', authMiddleware(), async (c) => {
   return c.json({ ok: true, avatar_version: ver });
 });
 
-// GET /auth/avatar — 读取当前用户头像（带鉴权；前端 Image.network 加 Authorization 头）
-authRouter.get('/avatar', authMiddleware(), async (c) => {
-  const me = c.get('user');
-  const row = await c.env.DB.prepare('SELECT avatar FROM users WHERE id = ?').bind(me.id).first<{ avatar: string | null }>();
+// GET /auth/avatar — 读取当前用户头像（带鉴权；支持 header token 或 query token——小程序 <image> 只能拼 URL）
+authRouter.get('/avatar', async (c) => {
+  const qToken = c.req.query('token');
+  const hToken = c.req.header('Authorization')?.replace(/^Bearer\s+/i, '');
+  const token = qToken || hToken;
+  if (!token) return c.json({ error: '未登录' }, 401);
+  const payload = await verifyToken(c.env.JWT_SECRET, token);
+  if (!payload) return c.json({ error: '登录已过期，请重新登录' }, 401);
+  const row = await c.env.DB.prepare('SELECT avatar FROM users WHERE id = ?').bind(payload.sub).first<{ avatar: string | null }>();
   if (!row?.avatar) return c.json({ error: '未设置头像' }, 404);
   const obj = await createStorage(c.env).get(row.avatar);
   if (!obj) return c.json({ error: '头像不存在' }, 404);

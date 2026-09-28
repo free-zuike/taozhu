@@ -89,6 +89,24 @@
 			"style": {
 				"navigationBarTitleText": "库存"
 			}
+		},
+		{
+			"path": "pages/theme-settings/theme-settings",
+			"style": {
+				"navigationBarTitleText": "主题设置"
+			}
+		},
+		{
+			"path": "pages/ai-settings/ai-settings",
+			"style": {
+				"navigationBarTitleText": "AI 识别设置"
+			}
+		},
+		{
+			"path": "pages/devices/devices",
+			"style": {
+				"navigationBarTitleText": "设备管理"
+			}
 		}
 	],
 	"tabBar": {
