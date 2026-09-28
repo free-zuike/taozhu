@@ -104,7 +104,10 @@ class _LoginPageState extends State<LoginPage> {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: Center(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
@@ -216,6 +219,8 @@ class _LoginPageState extends State<LoginPage> {
             ),
           ),
         ),
+      ),
+        ],
       ),
     );
   }

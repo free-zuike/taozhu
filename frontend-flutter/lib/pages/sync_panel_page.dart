@@ -357,7 +357,6 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     // 同步中或首次加载转圈；本地有数据时同步虽未完成仍可展示旧计数
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         // 无右上角按钮：下拉整个页面 = 重新全量同步（拉全量修复缺口）
       ),

@@ -204,13 +204,17 @@ class _UsersPageState extends State<UsersPage> {
     }
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(onPressed: () => _addOrEdit(), icon: const Icon(Icons.add)),
         ],
       ),
-      body: body,
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          body,
+        ],
+      ),
     );
   }
 }

@@ -531,7 +531,6 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context)), // 标题并入下方统计头（背景透出，顶部不占标题）
       body: Stack(
         children: [

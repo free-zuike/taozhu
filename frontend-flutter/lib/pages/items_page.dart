@@ -216,7 +216,6 @@ class _ItemsPageState extends State<ItemsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           // 店员只读（隐藏新增入口）；新增统一在右上角（与店铺管理一致）
@@ -553,11 +552,13 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: Stack(
         children: [
+          Positioned.fill(child: themePageBackground(context)),
+          ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
           TextField(controller: _nameCtrl, decoration: const InputDecoration(labelText: '商品名称 *')),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
@@ -667,6 +668,8 @@ class _ItemEditPageState extends State<_ItemEditPage> {
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             onPressed: _busy ? null : _save,
             child: Text(_busy ? '保存中…' : '保存'),
+          ),
+            ],
           ),
         ],
       ),
