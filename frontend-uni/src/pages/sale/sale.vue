@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <!-- 头部：饭店 / 日期 / 复制上一笔 -->
     <view class="head-row">
       <picker class="field" mode="selector" :range="clientNames" @change="onClient">
@@ -44,6 +44,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { computed, ref } from 'vue';
 import { onLoad, onShow } from '@dcloudio/uni-app';
 import { request, getToken, uploadAi } from '../../api';
@@ -387,11 +389,18 @@ async function submit() {
 </script>
 
 <style>
-.page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
+.page {
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .head-row { display: flex; gap: 12rpx; align-items: flex-start; margin-bottom: 16rpx; }
 .head-row .field { flex: 1; background: #fff; border-radius: 12rpx; padding: 24rpx; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }
-.copy-btn { flex-shrink: 0; background: #fff; color: #409eff; border: 1rpx solid #409eff; border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
+.copy-btn { flex-shrink: 0; background: #fff; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
 .ai-btn { flex-shrink: 0; background: #fff; color: #7c4dff; border: 1rpx solid #7c4dff; border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
 .ai-tip { background: #f0ecff; color: #7c4dff; border-radius: 12rpx; padding: 16rpx 24rpx; margin-bottom: 16rpx; font-size: 26rpx; }
 .field { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
@@ -415,5 +424,5 @@ async function submit() {
 .btn-add { font-size: 28rpx; }
 .total { font-size: 28rpx; }
 .total-num { color: #f56c6c; font-weight: bold; font-size: 34rpx; }
-.btn-submit { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 32rpx; }
+.btn-submit { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 32rpx; }
 </style>

@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <view class="seg">
       <view :class="['seg-item', { active: type === 'item' }]" @click="switchType('item')">商品分类</view>
       <view :class="['seg-item', { active: type === 'client' }]" @click="switchType('client')">店铺分类</view>
@@ -34,6 +34,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
@@ -128,22 +130,29 @@ async function remove(c: Cat) {
 </script>
 
 <style>
-.page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
+.page {
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .seg { display: flex; background: #fff; border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: #909399; }
-.seg-item.active { color: #409eff; font-weight: bold; background: #ecf5ff; }
-.btn-add { background: #409eff; color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
+.seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }
+.btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
 .card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; margin-bottom: 12rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .child { display: flex; align-items: center; padding: 10rpx 0 10rpx 32rpx; border-top: 1rpx solid #f5f7fa; }
 .ch-name { font-size: 28rpx; }
-.op { margin-left: 24rpx; color: #409eff; font-size: 26rpx; }
+.op { margin-left: 24rpx; color: var(--primary); font-size: 26rpx; }
 .del { margin-left: 24rpx; color: #f56c6c; font-size: 26rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

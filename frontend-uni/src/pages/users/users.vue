@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <button class="btn-add" @click="openForm()">+ 新增账号</button>
 
     <view v-for="u in users" :key="u.id" class="card">
@@ -29,6 +29,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
@@ -119,14 +121,21 @@ function remove(u: User) {
 </script>
 
 <style>
-.page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
-.btn-add { background: #409eff; color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
+.page {
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
+.btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
 .card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; }
 .name { font-size: 30rpx; font-weight: bold; }
-.role { margin-left: 16rpx; font-size: 24rpx; color: #409eff; background: #ecf5ff; border-radius: 8rpx; padding: 4rpx 12rpx; }
+.role { margin-left: 16rpx; font-size: 24rpx; color: var(--primary); background: #ecf5ff; border-radius: 8rpx; padding: 4rpx 12rpx; }
 .role.admin { color: #f56c6c; background: #fef0f0; }
-.op { margin-left: auto; color: #409eff; font-size: 26rpx; }
+.op { margin-left: auto; color: var(--primary); font-size: 26rpx; }
 .del { margin-left: 32rpx; color: #f56c6c; font-size: 26rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
@@ -135,6 +144,6 @@ function remove(u: User) {
 .ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .seg { display: flex; background: #f5f7fa; border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 16rpx; font-size: 26rpx; color: #909399; }
-.seg-item.active { color: #409eff; font-weight: bold; background: #ecf5ff; }
-.btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; }
+.seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

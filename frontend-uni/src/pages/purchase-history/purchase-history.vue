@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <!-- 月份（点击切换）+ 月度支出卡（对齐 App 进货页：仅支出统计） -->
     <view class="month-card">
       <view class="month-head" @click="pickMonth">
@@ -65,6 +65,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
@@ -298,7 +300,14 @@ async function removeAttach(key: string) {
 </script>
 
 <style>
-.page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
+.page {
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .month-card { background: #fff; border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; border: 1rpx solid #ebeef5; }
 .month-head { display: flex; align-items: center; justify-content: center; margin-bottom: 14rpx; }
 .month-label { font-size: 30rpx; font-weight: bold; color: #303133; }
@@ -317,7 +326,7 @@ async function removeAttach(key: string) {
 .line-meta { font-size: 22rpx; color: #909399; margin-top: 2rpx; display: block; }
 .line-amt { font-size: 27rpx; font-weight: bold; color: #f56c6c; margin-left: 16rpx; }
 .ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
-.op { color: #409eff; font-size: 26rpx; }
+.op { color: var(--primary); font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
 .tip-longpress { color: #c0c4cc; font-size: 22rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
@@ -325,7 +334,7 @@ async function removeAttach(key: string) {
 .sheet { width: 100%; background: #fff; border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid #f0f0f0; }
 .attach-img { width: 120rpx; height: 120rpx; border-radius: 8rpx; flex-shrink: 0; }

@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <view class="card">
       <picker class="field" mode="selector" :range="clientNames" @change="onClient">
         <view class="field-inner">
@@ -49,6 +49,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
@@ -193,7 +195,14 @@ function copyCsv() {
 </script>
 
 <style>
-.page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
+.page {
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
 .field { margin-bottom: 20rpx; }
 .field-inner { display: flex; justify-content: space-between; }
@@ -201,12 +210,12 @@ function copyCsv() {
 .value { font-size: 28rpx; }
 .seg { display: flex; background: #f5f7fa; border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 16rpx; font-size: 26rpx; color: #909399; }
-.seg-item.active { color: #409eff; font-weight: bold; background: #ecf5ff; }
+.seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }
 .dates { display: flex; align-items: center; gap: 12rpx; margin-bottom: 20rpx; }
 .ipt { flex: 1; background: #f5f7fa; border-radius: 10rpx; padding: 16rpx 20rpx; font-size: 26rpx; }
 .to { color: #909399; }
-.btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 20rpx; }
-.btn-copy { background: #fff; border: 1rpx solid #409eff; color: #409eff; border-radius: 12rpx; font-size: 28rpx; margin-top: 12rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 20rpx; }
+.btn-copy { background: #fff; border: 1rpx solid var(--primary); color: var(--primary); border-radius: 12rpx; font-size: 28rpx; margin-top: 12rpx; }
 .stat { display: flex; justify-content: space-between; padding: 12rpx 0; font-size: 28rpx; }
 .red { color: #f56c6c; }
 .green { color: #67c23a; }

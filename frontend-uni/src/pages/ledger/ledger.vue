@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <!-- 店铺筛选（月份移入下方月度卡头部，对齐 App：店铺条 + 月度卡） -->
     <view class="filter-bar">
       <picker class="client-picker" mode="selector" :range="clientNames" @change="onClientFilter">
@@ -14,7 +14,7 @@
         <text class="month-caret">▾</text>
       </view>
       <view class="mcols">
-        <view class="mcol"><text class="ml">售出</text><text class="mv" style="color:#409eff">¥{{ fmtNum(mSold) }}</text></view>
+        <view class="mcol"><text class="ml">售出</text><text class="mv" style="color:var(--primary)">¥{{ fmtNum(mSold) }}</text></view>
         <view class="mcol"><text class="ml">收入</text><text class="mv" :style="{ color: mIncome > 0 ? '#22c55e' : '#f59e0b' }">¥{{ fmtNum(mIncome) }}</text></view>
         <view class="mcol"><text class="ml">未回款</text><text class="mv" :style="{ color: mDebt > 0 ? '#f59e0b' : '#909399' }">¥{{ fmtNum(mDebt) }}</text></view>
         <view class="mcol"><text class="ml">结余</text><text class="mv" :style="{ color: mBalance >= 0 ? '#22c55e' : '#ef4444' }">¥{{ fmtNum(mBalance) }}</text></view>
@@ -119,6 +119,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
@@ -609,7 +611,14 @@ async function removePayment(p: Record<string, any>) {
 </script>
 
 <style>
-.page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
+.page {
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .filter-bar { display: flex; justify-content: space-between; align-items: center; background: #fff; border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; }
 .month-nav { display: flex; align-items: center; }
 .month-label { font-size: 28rpx; font-weight: bold; }
@@ -620,10 +629,10 @@ async function removePayment(p: Record<string, any>) {
 .mcol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6rpx; }
 .ml { font-size: 22rpx; color: #909399; }
 .mv { font-size: 30rpx; font-weight: bold; color: #303133; }
-.client-btn { font-size: 26rpx; color: #409eff; border: 1rpx solid #409eff; border-radius: 8rpx; padding: 6rpx 16rpx; }
+.client-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
 .seg { display: flex; background: #fff; border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: #909399; }
-.seg-item.active { color: #409eff; font-weight: bold; background: #ecf5ff; }
+.seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }
 .card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
@@ -635,7 +644,7 @@ async function removePayment(p: Record<string, any>) {
 .line-meta { font-size: 22rpx; color: #909399; margin-top: 2rpx; display: block; }
 .line-amt { font-size: 27rpx; font-weight: bold; color: #f56c6c; margin-left: 16rpx; }
 .ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
-.op { color: #409eff; font-size: 26rpx; }
+.op { color: var(--primary); font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
 .tip-longpress { color: #c0c4cc; font-size: 22rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
@@ -648,7 +657,7 @@ async function removePayment(p: Record<string, any>) {
 .label { color: #909399; font-size: 28rpx; }
 .value { color: #303133; font-size: 28rpx; }
 .placeholder { color: #c0c4cc; }
-.btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 /* 附件弹层 */
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid #f0f0f0; }

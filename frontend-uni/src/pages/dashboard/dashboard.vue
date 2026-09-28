@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <!-- 今日卡片 -->
     <view class="cards">
       <view class="card"><text class="cl">今日出货</text><text class="cv">¥{{ fmt(today.sales_total) }}</text></view>
@@ -48,6 +48,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '../../api';
@@ -130,7 +132,14 @@ function go(url: string) {
 </script>
 
 <style>
-.page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
+.page {
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 /* 两列网格：小程序对 flex gap / calc(50% - x) 兼容性差，用 48% + space-between 最稳 */
 .cards { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
 .card {
@@ -145,7 +154,7 @@ function go(url: string) {
 .entry { width: 30%; background: #fff; border-radius: 16rpx; padding: 24rpx 0 20rpx; margin-bottom: 16rpx; display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
 .e-ic { font-size: 44rpx; line-height: 1; }
 .e-tx { font-size: 24rpx; color: #303133; }
-.e-blue { color: #409eff; } .e-green { color: #67c23a; } .e-orange { color: #e6a23c; }
+.e-blue { color: var(--primary); } .e-green { color: #67c23a; } .e-orange { color: #e6a23c; }
 .e-purple { color: #9b59b6; } .e-red { color: #f56c6c; } .e-cyan { color: #17a2b8; }
 .e-amber { color: #f39c12; } .e-gray { color: #909399; }
 .list { background: #fff; border-radius: 12rpx; padding: 24rpx; }
@@ -159,6 +168,6 @@ function go(url: string) {
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .server-cur { font-size: 24rpx; color: #909399; margin-bottom: 16rpx; word-break: break-all; }
 .ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
 .btn-cancel { background: #f5f7fa; color: #909399; border-radius: 12rpx; font-size: 30rpx; }
 </style>

@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <!-- 头部：头像 + 问候语与名字一行（对齐 App） -->
     <view class="head">
       <image v-if="avatarUrl" class="avatar-img" :src="avatarUrl" mode="aspectFill" />
@@ -100,6 +100,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '../../api';
@@ -228,10 +230,17 @@ function logout() {
 </script>
 
 <style>
-.page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; padding-bottom: 60rpx; }
+.page {
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; padding-bottom: 60rpx; }
 .head {
   display: flex; align-items: center; gap: 20rpx;
-  background: linear-gradient(135deg, #409eff, #60a5fa);
+  background: linear-gradient(135deg, var(--primary), #60a5fa);
   border-radius: 20rpx; padding: 32rpx 28rpx; margin-bottom: 20rpx; color: #fff;
 }
 .avatar-img { width: 108rpx; height: 108rpx; border-radius: 50%; border: 4rpx solid rgba(255,255,255,0.5); flex-shrink: 0; }
@@ -272,6 +281,6 @@ function logout() {
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .server-cur { font-size: 24rpx; color: #909399; margin-bottom: 16rpx; word-break: break-all; }
 .ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
 .btn-cancel { background: #f5f7fa; color: #606266; border-radius: 12rpx; font-size: 30rpx; }
 </style>

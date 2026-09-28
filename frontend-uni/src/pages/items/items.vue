@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <input class="search" v-model="search" placeholder="搜索商品（名称关键字）" @input="onSearch" />
 
     <view v-for="it in items" :key="it.id" class="card">
@@ -34,6 +34,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
@@ -171,14 +173,21 @@ async function remove(id: string) {
 </script>
 
 <style>
-.page { padding: 24rpx; background: #f5f7fa; min-height: 100vh; }
+.page {
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);; min-height: 100vh; }
 .search { background: #fff; border-radius: 12rpx; padding: 18rpx 24rpx; margin-bottom: 20rpx; font-size: 28rpx; }
-.btn-add { background: #409eff; color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
+.btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
 .card { background: #fff; border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; margin-bottom: 12rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .cat { margin-left: 16rpx; font-size: 24rpx; color: #909399; }
-.op { margin-left: auto; color: #409eff; font-size: 26rpx; }
+.op { margin-left: auto; color: var(--primary); font-size: 26rpx; }
 .del { margin-left: 32rpx; color: #f56c6c; font-size: 26rpx; }
 .price { font-size: 26rpx; color: #606266; margin-top: 6rpx; }
 .empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
@@ -188,6 +197,6 @@ async function remove(id: string) {
 .ipt { background: #f5f7fa; border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .price-row { display: flex; gap: 12rpx; align-items: center; }
 .price-row .s { flex: 1; min-width: 0; }
-.btn-sub { background: #fff; border: 1rpx solid #409eff; color: #409eff; border-radius: 10rpx; font-size: 26rpx; margin-bottom: 16rpx; }
-.btn-save { background: #409eff; color: #fff; border-radius: 12rpx; font-size: 30rpx; }
+.btn-sub { background: #fff; border: 1rpx solid var(--primary); color: var(--primary); border-radius: 10rpx; font-size: 26rpx; margin-bottom: 16rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page" :style="tv">
     <view class="brand">陶朱<text class="ver"> v{{ APP_VERSION }}</text></view>
 
     <view class="form">
@@ -14,6 +14,8 @@
 </template>
 
 <script setup lang="ts">
+import { useThemeVars } from '../../theme';
+const tv = useThemeVars();
 import { ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import { request, getApiBase, setApiBase, setToken, setRole, getToken } from '../../api';
@@ -85,8 +87,13 @@ async function submit() {
 
 <style>
 .page {
-  min-height: 100vh;
-  background: #f5f7fa;
+  background:
+      radial-gradient(circle at 18% 12%, var(--primary-soft) 0 6rpx, transparent 10rpx),
+      radial-gradient(circle at 75% 20%, var(--primary-soft) 0 9rpx, transparent 14rpx),
+      radial-gradient(circle at 35% 42%, var(--primary-soft) 0 5rpx, transparent 9rpx),
+      radial-gradient(circle at 65% 58%, var(--primary-soft) 0 11rpx, transparent 16rpx),
+      radial-gradient(circle at 20% 75%, var(--primary-soft) 0 7rpx, transparent 12rpx),
+      linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%);;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -114,7 +121,7 @@ async function submit() {
 }
 .btn {
   margin-top: 12rpx;
-  background: #409eff;
+  background: var(--primary);
   color: #fff;
   border-radius: 12rpx;
   font-size: 32rpx;
