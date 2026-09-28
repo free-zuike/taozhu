@@ -139,7 +139,7 @@ onShow(async () => {
         name: (d.user.display_name || d.user.username || user.value.name),
         role: isAdmin.value ? '老板' : '店员',
       };
-      avatarUrl.value = d.user.avatar ? `${getApiBase()}/auth/avatar?token=${getToken()}` : '';
+      avatarUrl.value = d.user.avatar ? `${getApiBase()}/api/v1/auth/avatar?token=${getToken()}` : '';
     }
   } catch (e) {
     // 用户信息拉取失败不阻塞页面

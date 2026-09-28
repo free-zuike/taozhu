@@ -53,7 +53,7 @@ class TaozhuColors extends ThemeExtension<TaozhuColors> {
 
   static TaozhuColors light(Color primary) => TaozhuColors(
         primary: primary,
-        card: Colors.white.withValues(alpha: 0.92),
+        card: Colors.white.withValues(alpha: 0.88),
         field: const Color(0xFFF5F7FA),
         textMain: const Color(0xFF111827),
         textSub: const Color(0xFF909399),
@@ -65,7 +65,7 @@ class TaozhuColors extends ThemeExtension<TaozhuColors> {
 
   static TaozhuColors dark(Color primary) => TaozhuColors(
         primary: primary,
-        card: const Color(0xFF1C1C1E).withValues(alpha: 0.92),
+        card: const Color(0xFF1C1C1E).withValues(alpha: 0.88),
         field: const Color(0xFF2C2C2E),
         textMain: Colors.white,
         textSub: const Color(0xFF9CA3AF),
@@ -486,8 +486,8 @@ abstract class _BaseSkinPainter extends CustomPainter {
       final bottom = dark ? const Color(0xFF15181F) : Color.lerp(primary, Colors.white, 0.58)!;
       return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
     }
-    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.58)!;
-    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.26)!;
+    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.74)!;
+    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.5)!;
     return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
   }
 
@@ -511,22 +511,25 @@ class _CoinPainter extends _BaseSkinPainter {
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..shader = bottomGradient().createShader(Offset.zero & size));
     final rnd = Random(11);
-    final coins = compact ? 4 : 3;
+    final coins = compact ? 4 : 8;
     final r = size.width * (compact ? 0.085 : 0.05);
     for (var i = 0; i < coins; i++) {
+      // 全屏：铜钱均匀铺满整页高度（0.08~0.9），不再挤在顶部一条
       final cx = rnd.nextDouble() * size.width;
-      final cy = size.height * (compact ? 0.2 + rnd.nextDouble() * 0.6 : 0.12 + rnd.nextDouble() * 0.3);
+      final cy = compact
+          ? size.height * (0.2 + rnd.nextDouble() * 0.6)
+          : size.height * (0.08 + rnd.nextDouble() * 0.82);
       final cr = r * (0.8 + rnd.nextDouble() * 0.5);
       final stroke = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = cr * 0.13
-        ..color = ink(compact ? 0.62 : 0.4);
+        ..color = ink(compact ? 0.62 : 0.62);
       canvas.drawCircle(Offset(cx, cy), cr, stroke);
       final hole = cr * 0.34;
       final holePaint = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = cr * 0.09
-        ..color = ink(compact ? 0.72 : 0.48);
+        ..color = ink(compact ? 0.72 : 0.72);
       canvas.drawRect(Rect.fromCenter(center: Offset(cx, cy), width: hole * 2, height: hole * 2), holePaint);
     }
   }
@@ -539,28 +542,29 @@ class _BambooPainter extends _BaseSkinPainter {
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..shader = bottomGradient().createShader(Offset.zero & size));
     final rnd = Random(17);
-    final stalks = compact ? 3 : 2;
+    final stalks = compact ? 3 : 4;
     for (var i = 0; i < stalks; i++) {
-      final x = size.width * (0.16 + i * 0.34 + rnd.nextDouble() * 0.05);
+      // 全屏：竹竿均匀分布整页高度（0.08~0.88），竹叶全高散落
+      final x = size.width * (0.14 + i * 0.26 + rnd.nextDouble() * 0.05);
       final w = size.width * (compact ? 0.028 : 0.02);
-      final topY = size.height * (compact ? 0.16 : 0.1);
-      final h = size.height * (compact ? 0.62 : 0.4);
+      final topY = compact ? size.height * 0.16 : size.height * (0.08 + i * 0.02);
+      final h = compact ? size.height * 0.62 : size.height * (0.34 + (i % 2) * 0.2) + size.height * 0.2;
       final paint = Paint()
-        ..color = ink(compact ? 0.6 : 0.35)
+        ..color = ink(compact ? 0.6 : 0.55)
         ..strokeWidth = w
         ..strokeCap = StrokeCap.round;
       canvas.drawLine(Offset(x, topY), Offset(x, topY + h), paint);
       final node = Paint()
-        ..color = ink(compact ? 0.5 : 0.3)
+        ..color = ink(compact ? 0.5 : 0.45)
         ..strokeWidth = w * 0.28;
-      for (var n = 0; n < 2; n++) {
-        final ny = topY + h * (0.38 + n * 0.3);
+      for (var n = 0; n < 3; n++) {
+        final ny = topY + h * (0.2 + n * 0.24);
         canvas.drawLine(Offset(x - w * 0.7, ny), Offset(x + w * 0.7, ny), node);
       }
-      final leaf = Paint()..color = ink(compact ? 0.72 : 0.48);
+      final leaf = Paint()..color = ink(compact ? 0.72 : 0.68);
       for (var l = 0; l < 3; l++) {
         final lx = x + w * (0.6 + rnd.nextDouble() * 0.5);
-        final ly = topY + h * (0.1 + rnd.nextDouble() * 0.3);
+        final ly = topY + h * (0.1 + rnd.nextDouble() * 0.8);
         final len = size.width * (compact ? 0.055 : 0.035);
         final dir = rnd.nextBool() ? 1 : -1;
         canvas.drawPath(
@@ -582,20 +586,23 @@ class _LedgerPainter extends _BaseSkinPainter {
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..shader = bottomGradient().createShader(Offset.zero & size));
-    final n = compact ? 2 : 1;
+    final n = compact ? 2 : 3;
     for (var i = 0; i < n; i++) {
+      // 全屏：账本沿整页高度铺 3 本（顶部/中部/下部），不再只画顶部一条
       final cx = size.width * (compact ? 0.28 + i * 0.44 : 0.5);
-      final cy = size.height * (compact ? 0.32 + i * 0.3 : 0.22);
-      final w = size.width * (compact ? 0.36 : 0.3);
-      final h = w * (compact ? 0.5 : 0.38);
+      final cy = compact
+          ? size.height * (0.32 + i * 0.3)
+          : size.height * (0.16 + i * 0.3);
+      final w = size.width * (compact ? 0.36 : 0.34);
+      final h = w * (compact ? 0.5 : 0.4);
       final frame = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = size.width * 0.009
-        ..color = ink(compact ? 0.68 : 0.42);
+        ..color = ink(compact ? 0.68 : 0.6);
       final rect = Rect.fromCenter(center: Offset(cx, cy), width: w, height: h);
       canvas.drawRRect(RRect.fromRectAndRadius(rect, Radius.circular(w * 0.04)), frame);
       final line = Paint()
-        ..color = ink(compact ? 0.58 : 0.38)
+        ..color = ink(compact ? 0.58 : 0.55)
         ..strokeWidth = size.width * 0.007;
       canvas.drawLine(Offset(cx - w * 0.3, cy - h * 0.3), Offset(cx + w * 0.3, cy - h * 0.3), line);
       for (var r = 0; r < 3; r++) {
@@ -613,20 +620,24 @@ class _FlowPainter extends _BaseSkinPainter {
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..shader = bottomGradient().createShader(Offset.zero & size));
-    final cy = size.height * (compact ? 0.5 : 0.26);
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * (compact ? 0.03 : 0.02)
-      ..strokeCap = StrokeCap.round
-      ..color = ink(compact ? 0.7 : 0.45);
-    final path = Path()
-      ..moveTo(size.width * 0.08, cy)
-      ..cubicTo(size.width * 0.35, cy - size.height * (compact ? 0.2 : 0.12),
-          size.width * 0.65, cy + size.height * (compact ? 0.2 : 0.12), size.width * 0.92, cy);
-    canvas.drawPath(path, paint);
-    final len = size.width * (compact ? 0.055 : 0.035);
-    _arrow(canvas, Offset(size.width * 0.92, cy), len, 0, paint);
-    _arrow(canvas, Offset(size.width * 0.08, cy), len, pi, paint);
+    // 全屏：3 条进出曲线铺满整页高度（顶部/中部/下部各一条）
+    final curves = compact ? 1 : 3;
+    for (var cIdx = 0; cIdx < curves; cIdx++) {
+      final cy = compact ? size.height * 0.5 : size.height * (0.2 + cIdx * 0.3);
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.width * (compact ? 0.03 : 0.02)
+        ..strokeCap = StrokeCap.round
+        ..color = ink(compact ? 0.7 : 0.62);
+      final amp = compact ? 0.2 : 0.1 + cIdx * 0.02;
+      final path = Path()
+        ..moveTo(size.width * 0.08, cy)
+        ..cubicTo(size.width * 0.35, cy - size.height * amp, size.width * 0.65, cy + size.height * amp, size.width * 0.92, cy);
+      canvas.drawPath(path, paint);
+      final len = size.width * (compact ? 0.055 : 0.035);
+      _arrow(canvas, Offset(size.width * 0.92, cy), len, 0, paint);
+      _arrow(canvas, Offset(size.width * 0.08, cy), len, pi, paint);
+    }
   }
 
   void _arrow(Canvas canvas, Offset tip, double len, double angle, Paint paint) {
@@ -646,17 +657,22 @@ class _RipplePainter extends _BaseSkinPainter {
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..shader = bottomGradient().createShader(Offset.zero & size));
     final rnd = Random(29);
-    final groups = compact ? 3 : 2;
+    final groups = compact ? 3 : 5;
     for (var g = 0; g < groups; g++) {
-      final cx = size.width * (compact ? 0.25 + g * 0.26 : 0.2 + g * 0.32);
-      final cy = size.height * (compact ? 0.3 + g * 0.22 : 0.2 + g * 0.14);
-      final baseR = size.width * (compact ? 0.05 : 0.03);
+      // 全屏：5 组涟漪铺满整页（横纵错落 0.12~0.86），不再挤在顶部两条
+      final cx = compact
+          ? size.width * (0.25 + g * 0.26)
+          : size.width * (0.22 + (g % 2) * 0.3 + rnd.nextDouble() * 0.1);
+      final cy = compact
+          ? size.height * (0.3 + g * 0.22)
+          : size.height * (0.14 + g * 0.18 + rnd.nextDouble() * 0.05);
+      final baseR = size.width * (compact ? 0.05 : 0.036);
       for (var ring = 0; ring < 3; ring++) {
         final r = baseR * (1 + ring * 0.9);
         final paint = Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = size.width * (compact ? 0.009 : 0.006)
-          ..color = ink((compact ? 0.52 : 0.32) - ring * 0.1);
+          ..color = ink((compact ? 0.52 : 0.55) - ring * 0.1);
         canvas.drawCircle(Offset(cx, cy), r, paint);
       }
     }
