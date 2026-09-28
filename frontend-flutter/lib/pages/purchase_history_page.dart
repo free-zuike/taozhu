@@ -558,71 +558,78 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 月份 + 进货统计同一行（对齐交易页形态：左月份切换，右三列统计）
                 Row(
                   children: [
                     InkWell(
                       borderRadius: BorderRadius.circular(8),
                       onTap: _pickMonth,
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                        child: Row(
+                        padding: const EdgeInsets.only(right: 12),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text('$_selYear年$_selMonth月',
-                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.textMain)),
-                            const SizedBox(width: 2),
-                            Icon(Icons.expand_more, size: 16, color: c.textSub),
+                            Row(children: [
+                              Text('$_selYear年$_selMonth月',
+                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: c.primary)),
+                              const SizedBox(width: 2),
+                              Icon(Icons.expand_more, size: 16, color: c.textSub),
+                            ]),
+                            const SizedBox(height: 2),
+                            Text('点击切换', style: TextStyle(fontSize: 10, color: c.textSub)),
                           ],
                         ),
                       ),
                     ),
-                    const Spacer(),
-                    // 与交易页一致：去左右箭头，点标题弹滚轮选择；列表上下滑动月份联动
+                    Container(width: 1, height: 40, color: c.divider),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('¥${fmtMoney(_monthExpense)}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: c.danger)),
+                                    const SizedBox(height: 2),
+                                    Text('进货金额', style: TextStyle(fontSize: 10, color: c.textSub)),
+                                  ],
+                                ),
+                              ),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('$_monthCount',
+                                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: c.textMain)),
+                                    const SizedBox(height: 2),
+                                    Text('天数', style: TextStyle(fontSize: 10, color: c.textSub)),
+                                  ],
+                                ),
+                              ),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('$_monthItems',
+                                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: c.textMain)),
+                                    const SizedBox(height: 2),
+                                    Text('商品件数', style: TextStyle(fontSize: 10, color: c.textSub)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
-                ),
-                const SizedBox(height: 4),
-                // 进货统计：金额 + 笔数 + 商品件数（与月份行合成一块，透明露出背景图案）
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('进货金额', style: TextStyle(fontSize: 11, color: c.textSub)),
-                            const SizedBox(height: 3),
-                            Text('¥${fmtMoney(_monthExpense)}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: c.danger)),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('天数', style: TextStyle(fontSize: 11, color: c.textSub)),
-                            const SizedBox(height: 3),
-                            Text('$_monthCount',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.textMain)),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('商品件数', style: TextStyle(fontSize: 11, color: c.textSub)),
-                            const SizedBox(height: 3),
-                            Text('$_monthItems',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.textMain)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
               ],
             ),

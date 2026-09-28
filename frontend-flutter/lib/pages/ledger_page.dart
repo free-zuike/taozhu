@@ -615,44 +615,41 @@ class _LedgerPageState extends State<LedgerPage> {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(14, 8, 10, 12),
       // 透明：与店铺选择合成一块，露出主题背景图案
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // 头部：月份切换——点击年月弹选择器（对齐参考项目：无左右箭头，点选切换）
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: _pickMonth,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Row(
-                    children: [
-                      Icon(Icons.calendar_month_outlined, size: 16, color: c.primary),
-                      const SizedBox(width: 4),
-                      Text('$y年$m月',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.textMain)),
-                      const SizedBox(width: 2),
-                      Icon(Icons.expand_more, size: 16, color: c.textSub),
-                    ],
-                  ),
-                ),
+          // 左侧：月份（点击切换）——与右侧统计同一行（对齐参考项目头部形态）
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: _pickMonth,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('$y年$m月',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: c.primary)),
+                  const SizedBox(height: 2),
+                  Text('点击切换', style: TextStyle(fontSize: 10, color: c.textSub)),
+                ],
               ),
-              const Spacer(),
-            ],
+            ),
           ),
-          const SizedBox(height: 2),
-          Row(
-            children: [
-              col('售出', sold, c.primary),
-              const SizedBox(width: 3),
-              col('收入', income, income > 0 ? c.success : c.warning),
-              const SizedBox(width: 3),
-              col('未回款', debt, debt > 0 ? c.warning : c.textSub),
-              const SizedBox(width: 3),
-              col('结余', balance, balance >= 0 ? c.success : c.danger),
-            ],
+          Container(width: 1, height: 40, color: c.divider),
+          const SizedBox(width: 10),
+          // 右侧：四列统计（售出/收入/未回款/结余）
+          Expanded(
+            child: Row(
+              children: [
+                col('售出', sold, c.primary),
+                const SizedBox(width: 3),
+                col('收入', income, income > 0 ? c.success : c.warning),
+                const SizedBox(width: 3),
+                col('未回款', debt, debt > 0 ? c.warning : c.textSub),
+                const SizedBox(width: 3),
+                col('结余', balance, balance >= 0 ? c.success : c.danger),
+              ],
+            ),
           ),
         ],
       ),
