@@ -330,12 +330,13 @@ class ThemeConfig extends ChangeNotifier {
       final pid = '${d['preset_id'] ?? ''}';
       final sid = '${d['skin_id'] ?? ''}';
       final bg = d['bg_enabled'] == true;
-      // 服务器无主题配置（从未设置过）→ 不覆盖本地：否则 bg_enabled 空值会关闭本地已开启的背景
-      if (pid.isEmpty && sid.isEmpty) return;
+      final hasBg = d.containsKey('bg_enabled') && d['bg_enabled'] is bool;
+      // 服务器无主题配置（从未设置过）→ 不覆盖本地：否则空值会关闭本地已开启的背景
+      if (pid.isEmpty && sid.isEmpty && !hasBg) return;
       var changed = false;
       if (pid.isNotEmpty && pid != _presetId) { _presetId = pid; changed = true; }
       if (sid.isNotEmpty && sid != _skinId) { _skinId = sid; changed = true; }
-      if (bg != _bgEnabled) { _bgEnabled = bg; changed = true; }
+      if (hasBg && bg != _bgEnabled) { _bgEnabled = bg; changed = true; }
       if (changed) {
         final p = await SharedPreferences.getInstance();
         await p.setString(_kPreset, _presetId);
@@ -356,8 +357,18 @@ Widget themeBackgroundWrap(BuildContext context, Widget? child) {
   final cfg = ThemeConfig.instance;
   final dark = Theme.of(context).brightness == Brightness.dark;
   if (!cfg.bgEnabled) {
-    // 纯色底（无背景功能时兜底，避免透明透黑）
-    return Container(color: dark ? const Color(0xFF121212) : const Color(0xFFF5F7FA), child: child);
+    // 背景开关关闭也保留主题渐变（不显示纯白）：背景始终可见
+    final preset = cfg.preset;
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
+      child: child,
+    );
   }
   final preset = cfg.preset;
   final skin = skinPatternById(cfg.skinId);
@@ -382,7 +393,17 @@ Widget themePageBackground(BuildContext context) {
   final cfg = ThemeConfig.instance;
   final dark = Theme.of(context).brightness == Brightness.dark;
   if (!cfg.bgEnabled) {
-    return ColoredBox(color: dark ? const Color(0xFF17181C) : const Color(0xFFF5F7FA));
+    // 背景开关关闭也保留主题渐变（不显示纯白）：背景始终可见
+    final preset = cfg.preset;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
+    );
   }
   final preset = cfg.preset;
   final skin = skinPatternById(cfg.skinId);
@@ -404,7 +425,19 @@ Widget themePageBackground(BuildContext context) {
 Widget appBarBackground(BuildContext context) {
   final cfg = ThemeConfig.instance;
   final dark = Theme.of(context).brightness == Brightness.dark;
-  if (!cfg.bgEnabled) return const SizedBox.shrink();
+  if (!cfg.bgEnabled) {
+    // 背景开关关闭也保留主题渐变（不显示纯白）：背景始终可见
+    final preset = cfg.preset;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
+    );
+  }
   final preset = cfg.preset;
   final skin = skinPatternById(cfg.skinId);
   if (skin == null) {

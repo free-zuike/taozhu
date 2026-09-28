@@ -96,74 +96,97 @@ class _DevicesPageState extends State<DevicesPage> {
                       ),
                     ],
                   )
-                : ListView(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    children: [
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Table(
-                          defaultColumnWidth: const FixedColumnWidth(120),
-                          border: TableBorder.all(color: c.divider.withValues(alpha: 0.4), width: 0.6),
-                          children: [
-                            // 表头
-                            TableRow(
-                              decoration: BoxDecoration(color: c.primary.withValues(alpha: 0.08)),
-                              children: [
-                                for (final h in ['设备', '平台', 'IP', '版本', '最近活跃', ''])
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    child: Text(h,
-                                        style: TextStyle(
-                                            fontSize: 13, fontWeight: FontWeight.w700, color: c.textMain)),
+                : ListView.separated(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: _devices.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (ctx, i) {
+                      final dev = _devices[i];
+                      final platform = '${dev['platform'] ?? ''}';
+                      final icon = platform == 'Web'
+                          ? Icons.language
+                          : platform == '小程序'
+                              ? Icons.phone_iphone
+                              : Icons.smartphone;
+                      final ip = '${dev['ip'] ?? ''}';
+                      final ver = '${dev['version'] ?? ''}';
+                      return Card(
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12), side: BorderSide(color: c.divider)),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 8, 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(children: [
+                                Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                      color: c.primary.withValues(alpha: 0.12),
+                                      borderRadius: BorderRadius.circular(10)),
+                                  child: Icon(icon, size: 22, color: c.primary),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('${dev['device_name'] ?? ''}',
+                                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: c.textMain),
+                                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                                      const SizedBox(height: 2),
+                                      Text(platform,
+                                          style: TextStyle(fontSize: 11, color: c.textSub)),
+                                    ],
                                   ),
-                              ],
-                            ),
-                            for (final dev in _devices)
-                              TableRow(
-                                decoration: BoxDecoration(color: c.card.withValues(alpha: 0.6)),
+                                ),
+                                IconButton(
+                                  tooltip: '删除设备',
+                                  icon: const Icon(Icons.delete_outline, color: Color(0xFFEF4444)),
+                                  onPressed: _busy ? null : () => _remove(dev),
+                                ),
+                              ]),
+                              const SizedBox(height: 6),
+                              Container(height: 1, color: c.divider),
+                              const SizedBox(height: 10),
+                              // 三格信息：IP / 版本 / 最近活跃（对齐店铺卡布局）
+                              Row(
                                 children: [
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    child: Text('${dev['device_name'] ?? ''}',
-                                        style: TextStyle(
-                                            fontSize: 13, fontWeight: FontWeight.w600, color: c.textMain)),
+                                  Expanded(
+                                    child: Column(children: [
+                                      Text(ip.isEmpty ? '--' : ip,
+                                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: ip.isEmpty ? c.textSub : c.textMain)),
+                                      const SizedBox(height: 2),
+                                      Text('IP', style: TextStyle(fontSize: 11, color: c.textSub)),
+                                    ]),
                                   ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    child: Text('${dev['platform'] ?? ''}', style: TextStyle(fontSize: 12, color: c.textSub)),
+                                  Container(width: 1, height: 28, color: c.divider),
+                                  Expanded(
+                                    child: Column(children: [
+                                      Text(ver.isEmpty ? '--' : 'v$ver',
+                                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: ver.isEmpty ? c.textSub : c.textMain)),
+                                      const SizedBox(height: 2),
+                                      Text('版本', style: TextStyle(fontSize: 11, color: c.textSub)),
+                                    ]),
                                   ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    child: Text('${dev['ip'] ?? ''}', style: TextStyle(fontSize: 12, color: c.textSub)),
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    child: Text('${dev['version'] ?? ''}'.isNotEmpty ? 'v${dev['version']}' : '',
-                                        style: TextStyle(fontSize: 12, color: c.textSub)),
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    child: Text(_shortTime('${dev['last_active_at'] ?? ''}'),
-                                        style: TextStyle(fontSize: 12, color: c.textSub)),
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                    child: InkWell(
-                                      borderRadius: BorderRadius.circular(6),
-                                      onTap: _busy ? null : () => _remove(dev),
-                                      child: Padding(
-                                        padding: const EdgeInsets.all(4),
-                                        child: Icon(Icons.delete_outline, size: 18, color: const Color(0xFFEF4444)),
-                                      ),
-                                    ),
+                                  Container(width: 1, height: 28, color: c.divider),
+                                  Expanded(
+                                    child: Column(children: [
+                                      Text(_shortTime('${dev['last_active_at'] ?? ''}'),
+                                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.textMain)),
+                                      const SizedBox(height: 2),
+                                      Text('最近活跃', style: TextStyle(fontSize: 11, color: c.textSub)),
+                                    ]),
                                   ),
                                 ],
                               ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      );
+                    },
                   ),
       ),
     );
