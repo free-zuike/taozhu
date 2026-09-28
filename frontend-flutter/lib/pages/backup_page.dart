@@ -214,7 +214,10 @@ class _BackupPageState extends State<BackupPage> {
       appBar: AppBar(
         toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
-      body: ListView(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          ListView(
         padding: const EdgeInsets.all(16),
         children: [
           _groupTitle(c, '备份'),
@@ -261,6 +264,8 @@ class _BackupPageState extends State<BackupPage> {
             ),
           ),
           const SizedBox(height: 24),
+        ],
+      ),
         ],
       ),
     );

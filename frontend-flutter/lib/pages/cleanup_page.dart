@@ -433,7 +433,10 @@ class _CleanupPageState extends State<CleanupPage> {
       appBar: AppBar(
         toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
-      body: Column(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          Column(
         children: [
           // 统计卡
           Padding(
@@ -623,6 +626,8 @@ class _CleanupPageState extends State<CleanupPage> {
                 ),
               ),
             ),
+        ],
+      ),
         ],
       ),
     );

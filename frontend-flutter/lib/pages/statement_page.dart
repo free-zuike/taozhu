@@ -1910,7 +1910,10 @@ class _StatementPageState extends State<StatementPage> {
           ),
         ],
       ),
-      body: ListView(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Card(
@@ -2153,6 +2156,8 @@ class _StatementPageState extends State<StatementPage> {
               label: const Text('打印（按当前模板）'),
             ),
           ],
+        ],
+      ),
         ],
       ),
     );

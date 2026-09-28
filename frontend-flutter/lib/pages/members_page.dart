@@ -30,12 +30,17 @@ class _MembersPageState extends State<MembersPage> {
             ],
           ),
         ),
-        body: const TabBarView(
+        body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          const TabBarView(
           children: [
             AccountSettingsPage(embed: true),
             UsersPage(embed: true),
           ],
         ),
+        ],
+      ),
       ),
     );
   }

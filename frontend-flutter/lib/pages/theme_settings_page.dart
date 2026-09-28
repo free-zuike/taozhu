@@ -17,7 +17,10 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
       appBar: AppBar(
         toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
-      body: ListenableBuilder(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          ListenableBuilder(
         listenable: Listenable.merge([ThemeConfig.instance, themeNotifier]),
         builder: (context, _) {
           final cfg = ThemeConfig.instance;
@@ -80,6 +83,8 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
             ],
           );
         },
+      ),
+        ],
       ),
     );
   }

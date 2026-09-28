@@ -361,8 +361,13 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         // 无右上角按钮：下拉整个页面 = 重新全量同步（拉全量修复缺口）
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          _loading
+          ? const Center(child: CircularProgressIndicator()),
+        ],
+      )
           : RefreshIndicator(
               onRefresh: _fullSyncNow,
               edgeOffset: 24,

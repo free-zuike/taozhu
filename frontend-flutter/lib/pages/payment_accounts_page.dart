@@ -496,8 +496,13 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
           IconButton(tooltip: '新增账户', icon: const Icon(Icons.add), onPressed: _busy ? null : _add),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          _loading
+          ? const Center(child: CircularProgressIndicator()),
+        ],
+      )
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(

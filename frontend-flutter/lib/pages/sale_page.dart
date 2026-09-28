@@ -1186,7 +1186,10 @@ class _SalePageState extends State<SalePage> {
           ),
         ],
       ),
-      body: ListView(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         children: [
           _infoCard(),
@@ -1205,6 +1208,8 @@ class _SalePageState extends State<SalePage> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
           ),
+        ],
+      ),
         ],
       ),
       // 底部悬浮栏：合计 + 提交 固定可见，长单无需滚到底

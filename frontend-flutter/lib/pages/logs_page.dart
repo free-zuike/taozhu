@@ -103,7 +103,10 @@ class _LogsPageState extends State<LogsPage> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          Column(
         children: [
           // 级别筛选：默认全部；chips 上显示各类条数
           Padding(
@@ -147,6 +150,8 @@ class _LogsPageState extends State<LogsPage> {
                         itemBuilder: (_, i) => _entry(c, shown[shown.length - 1 - i]), // 新的在上
                       ),
           ),
+        ],
+      ),
         ],
       ),
     );

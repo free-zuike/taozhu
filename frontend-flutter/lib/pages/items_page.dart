@@ -231,7 +231,10 @@ class _ItemsPageState extends State<ItemsPage> {
             ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -332,6 +335,8 @@ class _ItemsPageState extends State<ItemsPage> {
               ),
             ),
           ),
+        ],
+      ),
         ],
       ),
     );

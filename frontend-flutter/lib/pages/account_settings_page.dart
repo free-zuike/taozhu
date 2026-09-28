@@ -374,10 +374,10 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     if (widget.embed) return body; // 「成员」页 Tab 嵌入（无 AppBar）
     return Scaffold(appBar: AppBar(
         toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
-        flexibleSpace: appBarBackground(context)), body: body);
-  }
-
-  Widget _headerCard(TaozhuColors c) {
+        flexibleSpace: appBarBackground(context)), body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          body,        ],      ));  }  Widget _headerCard(TaozhuColors c) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(16)),

@@ -95,8 +95,13 @@ class _PaymentAccountDetailPageState extends State<PaymentAccountDetailPage> {
       appBar: AppBar(
         toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          _loading
+          ? const Center(child: CircularProgressIndicator()),
+        ],
+      )
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(

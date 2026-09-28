@@ -339,7 +339,10 @@ class _ClientsPageState extends State<ClientsPage> {
           IconButton(onPressed: () => _edit(), icon: const Icon(Icons.add)),
         ],
       ),
-      body: Column(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -468,6 +471,8 @@ class _ClientsPageState extends State<ClientsPage> {
               ),
             ),
           ),
+        ],
+      ),
         ],
       ),
     );

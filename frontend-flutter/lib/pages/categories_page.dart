@@ -198,7 +198,10 @@ class _CategoriesPageState extends State<CategoriesPage> {
           IconButton(onPressed: () => _add(), icon: const Icon(Icons.add)),
         ],
       ),
-      body: Column(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -240,6 +243,8 @@ class _CategoriesPageState extends State<CategoriesPage> {
                     ),
                   ),
           ),
+        ],
+      ),
         ],
       ),
     );

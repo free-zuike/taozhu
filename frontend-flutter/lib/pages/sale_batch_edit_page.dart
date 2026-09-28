@@ -180,7 +180,10 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
       appBar: AppBar(
         toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
-      body: ListView(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          ListView(
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
         children: [
           Padding(
@@ -205,6 +208,8 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
             icon: const Icon(Icons.add, size: 18),
             label: const Text('记一笔出货（补录当天）'),
           ),
+        ],
+      ),
         ],
       ),
     );

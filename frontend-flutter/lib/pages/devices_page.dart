@@ -83,7 +83,10 @@ class _DevicesPageState extends State<DevicesPage> {
       appBar: AppBar(
         toolbarHeight: 140, // 顶部图案区加高（大面积露出背景图案）
         flexibleSpace: appBarBackground(context)), // 顶部露出主题背景（无标题文字）
-      body: RefreshIndicator(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          RefreshIndicator(
         onRefresh: _load,
         child: _loading
             ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
@@ -190,6 +193,8 @@ class _DevicesPageState extends State<DevicesPage> {
                       );
                     },
                   ),
+      ),
+        ],
       ),
     );
   }

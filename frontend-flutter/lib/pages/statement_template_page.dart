@@ -168,8 +168,13 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [TextButton(onPressed: _save, child: const Text('保存'))],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          _loading
+          ? const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        ],
+      )
           : Column(children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),

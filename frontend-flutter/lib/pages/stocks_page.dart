@@ -422,7 +422,10 @@ class _StocksPageState extends State<StocksPage> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -511,6 +514,8 @@ class _StocksPageState extends State<StocksPage> {
                     ),
                   ),
           ),
+        ],
+      ),
         ],
       ),
     );

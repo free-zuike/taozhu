@@ -53,7 +53,7 @@ class TaozhuColors extends ThemeExtension<TaozhuColors> {
 
   static TaozhuColors light(Color primary) => TaozhuColors(
         primary: primary,
-        card: Colors.white,
+        card: Colors.white.withValues(alpha: 0.92),
         field: const Color(0xFFF5F7FA),
         textMain: const Color(0xFF111827),
         textSub: const Color(0xFF909399),
@@ -65,7 +65,7 @@ class TaozhuColors extends ThemeExtension<TaozhuColors> {
 
   static TaozhuColors dark(Color primary) => TaozhuColors(
         primary: primary,
-        card: const Color(0xFF1C1C1E),
+        card: const Color(0xFF1C1C1E).withValues(alpha: 0.92),
         field: const Color(0xFF2C2C2E),
         textMain: Colors.white,
         textSub: const Color(0xFF9CA3AF),
