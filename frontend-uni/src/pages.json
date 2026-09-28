@@ -107,6 +107,12 @@
 			"style": {
 				"navigationBarTitleText": "设备管理"
 			}
+		},
+		{
+			"path": "pages/backup/backup",
+			"style": {
+				"navigationBarTitleText": "数据备份"
+			}
 		}
 	],
 	"tabBar": {

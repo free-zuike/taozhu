@@ -75,6 +75,9 @@
       <view v-if="isAdmin" class="row" @click="go('/pages/devices/devices')">
         <view class="r-ic ic-green"><text class="ic-tx">📱</text></view><text class="r-tx">设备管理</text><text class="r-arrow">›</text>
       </view>
+      <view class="row" @click="go('/pages/backup/backup')">
+        <view class="r-ic ic-orange"><text class="ic-tx">💾</text></view><text class="r-tx">数据备份</text><text class="r-arrow">›</text>
+      </view>
       <view class="row" @click="checkUpdate">
         <view class="r-ic ic-blue"><text class="ic-tx">🔄</text></view><text class="r-tx">检查更新</text><text class="r-arrow">›</text>
       </view>
