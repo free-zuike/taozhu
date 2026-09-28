@@ -172,9 +172,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
         children: [
           Positioned.fill(child: themePageBackground(context)),
           _loading
-          ? const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-        ],
-      )
+          ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
           : Column(children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
@@ -204,6 +202,8 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
               const Divider(height: 1),
               Expanded(child: _gridEditor(c)),
             ]),
+        ],
+      ),
     );
   }
 

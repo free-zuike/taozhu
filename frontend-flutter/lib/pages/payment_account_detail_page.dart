@@ -99,9 +99,7 @@ class _PaymentAccountDetailPageState extends State<PaymentAccountDetailPage> {
         children: [
           Positioned.fill(child: themePageBackground(context)),
           _loading
-          ? const Center(child: CircularProgressIndicator()),
-        ],
-      )
+          ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(
@@ -195,6 +193,8 @@ class _PaymentAccountDetailPageState extends State<PaymentAccountDetailPage> {
                 ],
               ),
             ),
+        ],
+      ),
     );
   }
 }

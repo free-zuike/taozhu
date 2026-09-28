@@ -365,9 +365,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
         children: [
           Positioned.fill(child: themePageBackground(context)),
           _loading
-          ? const Center(child: CircularProgressIndicator()),
-        ],
-      )
+          ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _fullSyncNow,
               edgeOffset: 24,
@@ -529,6 +527,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 ],
                 ),
               ),
+        ],
+      ),
     );
   }
 

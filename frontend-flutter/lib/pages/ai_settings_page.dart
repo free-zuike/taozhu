@@ -477,9 +477,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         children: [
           Positioned.fill(child: themePageBackground(context)),
           _loading
-          ? const Center(child: CircularProgressIndicator()),
-        ],
-      )
+          ? const Center(child: CircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -533,6 +531,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                 const SizedBox(height: 24),
               ],
             ),
+        ],
+      ),
     );
   }
 

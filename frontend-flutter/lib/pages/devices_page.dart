@@ -87,21 +87,21 @@ class _DevicesPageState extends State<DevicesPage> {
         children: [
           Positioned.fill(child: themePageBackground(context)),
           RefreshIndicator(
-        onRefresh: _load,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-            : _devices.isEmpty
-                ? ListView(
-                    children: [
-                      const SizedBox(height: 80),
-                      Center(child: Text('暂无登录设备', style: TextStyle(color: c.textSub))),
-                      const SizedBox(height: 8),
-                      Center(
-                        child: Text('登录过的设备会显示在这里', style: TextStyle(fontSize: 12, color: c.textSub)),
-                      ),
-                    ],
-                  )
-                : ListView.separated(
+            onRefresh: _load,
+            child: _loading
+                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                : _devices.isEmpty
+                    ? ListView(
+                        children: [
+                          const SizedBox(height: 80),
+                          Center(child: Text('暂无登录设备', style: TextStyle(color: c.textSub))),
+                          const SizedBox(height: 8),
+                          Center(
+                            child: Text('登录过的设备会显示在这里', style: TextStyle(fontSize: 12, color: c.textSub)),
+                          ),
+                        ],
+                      )
+                    : ListView.separated(
                     padding: const EdgeInsets.all(12),
                     itemCount: _devices.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 8),

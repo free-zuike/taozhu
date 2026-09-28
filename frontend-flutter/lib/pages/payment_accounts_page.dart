@@ -500,9 +500,7 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
         children: [
           Positioned.fill(child: themePageBackground(context)),
           _loading
-          ? const Center(child: CircularProgressIndicator()),
-        ],
-      )
+          ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(
@@ -585,6 +583,8 @@ class _PaymentAccountsPageState extends State<PaymentAccountsPage> {
                 ],
               ),
             ),
+        ],
+      ),
     );
   }
 }
