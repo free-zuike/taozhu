@@ -119,7 +119,7 @@ async function testAll() {
 </script>
 
 <style>
-.page { padding: 24rpx; background: var(--page-bg); min-height: 100vh; }
+.page { padding: 24rpx;  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; }
 .card { background: var(--card-bg); border-radius: 20rpx; padding: 8rpx 24rpx; margin-bottom: 24rpx; }
 .p-head { padding: 20rpx 0 8rpx; }

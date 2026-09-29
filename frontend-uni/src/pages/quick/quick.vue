@@ -32,7 +32,7 @@ function go(url: string) {
 </script>
 
 <style>
-.page { background: var(--page-bg); min-height: 100vh; }
+.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .tip { color: var(--text-sub); font-size: 26rpx; margin-bottom: 24rpx; }
 .grid { display: flex; flex-wrap: wrap; justify-content: space-between; }
 .cell {

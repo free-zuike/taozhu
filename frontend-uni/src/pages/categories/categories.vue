@@ -130,7 +130,7 @@ async function remove(c: Cat) {
 </script>
 
 <style>
-.page { background: var(--page-bg); min-height: 100vh; }
+.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .seg { display: flex; background: var(--card-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }

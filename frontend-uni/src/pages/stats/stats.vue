@@ -102,7 +102,7 @@ async function onYear(e: { detail: { value: number } }) {
 </script>
 
 <style>
-.page { background: var(--page-bg); min-height: 100vh; }
+.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .card-title { display: flex; justify-content: space-between; align-items: center; font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .year-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }

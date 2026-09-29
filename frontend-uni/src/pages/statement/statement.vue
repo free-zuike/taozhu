@@ -195,7 +195,7 @@ function copyCsv() {
 </script>
 
 <style>
-.page { background: var(--page-bg); min-height: 100vh; }
+.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
 .field { margin-bottom: 20rpx; }
 .field-inner { display: flex; justify-content: space-between; }

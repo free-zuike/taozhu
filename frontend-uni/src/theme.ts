@@ -228,17 +228,18 @@ export function skinPreviewCss(skin: string, primary: string): string {
   return uri ? `${uri}, #ffffff` : '#f5f7fa';
 }
 
-/** 页面背景 CSS（渐变底 + 所选图案 SVG 层；图案颜色跟随主题主色）
- *  透明度对齐 App 全屏 painter：亮色 ink rgba(primary,0.14~0.26) 区间，暗色白 0.14~0.26 */
-function pageBackgroundCss(primary: string, dark: boolean, skin: string): string {
+/** 页面背景 CSS：小程序 WXSS 的 background 简写不支持多层 data URI（SVG 图案层会白屏）——
+ *  拆两层：--bg-pattern（SVG data URI 层）+ --bg-gradient（渐变底色层），页面 .page 用
+ *  background-image: var(--bg-pattern), var(--bg-gradient) 组合（image 多背景小程序支持） */
+function pageBackgroundVars(primary: string, dark: boolean, skin: string): { pattern: string; gradient: string } {
   const ink = dark ? 'rgba(255,255,255,0.24)' : rgba(primary, 0.22);
   const ink2 = dark ? 'rgba(255,255,255,0.15)' : rgba(primary, 0.14);
   const baseTop = dark ? '#181b22' : alpha(primary, '14');
   const baseBottom = dark ? '#12151c' : '#f5f7fa';
   const gradient = `linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
-  if (skin === 'none') return gradient;
+  if (skin === 'none') return { pattern: '', gradient };
   const uri = skinSvgUri(skin, { ink, ink2 });
-  return uri ? `${uri}, ${gradient}` : gradient;
+  return { pattern: uri, gradient };
 }
 
 /**
@@ -255,11 +256,15 @@ export function useThemeVars() {
     const textSub = dark ? '#9aa2b3' : '#909399';
     const divider = dark ? '#2e3440' : '#f0f2f5';
     const inputBg = dark ? '#2a303c' : '#f5f7fa';
+    const bg = pageBackgroundVars(primary, dark, skin);
+    // 小程序 WXSS background 简写不支持多层 data URI；组合用 background-image 多背景（拆两层变量）
     vars.value = {
       '--primary': primary,
       '--primary-soft': alpha(primary, '1F'),
       '--primary-fade': alpha(primary, '14'),
-      '--page-bg': pageBackgroundCss(primary, dark, skin),
+      '--page-bg': bg.pattern ? `${bg.pattern}, ${bg.gradient}` : bg.gradient,
+      '--bg-pattern': bg.pattern || 'none',
+      '--bg-gradient': bg.gradient,
       '--card-bg': cardBg,
       '--text-main': textMain,
       '--text-sub': textSub,
@@ -271,8 +276,21 @@ export function useThemeVars() {
       '--danger-bg': 'rgba(245,108,108,0.14)',
       '--violet-bg': 'rgba(124,77,255,0.12)',
     };
+    applyTabBar(dark, primary);
   };
   load();
   onShow(load);
   return vars;
+}
+
+/** tabBar 深色适配：微信原生 tabBar 不随页面 CSS 变量，主题加载/切换时动态设置底部栏配色 */
+function applyTabBar(dark: boolean, primary: string) {
+  try {
+    uni.setTabBarStyle({
+      color: dark ? '#9aa2b3' : '#909399',
+      selectedColor: primary,
+      backgroundColor: dark ? '#181b22' : '#ffffff',
+      borderStyle: dark ? 'black' : 'white',
+    });
+  } catch (_) {}
 }

@@ -216,7 +216,10 @@ attachmentsRouter.get('/in-use', async (c) => {
   purchases.results.forEach((r) => add('purchase', r.id));
   purchaseItems.results.forEach((r) => add('purchase_item', r.id));
   payments.results.forEach((r) => add('payment', r.id));
-  for (const prefix of ['taozhu/images/attachments/', 'taozhu/attachments/', '']) {
+  // 附件前缀：现行规范 + 历史规范 + 根级历史（sale/s1/a.jpg）。不用空前缀扫全 bucket——
+  // 全桶含备份/头像等大量对象，list 分页慢→前端 in-use 拉取超时→本地孤儿扫不出（性能根因）。
+  const scanPrefixes = ['taozhu/images/attachments/', 'taozhu/attachments/', 'sale/', 'sale_item/', 'purchase/', 'purchase_item/', 'payment/'];
+  for (const prefix of scanPrefixes) {
     let cursor: string | undefined;
     do {
       const r = await store.list(prefix, cursor);
@@ -272,7 +275,9 @@ attachmentsRouter.get('/orphans', async (c) => {
   purchaseItems.results.forEach((r) => add('purchase_item', r.id));
   payments.results.forEach((r) => add('payment', r.id));
   const orphans: Array<{ key: string; entity: string; id: string; size: number }> = [];
-  for (const prefix of ['taozhu/images/attachments/', 'taozhu/attachments/', '']) {
+  // 附件前缀同 in-use：限定实体前缀扫描，避免空前缀全 bucket（含备份/头像）拖慢列表
+  const scanPrefixes = ['taozhu/images/attachments/', 'taozhu/attachments/', 'sale/', 'sale_item/', 'purchase/', 'purchase_item/', 'payment/'];
+  for (const prefix of scanPrefixes) {
     let cursor: string | undefined;
     do {
       const r = await store.list(prefix, cursor);

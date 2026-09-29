@@ -300,7 +300,7 @@ async function removeAttach(key: string) {
 </script>
 
 <style>
-.page { background: var(--page-bg); min-height: 100vh; }
+.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .month-card { background: var(--card-bg); border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; border: 1rpx solid var(--divider); }
 .month-head { display: flex; align-items: center; justify-content: center; margin-bottom: 14rpx; }
 .month-label { font-size: 30rpx; font-weight: bold; color: var(--text-main); }

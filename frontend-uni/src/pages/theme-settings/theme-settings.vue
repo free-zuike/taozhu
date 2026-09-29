@@ -2,7 +2,7 @@
   <view class="page" :style="tv">
     <view class="group-title">配色主题</view>
     <view class="presets">
-      <view v-for="p in presets" :key="p.id" class="preset" @click="cur = p.id">
+      <view v-for="p in presets" :key="p.id" class="preset" @click="pickPreset(p)">
         <view class="swatch" :style="{ background: p.color }">
           <text v-if="cur === p.id" class="check">✓</text>
         </view>
@@ -12,14 +12,14 @@
 
     <view class="group-title">明暗模式</view>
     <view class="mode-row">
-      <view v-for="m in modes" :key="m.id" :class="['mode-pill', mode === m.id ? 'on' : '']" @click="mode = m.id">
+      <view v-for="m in modes" :key="m.id" :class="['mode-pill', mode === m.id ? 'on' : '']" @click="pickMode(m.id)">
         {{ m.name }}
       </view>
     </view>
 
     <view class="group-title">背景图案</view>
     <view class="presets">
-      <view v-for="s in skins" :key="s.id" class="preset skin" @click="curSkin = s.id">
+      <view v-for="s in skins" :key="s.id" class="preset skin" @click="pickSkin(s.id)">
         <view class="swatch skin-swatch" :style="{ background: typeof s.preview === 'function' ? s.preview(selectedColor) : s.preview }">
           <text v-if="curSkin === s.id" class="check">✓</text>
         </view>
@@ -29,7 +29,7 @@
 
     <view class="tip">图案颜色跟随上方所选主题色；明暗切换立即生效</view>
 
-    <button class="btn" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+    <button class="btn" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存（同步其他端）' }}</button>
   </view>
 </template>
 
@@ -37,7 +37,7 @@
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
-import { useThemeVars, setThemePrimary, setThemeMode, setThemeSkin, getThemeMode, getThemeSkin, skinPreviewCss, type ThemeMode } from '../../theme';
+import { useThemeVars, setThemePrimary, setThemeMode, setThemeSkin, getThemeMode, getThemeSkin, isDark, skinPreviewCss, type ThemeMode } from '../../theme';
 
 const tv = useThemeVars();
 const modes: Array<{ id: ThemeMode; name: string }> = [
@@ -66,6 +66,40 @@ const skins = [
 const cur = ref('default');
 const curSkin = ref(getThemeSkin());
 const saving = ref(false);
+/** 点击即生效（本地主题即时变化，保存才同步其他端） */
+function applyLocal() {
+  setThemeMode(mode.value);
+  setThemeSkin(curSkin.value);
+  const c = presets.find((p) => p.id === cur.value);
+  if (c) setThemePrimary(c.color);
+  tv.value = useThemeVars().value;
+  applyTabBar();
+}
+/** tabBar 深色适配：跟随当前明暗模式动态设置底部栏配色（微信原生 tabBar 不随 CSS 变量） */
+function applyTabBar() {
+  try {
+    const dark = isDark();
+    const primary = getThemePrimary();
+    uni.setTabBarStyle({
+      color: dark ? '#9aa2b3' : '#909399',
+      selectedColor: primary,
+      backgroundColor: dark ? '#181b22' : '#ffffff',
+      borderStyle: dark ? 'black' : 'white',
+    });
+  } catch (_) {}
+}
+function pickPreset(p: { id: string; color: string }) {
+  cur.value = p.id;
+  applyLocal();
+}
+function pickMode(m: ThemeMode) {
+  mode.value = m;
+  applyLocal();
+}
+function pickSkin(id: string) {
+  curSkin.value = id;
+  applyLocal();
+}
 /** 当前选中主题色的 hex（供图案预览实时取色） */
 const selectedColor = () => (presets.find((p) => p.id === cur.value)?.color ?? '#409EFF');
 /** 当前选中主题色的图案预览（随配色实时变化） */
@@ -90,11 +124,7 @@ async function save() {
   saving.value = true;
   try {
     await request('/settings/theme_config', 'PUT', { preset_id: cur.value, skin_id: curSkin.value, bg_enabled: true });
-    const c = presets.find((p) => p.id === cur.value);
-    if (c) setThemePrimary(c.color);
-    setThemeMode(mode.value);
-    setThemeSkin(curSkin.value);
-    tv.value = useThemeVars().value;
+    applyLocal();
     uni.showToast({ title: '已保存，本页与其他端同步生效', icon: 'none' });
   } catch (e) {
     uni.showToast({ title: '保存失败', icon: 'none' });
@@ -105,7 +135,7 @@ async function save() {
 </script>
 
 <style>
-.page { padding: 24rpx; background: var(--page-bg); min-height: 100vh; }
+.page { padding: 24rpx;  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 20rpx; }
 .presets { display: flex; flex-wrap: wrap; gap: 20rpx; background: var(--card-bg); border-radius: 20rpx; padding: 32rpx 24rpx; margin-bottom: 24rpx; }
 .mode-row { display: flex; gap: 16rpx; background: var(--card-bg); border-radius: 20rpx; padding: 20rpx 24rpx; margin-bottom: 24rpx; }

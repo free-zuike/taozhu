@@ -230,7 +230,7 @@ function logout() {
 </script>
 
 <style>
-.page { background: var(--page-bg); min-height: 100vh; padding-bottom: 60rpx; }
+.page {  min-height: 100vh; padding-bottom: 60rpx;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .head {
   display: flex; align-items: center; gap: 20rpx;
   background: linear-gradient(135deg, var(--primary), #60a5fa);

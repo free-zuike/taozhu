@@ -87,11 +87,12 @@ async function submit() {
 
 <style>
 .page {
-  background: var(--page-bg);
   display: flex;
   flex-direction: column;
   align-items: center;
   padding-top: 120rpx;
+  min-height: 100vh;
+  background-image: var(--bg-pattern), var(--bg-gradient);
 }
 .brand {
   font-size: 48rpx;

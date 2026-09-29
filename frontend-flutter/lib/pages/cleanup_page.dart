@@ -44,6 +44,8 @@ class _CleanupPageState extends State<CleanupPage> {
   List<_CacheFile> _files = [];
   bool _loading = true;
   bool _busy = false;
+  /// 服务器在用附件信息拉取失败（在线判定不可用→本地扫描按保守目录级，可能扫不出同目录部分孤儿）
+  bool _inUseFailed = false;
 
   @override
   void initState() {
@@ -248,7 +250,7 @@ class _CleanupPageState extends State<CleanupPage> {
         // 交易引用过的附件副本绝不出现在可清理列表。
         final inUseFiles = <String>{}; // "entity/id/file" 三元组集合（文件级精确比对）
         try {
-          final du = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
+          final du = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
           // 关键：以服务器引用表为"在用"权威——清掉上面本地库/服务器单据并集的影响。
           // 否则 AI 识别未提交的本地孤儿副本因本地单据仍在而被判"在用"，永远扫不出
           //（本地附件数与云端对不上，用户场景：本地 6 / 服务器 2）。
@@ -263,7 +265,10 @@ class _CleanupPageState extends State<CleanupPage> {
           }
           // 文件级在用校验：本地附件副本若与在用三元组完全匹配 → 从列表中剔除
           files.removeWhere((f) => f.kind == 'attach' && inUseFiles.contains(f.name));
-        } catch (_) {}
+        } catch (_) {
+          // in-use 拉取失败（超时/网络）→ 标记提示（在线场景按服务器引用判定才能扫出同目录部分孤儿）
+          _inUseFailed = true;
+        }
         final root = await getApplicationDocumentsDirectory();
         final att = Directory('${root.path}/attachments');
         // 两种来源都拿不到在用数据（离线且本地库空）→ 无法判断在用，暂不列出附件（宁可不清理不误删）
@@ -472,6 +477,13 @@ class _CleanupPageState extends State<CleanupPage> {
                         : '更新安装包（APK/Zip）、附件副本（逐张图片）、云端孤儿附件、头像缓存、库重建备份与临时文件',
                     style: TextStyle(fontSize: 12, color: c.textSub),
                   ),
+                  if (_inUseFailed && !kIsWeb) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '⚠ 服务器在用附件信息获取失败，附件扫描已降级为保守判定（同目录部分孤儿可能不列出），请下拉重试',
+                      style: TextStyle(fontSize: 11, color: c.warning),
+                    ),
+                  ],
                 ],
               ),
             ),

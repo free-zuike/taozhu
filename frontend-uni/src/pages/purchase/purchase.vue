@@ -355,7 +355,7 @@ async function submit() {
 </script>
 
 <style>
-.page { background: var(--page-bg); min-height: 100vh; }
+.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .head-row { display: flex; gap: 12rpx; align-items: flex-start; margin-bottom: 16rpx; }
 .head-row .field { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }

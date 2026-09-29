@@ -42,11 +42,9 @@ const loading = ref(true);
 
 const shortTime = (iso: string) => (iso && iso.length >= 16 ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}` : iso || '');
 
-/** 在线判定：最近活跃 5 分钟内=在线（设备请求均更新 last_active_at） */
+/** 在线判定：最近活跃 5 分钟内=在线（设备任意请求都会节流更新 last_active_at） */
 const online = (iso: string) => {
   if (!iso) return false;
-  const t = new Date(iso.replace('Z', '')).getTime() + (iso.endsWith('Z') ? 0 : 0);
-  if (isNaN(t)) return false;
   const last = Date.parse(iso);
   return !isNaN(last) && Date.now() - last < 5 * 60 * 1000;
 };
@@ -98,7 +96,7 @@ function remove(d: Device) {
 </script>
 
 <style>
-.page { background: var(--page-bg); min-height: 100vh; }
+.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .loading { text-align: center; color: var(--text-sub); padding: 80rpx 0; font-size: 26rpx; }
 .empty { display: flex; flex-direction: column; align-items: center; padding: 120rpx 0; gap: 12rpx; }
 .empty-tx { font-size: 28rpx; color: var(--text-sub); }

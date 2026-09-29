@@ -333,7 +333,7 @@ async function remove(id: string) {
 </script>
 
 <style>
-.page { background: var(--page-bg); min-height: 100vh; }
+.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .card-title { font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .field { margin-bottom: 16rpx; }
