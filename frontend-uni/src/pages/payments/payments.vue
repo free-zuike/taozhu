@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 登记收款 -->
@@ -27,14 +27,13 @@
     <!-- 收款历史 -->
     <view class="card">
       <view class="card-title">收款历史</view>
-      <view v-for="p in payments" :key="p.id" class="pay-row">
+      <view v-for="p in payments" :key="p.id" class="pay-row" @click="editPayment(p)" @longpress="remove(p.id)">
         <view class="pay-left">
           <text class="pay-name">{{ p.client_name }}</text>
           <text class="pay-meta">{{ p.happened_at }} · {{ p.method || '—' }}{{ Number(p.waived || 0) > 0 ? ' · 平账¥' + p.waived : '' }}</text>
         </view>
         <text class="pay-amount green">¥{{ fmt(p.amount) }}</text>
-        <text class="edit" @click="editPayment(p)">编辑</text>
-        <text class="del" @click="remove(p.id)">撤销</text>
+        <text class="tip-longpress">长按撤销</text>
       </view>
       <view v-if="payments.length === 0" class="empty">暂无收款记录</view>
     </view>
@@ -328,13 +327,20 @@ async function savePayment() {
 }
 
 async function remove(id: string) {
-  try {
-    await request(`/payments/${id}`, 'DELETE');
-    uni.showToast({ title: '已撤销', icon: 'success' });
-    await load();
-  } catch (e) {
-    uni.showToast({ title: (e as Error).message || '撤销失败', icon: 'none' });
-  }
+  uni.showModal({
+    title: '撤销收款',
+    content: '确定撤销这笔收款吗？',
+    success: async (r) => {
+      if (!r.confirm) return;
+      try {
+        await request(`/payments/${id}`, 'DELETE');
+        uni.showToast({ title: '已撤销', icon: 'success' });
+        await load();
+      } catch (e) {
+        uni.showToast({ title: (e as Error).message || '撤销失败', icon: 'none' });
+      }
+    },
+  });
 }
 
   onHide(() => { offWs('*', load); });
@@ -359,8 +365,7 @@ async function remove(id: string) {
 .pay-meta { display: block; font-size: 22rpx; color: var(--text-sub); margin-top: 4rpx; }
 .pay-amount { font-size: 30rpx; font-weight: bold; margin-right: 20rpx; }
 .green { color: #67c23a; }
-.edit { color: var(--primary); font-size: 24rpx; margin-right: 20rpx; }
-.del { color: #f56c6c; font-size: 24rpx; }
+.tip-longpress { color: var(--text-sub); font-size: 22rpx; margin-left: 16rpx; flex-shrink: 0; }
 .empty { color: var(--text-sub); text-align: center; padding: 30rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }

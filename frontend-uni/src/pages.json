@@ -113,6 +113,12 @@
 			"style": {
 				"navigationBarTitleText": "数据备份"
 			}
+		},
+		{
+			"path": "pages/audit/audit",
+			"style": {
+				"navigationBarTitleText": "操作审计"
+			}
 		}
 	],
 	"tabBar": {
@@ -120,11 +126,11 @@
 		"selectedColor": "#409EFF",
 		"backgroundColor": "#ffffff",
 		"list": [
-			{ "pagePath": "pages/ledger/ledger", "text": "交易" },
-			{ "pagePath": "pages/stats/stats", "text": "统计" },
-			{ "pagePath": "pages/quick/quick", "text": "记单" },
-			{ "pagePath": "pages/purchase-history/purchase-history", "text": "进货" },
-			{ "pagePath": "pages/my/my", "text": "我的" }
+			{ "pagePath": "pages/ledger/ledger", "text": "交易", "iconPath": "static/tabbar/ledger.png", "selectedIconPath": "static/tabbar/ledger_active.png" },
+			{ "pagePath": "pages/stats/stats", "text": "统计", "iconPath": "static/tabbar/stats.png", "selectedIconPath": "static/tabbar/stats_active.png" },
+			{ "pagePath": "pages/quick/quick", "text": "记单", "iconPath": "static/tabbar/quick.png", "selectedIconPath": "static/tabbar/quick_active.png" },
+			{ "pagePath": "pages/purchase-history/purchase-history", "text": "进货", "iconPath": "static/tabbar/purchase.png", "selectedIconPath": "static/tabbar/purchase_active.png" },
+			{ "pagePath": "pages/my/my", "text": "我的", "iconPath": "static/tabbar/my.png", "selectedIconPath": "static/tabbar/my_active.png" }
 		]
 	},
 	"globalStyle": {

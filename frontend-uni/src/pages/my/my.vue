@@ -3,8 +3,8 @@
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 头部：头像 + 问候语与名字一行（对齐 App） -->
     <view class="head">
-      <image v-if="avatarUrl" class="avatar-img" :src="avatarUrl" mode="aspectFill" />
-      <view v-else class="avatar">{{ (user.name || '陶').slice(0, 1) }}</view>
+      <image v-if="avatarUrl" class="avatar-img" :src="avatarUrl" mode="aspectFill" @click="changeAvatar" />
+      <view v-else class="avatar" @click="changeAvatar">{{ (user.name || '陶').slice(0, 1) }}</view>
       <view class="head-info">
         <view class="hi-line">
           <text class="hi">{{ greeting }}</text>
@@ -13,6 +13,13 @@
         <text class="hi-sub">{{ user.role === 'staff' ? '店员' : '老板' }} · {{ curBase || '未设置服务器地址' }}</text>
       </view>
       <text class="server-tag" @click="openServer">切换 ▾</text>
+    </view>
+
+    <!-- 当前店铺切换（对齐 App 我的页主档切换：统计随当前店铺） -->
+    <view class="shop-row" @click="pickClient">
+      <text class="shop-label">当前店铺</text>
+      <text class="shop-name">{{ curClientName || '全部店铺' }}</text>
+      <text class="r-arrow">›</text>
     </view>
 
     <!-- 统计三列（老板）：记账天数 / 本店交易 / 店铺结余 -->
@@ -67,6 +74,9 @@
       <view v-if="isAdmin" class="row" @click="go('/pages/users/users')">
         <view class="r-ic ic-blue"><text class="ic-tx">👥</text></view><text class="r-tx">账号管理</text><text class="r-arrow">›</text>
       </view>
+      <view v-if="isAdmin" class="row" @click="go('/pages/audit/audit')">
+        <view class="r-ic ic-red"><text class="ic-tx">📋</text></view><text class="r-tx">操作审计</text><text class="r-arrow">›</text>
+      </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/ai-settings/ai-settings')">
         <view class="r-ic ic-purple"><text class="ic-tx">🤖</text></view><text class="r-tx">AI 识别设置</text><text class="r-arrow">›</text>
       </view>
@@ -76,7 +86,7 @@
       <view v-if="isAdmin" class="row" @click="go('/pages/devices/devices')">
         <view class="r-ic ic-green"><text class="ic-tx">📱</text></view><text class="r-tx">设备管理</text><text class="r-arrow">›</text>
       </view>
-      <view class="row" @click="go('/pages/backup/backup')">
+      <view v-if="isAdmin" class="row" @click="go('/pages/backup/backup')">
         <view class="r-ic ic-orange"><text class="ic-tx">💾</text></view><text class="r-tx">数据备份</text><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="checkUpdate">
@@ -127,6 +137,68 @@ const showServer = ref(false);
 const saving = ref(false);
 const curBase = ref(getApiBase());
 const serverInput = ref(getApiBase());
+// 当前店铺切换（对齐 App 我的页主档切换；存 taozhu_cur_client，统计随店铺）
+const curClientName = ref('');
+const clientChoices = ref<Array<{ id: string; name: string }>>([]);
+
+// 头像更换：选图 → 上传 /auth/avatar（multipart photo，header 带 token）→ 刷新（对齐 App 头像更换）
+function changeAvatar() {
+  uni.chooseImage({
+    count: 1,
+    sizeType: ['compressed'],
+    success: (res) => {
+      const file = res.tempFilePaths[0];
+      if (!file) return;
+      uni.showLoading({ title: '上传中' });
+      uni.uploadFile({
+        url: `${getApiBase()}/api/v1/auth/avatar`,
+        filePath: file,
+        name: 'photo',
+        header: { Authorization: `Bearer ${getToken()}` },
+        success: () => {
+          uni.hideLoading();
+          uni.showToast({ title: '头像已更新', icon: 'success' });
+          avatarUrl.value = `${getApiBase()}/api/v1/auth/avatar?token=${getToken()}&v=${Date.now()}`;
+        },
+        fail: () => {
+          uni.hideLoading();
+          uni.showToast({ title: '上传失败', icon: 'none' });
+        },
+      });
+    },
+  });
+}
+
+async function loadClients() {
+  try {
+    const d = await request<{ clients: Array<{ id: string; name: string }> }>('/clients', 'GET').catch(() => null);
+    clientChoices.value = d?.clients || [];
+  } catch (e) {
+    // 店铺列表拉取失败不阻塞
+  }
+}
+
+function pickClient() {
+  const names = ['全部店铺', ...clientChoices.value.map((c) => c.name)];
+  uni.showActionSheet({
+    itemList: names.slice(0, 6),
+    success: (r) => {
+      const idx = r.tapIndex;
+      const items = names.slice(0, 6);
+      if (idx === 0) {
+        uni.removeStorageSync('taozhu_cur_client');
+        curClientName.value = '';
+      } else {
+        const c = clientChoices.value[idx - 1];
+        if (c) {
+          uni.setStorageSync('taozhu_cur_client', c.id);
+          curClientName.value = c.name;
+        }
+      }
+      loadStats();
+    },
+  });
+}
 
 onShow(async () => {
   if (!getToken()) {
@@ -148,6 +220,9 @@ onShow(async () => {
     // 用户信息拉取失败不阻塞页面
   }
   loadStats();
+  loadClients();
+  const cid = (uni.getStorageSync('taozhu_cur_client') as string) || '';
+  curClientName.value = cid ? clientChoices.value.find((c) => c.id === cid)?.name || '当前店铺' : '';
 });
 
 async function loadStats() {
@@ -249,6 +324,9 @@ function logout() {
 .hi-name { font-size: 34rpx; font-weight: bold; max-width: 220rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hi-sub { font-size: 22rpx; opacity: 0.85; word-break: break-all; }
 .server-tag { font-size: 24rpx; background: rgba(255,255,255,0.2); border-radius: 999rpx; padding: 8rpx 20rpx; flex-shrink: 0; }
+.shop-row { display: flex; align-items: center; background: var(--card-bg); border-radius: 16rpx; padding: 22rpx 24rpx; margin-bottom: 20rpx; }
+.shop-label { font-size: 26rpx; color: var(--text-sub); margin-right: 20rpx; }
+.shop-name { flex: 1; font-size: 28rpx; color: var(--primary); font-weight: 600; }
 .stats { display: flex; align-items: stretch; background: var(--card-bg); border-radius: 20rpx; padding: 26rpx 10rpx; margin-bottom: 24rpx; }
 .stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8rpx; justify-content: center; }
 .stat-line { width: 1rpx; background: var(--divider); margin: 6rpx 0; }
@@ -265,7 +343,7 @@ function logout() {
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 .ic-blue { background: var(--primary-soft); } .ic-green { background: var(--ok-bg); }
-.ic-orange { background: var(--warn-bg); } .ic-purple { background: var(--violet-bg); } .ic-gold { background: var(--warn-bg); }
+.ic-orange { background: var(--warn-bg); } .ic-purple { background: var(--violet-bg); } .ic-gold { background: var(--warn-bg); } .ic-red { background: var(--danger-bg); }
 .ic-tx { font-size: 28rpx; line-height: 1; }
 .r-tx { flex: 1; font-size: 28rpx; color: var(--text-main); }
 .r-arrow { font-size: 34rpx; color: var(--text-sub); }

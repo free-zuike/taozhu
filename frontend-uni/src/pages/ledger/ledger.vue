@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 店铺筛选（月份移入下方月度卡头部，对齐 App：店铺条 + 月度卡） -->
@@ -6,6 +6,7 @@
       <picker class="client-picker" mode="selector" :range="clientNames" @change="onClientFilter">
         <view class="client-btn">{{ filterClientId ? filterClientName : '全部店铺' }} ▾</view>
       </picker>
+      <text class="export-btn" @click="exportCsv">导出 CSV</text>
     </view>
 
     <!-- 月度卡（对齐 App：月份居中点击切换 + 四列统计；列表滚动联动月份跟随） -->
@@ -408,6 +409,35 @@ function switchTab(t: 'sales' | 'payments') {
   tab.value = t;
 }
 
+// 当前筛选（月份+店铺）明细导出 CSV：出货行级平铺 + 收款明细（对齐 App 交易页导出）
+function exportCsv() {
+  const head = ['日期', '类型', '店铺', '商品', '数量', '单位', '单价', '金额', '备注'];
+  const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const rows: string[][] = [head];
+  for (const s of sales.value) {
+    const items = (s.items as Array<Record<string, any>>) || [];
+    if (items.length === 0) {
+      rows.push([s.happened_at, '出货', s.client_name, '', '', '', '', fmtNum((s as any).total), s.note]);
+    } else {
+      for (const it of items) {
+        rows.push([
+          s.happened_at || it.happened_at, '出货', it.client_name || s.client_name,
+          it.item_name, it.quantity, it.unit,
+          it.sale_price != null ? fmtNum(it.sale_price) : '', fmtNum(it.amount), it.note,
+        ]);
+      }
+    }
+  }
+  for (const p of payments.value) {
+    rows.push([p.happened_at, '收款', p.client_name, '', '', '', '', fmtNum(p.amount), p.method || '']);
+  }
+  const csv = rows.map((r) => r.map(esc).join(',')).join('\n');
+  uni.setClipboardData({
+    data: csv,
+    success: () => uni.showToast({ title: `已复制 ${rows.length - 1} 行（${selYear}年${selMonth}月）`, icon: 'none' }),
+  });
+}
+
 // 日期分组 → 当前可见首日（滚动联动月份：顶部月份跟随当前可见日期，对齐 App）
 function onFlowScroll(e: { detail: { scrollTop: number } }) {
   const top = e.detail.scrollTop;
@@ -632,6 +662,7 @@ async function removePayment(p: Record<string, any>) {
 .ml { font-size: 22rpx; color: var(--text-sub); }
 .mv { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
 .client-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
+.export-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; flex-shrink: 0; }
 .seg { display: flex; background: var(--card-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
