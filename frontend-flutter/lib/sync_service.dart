@@ -128,12 +128,27 @@ class SyncService {
   /// 本地副本被清理后离线不可见——违背本地优先。从 /attachments/in-use 拿服务器在用引用的规范化三元组
   /// {entity,id,file}（后端以 attachment_refs 引用表为权威 + R2 扫描兜底），逐张下载。
   /// 已存在跳过；并发 4 + 指数退避重试 3 次；单张失败静默跳过（下次同步再补），不阻塞同步主流程。
+  /// 同时把三元组持久化到本地 attachment_refs store（离线清理页按本地表 basename 判定孤儿，
+  /// 对齐参考实现本地 transaction_attachments 范式，不依赖网络）。
   static Future<void> downloadInUseAttachments() async {
     if (kIsWeb) return;
     List<Map<String, dynamic>> inUse;
     try {
-      final d = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
+      final d = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
       inUse = ((d['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
+      // 持久化在用三元组：本地 attachment_refs store（每次同步全量刷新，删除的引用随之消失）
+      final refs = inUse
+          .map((a) => {
+                'id': '${a['entity'] ?? ''}/${a['id'] ?? ''}/${a['file'] ?? ''}',
+                'entity': a['entity'] ?? '',
+                'entity_id': a['id'] ?? '',
+                'file': a['file'] ?? '',
+              })
+          .where((r) => r['entity'] != '' && r['entity_id'] != '' && r['file'] != '')
+          .toList();
+      if (refs.isNotEmpty) {
+        await LocalDb.putAll('attachment_refs', refs);
+      }
     } catch (_) {
       return;
     }
@@ -493,6 +508,10 @@ class SyncService {
                 if (parsed != null) {
                   final f = File('${root.path}/attachments/${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
                   if (f.existsSync()) f.deleteSync();
+                  // 同步删除本地引用行（在下次 in-use 全量刷新前保持本地表一致，避免误判在用）
+                  try {
+                    await LocalDb.deleteOne('attachment_refs', '${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
+                  } catch (_) {}
                 }
               }
               applied = true;

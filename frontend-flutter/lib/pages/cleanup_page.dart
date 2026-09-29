@@ -248,30 +248,48 @@ class _CleanupPageState extends State<CleanupPage> {
             addUse('payment', '${(p as Map)['id'] ?? ''}');
           }
         } catch (_) {}
-        // ③ 服务器在用附件（引用判定：交易引用的附件文件 = 在用）：
-        // /attachments/in-use 返回规范化三元组 {entity,id,file}（后端 attachment_refs 引用表为权威
-        // + R2 扫描兜底历史存量）。这里直接用三元组构建 entity→id 集合与文件级三元组集合——
-        // 交易引用过的附件副本绝不出现在可清理列表。
-        final inUseFiles = <String>{}; // "entity/id/file" 三元组集合（文件级精确比对）
+        // ③ 本地附件引用表（参考实现范式：本地 transaction_attachments 表 file_name 集合判定，
+        // 不依赖网络/服务器——同步时 downloadInUseAttachments 已把服务器在用三元组持久化到
+        // 本地 attachment_refs store；此处读本地表做 basename 集合，离线/在线都可靠）。
+        final localRefs = <String>{}; // basename 集合（参考实现：SELECT DISTINCT file_name）
+        final localRefsFull = <String>{}; // "entity/id/file" 三元组（辅助判断同目录部分孤儿）
+        try {
+          final rows = await LocalDb.getAll('attachment_refs');
+          for (final r in rows) {
+            final entity = '${r['entity'] ?? ''}';
+            final id = '${r['entity_id'] ?? ''}';
+            final file = '${r['file'] ?? ''}';
+            if (file.isEmpty) continue;
+            localRefs.add(file);
+            if (entity.isNotEmpty && id.isNotEmpty) {
+              localRefsFull.add('$entity/$id/$file');
+            }
+          }
+        } catch (_) {}
+        // 在线时刷新本地引用表（服务器在用三元组权威；失败静默保留本地旧表——本地表仍可靠）
         try {
           final du = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
-          // 关键：以服务器引用表为"在用"权威——清掉上面本地库/服务器单据并集的影响。
-          // 否则 AI 识别未提交的本地孤儿副本因本地单据仍在而被判"在用"，永远扫不出
-          //（本地附件数与云端对不上，用户场景：本地 6 / 服务器 2）。
-          inUse.clear();
-          for (final a in ((du['attachments'] as List?) ?? []).cast<Map<String, dynamic>>()) {
-            final entity = '${a['entity'] ?? ''}';
-            final id = '${a['id'] ?? ''}';
-            final file = '${a['file'] ?? ''}';
-            if (entity.isEmpty || id.isEmpty || file.isEmpty) continue;
-            addUse(entity, id);
-            inUseFiles.add('$entity/$id/$file');
+          final rows = ((du['attachments'] as List?) ?? [])
+              .cast<Map<String, dynamic>>()
+              .map((a) => {
+                    'id': '${a['entity'] ?? ''}/${a['id'] ?? ''}/${a['file'] ?? ''}',
+                    'entity': a['entity'] ?? '',
+                    'entity_id': a['id'] ?? '',
+                    'file': a['file'] ?? '',
+                  })
+              .where((r) => r['entity'] != '' && r['entity_id'] != '' && r['file'] != '')
+              .toList();
+          if (rows.isNotEmpty) {
+            await LocalDb.putAll('attachment_refs', rows);
+            localRefs
+              ..clear()
+              ..addAll(rows.map((r) => '${r['file']}'));
+            localRefsFull
+              ..clear()
+              ..addAll(rows.map((r) => '${r['entity']}/${r['entity_id']}/${r['file']}'));
           }
-          // 文件级在用校验：本地附件副本若与在用三元组完全匹配 → 从列表中剔除
-          files.removeWhere((f) => f.kind == 'attach' && inUseFiles.contains(f.name));
           _inUseFailed = false;
         } catch (_) {
-          // in-use 拉取失败（超时/网络）→ 标记提示（在线场景按服务器引用判定才能扫出同目录部分孤儿）
           _inUseFailed = true;
         }
         final root = await getApplicationDocumentsDirectory();
@@ -280,40 +298,30 @@ class _CleanupPageState extends State<CleanupPage> {
         var localAttachAll = 0;
         var localAttachOrphan = 0;
         var localAttachInUse = 0;
-        // 两种来源都拿不到在用数据（离线且本地库空）→ 无法判断在用，暂不列出附件（宁可不清理不误删）
-        if (await att.exists() && (localHasData || serverHasData)) {
+        // 扫描整个 attachments/ 目录所有文件（参考实现：先 list 目录全部文件，再逐个 basename 比对引用集合）。
+        // 本地引用表非空即可判定（无论在线/离线）；表空且在线拉取也失败才保守跳过（宁可不清理不误删）。
+        if (await att.exists() && (localRefs.isNotEmpty || localHasData || serverHasData)) {
           await for (final entity in att.list(followLinks: false)) {
             if (entity is! Directory) continue;
             final entityName = entity.uri.pathSegments.last;
-            // 空段目录（attachments//xxx 或 attachments/x// 等脏路径）跳过——不属于任何实体，不参与清理判定
             if (entityName.isEmpty) continue;
             await for (final id in entity.list(followLinks: false)) {
               if (id is! Directory) continue;
               final idName = id.uri.pathSegments.last;
               if (idName.isEmpty) continue;
-              // 在用判定：在线时按「文件级三元组」精确比对（服务器引用表的 file 才是在用）——
-              // 同一单据目录里可能部分文件已在云端清理（引用缺失）→ 这些孤儿文件必须列出，
-              // 不能按「目录级实体在用」整目录跳过（否则本地 6 / 服务器 2 的孤儿永远扫不出）。
-              final entityInUse = (inUse[entityName] ?? {}).contains(idName);
               await for (final f in id.list(followLinks: false)) {
                 if (f is! File) continue;
                 final fileName = f.uri.pathSegments.last;
                 final rel = '$entityName/$idName/$fileName';
-                final fileInUse = inUseFiles.contains(rel);
                 localAttachAll++;
-                // 在线：文件不在服务器引用三元组 → 孤儿可清理；离线兜底：实体在用则整目录保守跳过
-                if (inUseFiles.isNotEmpty) {
-                  if (!fileInUse) {
-                    files.add(_CacheFile(rel, await f.length(), f.path));
-                    localAttachOrphan++;
-                  } else {
-                    localAttachInUse++;
-                  }
-                } else if (!entityInUse) {
+                // basename 在用判定（参考实现）：文件名在本地引用表 file 集合 = 在用；
+                // 不在 = 孤儿（可清理）。三元组辅助：同目录部分孤儿也能正确区分。
+                final fileInUse = localRefs.contains(fileName) || localRefsFull.contains(rel);
+                if (fileInUse) {
+                  localAttachInUse++;
+                } else {
                   files.add(_CacheFile(rel, await f.length(), f.path));
                   localAttachOrphan++;
-                } else {
-                  localAttachInUse++;
                 }
               }
             }
