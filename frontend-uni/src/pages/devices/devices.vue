@@ -108,7 +108,7 @@ function remove(d: Device) {
 .empty-tx { font-size: 28rpx; color: var(--text-sub); }
 .empty-sub { font-size: 22rpx; color: var(--text-sub); }
 .list { display: flex; flex-direction: column; gap: 20rpx; }
-.card { background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; }
+.card { background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; box-shadow: var(--card-shadow);}
 .head { display: flex; align-items: center; gap: 20rpx; }
 .d-icon {
   width: 72rpx; height: 72rpx; border-radius: 18rpx; background: var(--primary-soft);

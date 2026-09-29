@@ -237,13 +237,13 @@ async function onYear(e: { detail: { value: number } }) {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh; padding: 20rpx; box-sizing: border-box; background: var(--page-bg); }
-.quick { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; }
+.quick { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
 .q-item { flex: 1; text-align: center; font-size: 26rpx; color: var(--text-sub); padding: 12rpx 0; border-radius: 8rpx; }
 .q-item.active { color: #fff; background: var(--primary); font-weight: 600; }
-.seg { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; }
+.seg { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
 .seg-item { flex: 1; text-align: center; font-size: 26rpx; color: var(--text-sub); padding: 12rpx 0; border-radius: 8rpx; }
 .seg-item.active { color: #fff; background: var(--primary); font-weight: 600; }
-.card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 16rpx; padding: 24rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
 .card-title { display: flex; justify-content: space-between; align-items: center; font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .range-txt { font-size: 22rpx; color: var(--text-sub); font-weight: normal; }
 .sum-card { background: var(--card-bg); }

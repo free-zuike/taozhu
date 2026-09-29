@@ -335,7 +335,7 @@ function logout() {
 .green { color: #67c23a; }
 .red { color: #f56c6c; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 12rpx; }
-.grp { background: var(--card-bg); border-radius: 20rpx; margin-bottom: 20rpx; overflow: hidden; }
+.grp { background: var(--card-bg); border-radius: 20rpx; margin-bottom: 20rpx; overflow: hidden; box-shadow: var(--card-shadow);}
 .row { display: flex; align-items: center; padding: 26rpx 24rpx; border-bottom: 1rpx solid var(--divider); }
 .row:last-child { border-bottom: none; }
 .r-ic {
@@ -350,10 +350,10 @@ function logout() {
 .logout { margin: 24rpx 0 16rpx; background: var(--card-bg); color: #f56c6c; border-radius: 16rpx; font-size: 30rpx; border: 1rpx solid #f56c6c; }
 .ver { text-align: center; color: var(--text-sub); font-size: 22rpx; margin-top: 8rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
+.sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .server-cur { font-size: 24rpx; color: var(--text-sub); margin-bottom: 16rpx; word-break: break-all; }
-.ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
+.ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
 .btn-cancel { background: var(--input-bg); color: var(--text-sub); border-radius: 12rpx; font-size: 30rpx; }
 </style>

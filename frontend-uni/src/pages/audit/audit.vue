@@ -112,9 +112,9 @@ function remove(l: Log) {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh; padding: 20rpx; box-sizing: border-box; background: var(--page-bg); }
-.filter-bar { background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; }
+.filter-bar { background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
 .act-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; display: inline-block; }
-.card { background: var(--card-bg); border-radius: 12rpx; padding: 20rpx 24rpx; margin-bottom: 14rpx; }
+.card { background: var(--card-bg); border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 14rpx; box-shadow: var(--card-shadow);}
 .head { display: flex; align-items: flex-start; }
 .left { flex: 1; min-width: 0; }
 .who { font-size: 28rpx; font-weight: bold; display: block; color: var(--text-main); }

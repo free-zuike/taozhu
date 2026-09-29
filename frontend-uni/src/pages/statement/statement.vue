@@ -205,18 +205,18 @@ function copyCsv() {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
-.card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 20rpx; }
+.card { background: var(--card-bg); border-radius: 16rpx; padding: 24rpx; margin-bottom: 20rpx; box-shadow: var(--card-shadow);}
 .field { margin-bottom: 20rpx; }
 .field-inner { display: flex; justify-content: space-between; }
 .label { color: var(--text-sub); font-size: 26rpx; }
 .value { font-size: 28rpx; }
-.seg { display: flex; background: var(--input-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
+.seg { display: flex; background: var(--input-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; box-shadow: var(--card-shadow);}
 .seg-item { flex: 1; text-align: center; padding: 16rpx; font-size: 26rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
 .dates { display: flex; align-items: center; gap: 12rpx; margin-bottom: 20rpx; }
-.ipt { flex: 1; background: var(--input-bg); border-radius: 10rpx; padding: 16rpx 20rpx; font-size: 26rpx; }
+.ipt { flex: 1; background: var(--input-bg); border-radius: 12rpx; padding: 16rpx 20rpx; font-size: 26rpx; }
 .to { color: var(--text-sub); }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 20rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 20rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
 .btn-copy { background: var(--card-bg); border: 1rpx solid var(--primary); color: var(--primary); border-radius: 12rpx; font-size: 28rpx; margin-top: 12rpx; }
 .stat { display: flex; justify-content: space-between; padding: 12rpx 0; font-size: 28rpx; }
 .red { color: #f56c6c; }

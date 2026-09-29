@@ -138,9 +138,8 @@ function go(url: string) {
 /* 两列网格：小程序对 flex gap / calc(50% - x) 兼容性差，用 48% + space-between 最稳 */
 .cards { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
 .card {
-  width: 48%; background: var(--card-bg); border-radius: 12rpx;
-  padding: 22rpx 20rpx; box-sizing: border-box; margin-bottom: 16rpx;
-}
+  width: 48%; background: var(--card-bg); border-radius: 16rpx;
+  padding: 22rpx 20rpx; box-sizing: border-box; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
 .cl { display: block; color: var(--text-sub); font-size: 26rpx; margin-bottom: 10rpx; }
 .cv { font-size: 38rpx; font-weight: bold; }
 .green { color: #67c23a; }
@@ -159,10 +158,10 @@ function go(url: string) {
 .lr-debt { font-size: 28rpx; }
 .empty { color: var(--text-sub); text-align: center; padding: 30rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
+.sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .server-cur { font-size: 24rpx; color: var(--text-sub); margin-bottom: 16rpx; word-break: break-all; }
-.ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
+.ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
 .btn-cancel { background: var(--input-bg); color: var(--text-sub); border-radius: 12rpx; font-size: 30rpx; }
 </style>

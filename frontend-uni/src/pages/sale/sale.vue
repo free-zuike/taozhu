@@ -416,7 +416,7 @@ async function submit() {
 .amt { width: 110rpx; font-size: 24rpx; color: #f56c6c; }
 .del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; }
 .footer { display: flex; justify-content: space-between; align-items: center; margin: 20rpx 0; }
-.btn-add { font-size: 28rpx; }
+.btn-add { font-size: 28rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
 .total { font-size: 28rpx; }
 .total-num { color: #f56c6c; font-weight: bold; font-size: 34rpx; }
 .btn-submit { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 32rpx; }

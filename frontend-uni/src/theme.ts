@@ -58,6 +58,25 @@ export function isDark(): boolean {
   }
 }
 
+// 系统主题变化监听（微信 uni.onThemeChange，基础库 2.11+）：follow 模式下手机系统
+// 暗色/浅色切换时，通知所有 useThemeVars 页面重算变量（仅静态 getSystemInfoSync 读取
+// 不会随系统切换刷新——"跟随系统主题没有用"根因）。模块级单例只绑定一次。
+const themeListeners = new Set<() => void>();
+let sysThemeBound = false;
+export function onThemeChange(cb: () => void) {
+  themeListeners.add(cb);
+  if (sysThemeBound) return;
+  sysThemeBound = true;
+  try {
+    const u = uni as unknown as { onThemeChange?: (f: (res: { theme?: string }) => void) => void };
+    if (typeof u.onThemeChange === 'function') {
+      u.onThemeChange(() => themeListeners.forEach((f) => f()));
+    }
+  } catch (_) {
+    // 不支持 onThemeChange 的平台静默（follow 退化为进入页面时的静态读取）
+  }
+}
+
 /** hex → rgba 字符串（SVG 描边/填充用） */
 function rgba(color: string, a: number): string {
   const m = /^#([0-9a-fA-F]{6})$/.exec(color);
@@ -278,7 +297,7 @@ export function useThemeVars() {
       const primary = getThemePrimary();
       const dark = isDark();
       const skin = getThemeSkin();
-      const cardBg = dark ? '#232833' : '#ffffff';
+      const cardBg = dark ? 'rgba(35,40,51,0.88)' : 'rgba(255,255,255,0.88)'; // 半透明卡片：透出背景图案（对齐 App card alpha）
       const textMain = dark ? '#e8eaf1' : '#303133';
       const textSub = dark ? '#9aa2b3' : '#909399';
       const divider = dark ? '#2e3440' : '#f0f2f5';
@@ -292,6 +311,10 @@ export function useThemeVars() {
         // 页面 CSS 背景只用渐变（小程序 WXSS 支持；SVG 图案由 image 组件铺层，不依赖 CSS data URI）
         '--page-bg': bg.gradientCss,
         '--card-bg': cardBg,
+        // 卡片投影（浅色轻、深色重）：与圆角/半透明共同构成 App 卡片族层次
+        '--card-shadow': dark ? '0 4rpx 16rpx rgba(0,0,0,0.35)' : '0 4rpx 16rpx rgba(0,0,0,0.06)',
+        // 弹层底（遮罩下需更实，避免内容透穿模糊）
+        '--sheet-bg': dark ? 'rgba(35,40,51,0.97)' : 'rgba(255,255,255,0.97)',
         '--text-main': textMain,
         '--text-sub': textSub,
         '--divider': divider,
@@ -303,6 +326,7 @@ export function useThemeVars() {
         '--violet-bg': 'rgba(124,77,255,0.12)',
       };
       applyTabBar(dark, primary);
+      applyNavBar(dark, primary);
     } catch (e) {
       // 主题渲染任何异常都不中断页面 setup（历史上 TextEncoder/btoa 缺失曾致整页 CSS 变量全空）
       // eslint-disable-next-line no-console
@@ -311,6 +335,7 @@ export function useThemeVars() {
   };
   load();
   onShow(load);
+  onThemeChange(load); // 系统明暗切换（follow 模式）→ 立即重算变量+tabBar
   return { tv: vars, patternSrc, refresh: load };
 }
 
@@ -322,6 +347,18 @@ function applyTabBar(dark: boolean, primary: string) {
       selectedColor: primary,
       backgroundColor: dark ? '#181b22' : '#ffffff',
       borderStyle: dark ? 'black' : 'white',
+    });
+  } catch (_) {}
+}
+
+/** 原生导航栏深色适配（与 tabBar 同类：navigationBar 静态色不随 CSS 变量；深色下顶部仍白）
+ *  每页 useThemeVars load 时调用——明暗切换/跟随系统即时生效 */
+function applyNavBar(dark: boolean, primary: string) {
+  try {
+    uni.setNavigationBarColor({
+      frontColor: dark ? '#ffffff' : '#000000',
+      backgroundColor: dark ? '#181b22' : (primary || '#ffffff'),
+      animation: { duration: 200, timingFunc: 'easeIn' },
     });
   } catch (_) {}
 }

@@ -65,12 +65,28 @@
             <text class="acct-name">{{ a }}</text>
             <text class="acct-stats">进账 ¥{{ fmt(acctStats[a]?.total ?? 0) }} · {{ acctStats[a]?.count ?? 0 }} 笔</text>
           </view>
+          <text class="acct-detail" @click="viewAcctDetail(a)">明细</text>
           <text class="acct-edit" @click="renameAccount(i)">改名</text>
           <text class="acct-del" @click="removeAccount(i)">删除</text>
         </view>
         <view class="acct-add-row">
           <input class="ipt add" v-model="mgrName" placeholder="新账户名称" />
           <button class="btn-sub" @click="addAccount">添加</button>
+        </view>
+        <!-- 账户明细区块（该账户全部收款记录，对齐 App 账户收支明细） -->
+        <view v-if="acctDetail" class="acct-detail-block">
+          <view class="acct-detail-title">
+            <text>「{{ acctDetail }}」收款明细（{{ acctDetailRows.length }} 笔）</text>
+            <text class="acct-detail-close" @click="acctDetail = ''">收起 ✕</text>
+          </view>
+          <view v-for="r in acctDetailRows" :key="r.id" class="acct-detail-row">
+            <view class="ad-left">
+              <text class="ad-name">{{ r.client_name }}</text>
+              <text class="ad-meta">{{ r.happened_at }}<template v-if="r.note"> · {{ r.note }}</template></text>
+            </view>
+            <text class="ad-amt">¥{{ fmt(r.amount) }}</text>
+          </view>
+          <view v-if="acctDetailRows.length === 0" class="empty">该账户暂无收款</view>
         </view>
         <button class="btn-save" @click="showAccountMgr = false">完成</button>
       </view>
@@ -110,6 +126,14 @@ const mgrName = ref('');
 const payForm = ref<{
   show: boolean; id: string; amount: string; waived: string; date: string; method: string; note: string;
 }>({ show: false, id: '', amount: '', waived: '0', date: '', method: '', note: '' });
+// 账户收支明细（对齐 App：点账户看该账户全部收款记录）
+const acctDetail = ref('');
+const acctDetailRows = computed(() =>
+  acctDetail.value ? payments.value.filter((p) => p.method === acctDetail.value) : [],
+);
+function viewAcctDetail(a: string) {
+  acctDetail.value = acctDetail.value === a ? '' : a;
+}
 
 const fmt = (n: number) => Number(n || 0).toFixed(2);
 
@@ -349,16 +373,16 @@ async function remove(id: string) {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
-.card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 16rpx; padding: 24rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
 .card-title { font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .field { margin-bottom: 16rpx; }
 .field-inner { display: flex; justify-content: space-between; padding: 18rpx 0; }
 .label { color: var(--text-sub); }
 .value { color: var(--text-main); }
 .placeholder { color: var(--text-sub); }
-.ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .debt-tip { color: #f56c6c; font-size: 24rpx; margin: -8rpx 0 16rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
 .pay-row { display: flex; align-items: center; padding: 16rpx 0; border-bottom: 1rpx solid var(--divider); }
 .pay-left { flex: 1; min-width: 0; }
 .pay-name { display: block; font-size: 28rpx; }
@@ -368,13 +392,23 @@ async function remove(id: string) {
 .tip-longpress { color: var(--text-sub); font-size: 22rpx; margin-left: 16rpx; flex-shrink: 0; }
 .empty { color: var(--text-sub); text-align: center; padding: 30rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
+.sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .acct-link { color: var(--primary); font-size: 24rpx; text-align: center; margin-top: 10rpx; }
 .acct-row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); }
 .acct-info { flex: 1; display: flex; flex-direction: column; }
 .acct-name { font-size: 28rpx; }
 .acct-stats { font-size: 22rpx; color: var(--text-sub); margin-top: 4rpx; }
+.acct-detail { font-size: 24rpx; color: var(--primary); margin-right: 20rpx; }
+.acct-detail-block { margin: 20rpx 0 8rpx; padding: 20rpx; background: var(--input-bg); border-radius: 12rpx; }
+.acct-detail-title { display: flex; justify-content: space-between; align-items: center; font-size: 26rpx; font-weight: 600; margin-bottom: 12rpx; }
+.acct-detail-close { font-size: 22rpx; color: var(--text-sub); font-weight: normal; }
+.acct-detail-row { display: flex; align-items: center; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
+.acct-detail-row:last-child { border-bottom: none; }
+.ad-left { flex: 1; min-width: 0; }
+.ad-name { font-size: 26rpx; display: block; color: var(--text-main); }
+.ad-meta { font-size: 22rpx; color: var(--text-sub); display: block; margin-top: 2rpx; }
+.ad-amt { font-size: 26rpx; font-weight: bold; color: #67c23a; }
 .acct-edit { color: var(--primary); font-size: 24rpx; margin-right: 24rpx; }
 .acct-del { color: #f56c6c; font-size: 24rpx; }
 .acct-add-row { display: flex; align-items: center; margin-top: 16rpx; }
