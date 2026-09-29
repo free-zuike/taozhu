@@ -133,8 +133,8 @@ function go(url: string) {
 </script>
 
 <style>
-.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
-.page {  min-height: 100vh;  background: var(--page-bg); }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page { position: relative; min-height: 100vh;  background: var(--page-bg); }
 /* 两列网格：小程序对 flex gap / calc(50% - x) 兼容性差，用 48% + space-between 最稳 */
 .cards { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
 .card {

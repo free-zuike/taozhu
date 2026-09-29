@@ -308,8 +308,8 @@ async function removeAttach(key: string) {
 </script>
 
 <style>
-.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
-.page {  min-height: 100vh;  background: var(--page-bg); }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page { position: relative; min-height: 100vh;  background: var(--page-bg); }
 .month-card { background: var(--card-bg); border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; border: 1rpx solid var(--divider); }
 .month-head { display: flex; align-items: center; justify-content: center; margin-bottom: 14rpx; }
 .month-label { font-size: 30rpx; font-weight: bold; color: var(--text-main); }

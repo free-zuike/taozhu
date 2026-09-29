@@ -50,6 +50,8 @@ class _CleanupPageState extends State<CleanupPage> {
   int _localAttachAll = 0;
   int _localAttachInUse = 0;
   int _localAttachOrphan = 0;
+  /// 本地附件引用表条数（同步建立；在线拉取刷新）
+  int _localRefCount = 0;
 
   @override
   void initState() {
@@ -316,7 +318,11 @@ class _CleanupPageState extends State<CleanupPage> {
                 localAttachAll++;
                 // basename 在用判定（参考实现）：文件名在本地引用表 file 集合 = 在用；
                 // 不在 = 孤儿（可清理）。三元组辅助：同目录部分孤儿也能正确区分。
-                final fileInUse = localRefs.contains(fileName) || localRefsFull.contains(rel);
+                // 目录级兜底（本地镜像在用 id 集合）：引用表为空/未同步时保守归在用防误删，
+                // 此时同目录孤儿无法区分（宁可不清理不误删）——表空且在线拉取成功会写入表后再判。
+                final fileInUse = localRefs.contains(fileName) ||
+                    localRefsFull.contains(rel) ||
+                    (inUse[entityName]?.contains(idName) ?? false);
                 if (fileInUse) {
                   localAttachInUse++;
                 } else {
@@ -506,10 +512,12 @@ class _CleanupPageState extends State<CleanupPage> {
                         : '更新安装包（APK/Zip）、附件副本（逐张图片）、云端孤儿附件、头像缓存、库重建备份与临时文件',
                     style: TextStyle(fontSize: 12, color: c.textSub),
                   ),
-                  if (!kIsWeb && _localAttachAll > 0) ...[
+                  if (!kIsWeb) ...[
                     const SizedBox(height: 4),
                     Text(
-                      '附件副本：本地共 $_localAttachAll 张（在用 $_localAttachInUse · 可清理 $_localAttachOrphan）',
+                      _localAttachAll == 0 && !_inUseFailed
+                          ? '附件副本：本地目录无文件（同步后会自动下载在用附件）'
+                          : '附件副本：本地共 $_localAttachAll 张（在用 $_localAttachInUse · 可清理 $_localAttachOrphan · 引用表 $_localRefCount 条）',
                       style: TextStyle(fontSize: 12, color: _localAttachOrphan > 0 ? c.warning : c.textSub, fontWeight: FontWeight.w600),
                     ),
                   ],

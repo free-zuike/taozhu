@@ -33,8 +33,8 @@ function go(url: string) {
 </script>
 
 <style>
-.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
-.page {  min-height: 100vh;  background: var(--page-bg); }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page { position: relative; min-height: 100vh;  background: var(--page-bg); }
 .tip { color: var(--text-sub); font-size: 26rpx; margin-bottom: 24rpx; }
 .grid { display: flex; flex-wrap: wrap; justify-content: space-between; }
 .cell {

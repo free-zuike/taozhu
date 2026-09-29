@@ -782,6 +782,10 @@ class SyncService {
       // **await 等待附件下载完，同步中的动画/状态行才消失**（完全同步之后再消失）；
       // 单张失败内部静默跳过，下次同步自动重补，不阻塞主流程
       await downloadInUseAttachments();
+      // ④b 同步完成后自动清理本地孤儿附件副本（文件级 basename 判定，引用表已刷新）：
+      // 与清理页手动扫描同范式；同步完本地目录恒=纯在用，同步面板"本地附件"数与服务器在用一致
+      // （解决"本地 6 / 服务器 2"数字对不上，孤儿不再滞留等待手动清理）
+      await cleanupOrphanLocalAttachments();
       // ⑤ 资料（显示名/头像版本）同步对齐参考 sync() 编排：实体+附件完成后统一 syncMyProfile
       await syncMyProfile();
       // ⑥ 主题配置随同步上传/拉取（App 不直连写数据库；Web 直连在设置页保存）
@@ -898,6 +902,18 @@ class SyncService {
       await collect(await LocalDb.getAll('sales'), 'sale', 'sale_item');
       await collect(await LocalDb.getAll('purchases'), 'purchase', 'purchase_item');
       await collect(await LocalDb.getAll('payments'), 'payment', 'payment');
+      // 本地附件引用表（basename 集合）：同步时 downloadInUseAttachments 已持久化服务器在用三元组。
+      // 文件级孤儿清理 = basename 不在引用表即孤儿（对齐参考实现 scanFileOrphanAttachments）。
+      // 引用表为空（未同步/拉取失败）时保守：只清无主目录（目录级兜底），在用目录内文件全部保留。
+      final refRows = await LocalDb.getAll('attachment_refs');
+      final refNames = refRows
+          .map((r) => '${r['file'] ?? ''}')
+          .where((f) => f.isNotEmpty)
+          .toSet();
+      final refFull = refRows
+          .map((r) => '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${r['file'] ?? ''}')
+          .where((f) => !f.startsWith('/') && !f.contains('//'))
+          .toSet();
       // 扫描 attachments/ 下 entity 目录，清掉不在用集合的 id 目录
       await for (final eDir in base.list(followLinks: false)) {
         if (eDir is! Directory) continue;
@@ -913,7 +929,19 @@ class SyncService {
           final id = idDir.uri.pathSegments.last;
           if (!have.contains(id)) {
             try { idDir.deleteSync(recursive: true); } catch (_) {}
+            continue;
           }
+          // 在用目录内：文件级孤儿清理（引用表非空时）；表空保守保留
+          if (refNames.isEmpty) continue;
+          await for (final f in idDir.list(followLinks: false)) {
+            if (f is! File) continue;
+            final fileName = f.uri.pathSegments.last;
+            final rel = '$entity/$id/$fileName';
+            if (!refNames.contains(fileName) && !refFull.contains(rel)) {
+              try { f.deleteSync(); } catch (_) {}
+            }
+          }
+          try { if (idDir.listSync().isEmpty) idDir.deleteSync(); } catch (_) {}
         }
         try { if (eDir.listSync().isEmpty) eDir.deleteSync(); } catch (_) {}
       }

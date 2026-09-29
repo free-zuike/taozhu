@@ -231,8 +231,8 @@ function logout() {
 </script>
 
 <style>
-.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
-.page {  min-height: 100vh; padding-bottom: 60rpx;  background: var(--page-bg); }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page { position: relative; min-height: 100vh; padding-bottom: 60rpx;  background: var(--page-bg); }
 .head {
   display: flex; align-items: center; gap: 20rpx;
   background: linear-gradient(135deg, var(--primary), #60a5fa);

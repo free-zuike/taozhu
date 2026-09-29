@@ -77,8 +77,8 @@ function restore(b: BackupItem) {
 </script>
 
 <style>
-.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
-.page {  min-height: 100vh;  background: var(--page-bg); }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page { position: relative; min-height: 100vh;  background: var(--page-bg); }
 .btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; }
 .tip { font-size: 22rpx; color: var(--text-sub); margin: 20rpx 8rpx 28rpx; line-height: 1.6; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; display: flex; align-items: center; }
