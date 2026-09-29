@@ -301,7 +301,7 @@ async function removeAttach(key: string) {
 
 <style>
 .page { background: var(--page-bg); min-height: 100vh; }
-.month-card { background: var(--card-bg); border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; border: 1rpx solid #ebeef5; }
+.month-card { background: var(--card-bg); border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; border: 1rpx solid var(--divider); }
 .month-head { display: flex; align-items: center; justify-content: center; margin-bottom: 14rpx; }
 .month-label { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
 .month-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 6rpx; }
@@ -321,15 +321,15 @@ async function removeAttach(key: string) {
 .ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
 .op { color: var(--primary); font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
-.tip-longpress { color: #c0c4cc; font-size: 22rpx; }
-.empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
+.tip-longpress { color: var(--text-sub); font-size: 22rpx; }
+.empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
-.attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid #f0f0f0; }
+.attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
 .attach-img { width: 120rpx; height: 120rpx; border-radius: 8rpx; flex-shrink: 0; }
 .attach-del { color: #f56c6c; font-size: 26rpx; margin-left: auto; }
 .attach-actions { display: flex; gap: 16rpx; }

@@ -80,8 +80,8 @@ function restore(b: BackupItem) {
 .btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; }
 .tip { font-size: 22rpx; color: var(--text-sub); margin: 20rpx 8rpx 28rpx; line-height: 1.6; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; display: flex; align-items: center; }
-.badge { display: inline-block; background: #eaf1fb; color: var(--primary); border-radius: 999rpx; padding: 2rpx 14rpx; font-size: 20rpx; margin-left: 12rpx; }
-.empty { background: var(--card-bg); border-radius: 20rpx; text-align: center; color: #c0c4cc; padding: 60rpx 0; font-size: 26rpx; }
+.badge { display: inline-block; background: var(--primary-soft); color: var(--primary); border-radius: 999rpx; padding: 2rpx 14rpx; font-size: 20rpx; margin-left: 12rpx; }
+.empty { background: var(--card-bg); border-radius: 20rpx; text-align: center; color: var(--text-sub); padding: 60rpx 0; font-size: 26rpx; }
 .list { display: flex; flex-direction: column; gap: 16rpx; }
 .card { background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; display: flex; align-items: center; justify-content: space-between; }
 .info { display: flex; flex-direction: column; gap: 6rpx; }

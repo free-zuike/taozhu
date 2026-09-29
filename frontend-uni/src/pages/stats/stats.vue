@@ -106,7 +106,7 @@ async function onYear(e: { detail: { value: number } }) {
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .card-title { display: flex; justify-content: space-between; align-items: center; font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .year-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
-.row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid #f0f0f0; }
+.row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); }
 .left { flex: 1; min-width: 0; }
 .name { font-size: 28rpx; display: block; }
 .meta { font-size: 22rpx; color: var(--text-sub); display: block; margin-top: 4rpx; }
@@ -114,5 +114,5 @@ async function onYear(e: { detail: { value: number } }) {
 .pay { font-size: 28rpx; font-weight: bold; }
 .red { color: #f56c6c; }
 .green { color: #67c23a; }
-.empty { color: #c0c4cc; text-align: center; padding: 30rpx 0; font-size: 26rpx; }
+.empty { color: var(--text-sub); text-align: center; padding: 30rpx 0; font-size: 26rpx; }
 </style>

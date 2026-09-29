@@ -1,5 +1,5 @@
 /**
- * 小程序全局主题：主色持久化 + 明暗模式 + 背景图案 + 页面根 view 绑定 CSS 变量。
+ * 小程序全局主题：主色持久化 + 明暗模式 + 背景图案（SVG 与 App CustomPainter 同几何：铜钱方孔/竹竿竹叶/账本表格/进销箭头/涟漪圆环）
  * 主题设置页保存后写 storage（taozhu_theme_primary / taozhu_theme_mode / taozhu_theme_skin），
  * 各页面 onShow 读取并应用。
  */
@@ -51,59 +51,198 @@ export function isDark(): boolean {
   if (m === 'dark') return true;
   if (m === 'light') return false;
   try {
-    // 微信小程序：系统深色模式（基础库 2.11.0+）
-    const si = uni.getSystemInfoSync() as Record<string, unknown>;
+    const si = uni.getSystemInfoSync() as unknown as { theme?: string };
     return si.theme === 'dark';
   } catch {
     return false;
   }
 }
 
-/**
- * 页面背景 CSS（按图案 id 生成；小程序无 CustomPainter，用 CSS 渐变/圆点模拟图案，
- * 图案颜色跟随主题主色 --primary 派生）。
- * skinId: ''=渐变 / 'none'=纯色 / coin 铜钱·圆环 / bamboo 竹韵·竖条 / ledger 账本·网格
- *        / flow 进销·斜浪 / ripple 涟漪·同心圆
- */
+/** hex → rgba 字符串（SVG 描边/填充用） */
+function rgba(color: string, a: number): string {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(color);
+  if (!m) return `rgba(64,158,255,${a})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+/** 确定性伪随机（Dart Random(seed) 同款 LCG 近似：seed 固定 → 每次渲染位置一致） */
+function dartRand(seed: number): () => number {
+  let s = (seed & 0x7fffffff) | 1;
+  return () => {
+    // Dart VM Random: xorshift32 变体（nextDouble = state / 2^32 近似）
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    return (s >>> 0) / 4294967296;
+  };
+}
+
+// ── SVG 图案（与 App/Web theme.dart CustomPainter 同几何与透明度：亮=主题主色 0.14~0.26，暗=白 0.14~0.26）──
+// 视口 360×640（对齐 App size.width 基准）；非 compact（全屏）形态
+
+/** 铜钱：8 枚外圆 + 方孔（Random(11)），r=W*0.05，cy 0.08~0.9 */
+function svgCoin(ink: string, ink2: string): string {
+  const W = 360, H = 640;
+  const rnd = dartRand(11);
+  const r = W * 0.05;
+  const parts: string[] = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+  for (let i = 0; i < 8; i++) {
+    const cx = rnd() * W;
+    const cy = H * (0.08 + rnd() * 0.82);
+    const cr = r * (0.8 + rnd() * 0.5);
+    parts.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${cr.toFixed(1)}" fill="none" stroke="${ink}" stroke-width="${(cr * 0.13).toFixed(1)}"/>`);
+    const hole = cr * 0.34;
+    parts.push(`<rect x="${(cx - hole).toFixed(1)}" y="${(cy - hole).toFixed(1)}" width="${(hole * 2).toFixed(1)}" height="${(hole * 2).toFixed(1)}" fill="none" stroke="${ink2}" stroke-width="${(cr * 0.09).toFixed(1)}"/>`);
+  }
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+/** 竹韵：4 竿竖竹 + 竹节 + 竹叶（Random(17)），叶为 quadraticBezier 叶片 */
+function svgBamboo(ink: string, ink2: string): string {
+  const W = 360, H = 640;
+  const rnd = dartRand(17);
+  const parts: string[] = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+  for (let i = 0; i < 4; i++) {
+    const x = W * (0.14 + i * 0.26 + rnd() * 0.05);
+    const w = W * 0.02;
+    const topY = H * (0.08 + i * 0.02);
+    const h = H * (0.34 + (i % 2) * 0.2) + H * 0.2;
+    // 竹竿
+    parts.push(`<line x1="${x.toFixed(1)}" y1="${topY.toFixed(1)}" x2="${x.toFixed(1)}" y2="${(topY + h).toFixed(1)}" stroke="${ink}" stroke-width="${w.toFixed(1)}" stroke-linecap="round"/>`);
+    // 竹节 3 道
+    for (let n = 0; n < 3; n++) {
+      const ny = topY + h * (0.2 + n * 0.24);
+      parts.push(`<line x1="${(x - w * 0.7).toFixed(1)}" y1="${ny.toFixed(1)}" x2="${(x + w * 0.7).toFixed(1)}" y2="${ny.toFixed(1)}" stroke="${ink2}" stroke-width="${(w * 0.28).toFixed(1)}"/>`);
+    }
+    // 竹叶 3 片（quadraticBezier 叶形：凸背+凹腹闭合）
+    for (let l = 0; l < 3; l++) {
+      const lx = x + w * (0.6 + rnd() * 0.5);
+      const ly = topY + h * (0.1 + rnd() * 0.8);
+      const len = W * 0.035;
+      const dir = rnd() < 0.5 ? 1 : -1;
+      const p1x = lx + len * 0.5 * dir, p1y = ly - len * 0.5;
+      const p2x = lx + len * dir, p2y = ly - len * 0.12;
+      const p3x = lx + len * 0.5 * dir, p3y = ly + len * 0.18;
+      parts.push(`<path d="M ${lx.toFixed(1)} ${ly.toFixed(1)} Q ${p1x.toFixed(1)} ${p1y.toFixed(1)} ${p2x.toFixed(1)} ${p2y.toFixed(1)} Q ${p3x.toFixed(1)} ${p3y.toFixed(1)} ${lx.toFixed(1)} ${ly.toFixed(1)} Z" fill="${ink2}"/>`);
+    }
+  }
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+/** 账本：3 本账本轮廓 + 表头 + 3 行账目线 + 中竖线 */
+function svgLedger(ink: string, ink2: string): string {
+  const W = 360, H = 640;
+  const parts: string[] = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+  for (let i = 0; i < 3; i++) {
+    const cx = W * 0.5;
+    const cy = H * (0.16 + i * 0.3);
+    const w = W * 0.34;
+    const h = w * 0.4;
+    const rx = w * 0.04;
+    // 账本框
+    parts.push(`<rect x="${(cx - w / 2).toFixed(1)}" y="${(cy - h / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="${rx.toFixed(1)}" fill="none" stroke="${ink}" stroke-width="${(W * 0.009).toFixed(2)}"/>`);
+    // 表头线
+    parts.push(`<line x1="${(cx - w * 0.3).toFixed(1)}" y1="${(cy - h * 0.3).toFixed(1)}" x2="${(cx + w * 0.3).toFixed(1)}" y2="${(cy - h * 0.3).toFixed(1)}" stroke="${ink2}" stroke-width="${(W * 0.007).toFixed(2)}"/>`);
+    // 3 行账目线
+    for (let r = 0; r < 3; r++) {
+      const y = cy - h * 0.08 + r * h * 0.2;
+      parts.push(`<line x1="${(cx - w * 0.34).toFixed(1)}" y1="${y.toFixed(1)}" x2="${(cx + w * 0.34).toFixed(1)}" y2="${y.toFixed(1)}" stroke="${ink2}" stroke-width="${(W * 0.007).toFixed(2)}"/>`);
+    }
+    // 中竖线
+    parts.push(`<line x1="${(cx + w * 0.2).toFixed(1)}" y1="${(cy - h * 0.42).toFixed(1)}" x2="${(cx + w * 0.2).toFixed(1)}" y2="${(cy + h * 0.42).toFixed(1)}" stroke="${ink2}" stroke-width="${(W * 0.007).toFixed(2)}"/>`);
+  }
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+/** 进销：3 条进出双向箭头曲线 */
+function svgFlow(ink: string, ink2: string): string {
+  const W = 360, H = 640;
+  const parts: string[] = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+  const curves = 3;
+  for (let cIdx = 0; cIdx < curves; cIdx++) {
+    const cy = H * (0.2 + cIdx * 0.3);
+    const amp = H * (0.1 + cIdx * 0.02);
+    const strokeW = W * 0.02;
+    // S 曲线（cubic）
+    parts.push(`<path d="M ${(W * 0.08).toFixed(1)} ${cy.toFixed(1)} C ${(W * 0.35).toFixed(1)} ${(cy - amp).toFixed(1)}, ${(W * 0.65).toFixed(1)} ${(cy + amp).toFixed(1)}, ${(W * 0.92).toFixed(1)} ${cy.toFixed(1)}" fill="none" stroke="${ink}" stroke-width="${strokeW.toFixed(1)}" stroke-linecap="round"/>`);
+    const len = W * 0.035;
+    // 右箭头（angle 0）
+    const tipR = W * 0.92, tipRY = cy;
+    parts.push(`<line x1="${tipR.toFixed(1)}" y1="${tipRY.toFixed(1)}" x2="${(tipR - len * 0.9 * Math.cos(0.32)).toFixed(1)}" y2="${(tipRY - len * 0.9 * Math.sin(0.32)).toFixed(1)}" stroke="${ink}" stroke-width="${strokeW.toFixed(1)}" stroke-linecap="round"/>
+<line x1="${tipR.toFixed(1)}" y1="${tipRY.toFixed(1)}" x2="${(tipR - len * 0.9 * Math.cos(-0.32)).toFixed(1)}" y2="${(tipRY - len * 0.9 * Math.sin(-0.32)).toFixed(1)}" stroke="${ink}" stroke-width="${strokeW.toFixed(1)}" stroke-linecap="round"/>`);
+    // 左箭头（angle pi）
+    const tipL = W * 0.08, tipLY = cy;
+    parts.push(`<line x1="${tipL.toFixed(1)}" y1="${tipLY.toFixed(1)}" x2="${(tipL - len * 0.9 * Math.cos(Math.PI - 0.32)).toFixed(1)}" y2="${(tipLY - len * 0.9 * Math.sin(Math.PI - 0.32)).toFixed(1)}" stroke="${ink2}" stroke-width="${strokeW.toFixed(1)}" stroke-linecap="round"/>
+<line x1="${tipL.toFixed(1)}" y1="${tipLY.toFixed(1)}" x2="${(tipL - len * 0.9 * Math.cos(Math.PI + 0.32)).toFixed(1)}" y2="${(tipLY - len * 0.9 * Math.sin(Math.PI + 0.32)).toFixed(1)}" stroke="${ink2}" stroke-width="${strokeW.toFixed(1)}" stroke-linecap="round"/>`);
+  }
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+/** 涟漪：5 组同心圆环（3 环，透明度递减） */
+function svgRipple(ink: string, ink2: string): string {
+  const W = 360, H = 640;
+  const rnd = dartRand(29);
+  const parts: string[] = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+  const groups = 5;
+  for (let g = 0; g < groups; g++) {
+    const cx = W * (0.22 + (g % 2) * 0.3 + rnd() * 0.1);
+    const cy = H * (0.14 + g * 0.18 + rnd() * 0.05);
+    const baseR = W * 0.036;
+    for (let ring = 0; ring < 3; ring++) {
+      const r = baseR * (1 + ring * 0.9);
+      const col = ring === 0 ? ink : ink2;
+      parts.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="none" stroke="${col}" stroke-width="${(W * 0.006).toFixed(2)}"/>`);
+    }
+  }
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+/** 背景图案 SVG data URI（与 App/Web CustomPainter 同几何；图案色随主题主色） */
+function skinSvgUri(skin: string, click: { ink: string; ink2: string }): string {
+  const { ink, ink2 } = click;
+  let svg = '';
+  switch (skin) {
+    case 'coin': svg = svgCoin(ink, ink2); break;
+    case 'bamboo': svg = svgBamboo(ink, ink2); break;
+    case 'ledger': svg = svgLedger(ink, ink2); break;
+    case 'flow': svg = svgFlow(ink, ink2); break;
+    case 'ripple': svg = svgRipple(ink, ink2); break;
+    default: return '';
+  }
+  return 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")';
+}
+
+/** 背景图案迷你预览（设置页缩略图）：与全屏同几何，色用主题主色高对比（对齐 App compact 预览） */
+export function skinPreviewCss(skin: string, primary: string): string {
+  if (skin === '') return 'linear-gradient(180deg, rgba(64,158,255,0.10), rgba(64,158,255,0.02))';
+  if (skin === 'none') return '#f5f7fa';
+  const ink = rgba(primary, 0.55);
+  const ink2 = rgba(primary, 0.32);
+  const uri = skinSvgUri(skin, { ink, ink2 });
+  return uri ? `${uri}, #ffffff` : '#f5f7fa';
+}
+
+/** 页面背景 CSS（渐变底 + 所选图案 SVG 层；图案颜色跟随主题主色）
+ *  透明度对齐 App 全屏 painter：亮色 ink rgba(primary,0.14~0.26) 区间，暗色白 0.14~0.26 */
 function pageBackgroundCss(primary: string, dark: boolean, skin: string): string {
-  const ink = dark ? 'rgba(255,255,255,0.16)' : alpha(primary, '26'); // 图案墨色（主题色 15%）
-  const ink2 = dark ? 'rgba(255,255,255,0.1)' : alpha(primary, '18');
+  const ink = dark ? 'rgba(255,255,255,0.24)' : rgba(primary, 0.22);
+  const ink2 = dark ? 'rgba(255,255,255,0.15)' : rgba(primary, 0.14);
   const baseTop = dark ? '#181b22' : alpha(primary, '14');
   const baseBottom = dark ? '#12151c' : '#f5f7fa';
-  switch (skin) {
-    case 'none':
-      return dark ? 'linear-gradient(180deg, #181b22, #12151c)' : `linear-gradient(180deg, ${alpha(primary, '14')} 0%, #f5f7fa 34%)`;
-    case 'coin':
-      return `radial-gradient(circle at 18% 15%, transparent 0 9rpx, ${ink} 9rpx 13rpx, transparent 13rpx 17rpx, ${ink2} 17rpx 19rpx, transparent 19rpx),
-        radial-gradient(circle at 72% 28%, transparent 0 7rpx, ${ink} 7rpx 10rpx, transparent 10rpx 13rpx, ${ink2} 13rpx 15rpx, transparent 15rpx),
-        radial-gradient(circle at 42% 55%, transparent 0 11rpx, ${ink} 11rpx 16rpx, transparent 16rpx 20rpx, ${ink2} 20rpx 22rpx, transparent 22rpx),
-        radial-gradient(circle at 82% 72%, transparent 0 6rpx, ${ink} 6rpx 9rpx, transparent 9rpx 12rpx, ${ink2} 12rpx 14rpx, transparent 14rpx),
-        linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
-    case 'bamboo':
-      return `linear-gradient(90deg, transparent 0 17%, ${ink} 17% 19%, transparent 19% 38%, ${ink2} 38% 39.5%, transparent 39.5% 62%, ${ink} 62% 64%, transparent 64% 82%, ${ink2} 82% 83.5%, transparent 83.5%),
-        linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
-    case 'ledger':
-      return `linear-gradient(0deg, transparent 0 12%, ${ink2} 12% 12.8%, transparent 12.8% 30%, ${ink2} 30% 30.8%, transparent 30.8% 48%, ${ink2} 48% 48.8%, transparent 48.8% 70%, ${ink2} 70% 70.8%, transparent 70.8%),
-        linear-gradient(90deg, transparent 0 22%, ${ink} 22% 23%, transparent 23% 78%, ${ink} 78% 79%, transparent 79%),
-        linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
-    case 'flow':
-      return `linear-gradient(135deg, transparent 0 44%, ${ink2} 44% 46%, transparent 46% 56%, ${ink2} 56% 58%, transparent 58%),
-        linear-gradient(315deg, transparent 0 44%, ${ink} 44% 46%, transparent 46% 56%, ${ink} 56% 58%, transparent 58%),
-        linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
-    case 'ripple':
-      return `radial-gradient(circle at 30% 25%, transparent 0 12rpx, ${ink} 12rpx 17rpx, transparent 17rpx 24rpx, ${ink2} 24rpx 28rpx, transparent 28rpx 34rpx, ${ink} 34rpx 38rpx, transparent 38rpx),
-        radial-gradient(circle at 72% 62%, transparent 0 8rpx, ${ink2} 8rpx 12rpx, transparent 12rpx 18rpx, ${ink} 18rpx 22rpx, transparent 22rpx 27rpx, ${ink2} 27rpx 30rpx, transparent 30rpx),
-        radial-gradient(circle at 15% 78%, transparent 0 6rpx, ${ink} 6rpx 9rpx, transparent 9rpx 13rpx, ${ink2} 13rpx 16rpx, transparent 16rpx),
-        linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
-    default:
-      return `linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
-  }
+  const gradient = `linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
+  if (skin === 'none') return gradient;
+  const uri = skinSvgUri(skin, { ink, ink2 });
+  return uri ? `${uri}, ${gradient}` : gradient;
 }
 
 /**
  * 页面根 view :style 绑定：提供主题色、明暗变量与页面背景（按所选图案）。
- * --primary / --primary-soft(12% 装饰) / --primary-fade(8% 渐变顶)
- * --page-bg（完整背景 CSS，含图案层）/ --card-bg / --text-main / --text-sub / --divider / --input-bg
  */
 export function useThemeVars() {
   const vars = ref<Record<string, string>>({ '--primary': defaultPrimary, '--page-bg': '#f5f7fa', '--card-bg': '#ffffff' });
@@ -118,14 +257,19 @@ export function useThemeVars() {
     const inputBg = dark ? '#2a303c' : '#f5f7fa';
     vars.value = {
       '--primary': primary,
-      '--primary-soft': alpha(primary, '1F'), // 12%（hex alpha ~1F）
-      '--primary-fade': alpha(primary, '14'), // 8%
+      '--primary-soft': alpha(primary, '1F'),
+      '--primary-fade': alpha(primary, '14'),
       '--page-bg': pageBackgroundCss(primary, dark, skin),
       '--card-bg': cardBg,
       '--text-main': textMain,
       '--text-sub': textSub,
       '--divider': divider,
       '--input-bg': inputBg,
+      // 语义浅底（成功/警告/危险/紫强调）：亮暗通用半透明，深色下协调不刺眼
+      '--ok-bg': 'rgba(34,197,94,0.14)',
+      '--warn-bg': 'rgba(230,162,60,0.14)',
+      '--danger-bg': 'rgba(245,108,108,0.14)',
+      '--violet-bg': 'rgba(124,77,255,0.12)',
     };
   };
   load();

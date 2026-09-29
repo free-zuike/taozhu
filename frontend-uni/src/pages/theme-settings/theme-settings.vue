@@ -20,7 +20,7 @@
     <view class="group-title">背景图案</view>
     <view class="presets">
       <view v-for="s in skins" :key="s.id" class="preset skin" @click="curSkin = s.id">
-        <view class="swatch skin-swatch" :style="{ background: s.preview }">
+        <view class="swatch skin-swatch" :style="{ background: typeof s.preview === 'function' ? s.preview(selectedColor) : s.preview }">
           <text v-if="curSkin === s.id" class="check">✓</text>
         </view>
         <text class="p-name" :class="{ active: curSkin === s.id }">{{ s.name }}</text>
@@ -37,7 +37,7 @@
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
-import { useThemeVars, setThemePrimary, setThemeMode, setThemeSkin, getThemeMode, getThemeSkin, type ThemeMode } from '../../theme';
+import { useThemeVars, setThemePrimary, setThemeMode, setThemeSkin, getThemeMode, getThemeSkin, skinPreviewCss, type ThemeMode } from '../../theme';
 
 const tv = useThemeVars();
 const modes: Array<{ id: ThemeMode; name: string }> = [
@@ -53,18 +53,27 @@ const presets = [
   { id: 'green', name: '墨绿', color: '#2F7D63' },
   { id: 'navy', name: '藏青', color: '#2B5FD9' },
 ];
+// 图案预览用真实 SVG 迷你图（与 App/Web CustomPainter 同几何，颜色随主题主色）
 const skins = [
-  { id: '', name: '渐变', preview: 'linear-gradient(180deg, #f4f9ff, #e6f0fb)' },
-  { id: 'none', name: '纯色', preview: '#f5f7fa' },
-  { id: 'coin', name: '铜钱', preview: 'radial-gradient(circle at 30% 35%, #fff 0 6rpx, transparent 7rpx), radial-gradient(circle at 70% 30%, #fff 0 5rpx, transparent 6rpx), radial-gradient(circle at 40% 70%, #fff 0 8rpx, transparent 9rpx), radial-gradient(circle at 80% 75%, #fff 0 5rpx, transparent 6rpx), #409EFF' },
-  { id: 'bamboo', name: '竹韵', preview: 'linear-gradient(90deg, transparent 0 18%, #fff 18% 21%, transparent 21% 45%, #fff 45% 48%, transparent 48%), #2F7D63' },
-  { id: 'ledger', name: '账本', preview: 'linear-gradient(0deg, #fff 0 8%, transparent 8% 50%, #fff 50% 58%, transparent 58%), linear-gradient(90deg, #fff 0 14%, transparent 14%), #409EFF' },
-  { id: 'flow', name: '进销', preview: 'linear-gradient(135deg, transparent 0 45%, #fff 45% 55%, transparent 55%), linear-gradient(315deg, transparent 0 45%, #fff 45% 55%, transparent 55%), #C04633' },
-  { id: 'ripple', name: '涟漪', preview: 'radial-gradient(circle at 35% 40%, transparent 0 10rpx, #fff 10rpx 14rpx, transparent 15rpx), radial-gradient(circle at 70% 65%, transparent 0 6rpx, #fff 6rpx 9rpx, transparent 10rpx), #409EFF' },
+  { id: '', name: '渐变', preview: skinPreviewCss('', '#409EFF') },
+  { id: 'none', name: '纯色', preview: skinPreviewCss('none', '#409EFF') },
+  { id: 'coin', name: '铜钱', preview: (p: string) => skinPreviewCss('coin', p) },
+  { id: 'bamboo', name: '竹韵', preview: (p: string) => skinPreviewCss('bamboo', p) },
+  { id: 'ledger', name: '账本', preview: (p: string) => skinPreviewCss('ledger', p) },
+  { id: 'flow', name: '进销', preview: (p: string) => skinPreviewCss('flow', p) },
+  { id: 'ripple', name: '涟漪', preview: (p: string) => skinPreviewCss('ripple', p) },
 ];
 const cur = ref('default');
 const curSkin = ref(getThemeSkin());
 const saving = ref(false);
+/** 当前选中主题色的 hex（供图案预览实时取色） */
+const selectedColor = () => (presets.find((p) => p.id === cur.value)?.color ?? '#409EFF');
+/** 当前选中主题色的图案预览（随配色实时变化） */
+const skinPreview = () => {
+  const p = selectedColor();
+  const s = skins.find((x) => x.id === curSkin.value);
+  return s && typeof s.preview === 'function' ? s.preview(p) : s?.preview ?? '#f5f7fa';
+};
 
 onShow(async () => {
   if (!getToken()) return;

@@ -2,6 +2,7 @@
  *  删除设备 = 从设备列表移除（下次该设备登录重新记录）；仅老板可管理。 */
 import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
+import { notifyClients } from '../services/sync-hub';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -62,5 +63,7 @@ devicesRouter.delete('/:id', async (c) => {
   const r = await c.env.DB.prepare('DELETE FROM devices WHERE id = ? AND user_id = ?')
     .bind(devId, userId).run();
   if ((r.meta.changes ?? 0) === 0) return c.json({ error: '设备不存在' }, 404);
+  // 实时刷新：其他端收到 devices 通知后重新拉设备列表（在线/离线状态即时反映）
+  await notifyClients('devices').catch(() => {});
   return c.json({ ok: true });
 });

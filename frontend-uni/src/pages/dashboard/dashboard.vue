@@ -152,10 +152,10 @@ function go(url: string) {
 .e-amber { color: #f39c12; } .e-gray { color: var(--text-sub); }
 .list { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .list-title { font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
-.list-row { display: flex; justify-content: space-between; padding: 16rpx 0; border-bottom: 1rpx solid #f0f0f0; }
+.list-row { display: flex; justify-content: space-between; padding: 16rpx 0; border-bottom: 1rpx solid var(--divider); }
 .lr-name { font-size: 28rpx; }
 .lr-debt { font-size: 28rpx; }
-.empty { color: #c0c4cc; text-align: center; padding: 30rpx 0; font-size: 26rpx; }
+.empty { color: var(--text-sub); text-align: center; padding: 30rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }

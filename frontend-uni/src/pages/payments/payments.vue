@@ -340,11 +340,11 @@ async function remove(id: string) {
 .field-inner { display: flex; justify-content: space-between; padding: 18rpx 0; }
 .label { color: var(--text-sub); }
 .value { color: var(--text-main); }
-.placeholder { color: #c0c4cc; }
+.placeholder { color: var(--text-sub); }
 .ipt { background: var(--input-bg); border-radius: 10rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .debt-tip { color: #f56c6c; font-size: 24rpx; margin: -8rpx 0 16rpx; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
-.pay-row { display: flex; align-items: center; padding: 16rpx 0; border-bottom: 1rpx solid #f0f0f0; }
+.pay-row { display: flex; align-items: center; padding: 16rpx 0; border-bottom: 1rpx solid var(--divider); }
 .pay-left { flex: 1; min-width: 0; }
 .pay-name { display: block; font-size: 28rpx; }
 .pay-meta { display: block; font-size: 22rpx; color: var(--text-sub); margin-top: 4rpx; }
@@ -352,15 +352,15 @@ async function remove(id: string) {
 .green { color: #67c23a; }
 .edit { color: var(--primary); font-size: 24rpx; margin-right: 20rpx; }
 .del { color: #f56c6c; font-size: 24rpx; }
-.empty { color: #c0c4cc; text-align: center; padding: 30rpx 0; font-size: 26rpx; }
+.empty { color: var(--text-sub); text-align: center; padding: 30rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .acct-link { color: var(--primary); font-size: 24rpx; text-align: center; margin-top: 10rpx; }
-.acct-row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid #f0f0f0; }
+.acct-row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); }
 .acct-info { flex: 1; display: flex; flex-direction: column; }
 .acct-name { font-size: 28rpx; }
-.acct-stats { font-size: 22rpx; color: #999; margin-top: 4rpx; }
+.acct-stats { font-size: 22rpx; color: var(--text-sub); margin-top: 4rpx; }
 .acct-edit { color: var(--primary); font-size: 24rpx; margin-right: 24rpx; }
 .acct-del { color: #f56c6c; font-size: 24rpx; }
 .acct-add-row { display: flex; align-items: center; margin-top: 16rpx; }

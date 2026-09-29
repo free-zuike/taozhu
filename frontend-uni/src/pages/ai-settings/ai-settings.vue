@@ -119,16 +119,16 @@ async function testAll() {
 </script>
 
 <style>
-.page { padding: 24rpx; background: linear-gradient(180deg, var(--primary-fade) 0%, #f5f7fa 34%); min-height: 100vh; }
+.page { padding: 24rpx; background: var(--page-bg); min-height: 100vh; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; }
 .card { background: var(--card-bg); border-radius: 20rpx; padding: 8rpx 24rpx; margin-bottom: 24rpx; }
 .p-head { padding: 20rpx 0 8rpx; }
 .p-info { display: flex; align-items: center; gap: 14rpx; }
 .p-name { font-size: 28rpx; color: var(--text-main); }
 .p-state { font-size: 20rpx; padding: 4rpx 14rpx; border-radius: 999rpx; }
-.p-state.ok { background: #e8f7ee; color: #67c23a; }
-.p-state.no { background: #fdf3e7; color: #e6a23c; }
-.p-id { font-size: 22rpx; color: #c0c4cc; }
+.p-state.ok { background: var(--ok-bg); color: #67c23a; }
+.p-state.no { background: var(--warn-bg); color: #e6a23c; }
+.p-id { font-size: 22rpx; color: var(--text-sub); }
 .f-row { display: flex; align-items: center; gap: 16rpx; padding: 14rpx 0 20rpx; }
 .f-lb { font-size: 24rpx; color: var(--text-sub); width: 120rpx; flex-shrink: 0; }
 .f-ipt { flex: 1; background: var(--input-bg); border-radius: 12rpx; padding: 12rpx 20rpx; font-size: 26rpx; }

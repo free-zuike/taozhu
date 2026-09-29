@@ -249,7 +249,7 @@ function logout() {
 .server-tag { font-size: 24rpx; background: rgba(255,255,255,0.2); border-radius: 999rpx; padding: 8rpx 20rpx; flex-shrink: 0; }
 .stats { display: flex; align-items: stretch; background: var(--card-bg); border-radius: 20rpx; padding: 26rpx 10rpx; margin-bottom: 24rpx; }
 .stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8rpx; justify-content: center; }
-.stat-line { width: 1rpx; background: #ebeef5; margin: 6rpx 0; }
+.stat-line { width: 1rpx; background: var(--divider); margin: 6rpx 0; }
 .st-label { font-size: 22rpx; color: var(--text-sub); }
 .st-value { font-size: 32rpx; font-weight: bold; color: var(--text-main); }
 .green { color: #67c23a; }
@@ -262,13 +262,13 @@ function logout() {
   width: 56rpx; height: 56rpx; border-radius: 16rpx; margin-right: 20rpx;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
-.ic-blue { background: #eaf1fb; } .ic-green { background: #e8f7ee; }
-.ic-orange { background: #fdf3e7; } .ic-purple { background: #f3eefb; } .ic-gold { background: #fdf6e3; }
+.ic-blue { background: var(--primary-soft); } .ic-green { background: var(--ok-bg); }
+.ic-orange { background: var(--warn-bg); } .ic-purple { background: var(--violet-bg); } .ic-gold { background: var(--warn-bg); }
 .ic-tx { font-size: 28rpx; line-height: 1; }
 .r-tx { flex: 1; font-size: 28rpx; color: var(--text-main); }
-.r-arrow { font-size: 34rpx; color: #c0c4cc; }
+.r-arrow { font-size: 34rpx; color: var(--text-sub); }
 .logout { margin: 24rpx 0 16rpx; background: var(--card-bg); color: #f56c6c; border-radius: 16rpx; font-size: 30rpx; border: 1rpx solid #f56c6c; }
-.ver { text-align: center; color: #c0c4cc; font-size: 22rpx; margin-top: 8rpx; }
+.ver { text-align: center; color: var(--text-sub); font-size: 22rpx; margin-top: 8rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }

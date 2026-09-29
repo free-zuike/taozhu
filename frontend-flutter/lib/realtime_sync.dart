@@ -93,6 +93,9 @@ class RealtimeSync {
       } else if (type == 'theme_config') {
         // 主题配置变更（其他端改了预设/图案/背景）：拉取并应用
         ThemeConfig.instance.pullTheme();
+      } else if (type == 'audit' || type == 'devices') {
+        // 审计/设备列表变更（其他端删除等）：notify version——各页（audit_page/devices_page）监听后重拉
+        SyncService.version.notifyListeners();
       } else {
         _trigger();
       }

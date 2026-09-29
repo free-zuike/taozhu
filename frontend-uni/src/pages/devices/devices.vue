@@ -102,12 +102,12 @@ function remove(d: Device) {
 .loading { text-align: center; color: var(--text-sub); padding: 80rpx 0; font-size: 26rpx; }
 .empty { display: flex; flex-direction: column; align-items: center; padding: 120rpx 0; gap: 12rpx; }
 .empty-tx { font-size: 28rpx; color: var(--text-sub); }
-.empty-sub { font-size: 22rpx; color: #c0c4cc; }
+.empty-sub { font-size: 22rpx; color: var(--text-sub); }
 .list { display: flex; flex-direction: column; gap: 20rpx; }
 .card { background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; }
 .head { display: flex; align-items: center; gap: 20rpx; }
 .d-icon {
-  width: 72rpx; height: 72rpx; border-radius: 18rpx; background: #eaf1fb;
+  width: 72rpx; height: 72rpx; border-radius: 18rpx; background: var(--primary-soft);
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 .d-emoji { font-size: 34rpx; }
@@ -115,8 +115,8 @@ function remove(d: Device) {
 .d-name { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
 .d-sub { font-size: 22rpx; color: var(--text-sub); }
 .state { font-size: 20rpx; padding: 4rpx 14rpx; border-radius: 999rpx; flex-shrink: 0; }
-.state.on { background: #e8f7ee; color: #22c55e; }
-.state.off { background: #fdf3e7; color: #e6a23c; }
+.state.on { background: var(--ok-bg); color: #22c55e; }
+.state.off { background: var(--warn-bg); color: #e6a23c; }
 .del { font-size: 26rpx; color: #f56c6c; padding: 8rpx 16rpx; }
 .meta { display: flex; align-items: center; gap: 12rpx; margin-top: 20rpx; padding-top: 20rpx; border-top: 1rpx solid var(--divider); }
 .m-label { font-size: 22rpx; color: var(--text-sub); }

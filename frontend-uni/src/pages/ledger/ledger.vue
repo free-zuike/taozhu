@@ -617,7 +617,7 @@ async function removePayment(p: Record<string, any>) {
 .month-label { font-size: 28rpx; font-weight: bold; }
 .month-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 6rpx; }
 /* 月度结余四列卡（对齐 App 月度卡：四列横排） */
-.month-card { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 20rpx 16rpx; margin-bottom: 16rpx; border: 1rpx solid #ebeef5; }
+.month-card { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 20rpx 16rpx; margin-bottom: 16rpx; border: 1rpx solid var(--divider); }
 .mcols { display: flex; } /* 四列容器：横排（缺此样式时 mcol 块级堆叠=竖排） */
 .mcol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6rpx; }
 .ml { font-size: 22rpx; color: var(--text-sub); }
@@ -625,7 +625,7 @@ async function removePayment(p: Record<string, any>) {
 .client-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
 .seg { display: flex; background: var(--card-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
-.seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }
+.seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
@@ -639,8 +639,8 @@ async function removePayment(p: Record<string, any>) {
 .ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
 .op { color: var(--primary); font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
-.tip-longpress { color: #c0c4cc; font-size: 22rpx; }
-.empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
+.tip-longpress { color: var(--text-sub); font-size: 22rpx; }
+.empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
@@ -649,11 +649,11 @@ async function removePayment(p: Record<string, any>) {
 .field-inner { display: flex; justify-content: space-between; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; }
 .label { color: var(--text-sub); font-size: 28rpx; }
 .value { color: var(--text-main); font-size: 28rpx; }
-.placeholder { color: #c0c4cc; }
+.placeholder { color: var(--text-sub); }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 /* 附件弹层 */
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
-.attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid #f0f0f0; }
+.attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
 .attach-img { width: 120rpx; height: 120rpx; border-radius: 8rpx; flex-shrink: 0; }
 .attach-del { color: #f56c6c; font-size: 26rpx; margin-left: auto; }
 .attach-actions { display: flex; gap: 16rpx; }

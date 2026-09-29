@@ -203,7 +203,7 @@ function copyCsv() {
 .value { font-size: 28rpx; }
 .seg { display: flex; background: var(--input-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 16rpx; font-size: 26rpx; color: var(--text-sub); }
-.seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }
+.seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
 .dates { display: flex; align-items: center; gap: 12rpx; margin-bottom: 20rpx; }
 .ipt { flex: 1; background: var(--input-bg); border-radius: 10rpx; padding: 16rpx 20rpx; font-size: 26rpx; }
 .to { color: var(--text-sub); }
@@ -214,8 +214,8 @@ function copyCsv() {
 .green { color: #67c23a; }
 .list { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .list-title { font-size: 30rpx; font-weight: bold; margin: 20rpx 0 12rpx; }
-.list-row { display: flex; justify-content: space-between; padding: 14rpx 0; border-bottom: 1rpx solid #f0f0f0; font-size: 26rpx; }
+.list-row { display: flex; justify-content: space-between; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); font-size: 26rpx; }
 .lr-l { color: var(--text-main); }
 .lr-r { font-weight: bold; }
-.empty { color: #c0c4cc; text-align: center; padding: 24rpx 0; font-size: 26rpx; }
+.empty { color: var(--text-sub); text-align: center; padding: 24rpx 0; font-size: 26rpx; }
 </style>

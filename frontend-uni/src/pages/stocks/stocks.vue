@@ -119,8 +119,8 @@ async function save() {
 .page { background: var(--page-bg); min-height: 100vh; }
 .toolbar { display: flex; align-items: center; gap: 16rpx; margin-bottom: 16rpx; }
 .search { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 24rpx; font-size: 28rpx; }
-.pill { padding: 12rpx 24rpx; background: var(--card-bg); border-radius: 24rpx; font-size: 26rpx; color: var(--text-sub); border: 1rpx solid #eee; }
-.pill.active { color: #f56c6c; border-color: #f56c6c; background: #fef0f0; }
+.pill { padding: 12rpx 24rpx; background: var(--card-bg); border-radius: 24rpx; font-size: 26rpx; color: var(--text-sub); border: 1rpx solid var(--divider); }
+.pill.active { color: #f56c6c; border-color: #f56c6c; background: var(--danger-bg); }
 .total { font-size: 26rpx; color: #67c23a; font-weight: bold; margin-bottom: 12rpx; }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
@@ -130,7 +130,7 @@ async function save() {
 .sub { font-size: 24rpx; color: var(--text-sub); margin-bottom: 8rpx; }
 .ops { display: flex; justify-content: flex-end; }
 .op { color: var(--primary); font-size: 26rpx; }
-.empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
+.empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }

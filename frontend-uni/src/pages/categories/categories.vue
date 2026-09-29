@@ -133,16 +133,16 @@ async function remove(c: Cat) {
 .page { background: var(--page-bg); min-height: 100vh; }
 .seg { display: flex; background: var(--card-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
-.seg-item.active { color: var(--primary); font-weight: bold; background: #ecf5ff; }
+.seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; margin-bottom: 12rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
-.child { display: flex; align-items: center; padding: 10rpx 0 10rpx 32rpx; border-top: 1rpx solid #f5f7fa; }
+.child { display: flex; align-items: center; padding: 10rpx 0 10rpx 32rpx; border-top: 1rpx solid var(--divider); }
 .ch-name { font-size: 28rpx; }
 .op { margin-left: 24rpx; color: var(--primary); font-size: 26rpx; }
 .del { margin-left: 24rpx; color: #f56c6c; font-size: 26rpx; }
-.empty { color: #c0c4cc; text-align: center; padding: 60rpx 0; font-size: 26rpx; }
+.empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--card-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
