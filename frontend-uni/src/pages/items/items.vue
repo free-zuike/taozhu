@@ -181,8 +181,8 @@ async function remove(id: string) {
 </script>
 
 <style>
-.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
-.page { position: relative; min-height: 100vh;  background: var(--page-bg); }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
+.page { min-height: 100vh;  background: var(--page-bg); }
 .search { background: var(--card-bg); border-radius: 12rpx; padding: 18rpx 24rpx; margin-bottom: 20rpx; font-size: 28rpx; }
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }

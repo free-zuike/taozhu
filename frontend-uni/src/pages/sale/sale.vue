@@ -390,8 +390,8 @@ async function submit() {
 </script>
 
 <style>
-.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
-.page { position: relative; min-height: 100vh;  background: var(--page-bg); }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
+.page { min-height: 100vh;  background: var(--page-bg); }
 .head-row { display: flex; gap: 12rpx; align-items: flex-start; margin-bottom: 16rpx; }
 .head-row .field { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }

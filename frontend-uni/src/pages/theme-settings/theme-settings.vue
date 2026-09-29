@@ -131,8 +131,8 @@ onShow(async () => {
 </script>
 
 <style>
-.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
-.page { position: relative; padding: 24rpx;  min-height: 100vh;  background: var(--page-bg); }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
+.page { padding: 24rpx;  min-height: 100vh;  background: var(--page-bg); }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 20rpx; }
 .presets { display: flex; flex-wrap: wrap; gap: 20rpx; background: var(--card-bg); border-radius: 20rpx; padding: 32rpx 24rpx; margin-bottom: 24rpx; }
 .mode-row { display: flex; gap: 16rpx; background: var(--card-bg); border-radius: 20rpx; padding: 20rpx 24rpx; margin-bottom: 24rpx; }

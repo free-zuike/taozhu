@@ -101,8 +101,8 @@ function remove(d: Device) {
 </script>
 
 <style>
-.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
-.page { position: relative; min-height: 100vh;  background: var(--page-bg); }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
+.page { min-height: 100vh;  background: var(--page-bg); }
 .loading { text-align: center; color: var(--text-sub); padding: 80rpx 0; font-size: 26rpx; }
 .empty { display: flex; flex-direction: column; align-items: center; padding: 120rpx 0; gap: 12rpx; }
 .empty-tx { font-size: 28rpx; color: var(--text-sub); }

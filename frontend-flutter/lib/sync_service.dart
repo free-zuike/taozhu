@@ -781,11 +781,9 @@ class SyncService {
       // ④ 在用附件本地副本补齐（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）：
       // **await 等待附件下载完，同步中的动画/状态行才消失**（完全同步之后再消失）；
       // 单张失败内部静默跳过，下次同步自动重补，不阻塞主流程
+      // 注意：同步只补齐副本，**不自动清理孤儿**（对齐参考实现：孤儿由存储清理页手动
+      // 扫描删除；同步自动删曾误删在用副本——"每次同步补齐后又被删"根因）
       await downloadInUseAttachments();
-      // ④b 同步完成后自动清理本地孤儿附件副本（文件级 basename 判定，引用表已刷新）：
-      // 与清理页手动扫描同范式；同步完本地目录恒=纯在用，同步面板"本地附件"数与服务器在用一致
-      // （解决"本地 6 / 服务器 2"数字对不上，孤儿不再滞留等待手动清理）
-      await cleanupOrphanLocalAttachments();
       // ⑤ 资料（显示名/头像版本）同步对齐参考 sync() 编排：实体+附件完成后统一 syncMyProfile
       await syncMyProfile();
       // ⑥ 主题配置随同步上传/拉取（App 不直连写数据库；Web 直连在设置页保存）
@@ -879,6 +877,8 @@ class SyncService {
   /// {entity, entity_id, file} 持久化到本地）——三元组在表内 = 在用（保留），不在表 = 孤儿（删文件）。
   /// 引用表为空（未同步/拉取失败）→ 不删任何文件（宁留勿误删——没有权威数据源不动本地副本）。
   /// 只删文件不整删目录（在用判定必须文件级；整删目录会在本地镜像 id 与目录不一致时误删在用副本）。
+  /// 删除前双重保险：三元组不在表 **且** basename 也不在表（防三元组某字段与下载路径不一致时误删在用）；
+  /// 删除动作与保留统计写 appLog（用户日志可直接核对清理了什么）。
   static Future<void> cleanupOrphanLocalAttachments() async {
     try {
       if (kIsWeb) return;
@@ -892,8 +892,15 @@ class SyncService {
           .map((r) => '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${r['file'] ?? ''}')
           .where((f) => !f.startsWith('/') && !f.contains('//') && f.split('/').length >= 3)
           .toSet();
-      if (refs.isEmpty) return;
-      // 扫描 attachments/ 全部文件：三元组不在引用表 = 孤儿 → 删文件（对齐参考实现 cleaner 只删文件）
+      final refNames = refRows
+          .map((r) => '${r['file'] ?? ''}')
+          .where((f) => f.isNotEmpty)
+          .toSet();
+      if (refs.isEmpty || refNames.isEmpty) return;
+      var scanned = 0;
+      var removed = 0;
+      final removedList = <String>[];
+      // 扫描 attachments/ 全部文件：三元组+basename 双重不匹配 = 孤儿 → 删文件（对齐参考实现 cleaner 只删文件）
       await for (final eDir in base.list(followLinks: false)) {
         if (eDir is! Directory) continue;
         final entity = eDir.uri.pathSegments.last;
@@ -902,15 +909,18 @@ class SyncService {
           final id = idDir.uri.pathSegments.last;
           await for (final f in idDir.list(followLinks: false)) {
             if (f is! File) continue;
-            final rel = '$entity/$id/${f.uri.pathSegments.last}';
-            if (!refs.contains(rel)) {
-              try { f.deleteSync(); } catch (_) {}
+            scanned++;
+            final fileName = f.uri.pathSegments.last;
+            final rel = '$entity/$id/$fileName';
+            if (!refs.contains(rel) && !refNames.contains(fileName)) {
+              try { f.deleteSync(); removed++; removedList.add(rel); } catch (_) {}
             }
           }
           try { if (idDir.listSync().isEmpty) idDir.deleteSync(); } catch (_) {}
         }
         try { if (eDir.listSync().isEmpty) eDir.deleteSync(); } catch (_) {}
       }
+      appLog('sync', '本地孤儿附件清理：引用表 ${refs.length} 条，扫描 $scanned 文件，删除 $removed 个${removedList.isEmpty ? '' : '（' + removedList.take(5).join(', ') + '…）'}', level: 'info');
     } catch (_) {}
   }
 

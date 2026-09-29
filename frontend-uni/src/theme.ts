@@ -217,19 +217,31 @@ function skinSvgSrc(skin: string, click: { ink: string; ink2: string }): string 
     case 'ripple': svg = svgRipple(ink, ink2); break;
     default: return '';
   }
-  const b64 = typeof uni !== 'undefined' && typeof uni.base64ToArrayBuffer === 'function'
-    ? ''
-    : '';
-  // 小程序 btoa 可能缺失：用数组手动转 base64（UTF-8 安全）
+  // 小程序 btoa/TextEncoder 可能缺失：自实现 base64（UTF-8 安全），image 组件 src 直接用
   return 'data:image/svg+xml;base64,' + utf8ToBase64(svg);
 }
-
-/** UTF-8 字符串 → base64（兼容微信小程序无 btoa 环境；SVG 含中文注释/非 ASCII 时安全） */
 function utf8ToBase64(s: string): string {
-  const bytes = new Uint8Array(new TextEncoder().encode(s));
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin);
+  // UTF-8 编码（手写，不依赖 TextEncoder）
+  const bytes: number[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) bytes.push(c);
+    else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+    else bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+  }
+  // base64（手写，不依赖 btoa）
+  const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : -1;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : -1;
+    out += b64[b0 >> 2];
+    out += b64[((b0 & 3) << 4) | (b1 < 0 ? 0 : b1 >> 4)];
+    out += b1 < 0 ? '=' : b64[((b1 & 15) << 2) | (b2 < 0 ? 0 : b2 >> 6)];
+    out += b2 < 0 ? '=' : b64[b2 & 63];
+  }
+  return out;
 }
 
 /** 背景图案迷你预览（设置页缩略图）：与全屏同几何，色用主题主色高对比（对齐 App compact 预览） */
@@ -262,34 +274,40 @@ export function useThemeVars() {
   const vars = ref<Record<string, string>>({ '--primary': defaultPrimary, '--page-bg': '#f5f7fa', '--card-bg': '#ffffff' });
   const patternSrc = ref('');
   const load = () => {
-    const primary = getThemePrimary();
-    const dark = isDark();
-    const skin = getThemeSkin();
-    const cardBg = dark ? '#232833' : '#ffffff';
-    const textMain = dark ? '#e8eaf1' : '#303133';
-    const textSub = dark ? '#9aa2b3' : '#909399';
-    const divider = dark ? '#2e3440' : '#f0f2f5';
-    const inputBg = dark ? '#2a303c' : '#f5f7fa';
-    const bg = pageBackgroundVars(primary, dark, skin);
-    patternSrc.value = bg.patternSrc;
-    vars.value = {
-      '--primary': primary,
-      '--primary-soft': alpha(primary, '1F'),
-      '--primary-fade': alpha(primary, '14'),
-      // 页面 CSS 背景只用渐变（小程序 WXSS 支持；SVG 图案由 image 组件铺层，不依赖 CSS data URI）
-      '--page-bg': bg.gradientCss,
-      '--card-bg': cardBg,
-      '--text-main': textMain,
-      '--text-sub': textSub,
-      '--divider': divider,
-      '--input-bg': inputBg,
-      // 语义浅底（成功/警告/危险/紫强调）：亮暗通用半透明，深色下协调不刺眼
-      '--ok-bg': 'rgba(34,197,94,0.14)',
-      '--warn-bg': 'rgba(230,162,60,0.14)',
-      '--danger-bg': 'rgba(245,108,108,0.14)',
-      '--violet-bg': 'rgba(124,77,255,0.12)',
-    };
-    applyTabBar(dark, primary);
+    try {
+      const primary = getThemePrimary();
+      const dark = isDark();
+      const skin = getThemeSkin();
+      const cardBg = dark ? '#232833' : '#ffffff';
+      const textMain = dark ? '#e8eaf1' : '#303133';
+      const textSub = dark ? '#9aa2b3' : '#909399';
+      const divider = dark ? '#2e3440' : '#f0f2f5';
+      const inputBg = dark ? '#2a303c' : '#f5f7fa';
+      const bg = pageBackgroundVars(primary, dark, skin);
+      patternSrc.value = bg.patternSrc;
+      vars.value = {
+        '--primary': primary,
+        '--primary-soft': alpha(primary, '1F'),
+        '--primary-fade': alpha(primary, '14'),
+        // 页面 CSS 背景只用渐变（小程序 WXSS 支持；SVG 图案由 image 组件铺层，不依赖 CSS data URI）
+        '--page-bg': bg.gradientCss,
+        '--card-bg': cardBg,
+        '--text-main': textMain,
+        '--text-sub': textSub,
+        '--divider': divider,
+        '--input-bg': inputBg,
+        // 语义浅底（成功/警告/危险/紫强调）：亮暗通用半透明，深色下协调不刺眼
+        '--ok-bg': 'rgba(34,197,94,0.14)',
+        '--warn-bg': 'rgba(230,162,60,0.14)',
+        '--danger-bg': 'rgba(245,108,108,0.14)',
+        '--violet-bg': 'rgba(124,77,255,0.12)',
+      };
+      applyTabBar(dark, primary);
+    } catch (e) {
+      // 主题渲染任何异常都不中断页面 setup（历史上 TextEncoder/btoa 缺失曾致整页 CSS 变量全空）
+      // eslint-disable-next-line no-console
+      console.warn('[theme] load 异常（保持默认变量）', e);
+    }
   };
   load();
   onShow(load);
