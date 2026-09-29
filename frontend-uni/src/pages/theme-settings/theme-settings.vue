@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="group-title">配色主题</view>
     <view class="presets">
       <view v-for="p in presets" :key="p.id" class="preset" @click="pickPreset(p)">
@@ -27,9 +28,7 @@
       </view>
     </view>
 
-    <view class="tip">图案颜色跟随上方所选主题色；明暗切换立即生效</view>
-
-    <button class="btn" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存（同步其他端）' }}</button>
+    <view class="tip">选择即生效并同步其他端；图案颜色跟随所选主题色，明暗切换立即生效</view>
   </view>
 </template>
 
@@ -39,7 +38,7 @@ import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
 import { useThemeVars, setThemePrimary, setThemeMode, setThemeSkin, getThemeMode, getThemeSkin, isDark, skinPreviewCss, type ThemeMode } from '../../theme';
 
-const tv = useThemeVars();
+const { tv, patternSrc, refresh } = useThemeVars();
 const modes: Array<{ id: ThemeMode; name: string }> = [
   { id: 'follow', name: '跟随系统' },
   { id: 'light', name: '浅色' },
@@ -65,15 +64,22 @@ const skins = [
 ];
 const cur = ref('default');
 const curSkin = ref(getThemeSkin());
-const saving = ref(false);
-/** 点击即生效（本地主题即时变化，保存才同步其他端） */
+/** 点击即生效 + 自动同步服务器（无保存按钮；主题配置=配置类，点击直接 PUT 服务器，其他端 WS 即时应用） */
 function applyLocal() {
   setThemeMode(mode.value);
   setThemeSkin(curSkin.value);
   const c = presets.find((p) => p.id === cur.value);
   if (c) setThemePrimary(c.color);
-  tv.value = useThemeVars().value;
+  refresh();
   applyTabBar();
+  pushTheme();
+}
+/** 立即同步主题配置到服务器（小程序直连架构，无本地库；失败静默，下次进入再同步） */
+async function pushTheme() {
+  if (!getToken()) return;
+  try {
+    await request('/settings/theme_config', 'PUT', { preset_id: cur.value, skin_id: curSkin.value, bg_enabled: true });
+  } catch (_) {}
 }
 /** tabBar 深色适配：跟随当前明暗模式动态设置底部栏配色（微信原生 tabBar 不随 CSS 变量） */
 function applyTabBar() {
@@ -115,27 +121,18 @@ onShow(async () => {
     const d = await request<{ preset_id?: string; skin_id?: string; bg_enabled?: boolean }>('/settings/theme_config', 'GET');
     if (d?.preset_id) cur.value = d.preset_id;
     if (d?.skin_id) curSkin.value = d.skin_id;
+    if (d?.preset_id || d?.skin_id) {
+      applyLocal();
+    }
   } catch (e) {
     // 未配置使用默认
   }
 });
-
-async function save() {
-  saving.value = true;
-  try {
-    await request('/settings/theme_config', 'PUT', { preset_id: cur.value, skin_id: curSkin.value, bg_enabled: true });
-    applyLocal();
-    uni.showToast({ title: '已保存，本页与其他端同步生效', icon: 'none' });
-  } catch (e) {
-    uni.showToast({ title: '保存失败', icon: 'none' });
-  } finally {
-    saving.value = false;
-  }
-}
 </script>
 
 <style>
-.page { padding: 24rpx;  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page { padding: 24rpx;  min-height: 100vh;  background: var(--page-bg); }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 20rpx; }
 .presets { display: flex; flex-wrap: wrap; gap: 20rpx; background: var(--card-bg); border-radius: 20rpx; padding: 32rpx 24rpx; margin-bottom: 24rpx; }
 .mode-row { display: flex; gap: 16rpx; background: var(--card-bg); border-radius: 20rpx; padding: 20rpx 24rpx; margin-bottom: 24rpx; }

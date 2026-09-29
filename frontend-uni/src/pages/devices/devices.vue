@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view v-if="loading" class="loading">加载中…</view>
     <view v-else-if="devices.length === 0" class="empty">
       <text class="empty-tx">暂无登录设备</text>
@@ -30,8 +31,10 @@
 </template>
 
 <script setup lang="ts">
+import { onWs, offWs } from '../../ws';
+
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
 import { onShow, onHide } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
@@ -50,6 +53,7 @@ const online = (iso: string) => {
 };
 
 onShow(async () => {
+  onWs('*', load);
   load();
   // 在线状态按时间衰减（5 分钟窗口），周期性刷新让"在线/离线"及时翻转
   timer = setInterval(() => {
@@ -60,6 +64,7 @@ onShow(async () => {
 onHide(() => {
   if (timer) clearInterval(timer);
   timer = null;
+  offWs('*', load);
 });
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -96,7 +101,8 @@ function remove(d: Device) {
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .loading { text-align: center; color: var(--text-sub); padding: 80rpx 0; font-size: 26rpx; }
 .empty { display: flex; flex-direction: column; align-items: center; padding: 120rpx 0; gap: 12rpx; }
 .empty-tx { font-size: 28rpx; color: var(--text-sub); }

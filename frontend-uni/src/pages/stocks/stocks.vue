@@ -1,5 +1,6 @@
-<template>
+﻿<template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="toolbar">
       <input class="search" v-model="q" placeholder="搜索商品" @input="onSearch" />
       <view :class="['pill', { active: belowOnly }]" @click="toggleBelow">只看预警</view>
@@ -33,10 +34,14 @@
 </template>
 
 <script setup lang="ts">
+import { onShow, onHide } from '@dcloudio/uni-app';
+import { onWs, offWs } from '../../ws';
+
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+;
+;
 import { request, getToken } from '../../api';
 
 interface Stock { id: string; item_name: string; unit: string; quantity: number; min_stock: number; low: boolean }
@@ -52,6 +57,7 @@ const formQty = ref('');
 const formMin = ref('');
 
 onShow(async () => {
+  onWs('*', load);
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
@@ -113,10 +119,13 @@ async function save() {
     saving.value = false;
   }
 }
+
+  onHide(() => { offWs('*', load); });
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .toolbar { display: flex; align-items: center; gap: 16rpx; margin-bottom: 16rpx; }
 .search { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 24rpx; font-size: 28rpx; }
 .pill { padding: 12rpx 24rpx; background: var(--card-bg); border-radius: 24rpx; font-size: 26rpx; color: var(--text-sub); border: 1rpx solid var(--divider); }

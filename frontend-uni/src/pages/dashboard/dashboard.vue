@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 今日卡片 -->
     <view class="cards">
       <view class="card"><text class="cl">今日出货</text><text class="cv">¥{{ fmt(today.sales_total) }}</text></view>
@@ -49,7 +50,7 @@
 
 <script setup lang="ts">
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '../../api';
@@ -132,7 +133,8 @@ function go(url: string) {
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 /* 两列网格：小程序对 flex gap / calc(50% - x) 兼容性差，用 48% + space-between 最稳 */
 .cards { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
 .card {

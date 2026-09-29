@@ -1,5 +1,6 @@
-<template>
+﻿<template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 登记收款 -->
     <view class="card">
       <picker class="field" mode="selector" :range="clientNames" @change="onClient">
@@ -79,10 +80,14 @@
 </template>
 
 <script setup lang="ts">
+import { onShow, onHide } from '@dcloudio/uni-app';
+import { onWs, offWs } from '../../ws';
+
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { computed, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+;
+;
 import { request, getToken } from '../../api';
 
 const clientId = ref('');
@@ -153,6 +158,7 @@ async function saveAccounts() {
   }
 }
 onShow(async () => {
+  onWs('*', load);
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
@@ -330,10 +336,13 @@ async function remove(id: string) {
     uni.showToast({ title: (e as Error).message || '撤销失败', icon: 'none' });
   }
 }
+
+  onHide(() => { offWs('*', load); });
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .card-title { font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .field { margin-bottom: 16rpx; }

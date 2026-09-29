@@ -1,5 +1,6 @@
-<template>
+﻿<template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 月份（点击切换）+ 月度支出卡（对齐 App 进货页：仅支出统计） -->
     <view class="month-card">
       <view class="month-head" @click="pickMonth">
@@ -65,10 +66,14 @@
 </template>
 
 <script setup lang="ts">
+import { onShow, onHide } from '@dcloudio/uni-app';
+import { onWs, offWs } from '../../ws';
+
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+;
+;
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 
 const selYear = ref(new Date().getFullYear());
@@ -86,6 +91,7 @@ const itemForm = ref<{
 const attach = ref<{ show: boolean; id: string; list: Array<{ key: string }> }>({ show: false, id: '', list: [] });
 
 onShow(async () => {
+  onWs('*', load);
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
@@ -297,10 +303,13 @@ async function removeAttach(key: string) {
     uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
   }
 }
+
+  onHide(() => { offWs('*', load); });
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .month-card { background: var(--card-bg); border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; border: 1rpx solid var(--divider); }
 .month-head { display: flex; align-items: center; justify-content: center; margin-bottom: 14rpx; }
 .month-label { font-size: 30rpx; font-weight: bold; color: var(--text-main); }

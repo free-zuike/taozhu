@@ -46,6 +46,10 @@ class _CleanupPageState extends State<CleanupPage> {
   bool _busy = false;
   /// 服务器在用附件信息拉取失败（在线判定不可用→本地扫描按保守目录级，可能扫不出同目录部分孤儿）
   bool _inUseFailed = false;
+  /// 本地附件副本统计（用于数字透明展示：用户"本地 6 / 服务器 2"对不上时能直接看到差异）
+  int _localAttachAll = 0;
+  int _localAttachInUse = 0;
+  int _localAttachOrphan = 0;
 
   @override
   void initState() {
@@ -265,12 +269,17 @@ class _CleanupPageState extends State<CleanupPage> {
           }
           // 文件级在用校验：本地附件副本若与在用三元组完全匹配 → 从列表中剔除
           files.removeWhere((f) => f.kind == 'attach' && inUseFiles.contains(f.name));
+          _inUseFailed = false;
         } catch (_) {
           // in-use 拉取失败（超时/网络）→ 标记提示（在线场景按服务器引用判定才能扫出同目录部分孤儿）
           _inUseFailed = true;
         }
         final root = await getApplicationDocumentsDirectory();
         final att = Directory('${root.path}/attachments');
+        // 本地副本统计：全部本地附件文件数（含在用+孤儿）——同步面板/用户"本地 6"口径
+        var localAttachAll = 0;
+        var localAttachOrphan = 0;
+        var localAttachInUse = 0;
         // 两种来源都拿不到在用数据（离线且本地库空）→ 无法判断在用，暂不列出附件（宁可不清理不误删）
         if (await att.exists() && (localHasData || serverHasData)) {
           await for (final entity in att.list(followLinks: false)) {
@@ -291,16 +300,28 @@ class _CleanupPageState extends State<CleanupPage> {
                 final fileName = f.uri.pathSegments.last;
                 final rel = '$entityName/$idName/$fileName';
                 final fileInUse = inUseFiles.contains(rel);
+                localAttachAll++;
                 // 在线：文件不在服务器引用三元组 → 孤儿可清理；离线兜底：实体在用则整目录保守跳过
                 if (inUseFiles.isNotEmpty) {
-                  if (!fileInUse) files.add(_CacheFile(rel, await f.length(), f.path));
+                  if (!fileInUse) {
+                    files.add(_CacheFile(rel, await f.length(), f.path));
+                    localAttachOrphan++;
+                  } else {
+                    localAttachInUse++;
+                  }
                 } else if (!entityInUse) {
                   files.add(_CacheFile(rel, await f.length(), f.path));
+                  localAttachOrphan++;
+                } else {
+                  localAttachInUse++;
                 }
               }
             }
           }
         }
+        _localAttachAll = localAttachAll;
+        _localAttachOrphan = localAttachOrphan;
+        _localAttachInUse = localAttachInUse;
         // 库重建备份（taozhu_ro_*.db，只读自愈时改名的旧库文件）：同步成功后纯冗余，可清理
         try {
           await for (final f in root.list(followLinks: false)) {
@@ -477,6 +498,13 @@ class _CleanupPageState extends State<CleanupPage> {
                         : '更新安装包（APK/Zip）、附件副本（逐张图片）、云端孤儿附件、头像缓存、库重建备份与临时文件',
                     style: TextStyle(fontSize: 12, color: c.textSub),
                   ),
+                  if (!kIsWeb && _localAttachAll > 0) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '附件副本：本地共 $_localAttachAll 张（在用 $_localAttachInUse · 可清理 $_localAttachOrphan）',
+                      style: TextStyle(fontSize: 12, color: _localAttachOrphan > 0 ? c.warning : c.textSub, fontWeight: FontWeight.w600),
+                    ),
+                  ],
                   if (_inUseFailed && !kIsWeb) ...[
                     const SizedBox(height: 4),
                     Text(

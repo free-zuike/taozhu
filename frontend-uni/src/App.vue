@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
+import { startWs, stopWs } from "./ws";
+import { getToken } from "./api";
 onLaunch(() => {
-  console.log("App Launch");
+  // 已登录则启动实时同步（其他端删除/修改 → WS 通知 → 当前页自动刷新）
+  if (getToken()) startWs();
 });
 onShow(() => {
-  console.log("App Show");
+  // 前台恢复：未连接则重连
+  if (getToken()) startWs();
 });
 onHide(() => {
-  console.log("App Hide");
+  stopWs();
 });
 </script>
 <style></style>

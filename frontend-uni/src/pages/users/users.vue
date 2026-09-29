@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <button class="btn-add" @click="openForm()">+ 新增账号</button>
 
     <view v-for="u in users" :key="u.id" class="card">
@@ -30,7 +31,7 @@
 
 <script setup lang="ts">
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
@@ -121,7 +122,8 @@ function remove(u: User) {
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; }

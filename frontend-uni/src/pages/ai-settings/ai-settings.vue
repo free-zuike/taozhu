@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="group-title">AI 服务商（Key 由服务器持有）</view>
     <view class="card" v-for="p in providers" :key="p.id">
       <view class="p-head">
@@ -36,7 +37,7 @@ import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
 import { useThemeVars } from '../../theme';
 
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 const providers = ref<Array<{ id: string; name: string; isBuiltIn?: boolean; hasKey?: boolean }>>([]);
 const editKey = ref<Record<string, string>>({});
 const bind = ref<Record<string, string>>({ textProviderId: '', visionProviderId: '', speechProviderId: '' });
@@ -119,7 +120,8 @@ async function testAll() {
 </script>
 
 <style>
-.page { padding: 24rpx;  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page { padding: 24rpx;  min-height: 100vh;  background: var(--page-bg); }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; }
 .card { background: var(--card-bg); border-radius: 20rpx; padding: 8rpx 24rpx; margin-bottom: 24rpx; }
 .p-head { padding: 20rpx 0 8rpx; }

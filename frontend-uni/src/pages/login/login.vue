@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="brand">陶朱<text class="ver"> v{{ APP_VERSION }}</text></view>
 
     <view class="form">
@@ -15,7 +16,7 @@
 
 <script setup lang="ts">
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import { request, getApiBase, setApiBase, setToken, setRole, getToken } from '../../api';
@@ -86,13 +87,14 @@ async function submit() {
 </script>
 
 <style>
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
 .page {
   display: flex;
   flex-direction: column;
   align-items: center;
   padding-top: 120rpx;
   min-height: 100vh;
-  background-image: var(--bg-pattern), var(--bg-gradient);
+  background: var(--page-bg);
 }
 .brand {
   font-size: 48rpx;

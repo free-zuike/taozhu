@@ -203,8 +203,10 @@ function svgRipple(ink: string, ink2: string): string {
   return parts.join('');
 }
 
-/** 背景图案 SVG data URI（与 App/Web CustomPainter 同几何；图案色随主题主色） */
-function skinSvgUri(skin: string, click: { ink: string; ink2: string }): string {
+/** 背景图案 SVG data URI（与 App/Web CustomPainter 同几何；图案色随主题主色）
+ *  返回 base64 data URI 供 <image> 组件 src 使用——微信小程序 WXSS background 不渲染 SVG data URI
+ *  （显示白屏），必须用 image 组件铺背景层。 */
+function skinSvgSrc(skin: string, click: { ink: string; ink2: string }): string {
   const { ink, ink2 } = click;
   let svg = '';
   switch (skin) {
@@ -215,7 +217,19 @@ function skinSvgUri(skin: string, click: { ink: string; ink2: string }): string 
     case 'ripple': svg = svgRipple(ink, ink2); break;
     default: return '';
   }
-  return 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")';
+  const b64 = typeof uni !== 'undefined' && typeof uni.base64ToArrayBuffer === 'function'
+    ? ''
+    : '';
+  // 小程序 btoa 可能缺失：用数组手动转 base64（UTF-8 安全）
+  return 'data:image/svg+xml;base64,' + utf8ToBase64(svg);
+}
+
+/** UTF-8 字符串 → base64（兼容微信小程序无 btoa 环境；SVG 含中文注释/非 ASCII 时安全） */
+function utf8ToBase64(s: string): string {
+  const bytes = new Uint8Array(new TextEncoder().encode(s));
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
 }
 
 /** 背景图案迷你预览（设置页缩略图）：与全屏同几何，色用主题主色高对比（对齐 App compact 预览） */
@@ -224,29 +238,29 @@ export function skinPreviewCss(skin: string, primary: string): string {
   if (skin === 'none') return '#f5f7fa';
   const ink = rgba(primary, 0.55);
   const ink2 = rgba(primary, 0.32);
-  const uri = skinSvgUri(skin, { ink, ink2 });
-  return uri ? `${uri}, #ffffff` : '#f5f7fa';
+  const uri = skinSvgSrc(skin, { ink, ink2 });
+  return uri ? `url("${uri}") center / cover no-repeat, #ffffff` : '#f5f7fa';
 }
 
-/** 页面背景 CSS：小程序 WXSS 的 background 简写不支持多层 data URI（SVG 图案层会白屏）——
- *  拆两层：--bg-pattern（SVG data URI 层）+ --bg-gradient（渐变底色层），页面 .page 用
- *  background-image: var(--bg-pattern), var(--bg-gradient) 组合（image 多背景小程序支持） */
-function pageBackgroundVars(primary: string, dark: boolean, skin: string): { pattern: string; gradient: string } {
+/** 页面背景：渐变底色（CSS 渲染，小程序支持）+ SVG 图案（image 组件铺层，base64 兼容）
+ *  返回 { patternSrc: 图案 image src（''=无图案）, gradientCss: 渐变底 } */
+function pageBackgroundVars(primary: string, dark: boolean, skin: string): { patternSrc: string; gradientCss: string } {
   const ink = dark ? 'rgba(255,255,255,0.24)' : rgba(primary, 0.22);
   const ink2 = dark ? 'rgba(255,255,255,0.15)' : rgba(primary, 0.14);
   const baseTop = dark ? '#181b22' : alpha(primary, '14');
   const baseBottom = dark ? '#12151c' : '#f5f7fa';
   const gradient = `linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
-  if (skin === 'none') return { pattern: '', gradient };
-  const uri = skinSvgUri(skin, { ink, ink2 });
-  return { pattern: uri, gradient };
+  if (skin === 'none') return { patternSrc: '', gradientCss: gradient };
+  return { patternSrc: skinSvgSrc(skin, { ink, ink2 }), gradientCss: gradient };
 }
 
 /**
- * 页面根 view :style 绑定：提供主题色、明暗变量与页面背景（按所选图案）。
+ * 页面主题变量：根 view :style 绑定（主题色/明暗变量/渐变底色）+ 背景图案 image src。
+ *  patternSrc：背景图案 base64 SVG（''=无图案），供页面 <image class="bg-pattern"> 铺底使用。
  */
 export function useThemeVars() {
   const vars = ref<Record<string, string>>({ '--primary': defaultPrimary, '--page-bg': '#f5f7fa', '--card-bg': '#ffffff' });
+  const patternSrc = ref('');
   const load = () => {
     const primary = getThemePrimary();
     const dark = isDark();
@@ -257,14 +271,13 @@ export function useThemeVars() {
     const divider = dark ? '#2e3440' : '#f0f2f5';
     const inputBg = dark ? '#2a303c' : '#f5f7fa';
     const bg = pageBackgroundVars(primary, dark, skin);
-    // 小程序 WXSS background 简写不支持多层 data URI；组合用 background-image 多背景（拆两层变量）
+    patternSrc.value = bg.patternSrc;
     vars.value = {
       '--primary': primary,
       '--primary-soft': alpha(primary, '1F'),
       '--primary-fade': alpha(primary, '14'),
-      '--page-bg': bg.pattern ? `${bg.pattern}, ${bg.gradient}` : bg.gradient,
-      '--bg-pattern': bg.pattern || 'none',
-      '--bg-gradient': bg.gradient,
+      // 页面 CSS 背景只用渐变（小程序 WXSS 支持；SVG 图案由 image 组件铺层，不依赖 CSS data URI）
+      '--page-bg': bg.gradientCss,
       '--card-bg': cardBg,
       '--text-main': textMain,
       '--text-sub': textSub,
@@ -280,7 +293,7 @@ export function useThemeVars() {
   };
   load();
   onShow(load);
-  return vars;
+  return { tv: vars, patternSrc, refresh: load };
 }
 
 /** tabBar 深色适配：微信原生 tabBar 不随页面 CSS 变量，主题加载/切换时动态设置底部栏配色 */

@@ -1,5 +1,6 @@
-<template>
+﻿<template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 按店统计 -->
     <view class="card">
       <view class="card-title">按店统计</view>
@@ -34,10 +35,14 @@
 </template>
 
 <script setup lang="ts">
+import { onShow, onHide } from '@dcloudio/uni-app';
+import { onWs, offWs } from '../../ws';
+
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+;
+;
 import { request, getToken } from '../../api';
 
 interface ByClient { id: string; name: string; sales_total: number; paid_total: number; debt: number; gross_profit: number }
@@ -53,6 +58,7 @@ const fmt = (n: number) => Number(n || 0).toFixed(2);
 const monthLabel = (m: string) => (m && m.length >= 7 ? `${Number(m.slice(5, 7))}月` : m);
 
 onShow(async () => {
+  onWs('*', load);
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
@@ -99,10 +105,13 @@ async function onYear(e: { detail: { value: number } }) {
     uni.showToast({ title: (err as Error).message || '加载失败', icon: 'none' });
   }
 }
+
+  onHide(() => { offWs('*', load); });
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .card { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .card-title { display: flex; justify-content: space-between; align-items: center; font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .year-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }

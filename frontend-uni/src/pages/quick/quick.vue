@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="tip">记一笔，云端直连实时保存</view>
     <view class="grid">
       <view class="cell sale" @click="go('/pages/sale/sale')">
@@ -18,7 +19,7 @@
 
 <script setup lang="ts">
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { getToken } from '../../api';
 import { onShow } from '@dcloudio/uni-app';
 
@@ -32,7 +33,8 @@ function go(url: string) {
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .tip { color: var(--text-sub); font-size: 26rpx; margin-bottom: 24rpx; }
 .grid { display: flex; flex-wrap: wrap; justify-content: space-between; }
 .cell {

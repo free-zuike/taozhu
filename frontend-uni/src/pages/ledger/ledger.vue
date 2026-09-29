@@ -1,5 +1,6 @@
-<template>
+﻿<template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 店铺筛选（月份移入下方月度卡头部，对齐 App：店铺条 + 月度卡） -->
     <view class="filter-bar">
       <picker class="client-picker" mode="selector" :range="clientNames" @change="onClientFilter">
@@ -119,10 +120,14 @@
 </template>
 
 <script setup lang="ts">
+import { onShow, onHide } from '@dcloudio/uni-app';
+import { onWs, offWs } from '../../ws';
+
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+;
+;
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 
 const tab = ref<'sales' | 'payments'>('sales');
@@ -318,6 +323,7 @@ async function loadClients() {
 }
 
 onShow(async () => {
+  onWs('*', load);
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
@@ -608,10 +614,13 @@ async function removePayment(p: Record<string, any>) {
     uni.showToast({ title: (e as Error).message || '撤销失败', icon: 'none' });
   }
 }
+
+  onHide(() => { offWs('*', load); });
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .filter-bar { display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; }
 .month-nav { display: flex; align-items: center; }
 .month-label { font-size: 28rpx; font-weight: bold; }

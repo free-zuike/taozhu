@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 头部：头像 + 问候语与名字一行（对齐 App） -->
     <view class="head">
       <image v-if="avatarUrl" class="avatar-img" :src="avatarUrl" mode="aspectFill" />
@@ -101,7 +102,7 @@
 
 <script setup lang="ts">
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '../../api';
@@ -230,7 +231,8 @@ function logout() {
 </script>
 
 <style>
-.page {  min-height: 100vh; padding-bottom: 60rpx;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh; padding-bottom: 60rpx;  background: var(--page-bg); }
 .head {
   display: flex; align-items: center; gap: 20rpx;
   background: linear-gradient(135deg, var(--primary), #60a5fa);

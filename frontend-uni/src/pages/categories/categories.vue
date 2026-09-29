@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="seg">
       <view :class="['seg-item', { active: type === 'item' }]" @click="switchType('item')">商品分类</view>
       <view :class="['seg-item', { active: type === 'client' }]" @click="switchType('client')">店铺分类</view>
@@ -35,7 +36,7 @@
 
 <script setup lang="ts">
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
@@ -130,7 +131,8 @@ async function remove(c: Cat) {
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .seg { display: flex; background: var(--card-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }

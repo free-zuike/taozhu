@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 头部：饭店 / 日期 / 复制上一笔 -->
     <view class="head-row">
       <picker class="field" mode="selector" :range="clientNames" @change="onClient">
@@ -45,7 +46,7 @@
 
 <script setup lang="ts">
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { computed, ref } from 'vue';
 import { onLoad, onShow } from '@dcloudio/uni-app';
 import { request, getToken, uploadAi } from '../../api';
@@ -389,7 +390,8 @@ async function submit() {
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .head-row { display: flex; gap: 12rpx; align-items: flex-start; margin-bottom: 16rpx; }
 .head-row .field { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }

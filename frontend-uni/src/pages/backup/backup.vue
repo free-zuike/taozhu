@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <button class="btn" :disabled="busy" @click="backupNow">{{ busy ? '备份中…' : '立即备份到云端' }}</button>
     <view class="tip">备份为全库 JSON 存档（云端历史可直接恢复，不覆盖现有数据）</view>
 
@@ -19,7 +20,7 @@
 
 <script setup lang="ts">
 import { useThemeVars } from '../../theme';
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
@@ -76,7 +77,8 @@ function restore(b: BackupItem) {
 </script>
 
 <style>
-.page {  min-height: 100vh;  background-image: var(--bg-pattern), var(--bg-gradient); }
+.bg-pattern { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.9; pointer-events: none; }
+.page {  min-height: 100vh;  background: var(--page-bg); }
 .btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; }
 .tip { font-size: 22rpx; color: var(--text-sub); margin: 20rpx 8rpx 28rpx; line-height: 1.6; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; display: flex; align-items: center; }
