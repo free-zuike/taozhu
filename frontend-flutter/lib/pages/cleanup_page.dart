@@ -316,13 +316,14 @@ class _CleanupPageState extends State<CleanupPage> {
                 final fileName = f.uri.pathSegments.last;
                 final rel = '$entityName/$idName/$fileName';
                 localAttachAll++;
-                // basename 在用判定（参考实现）：文件名在本地引用表 file 集合 = 在用；
-                // 不在 = 孤儿（可清理）。三元组辅助：同目录部分孤儿也能正确区分。
-                // 目录级兜底（本地镜像在用 id 集合）：引用表为空/未同步时保守归在用防误删，
-                // 此时同目录孤儿无法区分（宁可不清理不误删）——表空且在线拉取成功会写入表后再判。
-                final fileInUse = localRefs.contains(fileName) ||
-                    localRefsFull.contains(rel) ||
-                    (inUse[entityName]?.contains(idName) ?? false);
+                // 在用判定（对齐参考实现 scanFileOrphanAttachments：本地引用表集合判定）：
+                // 引用表非空时——三元组精确（表内=在用，不在=孤儿可清理；同目录部分孤儿正确区分）；
+                // 引用表空（未同步/在线拉取失败）——全部归在用，不列出孤儿（宁可不清理不误删；
+                // 统计行"引用表 0 条"让差异可见，同步/重进后再扫）。
+                final refTableReady = localRefs.isNotEmpty || localRefsFull.isNotEmpty;
+                final fileInUse = !refTableReady
+                    ? true
+                    : localRefsFull.contains(rel) || localRefs.contains(fileName);
                 if (fileInUse) {
                   localAttachInUse++;
                 } else {

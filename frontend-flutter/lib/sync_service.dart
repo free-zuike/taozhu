@@ -874,70 +874,36 @@ class SyncService {
     } catch (_) {}
   }
 
-  /// 同步完成后扫描清理本地孤儿附件副本：attachments/{entity}/{id}/ 对照本地镜像在用实体
-  /// （sale/purchase/payment 单据 + sale_item/purchase_item 明细行），无主目录 = 单据删除残留
-  /// 等历史孤儿 → 自动删除。本地附件目录恒等于在用实体集合（面板"全部附件 本地"计数随之归零）；
-  /// 补充删除入口即时清理的遗漏（存量孤儿 / 历史版本残留）。
+  /// 同步完成后扫描清理本地孤儿附件副本（对齐参考实现 scanFileOrphanAttachments）：
+  /// 数据源=本地 attachment_refs 表（同步时 downloadInUseAttachments 已把服务器在用三元组
+  /// {entity, entity_id, file} 持久化到本地）——三元组在表内 = 在用（保留），不在表 = 孤儿（删文件）。
+  /// 引用表为空（未同步/拉取失败）→ 不删任何文件（宁留勿误删——没有权威数据源不动本地副本）。
+  /// 只删文件不整删目录（在用判定必须文件级；整删目录会在本地镜像 id 与目录不一致时误删在用副本）。
   static Future<void> cleanupOrphanLocalAttachments() async {
     try {
       if (kIsWeb) return;
       final root = await getApplicationDocumentsDirectory();
       final base = Directory('${root.path}/attachments');
       if (!base.existsSync()) return;
-      // 在用 id 集合：entity -> Set<id>
-      final inUse = <String, Set<String>>{};
-      void add(String entity, String id) {
-        if (id.isEmpty) return;
-        (inUse[entity] ??= {}).add(id);
-      }
-      Future<void> collect(List<Map<String, dynamic>> orders, String orderEntity, String lineEntity) async {
-        for (final o in orders) {
-          add(orderEntity, '${o['id'] ?? ''}');
-          final items = (o['items'] as List?) ?? [];
-          for (final it in items) {
-            if (it is Map) add(lineEntity, '${it['id'] ?? ''}');
-          }
-        }
-      }
-      await collect(await LocalDb.getAll('sales'), 'sale', 'sale_item');
-      await collect(await LocalDb.getAll('purchases'), 'purchase', 'purchase_item');
-      await collect(await LocalDb.getAll('payments'), 'payment', 'payment');
-      // 本地附件引用表（basename 集合）：同步时 downloadInUseAttachments 已持久化服务器在用三元组。
-      // 文件级孤儿清理 = basename 不在引用表即孤儿（对齐参考实现 scanFileOrphanAttachments）。
-      // 引用表为空（未同步/拉取失败）时保守：只清无主目录（目录级兜底），在用目录内文件全部保留。
+      // 本地附件引用表 = 在用权威（同步时 downloadInUseAttachments 已持久化服务器在用三元组）
       final refRows = await LocalDb.getAll('attachment_refs');
-      final refNames = refRows
-          .map((r) => '${r['file'] ?? ''}')
-          .where((f) => f.isNotEmpty)
-          .toSet();
-      final refFull = refRows
+      if (refRows.isEmpty) return; // 表空不清理（宁留勿误删）
+      final refs = refRows
           .map((r) => '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${r['file'] ?? ''}')
-          .where((f) => !f.startsWith('/') && !f.contains('//'))
+          .where((f) => !f.startsWith('/') && !f.contains('//') && f.split('/').length >= 3)
           .toSet();
-      // 扫描 attachments/ 下 entity 目录，清掉不在用集合的 id 目录
+      if (refs.isEmpty) return;
+      // 扫描 attachments/ 全部文件：三元组不在引用表 = 孤儿 → 删文件（对齐参考实现 cleaner 只删文件）
       await for (final eDir in base.list(followLinks: false)) {
         if (eDir is! Directory) continue;
         final entity = eDir.uri.pathSegments.last;
-        final have = inUse[entity];
-        if (have == null) {
-          // 未知实体目录（脏残留）整删
-          try { eDir.deleteSync(recursive: true); } catch (_) {}
-          continue;
-        }
         await for (final idDir in eDir.list(followLinks: false)) {
           if (idDir is! Directory) continue;
           final id = idDir.uri.pathSegments.last;
-          if (!have.contains(id)) {
-            try { idDir.deleteSync(recursive: true); } catch (_) {}
-            continue;
-          }
-          // 在用目录内：文件级孤儿清理（引用表非空时）；表空保守保留
-          if (refNames.isEmpty) continue;
           await for (final f in idDir.list(followLinks: false)) {
             if (f is! File) continue;
-            final fileName = f.uri.pathSegments.last;
-            final rel = '$entity/$id/$fileName';
-            if (!refNames.contains(fileName) && !refFull.contains(rel)) {
+            final rel = '$entity/$id/${f.uri.pathSegments.last}';
+            if (!refs.contains(rel)) {
               try { f.deleteSync(); } catch (_) {}
             }
           }
