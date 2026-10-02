@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 月份（点击切换）+ 月度支出卡（对齐 App 进货页：仅支出统计） -->
@@ -20,14 +20,23 @@
       </view>
       <view v-for="it in (p.items || [])" :key="it.id" class="line" @click="editPurchaseItem(p, it)" @longpress="deletePurchaseLine(p, it)">
         <view class="line-left">
-          <text class="line-name">{{ it.item_name }}</text>
+          <view class="line-name-row">
+            <text class="line-name">{{ it.item_name }}</text>
+            <text class="op-attach" @click.stop="showAttach('purchase_item', it.id, 'purchase', p.id)">
+              <template v-if="(attachCounts.purchase_item[it.id] || 0) > 0">📎{{ attachCounts.purchase_item[it.id] }}</template>
+              <template v-else>凭证</template>
+            </text>
+          </view>
           <text class="line-meta">进价 ¥{{ Number(it.purchase_price || it.price || 0).toFixed(2) }} · ×{{ it.quantity }}{{ it.unit }}<text v-if="it.note"> · {{ it.note }}</text></text>
         </view>
         <text class="line-amt">¥{{ Number(it.amount || 0).toFixed(2) }}</text>
       </view>
       <view v-if="(p.items || []).length === 0" class="line"><text class="line-name">备注行</text></view>
       <view class="ops">
-        <text class="op" @click="showAttach(p.id)">凭证</text>
+        <text class="op" @click="showAttach('purchase', p.id)">
+          <template v-if="(attachCounts.purchase[p.id] || 0) > 0">📎{{ attachCounts.purchase[p.id] }}</template>
+          <template v-else>整单凭证</template>
+        </text>
         <text class="tip-longpress">长按删除该商品</text>
       </view>
     </view>
@@ -88,7 +97,9 @@ const itemForm = ref<{
   quantity: string; unit: string; salePrice: string; date: string;
 }>({ show: false, orderId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', date: '' });
 
-const attach = ref<{ show: boolean; id: string; list: Array<{ key: string }> }>({ show: false, id: '', list: [] });
+const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({ show: false, entity: 'purchase', id: '', list: [] });
+// 附件计数（行级 purchase_item / 单据级 purchase）
+const attachCounts = ref<Record<string, Record<string, number>>>({ purchase_item: {}, purchase: {} });
 
 onShow(async () => {
   onWs('*', load);
@@ -153,6 +164,7 @@ async function load() {
         : (results[0].purchases || []);
     const sum = results[1];
     if (sum) mExpense.value = Number(sum.purchase_total || 0);
+    loadAttachCounts();
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
@@ -260,14 +272,23 @@ async function saveItem() {
   }
 }
 
-async function showAttach(id: string) {
-  attach.value = { show: true, id, list: [] };
+async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') {
+  attach.value = { show: true, entity, id, list: [] };
+  let list: Array<{ key: string }> = [];
   try {
-    const d = await getAttachments('purchase', id);
-    attach.value.list = d.attachments || [];
+    const d = await getAttachments(entity, id);
+    list = d.attachments || [];
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载附件失败', icon: 'none' });
+    return;
   }
+  if (list.length === 0 && fbEntity && fbId) {
+    try {
+      const d = await getAttachments(fbEntity, fbId);
+      list = d.attachments || [];
+    } catch (_) {}
+  }
+  attach.value.list = list;
 }
 
 function previewAttach(i: number) {
@@ -276,16 +297,18 @@ function previewAttach(i: number) {
 }
 
 async function uploadAttach() {
+  const entity = attach.value.entity;
   const id = attach.value.id;
   uni.chooseImage({
     count: 1,
     success: async (r) => {
       const path = r.tempFilePaths[0];
       try {
-        await uploadAttachment('purchase', id, path);
+        await uploadAttachment(entity, id, path);
         uni.showToast({ title: '已上传', icon: 'success' });
-        const d = await getAttachments('purchase', id);
+        const d = await getAttachments(entity, id);
         attach.value.list = d.attachments || [];
+        loadAttachCounts();
       } catch (e) {
         uni.showToast({ title: (e as Error).message || '上传失败', icon: 'none' });
       }
@@ -299,9 +322,31 @@ async function removeAttach(key: string) {
     await deleteAttachment(key);
     attach.value.list = attach.value.list.filter((a) => a.key !== key);
     uni.showToast({ title: '已删除', icon: 'success' });
+    loadAttachCounts();
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
   }
+}
+
+/// 批量拉当前页附件数（行级 purchase_item + 单据级 purchase）
+async function loadAttachCounts() {
+  const lineIds = [
+    ...new Set(
+      purchases.value.flatMap((p) => ((p.items as Array<Record<string, any>>) || []).map((it) => String(it.id || '')).filter(Boolean)),
+    ),
+  ];
+  const orderIds = [...new Set(purchases.value.map((p) => String(p.id || '')).filter(Boolean))];
+  const fetch = async (entity: string, ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      const d = await request<{ counts: Record<string, number> }>('/attachments/counts', 'POST', { entity, ids });
+      for (const [id, n] of Object.entries(d.counts || {})) {
+        if (n > 0) attachCounts.value[entity][id] = n;
+      }
+    } catch (_) {}
+  };
+  await fetch('purchase_item', lineIds);
+  await fetch('purchase', orderIds);
 }
 
   onHide(() => { offWs('*', load); });
@@ -324,6 +369,8 @@ async function removeAttach(key: string) {
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }
 .line { display: flex; justify-content: space-between; align-items: center; padding: 10rpx 0; border-top: 1rpx solid var(--divider); }
 .line-left { flex: 1; min-width: 0; }
+.line-name-row { display: flex; align-items: center; gap: 12rpx; }
+.op-attach { font-size: 22rpx; color: var(--primary); flex-shrink: 0; padding: 4rpx 12rpx; background: var(--primary-fade); border-radius: 8rpx; }
 .line-name { font-size: 27rpx; color: var(--text-main); display: block; }
 .line-meta { font-size: 22rpx; color: var(--text-sub); margin-top: 2rpx; display: block; }
 .line-amt { font-size: 27rpx; font-weight: bold; color: #f56c6c; margin-left: 16rpx; }

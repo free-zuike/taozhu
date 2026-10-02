@@ -14,7 +14,24 @@
         </view>
         <text class="del" @click.stop="remove(c.id)">删除</text>
       </view>
-      <view class="debt">欠款 <text class="debt-num red">¥{{ fmt(c.debt) }}</text></view>
+      <!-- 三格统计（对齐 App 店铺卡）：记账天数 / 欠款 / 周期 -->
+      <view class="stat-row">
+        <view class="stat">
+          <text class="stat-num">{{ bookDays(c) }} 天</text>
+          <text class="stat-label">记账天数</text>
+        </view>
+        <view class="stat-divider"></view>
+        <view class="stat">
+          <text class="stat-num" :class="Number(c.debt || 0) > 0 ? 'red' : 'green'">¥{{ fmt(c.debt) }}</text>
+          <text class="stat-label">欠款</text>
+        </view>
+        <view class="stat-divider"></view>
+        <view class="stat">
+          <text class="stat-num">{{ (Number(c.month_start_day) || 1) > 1 ? `每月 ${c.month_start_day} 日` : '自然月' }}</text>
+          <text class="stat-label">周期</text>
+        </view>
+      </view>
+      <text v-if="c.first_book_date" class="stat-start">记账起始 {{ c.first_book_date }}</text>
     </view>
     <view v-if="clients.length === 0" class="empty">暂无饭店，点上方新增</view>
 
@@ -58,6 +75,8 @@ interface Client {
   debt: number;
   category_id?: string;
   category_name?: string;
+  first_book_date?: string;
+  month_start_day?: number;
 }
 
 const clients = ref<Client[]>([]);
@@ -65,6 +84,16 @@ const showForm = ref(false);
 const saving = ref(false);
 const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '' });
 const fmt = (n: number) => Number(n || 0).toFixed(2);
+
+/// 记账天数：首记日 → 今天（含当天，对齐 App _bookDays）
+function bookDays(c: Client): number {
+  const f = new Date(String(c.first_book_date || 'T00:00:00').slice(0, 10) + 'T00:00:00');
+  if (isNaN(f.getTime())) return 0;
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - f.getTime();
+  const days = Math.floor(d / 86400000) + 1;
+  return days < 1 ? 1 : days;
+}
 
 // 店铺分类（type=client，两级平铺；选项显示"一级/二级"）
 const cats = ref<Array<{ id: string; name: string; parent_id: string | null }>>([]);
@@ -195,6 +224,14 @@ async function remove(id: string) {
 .debt { margin-top: 16rpx; font-size: 26rpx; color: var(--text-sub); }
 .debt-num { font-weight: bold; font-size: 32rpx; }
 .red { color: #f56c6c; }
+.green { color: #22c55e; }
+/* 三格统计（对齐 App 店铺卡：记账天数/欠款/周期 + 分隔线） */
+.stat-row { display: flex; align-items: center; margin-top: 18rpx; border-top: 1rpx solid var(--divider); padding-top: 16rpx; }
+.stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4rpx; }
+.stat-num { font-size: 28rpx; font-weight: bold; color: var(--text-main); }
+.stat-label { font-size: 22rpx; color: var(--text-sub); }
+.stat-divider { width: 1rpx; height: 36rpx; background: var(--divider); }
+.stat-start { display: block; margin-top: 12rpx; font-size: 22rpx; color: var(--text-sub); }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }

@@ -32,12 +32,14 @@
       </picker>
       <input class="num" type="digit" v-model="row.quantity" placeholder="数量" />
       <input class="num" type="digit" v-model="row.salePrice" placeholder="单价" />
+      <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折${row.countUnit}`" />
       <text class="amt">¥{{ rowAmount(row) }}</text>
       <text class="del" @click="rows.splice(i, 1)">删</text>
     </view>
 
     <view class="footer">
       <button class="btn-add" @click="addRow">+ 添加商品</button>
+      <button class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
       <text class="total">合计 <text class="total-num">¥{{ total }}</text></text>
     </view>
     <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (editId ? '保存修改' : '提交出货单') }}</button>
@@ -49,14 +51,15 @@ import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { computed, ref } from 'vue';
 import { onLoad, onShow } from '@dcloudio/uni-app';
-import { request, getToken, uploadAi } from '../../api';
+import { request, getToken, uploadAi, uploadAttachment } from '../../api';
 
 interface Price { id: string; unit: string; sale_price: number; purchase_price: number }
-interface Item { id: string; name: string; prices: Price[] }
+interface Item { id: string; name: string; prices: Price[]; count_unit?: string }
 interface Row {
   itemId: string; itemName: string; prices: Price[];
   priceId: string; priceLabel: string; unit: string;
   quantity: string; salePrice: string; countQty: string;
+  countUnit: string; // 商品计数单位（袋/个…，有才显示折合计数输入框）
 }
 
 const clientId = ref('');
@@ -72,6 +75,8 @@ const loading = ref(false);
 const editId = ref(''); // 非空 = 编辑已有出货单（账本进入，提交走 PATCH）
 const aiBusy = ref(false);
 const aiTip = ref('');
+// 识别原图/手动凭证：暂存待提交后上传为本单凭证（服务器单据级 sale/{id}，账本行级入口查空回退单据级可见）
+const pendingPhoto = ref('');
 
 onLoad((options) => {
   editId.value = options?.id || '';
@@ -122,6 +127,7 @@ async function loadEdit() {
         itemId: item.id, itemName: item.name, prices: item.prices,
         priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`, unit: price.unit,
         quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
+        countUnit: String(item.count_unit || ''),
       });
     }
     if (rows.value.length === 0) {
@@ -162,6 +168,7 @@ async function copyLast() {
         itemId: item.id, itemName: item.name, prices: item.prices,
         priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`, unit: price.unit,
         quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
+        countUnit: String(item.count_unit || ''),
       });
     }
     if (rows.value.length === 0) addRow();
@@ -204,6 +211,7 @@ function aiPhoto() {
       aiTip.value = 'AI 识别中…';
       try {
         const d = await uploadAi<{ items?: Array<Record<string, any>> }>(`/ai/parse-photo?purpose=sale`, 'photo', fp);
+        pendingPhoto.value = fp; // 识别原图：提交成功后才上传为本单凭证（对齐全量同步/账本单据级凭证）
         fillFromDrafts(d.items || [], String(d.client ?? ''), String(d.date ?? ''));;
       } catch (e) {
         uni.showToast({ title: (e as Error).message || '识别失败', icon: 'none' });
@@ -303,7 +311,7 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', date = ''
     const match = items.value.find((it) => it.name === name || it.name.includes(name) || name.includes(it.name));
     let row = rows.value.find((r) => !r.itemId && !r.itemName);
     if (!row) {
-      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '' });
+      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '' });
       row = rows.value[rows.value.length - 1];
     }
     if (match) {
@@ -312,6 +320,7 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', date = ''
         row.itemId = match.id;
         row.itemName = match.name;
         row.prices = match.prices;
+        row.countUnit = String(match.count_unit || '');
         row.priceId = pr.id;
         row.unit = pr.unit;
         row.priceLabel = `${pr.unit}（¥${pr.sale_price}·库存${pr.stock ?? 0}）`;
@@ -336,7 +345,7 @@ function onDate(e: { detail: { value: string } }) {
 }
 
 function addRow() {
-  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '' });
+  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '' });
 }
 
 function onItem(i: number, idx: number) {
@@ -361,10 +370,82 @@ function onPrice(i: number, idx: number) {
   row.salePrice = String(p.sale_price);
 }
 
+/// 手动添加凭证：选图暂存，提交成功随单上传（对齐 App「整单凭证」）
+function pickVoucher() {
+  uni.chooseImage({
+    count: 1,
+    sizeType: ['compressed'],
+    sourceType: ['camera', 'album'],
+    success: (res) => {
+      const fp = res.tempFilePaths?.[0];
+      if (!fp) return;
+      pendingPhoto.value = fp;
+      uni.showToast({ title: '凭证已选，提交后上传', icon: 'none' });
+    },
+  });
+}
+
+/// 新商品入库：识别/手输未匹配商品库的名称，提交时弹窗让用户决定是否加入商品库（不静默丢弃）
+async function ensureNewItems(): Promise<boolean> {
+  const newNames = [
+    ...new Set(
+      rows.value.filter((r) => r.itemName?.trim() && !r.itemId).map((r) => r.itemName.trim()),
+    ),
+  ];
+  if (newNames.length === 0) return true;
+  const me = await request<{ user?: { role?: string } }>('/auth/me', 'GET').catch(() => null);
+  if (me?.user?.role === 'staff') {
+    uni.showToast({ title: `「${newNames.join('、')}」不在商品库，请让老板先添加`, icon: 'none' });
+    return false;
+  }
+  const go = await new Promise<boolean>((resolve) => {
+    uni.showModal({
+      title: '新商品入库',
+      content: `「${newNames.join('、')}」不在商品库，是否加入？\n（不加入则本次无法提交）`,
+      confirmText: '加入商品库',
+      cancelText: '不加入',
+      success: (r) => resolve(!!r.confirm),
+      fail: () => resolve(false),
+    });
+  });
+  if (!go) return false;
+  try {
+    for (const r of rows.value) {
+      const name = r.itemName?.trim();
+      if (!name || r.itemId) continue;
+      const d = await request<{ id: string; prices?: unknown[] | string[] }>('/items', 'POST', {
+        name,
+        category: '',
+        prices: [{ unit: r.unit || '件', purchase_price: 0, sale_price: Number(r.salePrice) || 0 }],
+      });
+      const pid = (d.prices as string[] | undefined)?.[0] || ((d.prices as unknown[] | undefined) as Array<{ id: string }> | undefined)?.[0]?.id || '';
+      r.itemId = d.id;
+      r.priceId = pid as string;
+      // 新商品加入本页下拉缓存（数量/单价保持，后续仍可改）
+      items.value.push({ id: d.id, name, prices: [{ id: pid as string, unit: r.unit || '件', sale_price: Number(r.salePrice) || 0, purchase_price: 0 }] });
+      itemNames.value.push(name);
+    }
+    return true;
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '创建商品失败', icon: 'none' });
+    return false;
+  }
+}
+
 async function submit() {
   if (!clientId.value) return uni.showToast({ title: '请选择饭店', icon: 'none' });
+  if (!(await ensureNewItems())) return;
   const valid = rows.value.filter((r) => r.itemId && r.priceId && Number(r.quantity) > 0);
   if (valid.length === 0) return uni.showToast({ title: '请填写完整的商品明细', icon: 'none' });
+  // 库存不足软提醒（不拦截，可强交——对齐 App）
+  const low = valid
+    .map((r) => {
+      const price = r.prices.find((p) => p.id === r.priceId);
+      const stock = price ? Number((price as any).stock || 0) : 0;
+      return stock > 0 && Number(r.quantity) > stock ? `${r.itemName}（${r.quantity} > 库存 $stock${r.unit}）` : '';
+    })
+    .filter(Boolean);
+  if (low.length > 0) uni.showToast({ title: `库存不足提醒：${low.slice(0, 2).join('；')}`, icon: 'none', duration: 2500 });
   saving.value = true;
   try {
     const body = {
@@ -372,14 +453,23 @@ async function submit() {
       happened_at: date.value,
       items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0 })),
     };
+    let savedId = editId.value;
     if (editId.value) {
       await request(`/sales/${editId.value}`, 'PATCH', body);
       uni.showToast({ title: '已保存修改', icon: 'success' });
     } else {
-      await request('/sales', 'POST', body);
+      const d = await request<{ id: string }>('/sales', 'POST', body);
+      savedId = d.id;
       uni.showToast({ title: `已提交 ¥${total.value.toFixed(2)}`, icon: 'success' });
       rows.value = [];
       addRow();
+    }
+    // 识别原图/手动凭证随单上传（单据级 sale/{savedId}；失败不阻断提交，可稍后在账本补传）
+    if (pendingPhoto.value && savedId) {
+      try {
+        await uploadAttachment('sale', savedId, pendingPhoto.value);
+        pendingPhoto.value = '';
+      } catch (_) {}
     }
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '提交失败', icon: 'none' });
@@ -413,10 +503,12 @@ async function submit() {
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 .num { width: 90rpx; background: var(--input-bg); border-radius: 8rpx; padding: 12rpx; font-size: 24rpx; text-align: center; }
+.num.count { width: 110rpx; }
 .amt { width: 110rpx; font-size: 24rpx; color: #f56c6c; }
 .del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; }
 .footer { display: flex; justify-content: space-between; align-items: center; margin: 20rpx 0; }
 .btn-add { font-size: 28rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.btn-voucher { font-size: 26rpx; background: var(--card-bg); color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; padding: 0 20rpx; height: 76rpx; line-height: 76rpx; }
 .total { font-size: 28rpx; }
 .total-num { color: #f56c6c; font-weight: bold; font-size: 34rpx; }
 .btn-submit { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 32rpx; }

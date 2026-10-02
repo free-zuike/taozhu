@@ -47,7 +47,10 @@
           </view>
           <view class="sale-line2">售价 ¥{{ Number(l.sale_price || 0).toFixed(2) }} · ×{{ l.quantity }}{{ l.unit }}</view>
           <view class="ops">
-            <text class="op" @click.stop="showAttach('sale', l.orderId)">凭证</text>
+            <text class="op" @click.stop="showAttach(l.itemId ? 'sale_item' : 'sale', l.itemId || l.orderId, 'sale', l.orderId)">
+              <template v-if="attachOf(l) > 0">📎{{ attachOf(l) }}</template>
+              <template v-else>凭证</template>
+            </text>
             <text class="tip-longpress" @click.stop>长按删除该商品</text>
           </view>
         </view>
@@ -63,7 +66,10 @@
         </view>
         <view class="sub">{{ p.happened_at }}<text v-if="p.method"> · {{ p.method }}</text></view>
         <view class="ops">
-          <text class="op" @click.stop="showAttach('payment', p.id)">凭证</text>
+          <text class="op" @click.stop="showAttach('payment', p.id)">
+            <template v-if="(attachCounts.payment[p.id] || 0) > 0">📎{{ attachCounts.payment[p.id] }}</template>
+            <template v-else>凭证</template>
+          </text>
           <text class="tip-longpress" @click.stop>长按撤销该收款</text>
         </view>
       </view>
@@ -154,15 +160,52 @@ const itemForm = ref<{
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({
   show: false, entity: '', id: '', list: [],
 });
+// 附件计数：sale_item（行级）/ sale（无明细备注行的单据级）/ payment（收款单据级）→ id → 张数
+const attachCounts = ref<Record<string, Record<string, number>>>({ sale_item: {}, sale: {}, payment: {} });
 
-async function showAttach(entity: string, id: string) {
+/** 行级附件数：有行 id 按 sale_item 查，无明细（备注占位行）按单据级 sale 查 */
+function attachOf(l: SaleLine): number {
+  const m = attachCounts.value;
+  return l.itemId ? (m.sale_item[l.itemId] || 0) : (m.sale[l.orderId] || 0);
+}
+
+/** 批量拉当前页附件数（POST /attachments/counts，一个实体一次） */
+async function loadAttachCounts() {
+  const saleLineIds = [...new Set(sales.value.flatMap((s) => ((s.items as Array<Record<string, any>>) || []).map((it) => String(it.id || '')).filter(Boolean)))];
+  const saleOrderIds = [...new Set(sales.value.map((s) => String(s.id || '')).filter(Boolean))];
+  const payIds = [...new Set(payments.value.map((p) => String(p.id || '')).filter(Boolean))];
+  const fetch = async (entity: string, ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      const d = await request<{ counts: Record<string, number> }>('/attachments/counts', 'POST', { entity, ids });
+      for (const [id, n] of Object.entries(d.counts || {})) {
+        if (n > 0) attachCounts.value[entity][id] = n;
+      }
+    } catch (_) {}
+  };
+  await Promise.all([fetch('sale_item', saleLineIds)]);
+  if (saleOrderIds.length > 0) await fetch('sale', saleOrderIds);
+  if (payIds.length > 0) await fetch('payment', payIds);
+}
+
+/** 打开凭证弹层：行级（sale_item/账单行）优先；查空时回退单据级（sale/purchase），兼容早期单据级上传 */
+async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') {
   attach.value = { show: true, entity, id, list: [] };
+  let list: Array<{ key: string }> = [];
   try {
     const d = await getAttachments(entity, id);
-    attach.value.list = d.attachments || [];
+    list = d.attachments || [];
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载凭证失败', icon: 'none' });
+    return;
   }
+  if (list.length === 0 && fbEntity && fbId) {
+    try {
+      const d = await getAttachments(fbEntity, fbId);
+      list = d.attachments || [];
+    } catch (_) {}
+  }
+  attach.value.list = list;
 }
 
 function previewAttach(i: number) {
@@ -181,6 +224,7 @@ function uploadAttach() {
         const d = await uploadAttachment(attach.value.entity, attach.value.id, path);
         attach.value.list.push({ key: d.key });
         uni.showToast({ title: '已添加', icon: 'success' });
+        loadAttachCounts();
       } catch (e) {
         uni.showToast({ title: (e as Error).message || '上传失败', icon: 'none' });
       }
@@ -194,6 +238,7 @@ async function removeAttach(key: string) {
     await deleteAttachment(key);
     attach.value.list = attach.value.list.filter((a) => a.key !== key);
     uni.showToast({ title: '已删除', icon: 'success' });
+    loadAttachCounts();
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
   }
@@ -373,6 +418,7 @@ async function load() {
       mDebt.value = Number(sum.debt || 0);
       mBalance.value = Number(sum.gross_profit || 0);
     }
+    loadAttachCounts();
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
