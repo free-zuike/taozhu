@@ -909,7 +909,7 @@ class _LedgerPageState extends State<LedgerPage> {
         // 服务端已级联：删的是最后一行时该条出货记录整体消失（无空壳单）
         if (r is Map && r['order_deleted'] == true) {
           toast(context, '已删除该商品（本条记录已无商品）');
-          appLog('op', '出货 删除商品行（末行→整单删除）');
+          appLog('op', '出货 删除商品行：该条出货记录最后一行，整单一并删除');
           SyncService.version.notifyListeners();
           _load();
           return;
@@ -927,7 +927,7 @@ class _LedgerPageState extends State<LedgerPage> {
           await SyncService.enqueueChange(
               entityType: 'sale', entitySyncId: '${order['id']}', action: 'delete', payload: {});
           toast(context, '已删除该商品（本条记录已无商品）');
-          appLog('op', '出货 删除商品行（末行→整单删除）');
+          appLog('op', '出货 删除商品行：该条出货记录最后一行，整单一并删除');
           SyncService.version.notifyListeners();
           _load();
           return;
