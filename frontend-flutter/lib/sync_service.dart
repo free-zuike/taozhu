@@ -184,8 +184,14 @@ class SyncService {
             if (attempt < 2) await Future.delayed(Duration(seconds: 1 << attempt));
           }
         }
-        // 单张失败跳过：下次同步再补
+        // 单张失败跳过：下次同步再补；404（云端文件已删/引用残留）→ 顺手清除本地在用引用行，
+        // 避免本地表把坏引用当在用（清理页误判）——服务端 in-use 已自愈，下一轮全量刷新不再下发
         appLog('sync', '附件下载失败 $entity/$id/$file: $lastError', level: 'error');
+        if ('$lastError'.contains('404')) {
+          try {
+            await LocalDb.deleteOne('attachment_refs', '$entity/$id/$file');
+          } catch (_) {}
+        }
         return false;
       }
       // 并发 4 分批下载（对齐参考同步引擎下载策略）

@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { buildPayload, recordChange } from '../lib/sync';
+import { recordAudit } from './audit';
 import type { AuthUser, ClientRow, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -99,7 +100,10 @@ function normalizeStartDay(v: unknown): number | null {
 // DELETE /clients/:id — 软删
 clientsRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
+  // 审计留痕带店铺名（删除后列表不可见，名称在删除时快照）
+  const client = await c.env.DB.prepare('SELECT name FROM clients WHERE id = ? AND deleted_at IS NULL').bind(id).first<{ name: string }>();
   await c.env.DB.prepare('UPDATE clients SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(nowIso(), id).run();
   await recordChange(c.env.DB, { entity_type: 'client', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'client', id), updated_by_username: c.get('user').username });
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'client', entity_id: id, detail: client ? `删除店铺：${client.name}` : '删除店铺（已不存在）' });
   return c.body(null, 204);
 });

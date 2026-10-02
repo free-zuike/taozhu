@@ -103,7 +103,9 @@ salesRouter.post('/', async (c) => {
 
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: user.username });
-  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'sale', entity_id: saleId, detail: `添加出货：店铺 ${clientId}，${items.length} 件商品，合计 ¥${(Math.round(total * 100) / 100).toFixed(2)}` });
+  // 审计留痕带店铺名（不是 id 长串）：创建时店铺必存在
+  const clientName = (await c.env.DB.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>())?.name ?? clientId;
+  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'sale', entity_id: saleId, detail: `添加出货：店铺 ${clientName}，${items.length} 件商品，合计 ¥${(Math.round(total * 100) / 100).toFixed(2)}` });
   return c.json({ id: saleId, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100, items: saleItemIds.length }, 201);
 });
 
@@ -426,7 +428,12 @@ salesRouter.delete('/:id', adminOnly(), async (c) => {
   batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
-  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'sale', entity_id: id, detail: `删除出货记录（${oldItems.results.length} 件商品）` });
+  // 审计留痕带店铺名（删前快照：行删除后查不到）
+  const delClientId = (await c.env.DB.prepare('SELECT client_id FROM sale_items WHERE sale_id = ? LIMIT 1').bind(id).first<{ client_id: string }>())?.client_id ?? '';
+  const delClientName = delClientId
+    ? (await c.env.DB.prepare('SELECT name FROM clients WHERE id = ?').bind(delClientId).first<{ name: string }>())?.name ?? ''
+    : '';
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'sale', entity_id: id, detail: `删除出货：${delClientName || '未知店铺'}（${oldItems.results.length} 件商品）` });
   // 删除交易附带的凭证图片（单据级 + 全部明细行级，best-effort 不阻塞删除）
   try {
     await deleteEntityAttachments(c.env, 'sale', id);

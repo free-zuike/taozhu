@@ -249,6 +249,38 @@ describe('交易附件（R2）', () => {
     expect(hit.file).toBe(up1.key.split('/').pop());
   });
 
+  it('in-use 引用自愈：实体已删但引用残留 → 不列出并清除坏引用（防同步下载 404 刷屏）', async () => {
+    // 真实单据 + 正常引用（应保留并列出）
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-09',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+    // 坏引用：目标单据不存在（模拟删除交易时引用清理失败的残留）
+    await (env.DB as FakeD1).prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', 'ghost-sale', 'taozhu/images/attachments/sale/ghost-sale/deadbeef.jpg', 'm0')",
+    ).bind('ref-ghost').run();
+
+    const scan = await (await call(env, 'GET', '/api/v1/attachments/in-use', token)).json() as {
+      attachments: Array<{ key: string }>;
+    };
+    // 坏引用不列出、真实引用保留
+    expect(scan.attachments.some((o) => o.key === up.key)).toBe(true);
+    expect(scan.attachments.some((o) => o.key === 'taozhu/images/attachments/sale/ghost-sale/deadbeef.jpg')).toBe(false);
+    // 坏引用行已被自愈清除（下次同步不再下发）
+    const ghost = await (env.DB as FakeD1).prepare("SELECT COUNT(*) AS n FROM attachment_refs WHERE id = 'ref-ghost'").first<{ n: number }>();
+    expect(ghost?.n ?? 0).toBe(0);
+  });
+
   it('附件引用表：上传写引用、删附件清引用、删单据级联清引用', async () => {
     // 建真实单据
     await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });

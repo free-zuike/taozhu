@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { buildPayload, recordChange } from '../lib/sync';
+import { recordAudit } from './audit';
 import type { AuthUser, Env, ItemRow } from '../types';
 
 type V = { user: AuthUser };
@@ -142,10 +143,13 @@ itemsRouter.patch('/:id', adminOnly(), async (c) => {
 // DELETE /items/:id — 软删
 itemsRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
+  // 审计留痕带商品名（删除后目录不可见，名称在删除时快照）
+  const item = await c.env.DB.prepare('SELECT name FROM items WHERE id = ? AND deleted_at IS NULL').bind(id).first<{ name: string }>();
   await c.env.DB.prepare(
     'UPDATE items SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(nowIso(), id).run();
   await c.env.DB.prepare('UPDATE item_prices SET active = 0 WHERE item_id = ?').bind(id).run();
   await noteItemChange(c.env.DB, id, c.get('user').username);
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'item', entity_id: id, detail: item ? `删除商品：${item.name}` : '删除商品（已不存在）' });
   return c.body(null, 204);
 });
 

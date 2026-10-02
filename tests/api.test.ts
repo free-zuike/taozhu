@@ -1100,6 +1100,25 @@ describe('操作审计（audit_logs：登录/删除/导出留痕，admin 查看�
     const staffToken = ((await login.json()) as { token: string }).token;
     expect((await call(env, 'GET', '/api/v1/audit', staffToken)).status).toBe(403);
   });
+
+  it('老板手动删除单条审计：deleted 返回且删除后列表不含该条；店员删除 403', async () => {
+    await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'boss', password: 'admin1234' });
+    const before = (await (await call(env, 'GET', '/api/v1/audit', token)).json()) as { logs: Array<{ id: number; action: string }> };
+    const target = before.logs.find((l) => l.action === 'login');
+    expect(target).toBeTruthy();
+    const del = await call(env, 'DELETE', `/api/v1/audit/${target!.id}`, token);
+    expect(del.status).toBe(200);
+    expect(((await del.json()) as { deleted: number }).deleted).toBe(1);
+    const after = (await (await call(env, 'GET', '/api/v1/audit', token)).json()) as { logs: Array<{ id: number }> };
+    expect(after.logs.some((l) => l.id === target!.id)).toBe(false);
+    // 非数字 id → 400
+    expect((await call(env, 'DELETE', '/api/v1/audit/abc', token)).status).toBe(400);
+    // 店员无权删除（adminOnly）
+    await call(env, 'POST', '/api/v1/users', token, { username: 'staff2', password: 'staff1234', role: 'staff' });
+    const login2 = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff2', password: 'staff1234' });
+    const staffToken = ((await login2.json()) as { token: string }).token;
+    expect((await call(env, 'DELETE', `/api/v1/audit/${target!.id}`, staffToken)).status).toBe(403);
+  });
 });
 
 describe('备份手动端点（/backup/now、/backup/files 鉴权）', () => {

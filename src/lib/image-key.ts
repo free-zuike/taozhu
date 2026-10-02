@@ -35,20 +35,24 @@ export function parseAttachmentKey(key: string): { entity: string; id: string } 
 }
 
 /** 删除某交易的全部附件对象（分页列 + 逐个删；删除交易后调用，避免 R2 残留孤儿文件）。
- *  同时删除 attachment_refs 引用行（实体删除 → 引用删除 → 文件由孤儿清理兜底） */
+ *  同时删除 attachment_refs 引用行。顺序：**先删引用行**（引用是 in-use/下载的权威来源，
+ *  实体删除即引用删除，绝不残留"引用在文件无"的坏引用 → 其他端同步下载 404 刷屏）；
+ *  R2 文件删除失败不阻断（残留文件由孤儿扫描/清理页兜底） */
 export async function deleteEntityAttachments(env: Env, entity: string, id: string): Promise<void> {
+  try {
+    await env.DB.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind(entity, id).run();
+  } catch (_) {}
   const store: AttachmentStorage = createStorage(env);
   for (const prefix of attachmentPrefixesOf(entity, id)) {
     let cursor: string | undefined;
     do {
-      const r = await store.list(prefix, cursor);
-      for (const o of r.objects) await store.delete(o.key);
-      cursor = r.truncated ? r.cursor : undefined;
+      try {
+        const r = await store.list(prefix, cursor);
+        for (const o of r.objects) await store.delete(o.key);
+        cursor = r.truncated ? r.cursor : undefined;
+      } catch (_) {
+        break; // 单前缀删除失败即停：剩余文件交给孤儿扫描兜底，不阻断引用已删的语义
+      }
     } while (cursor);
-  }
-  try {
-    await env.DB.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind(entity, id).run();
-  } catch (_) {
-    // 引用清理失败不阻断：孤儿扫描仍可兜底
   }
 }

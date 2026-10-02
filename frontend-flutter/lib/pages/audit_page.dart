@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
 
 /// 操作审计：服务端记录的关键操作留痕（登录/删除交易/修改收款/导入导出备份等，仅老板可看）
+/// 本地优先（对齐账本/进货历史范式）：原生端先渲染本地镜像（秒开/离线可见），
+/// 网络拉取成功后覆盖写库（服务端权威全集）；删除本地镜像即时移除，不依赖重拉成败。
 class AuditPage extends StatefulWidget {
   const AuditPage({super.key});
   @override
@@ -35,18 +38,42 @@ class _AuditPageState extends State<AuditPage> {
   }
 
   Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // 原生本地优先：先渲染本地镜像（秒开/离线可见），网络成功覆盖
+    if (!kIsWeb) {
+      final local = await LocalDb.getAll('audit_logs');
+      if (mounted && local.isNotEmpty) {
+        setState(() {
+          _logs = local;
+          _loading = false;
+          _error = null;
+        });
+      }
+    }
     try {
       final d = await Api.instance.get('/audit?limit=200');
       if (!mounted) return;
+      final logs = ((d['logs'] as List?) ?? []).cast<Map<String, dynamic>>();
+      // 本地镜像 = 服务端权威全集（覆盖写：服务端已删的记录随之从本地消失）
+      if (!kIsWeb && logs.isNotEmpty) {
+        await LocalDb.putAll('audit_logs', logs);
+      }
       setState(() {
-        _logs = ((d['logs'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _logs = logs;
         _loading = false;
+        _error = null;
       });
     } catch (e) {
+      // 网络失败：原生保留本地镜像展示（离线可见）；Web 无本地回退错误态
+      if (!kIsWeb) {
+        final local = await LocalDb.getAll('audit_logs');
+        if (mounted && local.isNotEmpty) {
+          setState(() {
+            _logs = local;
+            _loading = false;
+          });
+          return;
+        }
+      }
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -80,6 +107,9 @@ class _AuditPageState extends State<AuditPage> {
       final r = await Api.instance.delete('/audit/$id');
       final deleted = (r['deleted'] as num?)?.toInt() ?? 0;
       if (deleted > 0) {
+        // 本地优先：镜像删 + 内存移除（即时消失，不依赖重拉成败；_load 仅兜底对齐）
+        if (!kIsWeb) await LocalDb.deleteOne('audit_logs', id);
+        setState(() => _logs.removeWhere((x) => '${x['id']}' == id));
         toast(context, '已删除');
       } else {
         toast(context, '删除失败：记录不存在或已被删除');
@@ -87,6 +117,8 @@ class _AuditPageState extends State<AuditPage> {
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
+      // 请求异常但服务端可能已执行删除（响应丢失）→ 强制重拉对齐，避免"删了还在直到退出重进"
+      _load();
     }
   }
 
@@ -142,9 +174,19 @@ class _AuditPageState extends State<AuditPage> {
                           final actionTxt = ('${l['action_label'] ?? ''}'.isNotEmpty
                               ? '${l['action_label']}'
                               : _actionLabel('${l['action'] ?? ''}'));
-                          final entityTxt =
-                              ('${l['entity_label'] ?? ''}'.isNotEmpty ? '${l['entity_label']}' : '${l['entity_type'] ?? ''}') +
-                                  ('${l['entity_id'] ?? ''}'.isNotEmpty ? ' ${l['entity_id']}' : '');
+                          // 标题：用户名 · 具体留痕（detail 含业务名称，如"删除了店铺品味轩"；
+                          // 旧记录无 detail 时回退到 动作+实体 拼接，不显示实体 id 长串）
+                          final entityLabel = ('${l['entity_label'] ?? ''}'.isNotEmpty
+                              ? '${l['entity_label']}'
+                              : '${l['entity_type'] ?? ''}');
+                          final verb = ['新增', '修改', '删除', '导出', '导入', '重算'].contains(actionTxt)
+                              ? '$actionTxt了'
+                              : actionTxt;
+                          final detailTxt = '${l['detail'] ?? ''}';
+                          final title = '${l['username'] ?? ''}' +
+                              (detailTxt.isNotEmpty
+                                  ? ' · $detailTxt'
+                                  : ' · ${entityLabel.isNotEmpty ? '$verb$entityLabel' : actionTxt}');
                           return Container(
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                             decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
@@ -195,7 +237,7 @@ class _AuditPageState extends State<AuditPage> {
                                     ],
                                     Expanded(
                                       child: Text(
-                                        '${l['username'] ?? ''} ${entityTxt.isNotEmpty ? '· $entityTxt' : ''}',
+                                        title,
                                         style: TextStyle(fontSize: 14, color: c.textMain, fontWeight: FontWeight.w700),
                                       ),
                                     ),

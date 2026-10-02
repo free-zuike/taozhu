@@ -10,13 +10,13 @@
     <view v-for="l in logs" :key="l.id" class="card" @longpress="remove(l)">
       <view class="head">
         <view class="left">
-          <text class="who">{{ l.username || '—' }}</text>
+          <text class="who">{{ l.username }} · {{ headLabel(l) }}</text>
           <text class="when">{{ l.created_at || '' }}</text>
         </view>
         <text class="tag">{{ l.action_label || l.action }}</text>
       </view>
       <view class="body">
-        <text class="ent">{{ l.entity_label }} <text class="eid">{{ l.entity_id || '' }}</text></text>
+        <text class="ent">{{ l.entity_label || l.entity_type || '' }}</text>
         <text class="detail">{{ l.detail || '' }}</text>
       </view>
     </view>
@@ -83,6 +83,16 @@ function onActFilter(e: { detail: { value: number } }) {
   load();
 }
 
+// 标题副语：优先显示留痕详情（含业务名称，如"删除了店铺品味轩"）；旧记录无 detail 回退动作+实体
+function headLabel(l: Log): string {
+  if (l.detail) return l.detail;
+  const act = l.action_label || l.action || '';
+  const ent = l.entity_label || l.entity_type || '';
+  const known = ['新增', '修改', '删除', '导出', '导入', '重算'];
+  const verb = known.includes(act) ? `${act}了` : act;
+  return ent ? `${verb}${ent}` : act;
+}
+
 function remove(l: Log) {
   if (!isAdmin.value) {
     uni.showToast({ title: '仅老板可删除', icon: 'none' });
@@ -99,10 +109,14 @@ function remove(l: Log) {
           uni.showToast({ title: '删除失败：记录不存在或已被删除', icon: 'none' });
           return;
         }
+        // 本地立即移除该条（即时消失，不依赖重拉成败；load 兜底对齐）
+        logs.value = logs.value.filter((x) => Number(x.id) !== Number(l.id));
         uni.showToast({ title: '已删除', icon: 'success' });
         await load();
       } catch (e) {
         uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
+        // 请求异常但服务端可能已执行删除（响应丢失）→ 强制重拉对齐，避免"删了还在直到退出重进"
+        await load();
       }
     },
   });
@@ -122,7 +136,6 @@ function remove(l: Log) {
 .tag { font-size: 20rpx; color: var(--primary); background: var(--primary-soft); border-radius: 6rpx; padding: 2rpx 10rpx; flex-shrink: 0; }
 .body { margin-top: 14rpx; }
 .ent { font-size: 24rpx; color: var(--text-sub); display: block; }
-.eid { font-size: 22rpx; color: var(--text-sub); opacity: 0.8; }
 .detail { font-size: 26rpx; color: var(--text-main); margin-top: 6rpx; display: block; word-break: break-all; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .tip-longpress { color: var(--text-sub); font-size: 22rpx; text-align: center; padding: 10rpx 0 30rpx; }

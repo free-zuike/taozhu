@@ -185,17 +185,7 @@ attachmentsRouter.get('/in-use', async (c) => {
   const db = c.env.DB;
   const out: Array<{ key: string; entity: string; id: string; file: string; size: number }> = [];
   const seen = new Set<string>();
-  // ① 引用表（权威）：entity/id/file 直接从表取，不做任何正则
-  const refRows = await db.prepare('SELECT file_key, entity, entity_id FROM attachment_refs').all<{
-    file_key: string; entity: string; entity_id: string;
-  }>();
-  for (const r of refRows.results) {
-    const file = r.file_key.split('/').pop() ?? '';
-    if (!file) continue;
-    seen.add(r.file_key);
-    out.push({ key: r.file_key, entity: r.entity, id: r.entity_id, file, size: 0 });
-  }
-  // ② 历史兜底：R2 所有附件 key 对照 D1 在用单据 id，未写入引用表的视为在用（仅一次性补列，不写表）
+  // 在用实体 id 集合（单据 id 由商品行去重聚合；② 历史兜底与 ① 引用校验共用）
   const inUse = new Map<string, Set<string>>();
   const add = (entity: string, id: string) => {
     if (!id) return;
@@ -216,6 +206,25 @@ attachmentsRouter.get('/in-use', async (c) => {
   purchases.results.forEach((r) => add('purchase', r.id));
   purchaseItems.results.forEach((r) => add('purchase_item', r.id));
   payments.results.forEach((r) => add('payment', r.id));
+  // ① 引用表（权威）：entity/id/file 直接从表取，不做任何正则
+  // 引用自愈：目标实体已删（单据/明细行物理删除）但引用行残留 → 跳过并清除，
+  // 否则每次同步 in-use 都下发坏引用 → 客户端下载 404/失败日志刷屏
+  const refRows = await db.prepare('SELECT file_key, entity, entity_id FROM attachment_refs').all<{
+    file_key: string; entity: string; entity_id: string;
+  }>();
+  for (const r of refRows.results) {
+    const file = r.file_key.split('/').pop() ?? '';
+    if (!file) continue;
+    if (!(inUse.get(r.entity) ?? new Set()).has(r.entity_id)) {
+      try {
+        await db.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind(r.entity, r.entity_id).run();
+      } catch (_) {}
+      continue;
+    }
+    seen.add(r.file_key);
+    out.push({ key: r.file_key, entity: r.entity, id: r.entity_id, file, size: 0 });
+  }
+  // ② 历史兜底：R2 所有附件 key 对照 D1 在用单据 id，未写入引用表的视为在用（仅一次性补列，不写表）
   // 附件前缀：现行规范 + 历史规范 + 根级历史（sale/s1/a.jpg）。不用空前缀扫全 bucket——
   // 全桶含备份/头像等大量对象，list 分页慢→前端 in-use 拉取超时→本地孤儿扫不出（性能根因）。
   const scanPrefixes = ['taozhu/images/attachments/', 'taozhu/attachments/', 'sale/', 'sale_item/', 'purchase/', 'purchase_item/', 'payment/'];
