@@ -48,7 +48,7 @@ class ShareInbox {
           ? 'image/png'
           : (lower.endsWith('.webp') ? 'image/webp' : 'image/jpeg');
       final cb = _onImage;
-      if (cb != null) await cb(bytes, mime);
+      if (cb != null) cb(bytes, mime);
       // 处理完清理缓存副本（下次分享同名覆盖即可，无残留积累）
       try {
         if (await f.exists()) await f.delete();
