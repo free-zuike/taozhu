@@ -579,7 +579,7 @@ class _PurchasePageState extends State<PurchasePage> {
   /// 文件名用内容 md5（与云端 R2 key 同名：本地副本=云端 basename，下载覆盖不重复，
   /// 本地/服务器计数与引用表一致）；挂载本单明细行（行级 purchase_item，进货历史/凭证
   /// 按行展示，与手动"整单凭证批量挂行"一致）；无明细（备注占位行）回退单据级 purchase/{purchaseId}。
-  Future<void> _uploadPending(String purchaseId, List<_Row> rows) async {
+  Future<void> _uploadPending(String purchaseId, List<_PRow> rows) async {
     final img = _pendingPhoto;
     if (img == null) return;
     _pendingPhoto = null;
@@ -926,7 +926,7 @@ class _PurchasePageState extends State<PurchasePage> {
     }
     toast(context, _editing ? '已保存，正在同步' : '已提交，合计 ¥${_total.toStringAsFixed(2)}');
     // 提交成功后才上传识别原图附件（App 本地写完入队后）
-    unawaited(_uploadPending(purchaseId));
+    unawaited(_uploadPending(purchaseId, valid));
     if (mounted) Navigator.pop(context, true);
     if (mounted) setState(() => _busy = false);
   }

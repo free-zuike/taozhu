@@ -1093,7 +1093,7 @@ class _SalePageState extends State<SalePage> {
     }
     toast(context, _editing ? '已保存，正在同步' : '已提交，合计 ¥${_total.toStringAsFixed(2)}');
     // 提交成功后才上传识别原图附件（App 本地写完入队后）
-    unawaited(_uploadPending(saleId));
+    unawaited(_uploadPending(saleId, valid));
     if (mounted) Navigator.pop(context, true);
     if (mounted) setState(() => _busy = false);
   }
