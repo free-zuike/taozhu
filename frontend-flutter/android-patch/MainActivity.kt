@@ -2,8 +2,10 @@ package com.taozhu.app
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import java.io.File
 import io.flutter.embedding.android.FlutterActivity
@@ -11,6 +13,53 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    // 待处理分享图片（微信/相册「分享到陶朱」）：冷启动时 Dart 侧 getPending 领取，热启动由 onShare 推送
+    companion object {
+        private val pendingShares = java.util.Collections.synchronizedList(mutableListOf<String>())
+    }
+    private var shareChannel: MethodChannel? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        handleShare(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShare(intent)
+    }
+
+    /** 接收系统/微信分享的图片：复制到应用缓存目录，路径经 MethodChannel 交给 Flutter 识别记账 */
+    private fun handleShare(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        val uri = if (android.os.Build.VERSION.SDK_INT >= 33)
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        else
+            @Suppress("DEPRECATION") intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+        if (uri == null) return
+        try {
+            val dir = File(cacheDir, "shared_images")
+            if (!dir.exists()) dir.mkdirs()
+            // 按真实 MIME 存扩展名（PNG/WebP 分享存成 .jpg 后端/模型解析会失败 1210 同款问题）
+            val type = intent?.type ?: "image/jpeg"
+            val ext = when {
+                type.contains("png") -> "png"
+                type.contains("webp") -> "webp"
+                else -> "jpg"
+            }
+            val name = "shared_${System.currentTimeMillis()}.$ext"
+            val out = File(dir, name)
+            contentResolver.openInputStream(uri)?.use { input ->
+                out.outputStream().use { output -> input.copyTo(output) }
+            }
+            val path = out.absolutePath
+            pendingShares.add(path)
+            // 热启动（App 已在运行）：直接把路径推给 Dart；冷启动 Dart 稍后 getPending 领取
+            shareChannel?.invokeMethod("onShare", path, null)
+        } catch (_: Exception) {}
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "taozhu/download")
@@ -38,6 +87,16 @@ class MainActivity : FlutterActivity() {
                     }
                 } catch (e: Exception) {
                     result.error("dl_error", e.message, null)
+                }
+            }
+        // 微信/系统分享图片 → App：Dart 侧 getPending 领取待处理图片路径列表（领完即清）
+        shareChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "taozhu/share")
+            .also { ch ->
+                ch.setMethodCallHandler { call, result ->
+                    when (call.method) {
+                        "getPending" -> result.success(pendingShares.toList().also { pendingShares.clear() })
+                        else -> result.notImplemented()
+                    }
                 }
             }
     }

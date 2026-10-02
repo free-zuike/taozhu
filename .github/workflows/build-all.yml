@@ -196,6 +196,11 @@ jobs:
           #     tools:node="remove" 对不存在的权限是 no-op，未来依赖升级也安全。
           sed -i 's|<manifest xmlns:android="http://schemas.android.com/apk/res/android">|<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<application|<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove"/><uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove"/><uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/><uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/><application|' android/app/src/main/AndroidManifest.xml
+          # ②f 微信/系统分享图片 → App 自动识别记账：MainActivity 接收 ACTION_SEND image/*
+          #    （图片「分享到陶朱」→ 复制到应用缓存 → MethodChannel 交 Flutter 识别填行，可修改后保存）
+          sed -i '0,/<intent-filter>/s//<intent-filter>\n            <action android:name="android.intent.action.SEND"\/>\n            <category android:name="android.intent.category.DEFAULT"\/>\n            <data android:mimeType="image\/*"\/>\n        <\/intent-filter>\n        <intent-filter>/' android/app/src/main/AndroidManifest.xml
+          #    分享到已运行实例走 onNewIntent（singleTask 单实例复用；模板默认可能无 launchMode → 兜底追加）
+          sed -i 's|android:launchMode="singleTop"|android:launchMode="singleTask"|; /android:launchMode/!s|android:name=".MainActivity"|android:name=".MainActivity"\n            android:launchMode="singleTask"|' android/app/src/main/AndroidManifest.xml
           # 应用内更新 = 系统下载器（DownloadManager）：重写 MainActivity，注入 MethodChannel taozhu/download
           #     后台下载 + 通知栏（下滑栏）实时进度 + 下载完成回调状态，应用退到后台/被杀仍继续下载。
           #     源码在仓库 frontend-flutter/android-patch/MainActivity.kt（不 base64 内联，便于维护）

@@ -22,7 +22,7 @@ import 'attachment_viewer.dart';
 import 'router.dart';
 
 class SalePage extends StatefulWidget {
-  const SalePage({super.key, this.editId, this.initDate, this.dateRows, this.clientId});
+  const SalePage({super.key, this.editId, this.initDate, this.dateRows, this.clientId, this.shareBytes, this.shareMime});
   /// 非空 = 编辑已有出货单（从账本进入），提交走 PATCH
   final String? editId;
   /// 新建模式预填日期（如从账本日期栏补录当天出货）；编辑模式忽略
@@ -31,6 +31,9 @@ class SalePage extends StatefulWidget {
   final List<Map<String, dynamic>>? dateRows;
   /// dateRows 模式指定店铺（该日记录同店；缺省取首行店铺）
   final String? clientId;
+  /// 微信/系统分享图片 → App：图片字节+真实 MIME（进入即自动识别填行，可修改后保存）
+  final Uint8List? shareBytes;
+  final String? shareMime;
   @override
   State<SalePage> createState() => _SalePageState();
 }
@@ -124,6 +127,40 @@ class _SalePageState extends State<SalePage> {
   void initState() {
     super.initState();
     _load();
+    _maybeShare();
+  }
+
+  /// 微信/系统分享图片进入：等商品/店铺目录就绪后自动识别填行（草稿，用户可修改后保存）
+  Future<void> _maybeShare() async {
+    final sb = widget.shareBytes;
+    if (sb == null || widget.editId != null) return;
+    try {
+      // 等 _load 完成（需要 _items/_clients 就绪才能匹配填行）；_load 未跑完最多等 3s
+      var waited = 0;
+      while (_items.isEmpty && _clients.isEmpty && waited < 3000) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        waited += 100;
+      }
+      if (!mounted) return;
+      await _parseBytes(sb, widget.shareMime ?? 'image/jpeg');
+      appLog('op', '分享图片识别：出货 ${sb.length} 字节，已填行待确认保存');
+    } catch (e) {
+      appLog('error', '分享图片识别失败：${e.toString().replaceFirst('Exception: ', '')}');
+      if (mounted) toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// 识别图片字节 → 填行草稿 + 暂存原图（拍照/相册/分享共用）
+  Future<void> _parseBytes(Uint8List bytes, String mime) async {
+    final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
+    toast(context, '识别中…');
+    final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=sale', bytes, 'photo.$ext', mime);
+    _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
+    // 识别原图暂存本地：提交交易成功后才上传为本单附件（避免取消/放弃留云端孤儿附件）
+    setState(() {
+      _pendingPhoto = bytes;
+    });
+    toast(context, '识别完成（原图将在提交后一并保存为本单附件）');
   }
 
   Future<void> _load() async {
@@ -689,15 +726,7 @@ class _SalePageState extends State<SalePage> {
       final bytes = await picked.readAsBytes();
       // 按真实 MIME 上传（相册 PNG 若标成 JPEG，后端/模型会解析失败 1210）
       final mime = picked.mimeType ?? 'image/jpeg';
-      final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
-      toast(context, '识别中…');
-      final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=sale', bytes, 'photo.$ext', mime);
-      _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
-      // 识别原图暂存本地：提交交易成功后才上传为本单附件（避免取消/放弃留云端孤儿附件）
-      setState(() {
-        _pendingPhoto = bytes;
-      });
-      toast(context, '识别完成（原图将在提交后一并保存为本单附件）');
+      await _parseBytes(bytes, mime);
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }

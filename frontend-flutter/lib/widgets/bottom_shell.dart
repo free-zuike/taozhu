@@ -1,7 +1,9 @@
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../realtime_sync.dart';
+import '../share_inbox.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../version.dart';
@@ -54,9 +56,39 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     SyncService.sync();
     // 实时同步：保持 WebSocket 连接，服务端有变更立即拉取（断线自动重连）
     RealtimeSync.instance.start();
+    // 微信/系统「分享图片 → 陶朱」：领取待处理分享并自动识别记账（可修改后保存）
+    ShareInbox.init(_handleSharedImage);
     // 强制更新检查：启动延迟静默查 latest-version 的 min_supported，当前版本低于最低支持 →
     // 弹不可关闭的更新窗（更新检查属网络动作，网络失败/Web 静默跳过，不违背本地优先）
     _checkForceUpdate();
+  }
+
+  /// 收到分享图片：弹窗选「出货/进货」→ 打开对应记单页自动识别填行（草稿可修改，确认后才保存）
+  Future<void> _handleSharedImage(Uint8List bytes, String mime) async {
+    if (!mounted) return;
+    final kind = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('分享图片记账'),
+        content: const Text('识别为哪类单据？识别结果可修改后再保存'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'purchase'),
+            child: const Text('进货'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, 'sale'),
+            child: const Text('出货'),
+          ),
+        ],
+      ),
+    );
+    if (kind == null || !mounted) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => kind == 'sale'
+          ? SalePage(shareBytes: bytes, shareMime: mime)
+          : PurchasePage(shareBytes: bytes, shareMime: mime),
+    ));
   }
 
   /// 切换 tab：首次切到才构建页面（懒加载防启动并发请求）
