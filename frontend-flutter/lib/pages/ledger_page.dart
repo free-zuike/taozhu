@@ -900,6 +900,7 @@ class _LedgerPageState extends State<LedgerPage> {
           // 删的是该条记录最后一商品 → 整条记录删除（不留空壳单，与 Web 级联语义一致）
           await SyncService.cleanupLocalAttachmentsOf('sale_item', itemId);
           await SyncService.cleanupLocalAttachmentsOf('sale', '${order['id']}');
+          await _deleteSaleRowsOf('${order['id']}', items);
           await LocalDb.deleteOne('sales', '${order['id']}');
           await SyncService.enqueueChange(
               entityType: 'sale', entitySyncId: '${order['id']}', action: 'delete', payload: {});
@@ -909,6 +910,8 @@ class _LedgerPageState extends State<LedgerPage> {
         }
         // 非末行：该行凭证附件副本一并清（attachments/sale_item/{itemId}/），再镜像移除该行
         await SyncService.cleanupLocalAttachmentsOf('sale_item', itemId);
+        // 行级 store 同步删（账本按行级渲染：只改整单镜像则删除后仍显示到全量同步）
+        await LocalDb.deleteOne('sale_items', itemId);
         final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
         payload['total'] = updatedItems.fold<double>(
             0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
@@ -957,6 +960,7 @@ class _LedgerPageState extends State<LedgerPage> {
       } else {
         // 原生：先清附件副本（需镜像 items 定位行级目录）再删本地行（立即生效），再入同步队列
         await SyncService.cleanupLocalAttachmentsOf('sale', orderId);
+        await _deleteSaleRowsOf(orderId, ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>());
         await LocalDb.deleteOne('sales', orderId);
         await SyncService.enqueueChange(
             entityType: 'sale', entitySyncId: orderId, action: 'delete', payload: {});
@@ -965,6 +969,14 @@ class _LedgerPageState extends State<LedgerPage> {
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// 整单删除：行级 store 同步删（账本按行级渲染，只删整单镜像则删除后仍显示到全量同步）
+  Future<void> _deleteSaleRowsOf(String orderId, List<Map<String, dynamic>> items) async {
+    for (final it in items) {
+      final rid = '${it['id'] ?? ''}';
+      if (rid.isNotEmpty) await LocalDb.deleteOne('sale_items', rid);
     }
   }
 

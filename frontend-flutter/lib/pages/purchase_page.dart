@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -583,8 +584,21 @@ class _PurchasePageState extends State<PurchasePage> {
     if (img == null) return;
     _pendingPhoto = null;
     try {
-      await Api.instance.uploadPhoto('/attachments?entity=purchase&id=$purchaseId', img, 'photo.$_pendingExt', _pendingMime);
-      if (mounted) toast(context, '识别图片已存为本单附件');
+      if (kIsWeb) {
+        // Web 无本地副本/同步队列：直传云端（Web 固有形态）
+        await Api.instance.uploadPhoto('/attachments?entity=purchase&id=$purchaseId', img, 'photo.$_pendingExt', _pendingMime);
+        if (mounted) toast(context, '识别图片已存为本单附件');
+      } else {
+        // 本地优先：先落本地副本（进货历史附件图标/凭证查看立即可见，不依赖同步下载）
+        // + 入队待上传（同步统一上传云端；离线挂图不变，联网后自动补传）
+        final root = await getApplicationDocumentsDirectory();
+        final dir = Directory('${root.path}/attachments/purchase/$purchaseId');
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        final fileName = 'photo.$_pendingExt';
+        await File('${dir.path}/$fileName').writeAsBytes(img);
+        await SyncService.enqueueAttachmentUpload(entity: 'purchase', id: purchaseId, fileName: fileName);
+        if (mounted) toast(context, '识别图片已存为本单附件（联网后自动上传）');
+      }
     } catch (_) {}
   }
 

@@ -518,14 +518,17 @@ class SyncService {
             } else {
               final store = _storeOf(entityType);
               if (store.isEmpty) continue;
-              // 行级商品记录（去单据化）：sale_item/purchase_item 合并进对应单据镜像的 items
+              // 行级商品记录（去单据化）：sale_item/purchase_item 双写行级 store + 单据镜像 items
+              // （账本/进货历史按行级渲染：只写镜像则跨端增删改残留，全量同步才生效）
               if (entityType == 'sale_item' || entityType == 'purchase_item') {
+                final rowStore = entityType == 'sale_item' ? 'sale_items' : 'purchase_items';
                 final orderStore = entityType == 'sale_item' ? 'sales' : 'purchases';
                 final orderId = '${payload['${entityType == 'sale_item' ? 'sale_id' : 'purchase_id'}'] ?? ''}';
                 final rowId = id;
                 final order = await LocalDb.getOne(orderStore, orderId);
                 if (action == 'delete') {
-                  // 删行：从单据镜像 items 移除该行；空则删单据（防空壳）
+                  // 删行：行级 store 同步删 + 从单据镜像 items 移除该行；空则删单据（防空壳）
+                  await LocalDb.deleteOne(rowStore, rowId);
                   if (order != null) {
                     final items = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
                     final updated = items.where((it) => '${it['id']}' != rowId).toList();
@@ -537,7 +540,8 @@ class SyncService {
                     }
                   }
                 } else {
-                  // upsert：单据存在则合并该行，不存在则按订单头建仓（兼容历史整单 pull 已先行建单）
+                  // upsert：行级 store 同步写 + 单据镜像合并该行；单据不存在则按订单头建仓（兼容历史整单 pull 已先行建单）
+                  await LocalDb.upsertOne(rowStore, payload);
                   final items = ((order?['items'] as List?) ?? []).cast<Map<String, dynamic>>();
                   final others = items.where((it) => '${it['id']}' != rowId).toList();
                   others.add(payload);
@@ -557,6 +561,17 @@ class SyncService {
                 // 镜像先删则读不到 → attachments/sale_item/{lineId}/ 漏删残留孤儿副本
                 await cleanupLocalAttachmentsOf(entityType, id);
                 await LocalDb.deleteOne(store, id);
+                // 整单删除：行级 store 同步删（账本/进货历史按行级渲染，残留会显示到全量同步）
+                if (entityType == 'sale' || entityType == 'purchase') {
+                  final rowStore = entityType == 'sale' ? 'sale_items' : 'purchase_items';
+                  final fk = entityType == 'sale' ? 'sale_id' : 'purchase_id';
+                  for (final r in await LocalDb.getAll(rowStore)) {
+                    if ('${r[fk] ?? ''}' == id) {
+                      final rid = '${r['id'] ?? ''}';
+                      if (rid.isNotEmpty) await LocalDb.deleteOne(rowStore, rid);
+                    }
+                  }
+                }
                 applied = true;
               } else {
                 // 软删（client/item deleted_at 非空）→ 本地删行（历史单据有快照不丢）
@@ -572,6 +587,26 @@ class SyncService {
                   final local = await LocalDb.getOne(store, id);
                   if (local != null && '${local['deleted_at'] ?? ''}'.isNotEmpty) continue;
                   await LocalDb.upsertOne(store, payload);
+                  // 整单 upsert（服务端快照含 items）：行级 store 按快照对齐——
+                  // 跨端删行/改行后残留的旧行随快照消失，不必等全量同步
+                  if (entityType == 'sale' || entityType == 'purchase') {
+                    final rowStore = entityType == 'sale' ? 'sale_items' : 'purchase_items';
+                    final fk = entityType == 'sale' ? 'sale_id' : 'purchase_id';
+                    final kept = <String>{};
+                    for (final raw in ((payload['items'] as List?) ?? [])) {
+                      final r = (raw as Map).cast<String, dynamic>();
+                      final rid = '${r['id'] ?? ''}';
+                      if (rid.isEmpty) continue;
+                      kept.add(rid);
+                      await LocalDb.upsertOne(rowStore, r);
+                    }
+                    for (final old in await LocalDb.getAll(rowStore)) {
+                      final oid = '${old['id'] ?? ''}';
+                      if ('${old[fk] ?? ''}' == id && oid.isNotEmpty && !kept.contains(oid)) {
+                        await LocalDb.deleteOne(rowStore, oid);
+                      }
+                    }
+                  }
                   applied = true;
                 }
               }

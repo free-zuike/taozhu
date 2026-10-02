@@ -159,6 +159,10 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
           // 删的是该条记录最后一商品 → 整条记录删除（不留空壳，与 Web 级联语义一致）
           await SyncService.cleanupLocalAttachmentsOf('purchase_item', rowId);
           await SyncService.cleanupLocalAttachmentsOf('purchase', '${order['id']}');
+          for (final it in items) {
+            final rid = '${it['id'] ?? ''}';
+            if (rid.isNotEmpty) await LocalDb.deleteOne('purchase_items', rid);
+          }
           await LocalDb.deleteOne('purchases', '${order['id']}');
           await SyncService.enqueueChange(
               entityType: 'purchase', entitySyncId: '${order['id']}', action: 'delete', payload: {});
@@ -168,6 +172,8 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
         }
         // 非末行：该行凭证附件副本一并清（attachments/purchase_item/{rowId}/），再镜像移除该行
         await SyncService.cleanupLocalAttachmentsOf('purchase_item', rowId);
+        // 行级 store 同步删（进货历史按行级渲染：只改整单镜像则删除后仍显示到全量同步）
+        await LocalDb.deleteOne('purchase_items', rowId);
         final payload = Map<String, dynamic>.from(order)..['items'] = updatedItems;
         payload['total'] = updatedItems.fold<double>(
             0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
