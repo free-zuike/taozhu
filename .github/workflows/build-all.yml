@@ -137,7 +137,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          version: 3.47.2
+          flutter-version: 3.47.2
           cache: true
 
       - name: Cache Flutter pub dependencies
@@ -319,7 +319,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          version: 3.47.2
+          flutter-version: 3.47.2
           cache: true
 
       - name: Cache Flutter pub dependencies
@@ -388,7 +388,7 @@ jobs:
         if: needs.check.outputs.has_cf == 'true'
         uses: subosito/flutter-action@v2
         with:
-          version: 3.47.2
+          flutter-version: 3.47.2
           cache: true
       - name: Cache Flutter pub dependencies
         uses: actions/cache@v4
@@ -456,7 +456,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          version: 3.47.2
+          flutter-version: 3.47.2
           cache: true
 
       - name: Cache Flutter pub dependencies (Windows)
@@ -535,7 +535,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          version: 3.47.2
+          flutter-version: 3.47.2
           cache: true
 
       - name: Cache Flutter pub dependencies
@@ -608,7 +608,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          version: 3.47.2
+          flutter-version: 3.47.2
           cache: true
 
       - name: Cache Flutter pub dependencies
