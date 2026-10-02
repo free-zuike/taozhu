@@ -631,8 +631,15 @@ class _LedgerPageState extends State<LedgerPage> {
                   Text('$y年',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSub)),
                   const SizedBox(height: 1),
-                  Text('$m月',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: c.primary)),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('$m月',
+                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: c.primary)),
+                      const SizedBox(width: 2),
+                      Icon(Icons.expand_more, size: 16, color: c.textSub),
+                    ],
+                  ),
                   const SizedBox(height: 2),
                   Text('点击切换', style: TextStyle(fontSize: 10, color: c.textSub)),
                 ],
