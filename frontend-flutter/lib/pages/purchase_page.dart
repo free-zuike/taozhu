@@ -530,31 +530,51 @@ class _PurchasePageState extends State<PurchasePage> {
 
   /// 新增商品入库：在线创建（仅老板；店员提示找老板添加）→ 加入本地目录并选中
   Future<bool> _quickAddItem(_PRow row, String name) async {
-    final categoryCtrl = TextEditingController();
+    // 分类选择（对齐提交弹窗：下拉选择现有商品分类，可无分类；原生本地镜像/Web 直连）
+    var cats = await LocalDb.getAll('categories');
+    cats = cats.where((x) => '${x['type'] ?? ''}' == 'item').toList()
+      ..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
+    if (kIsWeb) {
+      try {
+        final d = await Api.instance.get('/categories?type=item');
+        cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } catch (_) {}
+    }
+    String category = '';
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('新增商品「$name」'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: categoryCtrl,
-              decoration: const InputDecoration(labelText: '分类（可留空）'),
-            ),
-            const SizedBox(height: 8),
-            Text('单位与进价可在下方明细行直接填写', style: TextStyle(fontSize: 12, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: Text('新增商品「$name」'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('分类', style: TextStyle(fontSize: 13, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)),
+              const SizedBox(height: 6),
+              DropdownButton<String>(
+                value: category,
+                isExpanded: true,
+                items: [
+                  const DropdownMenuItem(value: '', child: Text('无分类')),
+                  for (final c in cats) DropdownMenuItem(value: '${c['id']}', child: Text('${c['name'] ?? ''}')),
+                ],
+                onChanged: (v) => setDlg(() => category = v ?? ''),
+              ),
+              const SizedBox(height: 8),
+              Text('单位与进价可在下方明细行直接填写', style: TextStyle(fontSize: 12, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('添加商品')),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('添加商品')),
-        ],
       ),
     );
     if (ok != true) return false;
     final id = await _createItem(name,
-        unit: row.unitCtrl.text.trim(), price: row.purchasePrice, category: categoryCtrl.text.trim());
+        unit: row.unitCtrl.text.trim(), price: row.purchasePrice, category: category);
     if (id == null) return false;
     final opt = _items.where((x) => '${x['id']}' == id).firstOrNull;
     if (opt != null) _selectItem(row, opt);
@@ -734,7 +754,7 @@ class _PurchasePageState extends State<PurchasePage> {
       setState(() {
         final row = (_rows.length == 1 && _rows.first.itemId == null && _rows.first.nameCtrl.text.trim().isEmpty)
             ? _rows.first
-            : (_rows..add(_PRow()..happenedAt = _dateCtrl.text.trim())).last;
+            : (_rows..add(_newPRow()..happenedAt = _dateCtrl.text.trim())).last;
         if (match != null && pr != null) {
           row.itemId = '${match['id']}';
           row.priceId = pr!['id'] as String?;
