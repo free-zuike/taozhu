@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -657,8 +658,6 @@ class _SalePageState extends State<SalePage> {
   /// AI 拍照识别：拍照或从相册选图 → 后端解析 → 匹配已有商品填行
   // 识别原图：识别成功暂存本地，提交交易成功后才上传为本单附件（避免取消/放弃留孤儿附件）
   Uint8List? _pendingPhoto;
-  String _pendingMime = 'image/jpeg';
-  String _pendingExt = 'jpg';
 
   Future<void> _aiParse() async {
     try {
@@ -697,8 +696,6 @@ class _SalePageState extends State<SalePage> {
       // 识别原图暂存本地：提交交易成功后才上传为本单附件（避免取消/放弃留云端孤儿附件）
       setState(() {
         _pendingPhoto = bytes;
-        _pendingMime = mime;
-        _pendingExt = ext;
       });
       toast(context, '识别完成（原图将在提交后一并保存为本单附件）');
     } catch (e) {
@@ -706,27 +703,49 @@ class _SalePageState extends State<SalePage> {
     }
   }
 
-  /// 提交成功后上传识别原图为本单附件（失败静默，可稍后在凭证处手动添加）
-  Future<void> _uploadPending(String saleId) async {
+  /// 提交成功后上传识别原图为本单附件（失败静默，可稍后在凭证处手动添加）。
+  /// 文件名用内容 md5（与云端 R2 key 同名：本地副本=云端 basename，下载覆盖不重复，
+  /// 本地/服务器计数与引用表一致）；挂载本单明细行（行级 sale_item，账本/凭证按行展示，
+  /// 与手动"整单凭证批量挂行"一致）；无明细（备注占位行）回退单据级 sale/{saleId}。
+  Future<void> _uploadPending(String saleId, List<_Row> rows) async {
     final img = _pendingPhoto;
     if (img == null) return;
     _pendingPhoto = null;
     try {
+      final fileName = '${md5.convert(img).toString()}.jpg';
+      // 归属本单的明细行（批量直编时原单行 origSaleId 非空不属于本单，不挂）
+      final lineIds = [
+        for (final r in rows)
+          if (r.rowId.isNotEmpty && r.origSaleId.isEmpty) r.rowId,
+      ];
       if (kIsWeb) {
-        // Web 无本地副本/同步队列：直传云端（Web 固有形态）
-        await Api.instance.uploadPhoto('/attachments?entity=sale&id=$saleId', img, 'photo.$_pendingExt', _pendingMime);
+        if (lineIds.isEmpty) {
+          await Api.instance.uploadPhoto('/attachments?entity=sale&id=$saleId', img, fileName);
+        } else {
+          for (final lid in lineIds) {
+            await Api.instance.uploadPhoto('/attachments?entity=sale_item&id=$lid', img, fileName);
+          }
+        }
         if (mounted) toast(context, '识别图片已存为本单附件');
-      } else {
-        // 本地优先：先落本地副本（账本附件图标/凭证查看立即可见，不依赖同步下载）
-        // + 入队待上传（同步统一上传云端；离线挂图不变，联网后自动补传）
-        final root = await getApplicationDocumentsDirectory();
+        return;
+      }
+      final root = await getApplicationDocumentsDirectory();
+      if (lineIds.isEmpty) {
         final dir = Directory('${root.path}/attachments/sale/$saleId');
         if (!dir.existsSync()) dir.createSync(recursive: true);
-        final fileName = 'photo.$_pendingExt';
         await File('${dir.path}/$fileName').writeAsBytes(img);
         await SyncService.enqueueAttachmentUpload(entity: 'sale', id: saleId, fileName: fileName);
-        if (mounted) toast(context, '识别图片已存为本单附件（联网后自动上传）');
+      } else {
+        for (final lid in lineIds) {
+          final ld = Directory('${root.path}/attachments/sale_item/$lid');
+          if (!ld.existsSync()) ld.createSync(recursive: true);
+          final lf = File('${ld.path}/$fileName');
+          if (lf.existsSync()) continue; // 该行已有同内容图
+          await lf.writeAsBytes(img);
+          await SyncService.enqueueAttachmentUpload(entity: 'sale_item', id: lid, fileName: fileName);
+        }
       }
+      if (mounted) toast(context, '识别图片已存为本单附件（联网后自动上传）');
     } catch (_) {}
   }
 
@@ -1019,7 +1038,7 @@ class _SalePageState extends State<SalePage> {
         }
         toast(context, '已保存');
         // 提交成功后才上传识别原图附件
-        unawaited(_uploadPending(saleId));
+        unawaited(_uploadPending(saleId, valid));
       } catch (e) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       } finally {

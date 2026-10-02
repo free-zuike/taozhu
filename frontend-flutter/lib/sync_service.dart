@@ -436,9 +436,11 @@ class SyncService {
       await p.setBool(_fullDoneKey, true);
       await _markSynced();
       // 在用附件本地副本补齐已统一在 sync() 编排末尾执行（全量/增量同一入口）
-      // 全量同步数量含全部实体（含分类、收款账户）——同步面板日志/统计口径与实体数一致
+      // 全量同步数量含全部实体（含行级商品记录与库存）——与同步面板各 store 合计口径一致，
+      // 此前漏 sale_items/purchase_items/stocks 导致"同步日志拉取 N 条"与面板数字对不上
       return clients.length + items.length + categories.length + accounts.length +
-          sales.length + purchases.length + payments.length;
+          sales.length + purchases.length + payments.length +
+          saleItemRows.length + purchaseItemRows.length + stockRows.length;
     } catch (_) {
       _lastSyncFailed = true;
       return 0;
