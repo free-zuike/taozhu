@@ -2,7 +2,7 @@
     "name" : "陶朱",
     "appid" : "",
     "description" : "通用进销存记账（陶朱）",
-    "versionName" : "0.17.266",
+    "versionName" : "0.17.267",
     "versionCode" : "1",
     "transformPx" : false,
     /* 5+App特有相关 */
@@ -51,6 +51,7 @@
     /* 小程序特有相关 */
     "mp-weixin" : {
         "appid" : "wxf33cb857c5be257a",
+        "darkmode" : true,
         "setting" : {
             "urlCheck" : false
         },

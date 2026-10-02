@@ -45,14 +45,15 @@ export function setThemeSkin(id: string) {
   uni.setStorageSync(SKIN_KEY, id);
 }
 
-/** 当前是否深色：显式 dark 优先；follow 时随系统（小程序端 systemInfo theme；Web fallback false） */
+/** 当前是否深色：显式 dark 优先；follow 时随系统（微信原生 getSystemInfoSync().theme，
+ *  需 app.json 声明 darkmode:true 才会返回 dark；uni 封装可能丢 theme 字段，直接读 wx） */
 export function isDark(): boolean {
   const m = getThemeMode();
   if (m === 'dark') return true;
   if (m === 'light') return false;
   try {
-    const si = uni.getSystemInfoSync() as unknown as { theme?: string };
-    return si.theme === 'dark';
+    const w = (globalThis as unknown as { wx?: { getSystemInfoSync?: () => { theme?: string } } }).wx;
+    return w?.getSystemInfoSync?.().theme === 'dark';
   } catch {
     return false;
   }
@@ -68,9 +69,10 @@ export function onThemeChange(cb: () => void) {
   if (sysThemeBound) return;
   sysThemeBound = true;
   try {
-    const u = uni as unknown as { onThemeChange?: (f: (res: { theme?: string }) => void) => void };
-    if (typeof u.onThemeChange === 'function') {
-      u.onThemeChange(() => themeListeners.forEach((f) => f()));
+    // 微信原生 onThemeChange（uni 可能未封装；globalThis.wx 在微信小程序运行环境恒存在）
+    const w = (globalThis as unknown as { wx?: { onThemeChange?: (f: (res: { theme?: string }) => void) => void } }).wx;
+    if (w && typeof w.onThemeChange === 'function') {
+      w.onThemeChange(() => themeListeners.forEach((f) => f()));
     }
   } catch (_) {
     // 不支持 onThemeChange 的平台静默（follow 退化为进入页面时的静态读取）

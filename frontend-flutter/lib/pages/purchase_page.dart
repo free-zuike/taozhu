@@ -774,23 +774,54 @@ class _PurchasePageState extends State<PurchasePage> {
         toast(context, '「${newNames.join('、')}」不在商品库，请让老板先添加');
         return;
       }
-      final add = await showDialog<bool>(
+      // 新商品入库分类选择：读商品分类目录（原生本地镜像/Web 直连），弹窗下拉选择（可无分类）
+      var cats = await LocalDb.getAll('categories');
+      cats = cats.where((x) => '${x['type'] ?? ''}' == 'item').toList()
+        ..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
+      if (kIsWeb) {
+        try {
+          final d = await Api.instance.get('/categories?type=item');
+          cats = ((d['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
+        } catch (_) {}
+      }
+      String category = '';
+      final picked = await showDialog<String>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('新商品入库'),
-          content: Text('「${newNames.join('、')}」不在商品库，是否加入？\n（不加入则本次无法提交）'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('不加入')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('加入商品库')),
-          ],
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) => AlertDialog(
+            title: const Text('新商品入库'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('「${newNames.join('、')}」不在商品库，是否加入？\n（不加入则本次无法提交）'),
+                const SizedBox(height: 12),
+                Text('入库分类', style: TextStyle(fontSize: 13, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)),
+                const SizedBox(height: 6),
+                DropdownButton<String>(
+                  value: category,
+                  isExpanded: true,
+                  items: [
+                    const DropdownMenuItem(value: '', child: Text('无分类')),
+                    for (final c in cats) DropdownMenuItem(value: '${c['id']}', child: Text('${c['name'] ?? ''}')),
+                  ],
+                  onChanged: (v) => setDlg(() => category = v ?? ''),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, 'no'), child: const Text('不加入')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, 'yes'), child: const Text('加入商品库')),
+            ],
+          ),
         ),
       );
-      if (add != true) return;
+      if (picked != 'yes') return;
       for (final r in _rows) {
         final name = r.nameCtrl.text.trim();
         if (name.isEmpty || r.itemId != null) continue;
         final id = await _createItem(name,
-            unit: r.unitCtrl.text.trim(), price: r.purchasePrice, category: '');
+            unit: r.unitCtrl.text.trim(), price: r.purchasePrice, category: category);
         if (id == null) return;
         final opt = _items.where((x) => '${x['id']}' == id).firstOrNull;
         if (opt != null) _selectItem(r, opt);
