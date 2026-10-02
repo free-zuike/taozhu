@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
@@ -327,6 +328,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         unawaited(SyncService.pushPending());
       }
       toast(context, '已删除，库存已回滚');
+      appLog('op', '进货 删除记录：${_date(p['happened_at'])}');
+      SyncService.version.notifyListeners();
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -409,6 +412,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         unawaited(SyncService.pushPending());
       }
       toast(context, '已删除该商品');
+      appLog('op', '进货 删除商品行：$name');
+      SyncService.version.notifyListeners();
       _load();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));

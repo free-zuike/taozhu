@@ -236,6 +236,8 @@ Future<Map<String, dynamic>?> editPurchaseLine(
     await SyncService.enqueueChange(
         entityType: 'purchase', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
     toast(context, '已保存');
+    // 本地数据已变：通知进货历史/统计页即时刷新（不再等重启）
+    SyncService.version.notifyListeners();
     return payload;
   } catch (e) {
     toast(context, e.toString().replaceFirst('Exception: ', ''));

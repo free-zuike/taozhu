@@ -173,6 +173,7 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
         unawaited(SyncService.pushPending());
       }
       toast(context, '已删除该商品');
+      SyncService.version.notifyListeners();
       _refresh();
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));

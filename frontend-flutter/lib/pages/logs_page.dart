@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
@@ -7,6 +8,8 @@ import 'router.dart';
 
 /// 日志页：默认全部，可按 错误 / 正常 / Debug 筛选（chips 显示各类条数）；
 /// 每条固定高度截断显示，点击查看完整内容，可复制或分享。
+/// **实时刷新**：页面停留期间每 2 秒轮询追加（同步/保存/附件事件即时可见，便于复现问题），
+/// 无新日志不清空重绘（保留筛选态与滚动）。
 class LogsPage extends StatefulWidget {
   const LogsPage({super.key});
   @override
@@ -17,16 +20,34 @@ class _LogsPageState extends State<LogsPage> {
   String _filter = 'all'; // all | error | info | debug
   List<LogEntry> _logs = [];
   bool _loading = true;
+  Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // 实时刷新：轮询读取日志（SharedPreferences 读写开销小，300 条上限内安全）
+    _timer = Timer.periodic(const Duration(seconds: 2), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
     final logs = await readLogs();
     if (!mounted) return;
+    // 无新日志（最新一条相同）→ 不重绘，保留筛选与滚动位置
+    if (!_loading &&
+        logs.isNotEmpty &&
+        _logs.isNotEmpty &&
+        _logs.last.time == logs.last.time &&
+        _logs.last.msg == logs.last.msg &&
+        _logs.last.level == logs.last.level) {
+      return;
+    }
     setState(() {
       _logs = logs;
       _loading = false;

@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../log.dart';
 import '../sync_service.dart';
 import '../widgets/center_sheet.dart';
 import 'router.dart';
@@ -283,6 +284,8 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         }
       }
       await _load();
+      appLog('op', '附件 添加：${widget.entity}/${widget.id}${_bulk ? '（批量 ${widget.lineIds.length} 行）' : ''}', level: 'info');
+      SyncService.version.notifyListeners(); // 账本附件图标计数/列表即时联动
       if (mounted && _items.isNotEmpty) {
         _index = _items.length - 1;
         setState(() {});
@@ -385,6 +388,8 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     toast(context, kIsWeb
         ? '已删除'
         : (localDeleted ? '已删除（稍后同步删除云端）' : '已删除（本地无副本）'));
+    appLog('op', '附件 删除：${widget.entity}/${widget.id} ${keys.length} 张', level: 'info');
+    SyncService.version.notifyListeners(); // 账本附件图标计数/列表即时联动
     final prev = _index;
     await _load();
     if (mounted && _items.isNotEmpty) {

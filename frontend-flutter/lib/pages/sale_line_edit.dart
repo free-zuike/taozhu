@@ -243,6 +243,8 @@ Future<Map<String, dynamic>?> editSaleLine(
     await SyncService.enqueueChange(
         entityType: 'sale', entitySyncId: '${order['id']}', action: 'upsert', payload: payload);
     toast(context, '已保存');
+    // 本地数据已变：通知账本/统计页即时刷新（店铺统计/顶栏汇总不再等重启）
+    SyncService.version.notifyListeners();
     return payload;
   } catch (e) {
     toast(context, e.toString().replaceFirst('Exception: ', ''));

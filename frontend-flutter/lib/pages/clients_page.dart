@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
@@ -325,6 +326,8 @@ class _ClientsPageState extends State<ClientsPage> {
       await LocalDb.deleteOne('clients', '${c['id']}');
       await SyncService.enqueueChange(entityType: 'client', entitySyncId: '${c['id']}', payload: delPayload);
       toast(context, '已删除，正在同步');
+      appLog('op', '店铺 删除：「${c['name']}」');
+      SyncService.version.notifyListeners();
     }
     _load();
   }

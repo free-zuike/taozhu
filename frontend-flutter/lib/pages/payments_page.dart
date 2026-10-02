@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_accounts.dart';
 import '../local_db.dart';
+import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../widgets/date_field.dart';
@@ -195,6 +196,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
     toast(context, waived > 0
         ? '已登记：实收 ¥${amount.toStringAsFixed(2)}，平账 ¥${waived.toStringAsFixed(2)}'
         : '已登记收款 ¥${amount.toStringAsFixed(2)}');
+    appLog('op', '收款 登记：${_clients.where((x) => '${x['id']}' == _clientId).map((x) => x['name']).firstOrNull ?? _clientId} ¥${(amount * 100).round() / 100}${waived > 0 ? '（平账 ${(waived * 100).round() / 100}）' : ''}（${_dateCtrl.text.trim()}）');
+    SyncService.version.notifyListeners();
     _amountCtrl.clear();
     _waivedCtrl.clear();
     _waivedAuto = true;

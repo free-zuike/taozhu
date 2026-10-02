@@ -820,7 +820,9 @@ class SyncService {
       } else {
         pulled = await pullChanges();
       }
-      appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条', level: 'info');
+      // 推送 0 条时标注原因（队列空 = 离线录入已由自动同步推送；避免误读为"没推送"）
+      final pendingNow = await LocalDb.getPendingChanges();
+      appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条${pushed == 0 && pendingNow.isEmpty ? '（无待推变更，此前已推送）' : ''}', level: 'info');
       // ④ 在用附件本地副本补齐（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）：
       // **await 等待附件下载完，同步中的动画/状态行才消失**（完全同步之后再消失）；
       // 单张失败内部静默跳过，下次同步自动重补，不阻塞主流程

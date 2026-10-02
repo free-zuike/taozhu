@@ -174,6 +174,8 @@ class _ItemsPageState extends State<ItemsPage> {
       await _persistDeletedId(id); // 持久删除标记（本地库只读时仍跨重启生效，商品不再出现）
       if (mounted) setState(() => _items.removeWhere((x) => '${x['id']}' == id));
       toast(context, '已删除，正在同步');
+      appLog('op', '商品 删除：「$name」');
+      SyncService.version.notifyListeners();
       // ① 本地写（tombstone 先行保证重启不复活；失败仅记日志，绝不阻断后续推送）
       try {
         if (item != null) {
