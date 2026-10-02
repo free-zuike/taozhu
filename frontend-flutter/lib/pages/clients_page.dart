@@ -134,6 +134,23 @@ class _ClientsPageState extends State<ClientsPage> {
       _clientDebt = {
         for (final id in {...s.keys, ...p.keys}) id: (s[id] ?? 0) - (p[id] ?? 0),
       };
+      // 各店第一笔记账日期（出货行/收款最早日期，与服务端 MIN(happened_at) 口径一致）
+      final firstMap = <String, String>{};
+      void take(String cid, String h) {
+        if (cid.isEmpty || h.isEmpty) return;
+        final d = h.length >= 10 ? h.substring(0, 10) : h;
+        final cur = firstMap[cid];
+        if (cur == null || d.compareTo(cur) < 0) firstMap[cid] = d;
+      }
+      try {
+        for (final x in await LocalDb.getAll('sale_items')) {
+          take('${x['client_id']}', '${x['happened_at'] ?? ''}');
+        }
+        for (final x in await LocalDb.getAll('payments')) {
+          take('${x['client_id']}', '${x['happened_at'] ?? ''}');
+        }
+      } catch (_) {}
+      _clientFirstDate = firstMap;
     }
     if (mounted) {
       setState(() {
@@ -146,9 +163,19 @@ class _ClientsPageState extends State<ClientsPage> {
   /// 各店欠款（原生本地计算 map；Web 直接用服务端字段）
   Map<String, double> _clientDebt = {};
 
+  /// 各店第一笔记账日期（原生本地聚合：本地镜像缺 first_book_date 字段，服务端 /clients 才有）
+  Map<String, String> _clientFirstDate = {};
+
   double _debt(Map<String, dynamic> c) {
     final server = ((c['sales_total'] as num?)?.toDouble() ?? 0) - ((c['paid_total'] as num?)?.toDouble() ?? 0);
     return _clientDebt['${c['id']}'] ?? server;
+  }
+
+  /// 记账起始日：本地聚合优先（原生），服务端字段兜底（Web 直连 /clients 返回 first_book_date）
+  String _firstDateOf(Map<String, dynamic> c) {
+    final local = _clientFirstDate['${c['id']}'];
+    if (local != null && local.isNotEmpty) return local;
+    return '${c['first_book_date'] ?? ''}';
   }
 
   /// 记账天数（今天 − 第一笔记账日期 + 1）
@@ -424,7 +451,7 @@ class _ClientsPageState extends State<ClientsPage> {
                               children: [
                                 Expanded(
                                   child: Column(children: [
-                                    Text('${_bookDays('${c['first_book_date'] ?? ''}')} 天',
+                                    Text('${_bookDays(_firstDateOf(c))} 天',
                                         style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _c.textMain)),
                                     const SizedBox(height: 2),
                                     Text('记账天数', style: TextStyle(fontSize: 11, color: _c.textSub)),

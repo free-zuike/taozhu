@@ -34,6 +34,8 @@ class _LedgerPageState extends State<LedgerPage> {
   List<Map<String, dynamic>> _sales = [];
   List<Map<String, dynamic>> _payments = [];
   List<Map<String, dynamic>> _clients = [];
+  /// 分类 id → 名称（本地镜像 clients 无 category_name，按 category_id 反查 categories store 归组）
+  Map<String, String> _clientCatName = {};
   String? _clientId; // 店铺维度：必选，默认第一个；无店铺时自动建「默认店铺」
   bool _isStaff = false; // 店员账号：仅当天出货视角
   bool _loading = true;
@@ -308,6 +310,11 @@ class _LedgerPageState extends State<LedgerPage> {
         : await LocalDb.getAllByName('items');
     _itemCategory = {
       for (final it in items) '${it['id']}': '${it['category'] ?? ''}',
+    };
+    // 店铺分类名映射（原生本地 clients 镜像缺 category_name，按 category_id 反查 categories）
+    final cats = kIsWeb ? <Map<String, dynamic>>[] : await LocalDb.getAllByName('categories');
+    _clientCatName = {
+      for (final cat in cats) '${cat['id']}': '${cat['name'] ?? ''}',
     };
     // 店铺选择弹层的笔数/欠款用本地全量汇总（与后端口径一致：笔数=出货单数，欠款=Σ出货-Σ收款）
     _clientStat = _localStats(allSales, allPays);
@@ -736,7 +743,12 @@ class _LedgerPageState extends State<LedgerPage> {
   Map<String, List<Map<String, dynamic>>> _clientGroups() {
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final c in _clients) {
-      final cn = '${c['category_name'] ?? ''}'.trim();
+      final server = '${c['category_name'] ?? ''}'.trim();
+      var cn = server;
+      if (cn.isEmpty) {
+        // 本地镜像缺 category_name：按 category_id 反查本地分类名
+        cn = (_clientCatName['${c['category_id'] ?? ''}'] ?? '').trim();
+      }
       (grouped[cn.isEmpty ? '未分类' : cn] ??= []).add(c);
     }
     return grouped;
