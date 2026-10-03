@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../log.dart';
@@ -287,6 +289,64 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     }
   }
 
+  /// 保存当前附件到本地：Android 存系统相册（MediaStore，10+ 免权限 / 9- 需存储权限）；
+  /// 桌面存下载目录。Web 浏览器可长按图片保存，不提供按钮。
+  Future<void> _saveCurrent() async {
+    if (_items.isEmpty || kIsWeb) return;
+    final it = _items[_index];
+    // 取图片字节：本地副本优先，无副本网络拉取（保存需要完整字节）
+    List<int> bytes = <int>[];
+    try {
+      final local = it.localPath;
+      if (local != null && File(local).existsSync()) {
+        bytes = await File(local).readAsBytes();
+      } else {
+        final key = it.allKeys.isNotEmpty ? it.allKeys.first : it.key;
+        final fullKey = key.startsWith('taozhu/')
+            ? key
+            : 'taozhu/images/attachments/${widget.entity}/${widget.id}/${key}';
+        bytes = await Api.instance.getRaw('/attachments/$fullKey');
+      }
+    } catch (e) {
+      toast(context, '获取图片失败：${e.toString().replaceFirst('Exception: ', '')}');
+      return;
+    }
+    if (bytes.isEmpty) {
+      toast(context, '图片内容为空，无法保存');
+      return;
+    }
+    final fileName = 'taozhu_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        // Android 9-（SDK<29）写公共相册需存储权限；10+ MediaStore 免权限（原生端处理）
+        final ver = Platform.operatingSystemVersion;
+        final m = RegExp(r'SDK (\d+)').firstMatch(ver);
+        final sdk = m != null ? int.tryParse(m.group(1)!) ?? 34 : 34;
+        if (sdk < 29) {
+          final st = await Permission.storage.request();
+          if (!st.isGranted) {
+            toast(context, '需要存储权限才能保存到相册，请在系统设置中开启');
+            return;
+          }
+        }
+        const ch = MethodChannel('taozhu/download');
+        await ch.invokeMethod<Object>('saveImage', {'bytes': Uint8List.fromList(bytes), 'fileName': fileName});
+        toast(context, '已保存到系统相册（Pictures/陶朱）');
+      } else {
+        // 桌面：写下载目录
+        final dir = await getDownloadsDirectory();
+        if (dir == null) {
+          toast(context, '无法获取下载目录');
+          return;
+        }
+        await File('${dir.path}/$fileName').writeAsBytes(bytes);
+        toast(context, '已保存到下载目录：$fileName');
+      }
+    } catch (e) {
+      toast(context, '保存失败：${e.toString().replaceFirst('Exception: ', '')}');
+    }
+  }
+
   Future<void> _deleteCurrent() async {
     if (_items.isEmpty) return;
     final it = _items[_index];
@@ -407,6 +467,12 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
             icon: const Icon(Icons.add_photo_alternate_outlined, color: Color(0xFF409EFF)),
             onPressed: _add,
           ),
+          if (!kIsWeb && _items.isNotEmpty)
+            IconButton(
+              tooltip: '保存到本地',
+              icon: const Icon(Icons.download_outlined, color: Color(0xFF409EFF)),
+              onPressed: _saveCurrent,
+            ),
           if (_items.isNotEmpty)
             IconButton(
               tooltip: '删除当前附件',

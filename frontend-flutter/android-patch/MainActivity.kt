@@ -1,12 +1,14 @@
 package com.taozhu.app
 
 import android.app.DownloadManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import java.io.File
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -82,6 +84,12 @@ class MainActivity : FlutterActivity() {
                         "deleteFiles" -> {
                             val names = call.argument<List<String>>("names") ?: emptyList()
                             result.success(deleteFiles(names))
+                        }
+                        "saveImage" -> {
+                            val bytes = call.argument<ByteArray>("bytes")
+                            val fileName = call.argument<String>("fileName") ?: "taozhu_${System.currentTimeMillis()}.jpg"
+                            if (bytes == null || bytes.isEmpty()) result.error("no_bytes", "图片内容为空", null)
+                            else result.success(saveImageToGallery(bytes, fileName))
                         }
                         else -> result.notImplemented()
                     }
@@ -200,5 +208,35 @@ class MainActivity : FlutterActivity() {
             }
         } catch (_: Exception) {}
         return removed
+    }
+
+    /** 保存图片到系统相册（附件"保存到本地"）：Android 10+ 走 MediaStore 免权限（RELATIVE_PATH
+     *  存 Pictures/陶朱）；Android 9- 写公共 Pictures（前端 permission_handler 已请求存储权限）。
+     *  返回保存路径/URI；失败抛异常给 Flutter 端提示。 */
+    private fun saveImageToGallery(bytes: ByteArray, fileName: String): String {
+        if (Build.VERSION.SDK_INT >= 29) {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/陶朱")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: throw Exception("相册不可用，请检查存储权限")
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                ?: throw Exception("写入相册失败")
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            return uri.toString()
+        } else {
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "陶朱")
+            if (!dir.exists()) dir.mkdirs()
+            val f = File(dir, fileName)
+            f.writeBytes(bytes)
+            // 广播扫描相册，让图库立即看到
+            try { sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(f))) } catch (_: Exception) {}
+            return f.absolutePath
+        }
     }
 }
