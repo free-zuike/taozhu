@@ -344,6 +344,39 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     }
   }
 
+  /// 重置本地附件副本：删除本地 attachments/ 目录（副本与本地引用表随同步刷新），触发同步
+  /// 从服务器重新下载在用附件——本地附件数恢复为服务器在用数（修"本地 16 / 服务器 6"这类
+  /// 旧版逐行复制遗留的多余本地副本）。服务器数据不受影响，图片不丢失。
+  Future<void> _resetLocalAttachments() async {
+    if (kIsWeb || _syncing) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('重置本地附件副本？'),
+        content: const Text('将删除本机已下载的附件图片副本，然后自动从服务器重新下载在用附件。\n\n服务器数据不受影响，图片不丢失。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('重置并重新下载')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _syncing = true);
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final dir = Directory('${root.path}/attachments');
+      if (dir.existsSync()) await dir.delete(recursive: true);
+      // 引用表由 downloadInUseAttachments 每轮同步全量刷新（putAll），无需手动清
+      await SyncService.sync().timeout(const Duration(seconds: 60));
+    } catch (_) {
+    } finally {
+      if (!mounted) return;
+      setState(() => _syncing = false);
+      _load();
+      toast(context, SyncService.lastSyncFailed ? '同步失败（网络或服务器异常）' : '已重置本地附件副本，已重新下载在用附件');
+    }
+  }
+
   String _fmtTime(String iso) {
     final t = DateTime.tryParse(iso);
     if (t == null) return '从未同步';
@@ -481,6 +514,21 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                     _diffRow(c, '附件',
                         _localSynced ? _localAttachTotal : null,
                         _attachTotalLoaded ? _serverAttachTotal : null),
+                    // 附件本地副本重置：删本地副本 → 重新下载服务器在用附件（修旧版逐行复制遗留的
+                    // 本地副本数虚高，如"本地 16 / 服务器 6"；服务器数据不受影响）
+                    if (_localSynced)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: _syncing ? null : _resetLocalAttachments,
+                            icon: const Icon(Icons.refresh, size: 16),
+                            label: const Text('重置本地附件副本（重新下载在用附件）'),
+                            style: TextButton.styleFrom(foregroundColor: c.warning),
+                          ),
+                        ),
+                      ),
                     // 总计行：7 类实体 + 附件（本地在用附件 vs 服务器全部附件）合计
                     if (_localSynced && _serverStatsLoaded)
                       _diffRow(c, '总计',
