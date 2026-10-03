@@ -661,33 +661,23 @@ class _PurchasePageState extends State<PurchasePage> {
         for (final r in rows)
           if (r.rowId.isNotEmpty && r.origPurchaseId.isEmpty) r.rowId,
       ];
+      // 识别原图=这一批商品共用的一张图：只挂一份物理文件（对齐参考实现"附件一份，
+      // 商品行独立记录"），挂在第一个商品行（行级 id 客户端生成服务器保留，不孤儿化）。
+      // 其他商品行图标"行级查空回退该单"照常显示同一张图。不再逐行复制+逐行上传。
+      final targetId = lineIds.isEmpty ? purchaseId : lineIds.first;
       if (kIsWeb) {
-        if (lineIds.isEmpty) {
-          await Api.instance.uploadPhoto('/attachments?entity=purchase&id=$purchaseId', img, fileName);
-        } else {
-          for (final lid in lineIds) {
-            await Api.instance.uploadPhoto('/attachments?entity=purchase_item&id=$lid', img, fileName);
-          }
-        }
+        await Api.instance
+            .uploadPhoto('/attachments?entity=${lineIds.isEmpty ? 'purchase' : 'purchase_item'}&id=$targetId', img, fileName);
         if (mounted) toast(context, '识别图片已存为本单附件');
         return;
       }
       final root = await getApplicationDocumentsDirectory();
-      if (lineIds.isEmpty) {
-        final dir = Directory('${root.path}/attachments/purchase/$purchaseId');
-        if (!dir.existsSync()) dir.createSync(recursive: true);
-        await File('${dir.path}/$fileName').writeAsBytes(img);
-        await SyncService.enqueueAttachmentUpload(entity: 'purchase', id: purchaseId, fileName: fileName);
-      } else {
-        for (final lid in lineIds) {
-          final ld = Directory('${root.path}/attachments/purchase_item/$lid');
-          if (!ld.existsSync()) ld.createSync(recursive: true);
-          final lf = File('${ld.path}/$fileName');
-          if (lf.existsSync()) continue; // 该行已有同内容图
-          await lf.writeAsBytes(img);
-          await SyncService.enqueueAttachmentUpload(entity: 'purchase_item', id: lid, fileName: fileName);
-        }
-      }
+      final dir = Directory('${root.path}/attachments/${lineIds.isEmpty ? 'purchase' : 'purchase_item'}/$targetId');
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      final f = File('${dir.path}/$fileName');
+      if (!f.existsSync()) await f.writeAsBytes(img);
+      await SyncService.enqueueAttachmentUpload(
+          entity: lineIds.isEmpty ? 'purchase' : 'purchase_item', id: targetId, fileName: fileName);
       if (mounted) toast(context, '识别图片已存为本单附件（联网后自动上传）');
     } catch (_) {}
   }

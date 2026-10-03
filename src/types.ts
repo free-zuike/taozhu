@@ -28,6 +28,8 @@ export interface UserRow {
   avatar?: string | null;
   totp_secret?: string | null;
   totp_enabled?: number;
+  /** 双 token：当前有效 refresh token 的签发时刻（秒）；null=旧版单 token 会话 */
+  refresh_iat?: number | null;
 }
 
 export interface ClientRow {

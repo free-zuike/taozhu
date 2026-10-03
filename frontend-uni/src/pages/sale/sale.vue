@@ -53,6 +53,30 @@
       </view>
       <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (editId ? '保存修改' : '提交出货单') }}</button>
     </view>
+
+    <!-- 新商品入库弹窗（分类两级联动：先一级后二级，对齐 App；未匹配商品不静默丢弃） -->
+    <view v-if="newItemDlg" class="mask" @click="newItemDlg = false">
+      <view class="sheet" @click.stop>
+        <text class="s-title">新商品入库</text>
+        <text class="s-sub">「{{ newPending.join('、') }}」不在商品库，是否加入？</text>
+        <picker class="pk" mode="selector" :range="newTopNames" :value="newTopIdx" @change="onNewTop">
+          <view class="pk-inner">
+            <text class="label">一级分类</text>
+            <text :class="['value', { placeholder: newTopIdx === 0 }]">{{ newTopNames[newTopIdx] || '未分类' }}</text>
+          </view>
+        </picker>
+        <picker v-if="newTopIdx > 0" class="pk" mode="selector" :range="newSubNames" :value="newSubIdx" @change="onNewSub">
+          <view class="pk-inner">
+            <text class="label">二级分类</text>
+            <text :class="['value', { placeholder: newSubIdx === 0 }]">{{ newSubNames[newSubIdx] || '未分类' }}</text>
+          </view>
+        </picker>
+        <view class="dlg-ops">
+          <button class="btn-cancel" @click="newItemDlg = false; newItemResolve(false)">不加入</button>
+          <button class="btn-ok" @click="doCreateNewItems()">加入商品库</button>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -90,6 +114,23 @@ const aiBusy = ref(false);
 const aiTip = ref('');
 // 识别原图/手动凭证：暂存待提交后上传为本单凭证（服务器单据级 sale/{id}，账本行级入口查空回退单据级可见）
 const pendingPhoto = ref('');
+
+// 新商品入库弹窗（两级分类联动，对齐 App：一级分类 → 二级分类）
+const newItemDlg = ref(false);
+const newPending = ref<string[]>([]);
+const newCats = ref<Array<{ id: string; name: string; parent_id?: string }>>([]);
+const newTopIdx = ref(0); // 0=未分类
+const newSubIdx = ref(0);
+let newItemResolve: (v: boolean) => void = () => {};
+const newTopList = computed(() => newCats.value.filter((c) => !c.parent_id));
+const newTopNames = computed(() => ['未分类', ...newTopList.value.map((c) => c.name)]);
+const newSubList = computed(() => {
+  const top = newTopList.value[newTopIdx.value - 1];
+  return top ? newCats.value.filter((c) => c.parent_id === top.id) : [];
+});
+const newSubNames = computed(() => ['未分类', ...newSubList.value.map((c) => c.name)]);
+function onNewTop(e: any) { newTopIdx.value = Number(e.detail.value); newSubIdx.value = 0; }
+function onNewSub(e: any) { newSubIdx.value = Number(e.detail.value); }
 
 onLoad((options) => {
   editId.value = options?.id || '';
@@ -405,7 +446,8 @@ function pickVoucher() {
   });
 }
 
-/// 新商品入库：识别/手输未匹配商品库的名称，提交时弹窗让用户决定是否加入商品库（不静默丢弃）
+/// 新商品入库：识别/手输未匹配商品库的名称，提交时弹窗让用户决定是否加入商品库（不静默丢弃）。
+/// 弹窗带两级分类选择（对齐 App：一级分类 → 二级分类），不再硬编码无分类（修"items 页分类空白"）。
 async function ensureNewItems(): Promise<boolean> {
   const newNames = [
     ...new Set(
@@ -418,24 +460,34 @@ async function ensureNewItems(): Promise<boolean> {
     uni.showToast({ title: `「${newNames.join('、')}」不在商品库，请让老板先添加`, icon: 'none' });
     return false;
   }
-  const go = await new Promise<boolean>((resolve) => {
-    uni.showModal({
-      title: '新商品入库',
-      content: `「${newNames.join('、')}」不在商品库，是否加入？\n（不加入则本次无法提交）`,
-      confirmText: '加入商品库',
-      cancelText: '不加入',
-      success: (r) => resolve(!!r.confirm),
-      fail: () => resolve(false),
-    });
-  });
-  if (!go) return false;
+  // 加载商品分类目录（两级；失败不阻塞，未分类也可入库）
+  try {
+    const d = await request<{ categories: Array<{ id: string; name: string; parent_id?: string }> }>('/categories?type=item', 'GET');
+    newCats.value = (d.categories || []).filter((c) => c.name && c.name.trim());
+  } catch (_) {
+    newCats.value = [];
+  }
+  newTopIdx.value = 0;
+  newSubIdx.value = 0;
+  newPending.value = newNames;
+  newItemDlg.value = true;
+  return await new Promise<boolean>((resolve) => { newItemResolve = resolve; });
+}
+
+/// 弹窗"加入商品库"：按所选一级/二级分类创建商品（category=名称快照、category_id=id 关联）
+async function doCreateNewItems() {
+  const top = newTopList.value[newTopIdx.value - 1];
+  const sub = newSubList.value[newSubIdx.value - 1];
+  const catId = sub?.id || top?.id || '';
+  const catName = sub?.name || top?.name || '';
   try {
     for (const r of rows.value) {
       const name = r.itemName?.trim();
       if (!name || r.itemId) continue;
       const d = await request<{ id: string; prices?: unknown[] | string[] }>('/items', 'POST', {
         name,
-        category: '',
+        category: catName,
+        category_id: catId,
         prices: [{ unit: r.unit || '件', purchase_price: 0, sale_price: Number(r.salePrice) || 0 }],
       });
       const pid = (d.prices as string[] | undefined)?.[0] || ((d.prices as unknown[] | undefined) as Array<{ id: string }> | undefined)?.[0]?.id || '';
@@ -445,10 +497,11 @@ async function ensureNewItems(): Promise<boolean> {
       items.value.push({ id: d.id, name, prices: [{ id: pid as string, unit: r.unit || '件', sale_price: Number(r.salePrice) || 0, purchase_price: 0 }] });
       itemNames.value.push(name);
     }
-    return true;
+    newItemDlg.value = false;
+    newItemResolve(true);
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '创建商品失败', icon: 'none' });
-    return false;
+    newItemResolve(false);
   }
 }
 
@@ -539,4 +592,14 @@ async function submit() {
 .total { font-size: 28rpx; }
 .total-num { color: #f56c6c; font-weight: bold; font-size: 34rpx; }
 .btn-submit { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 32rpx; }
+/* 新商品入库弹窗（对齐其他页 mask/sheet 弹层） */
+.mask { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); z-index: 100; display: flex; align-items: center; justify-content: center; }
+.sheet { width: 84%; background: var(--card-bg); border: var(--card-border); border-radius: 20rpx; padding: 28rpx 24rpx; }
+.s-title { display: block; font-size: 32rpx; font-weight: 600; color: var(--text-main); margin-bottom: 12rpx; }
+.s-sub { display: block; font-size: 26rpx; color: var(--text-sub); margin-bottom: 20rpx; }
+.pk { background: var(--input-bg); border-radius: 12rpx; padding: 20rpx; margin-bottom: 16rpx; }
+.pk-inner { display: flex; justify-content: space-between; align-items: center; }
+.dlg-ops { display: flex; justify-content: flex-end; gap: 20rpx; margin-top: 12rpx; }
+.btn-cancel { background: var(--card-bg); color: var(--text-sub); border: 1rpx solid var(--divider); border-radius: 12rpx; font-size: 28rpx; padding: 0 28rpx; height: 80rpx; line-height: 80rpx; }
+.btn-ok { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 28rpx; padding: 0 28rpx; height: 80rpx; line-height: 80rpx; }
 </style>

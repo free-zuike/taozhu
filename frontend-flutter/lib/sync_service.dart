@@ -265,7 +265,13 @@ class SyncService {
       try {
         final root = await getApplicationDocumentsDirectory();
         final f = File('${root.path}/attachments/$entity/$id/$fileName');
-        if (!f.existsSync()) return; // 本地副本已删（图随单据删除）→ 无需上传
+        if (!f.existsSync()) {
+          // 本地副本缺失：不静默丢弃——记日志并保留队列（可能是路径/挂载不一致，待排查；
+          // 宁留勿丢：若此时清空整队列，其他待传附件也一并丢失 = "待推送 0 但服务器没收齐"）
+          appLog('sync', '附件本地副本缺失，暂不上传：$entity/$id/$fileName（保留队列，待核实）', level: 'error');
+          failed.add(entry);
+          return;
+        }
         final bytes = await f.readAsBytes();
         Object? lastError;
         for (var attempt = 0; attempt < 3; attempt++) {
@@ -274,6 +280,7 @@ class SyncService {
                 .uploadPhoto('/attachments?entity=$entity&id=$id', bytes, fileName)
                 .timeout(const Duration(seconds: 20));
             uploaded++;
+            appLog('sync', '附件上传成功：$entity/$id/$fileName', level: 'info');
             return;
           } catch (e) {
             lastError = e;

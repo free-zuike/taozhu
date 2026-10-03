@@ -3,7 +3,7 @@
  *  （设备"在线"判定依赖此字段——只靠登录/进设备页更新会让活跃设备显示离线）。 */
 
 import type { MiddlewareHandler } from 'hono';
-import { verifyToken } from '../lib/jwt';
+import { verifyTokenFull } from '../lib/jwt';
 import type { AuthUser, Env } from '../types';
 
 /** 设备心跳节流表（每设备 60s 内最多写一次，避免高频接口打爆 D1 写） */
@@ -46,10 +46,14 @@ export const authMiddleware = (): MiddlewareHandler<{ Bindings: Env; Variables: 
     if (!header?.startsWith('Bearer ')) {
       return c.json({ error: '未登录' }, 401);
     }
-    const payload = await verifyToken(c.env.JWT_SECRET, header.slice(7));
-    if (!payload) {
+    const r = await verifyTokenFull(c.env.JWT_SECRET, header.slice(7));
+    if (!r.ok) {
+      // access 过期返回特定码 token_expired：前端 api 层识别后走静默刷新（换新 access 重放原请求）；
+      // 无效/被篡改直接视为未登录（不触发刷新，避免死循环）
+      if (r.expired) return c.json({ error: '登录已过期，请重新登录', code: 'token_expired' }, 401);
       return c.json({ error: '登录已过期，请重新登录' }, 401);
     }
+    const payload = r.payload;
     c.set('user', { id: payload.sub, username: payload.username, role: payload.role });
     heartbeat(c, payload.sub);
     await next();

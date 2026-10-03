@@ -39,7 +39,7 @@
         <view class="ops">
           <view class="attach-entry" @click.stop="showAttach('purchase_item', l.itemId, 'purchase', l.orderId)">
             <image class="attach-ic" :src="attachIconSrc" mode="aspectFit" />
-            <text v-if="(attachCounts.purchase_item[l.itemId] || 0) > 0" class="attach-cnt">{{ attachCounts.purchase_item[l.itemId] }}</text>
+            <text v-if="attachOf(l) > 0" class="attach-cnt">{{ attachOf(l) }}</text>
           </view>
           <view class="attach-entry" @click.stop="showAttach('purchase', l.orderId)">
             <image class="attach-ic" :src="attachIconSrc" mode="aspectFit" />
@@ -158,6 +158,15 @@ const itemForm = ref<{
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({ show: false, entity: 'purchase', id: '', list: [] });
 // 附件计数（行级 purchase_item / 单据级 purchase）
 const attachCounts = ref<Record<string, Record<string, number>>>({ purchase_item: {}, purchase: {} });
+
+/** 行级附件数：有行 id 按 purchase_item 查，行级空回退该单（识别原图挂首个商品行，其他行共用）；
+ *  无明细（备注占位行）直接按单据级 purchase 查 */
+function attachOf(l: { itemId: string; orderId: string }): number {
+  const m = attachCounts.value;
+  if (!l.itemId) return m.purchase[l.orderId] || 0;
+  const line = m.purchase_item[l.itemId] || 0;
+  return line > 0 ? line : (m.purchase[l.orderId] || 0);
+}
 
 onShow(async () => {
   onWs('*', load);

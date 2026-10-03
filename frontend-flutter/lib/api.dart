@@ -102,6 +102,7 @@ class Api {
     p.remove(_usernameKey);
     p.remove(_accountKey);
     p.remove(_avatarKey);
+    p.remove(_refreshTokenKey);
     p.remove(_pendingKey);
     final keys = p.getKeys().where((k) => k.startsWith(_cachePrefix)).toList();
     for (final k in keys) {
@@ -117,11 +118,57 @@ class Api {
     p.remove(_roleKey);
     p.remove(_accountKey);
     p.remove(_avatarKey);
+    p.remove(_refreshTokenKey);
     final keys = p.getKeys().where((k) => k.startsWith(_cachePrefix)).toList();
     for (final k in keys) {
       await p.remove(k);
     }
     // 保留 _usernameKey：本地库在，重登同账号显示名不丢；切换账号清库时一并清
+  }
+
+  static const _refreshTokenKey = 'taozhu_refresh_token';
+
+  Future<void> setRefreshToken(String rt) async {
+    (await SharedPreferences.getInstance()).setString(_refreshTokenKey, rt);
+  }
+
+  Future<String> getRefreshToken() async =>
+      (await SharedPreferences.getInstance()).getString(_refreshTokenKey) ?? '';
+
+  /// 双 token 静默刷新（单例防并发）：同一时刻多个请求 401 只刷一次，其余 await 同一 future。
+  /// 成功返回 true 并写新 token/refresh_token；无 refresh_token（旧版会话）或刷新失败返回 false。
+  static Future<bool>? _refreshing;
+  static Future<bool> _tryRefreshToken() {
+    final existing = _refreshing;
+    if (existing != null) return existing;
+    final f = _doRefreshToken();
+    _refreshing = f;
+    f.whenComplete(() => _refreshing = null);
+    return f;
+  }
+
+  static Future<bool> _doRefreshToken() async {
+    final rt = await Api.instance.getRefreshToken();
+    if (rt.isEmpty) return false;
+    try {
+      final base = await Api.instance._base();
+      if (base.isEmpty) return false;
+      final r = await http
+          .post(Uri.parse('$base/api/v1/auth/refresh'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'refresh_token': rt}))
+          .timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return false;
+      final d = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      final nt = d['token'] as String?;
+      if (nt == null || nt.isEmpty) return false;
+      await Api.instance.setToken(nt);
+      final nrt = d['refresh_token'] as String?;
+      if (nrt != null && nrt.isNotEmpty) await Api.instance.setRefreshToken(nrt);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// 网络异常 → 中文可读文案（SocketException/超时等原始堆栈用户看不懂）。
@@ -191,11 +238,19 @@ class Api {
     if (t != null && t.isNotEmpty) headers['Authorization'] = 'Bearer $t';
     headers['x-client'] = kIsWeb ? 'taozhu-web' : 'taozhu-app'; // 操作端标识（审计/设备）
     headers['x-device-id'] = await deviceId(); // 设备唯一 id（设备管理按台上报）
-    final res = await http.get(Uri.parse(url), headers: headers);
+    var res = await http.get(Uri.parse(url), headers: headers);
     if (res.statusCode == 404) return null;
     if (res.statusCode == 401) {
-      await clearToken();
-      throw Exception('登录已过期，请重新登录');
+      // 双 token 静默刷新后重放一次
+      if (await _tryRefreshToken()) {
+        final nt = await _token();
+        if (nt != null && nt.isNotEmpty) headers['Authorization'] = 'Bearer $nt';
+        res = await http.get(Uri.parse(url), headers: headers);
+        if (res.statusCode == 404) return null;
+      } else {
+        await clearToken();
+        throw Exception('登录已过期，请重新登录');
+      }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
     throw Exception('获取头像失败(${res.statusCode})');
@@ -314,8 +369,17 @@ class Api {
     if (_offlineMarked) _offlineMarked = false;
 
     if (res.statusCode == 401) {
-      await clearToken();
-      throw Exception('登录已过期，请重新登录');
+      // 双 token 静默刷新：access 过期 → 用 refresh_token 换新后重放原请求一次（单例防并发：
+      // 多请求同时 401 只刷一次）。无 refresh_token（旧版 7 天单 token 会话）或刷新失败
+      // 才判定"登录已过期，请重新登录"。
+      if (await _tryRefreshToken()) {
+        final nt = await _token();
+        if (nt != null && nt.isNotEmpty) headers['Authorization'] = 'Bearer $nt';
+        res = await retry();
+      } else {
+        await clearToken();
+        throw Exception('登录已过期，请重新登录');
+      }
     }
     if (res.statusCode == 426) {
       // 服务端强制更新门禁：当前版本已低于最低支持版本 → 触发全局更新窗
@@ -354,10 +418,18 @@ class Api {
     headers['x-app-version'] = APP_VERSION;
     headers['x-client'] = kIsWeb ? 'taozhu-web' : 'taozhu-app'; // 操作端标识（审计/设备）
     headers['x-device-id'] = await deviceId(); // 设备唯一 id（设备管理按台上报）
-    final res = await http.get(Uri.parse(url), headers: headers);
+    final res0 = await http.get(Uri.parse(url), headers: headers);
+    var res = res0;
     if (res.statusCode == 401) {
-      await clearToken();
-      throw Exception('登录已过期，请重新登录');
+      // 双 token 静默刷新后重放一次（备份导出等原始字节请求）
+      if (await _tryRefreshToken()) {
+        final nt = await _token();
+        if (nt != null && nt.isNotEmpty) headers['Authorization'] = 'Bearer $nt';
+        res = await http.get(Uri.parse(url), headers: headers);
+      } else {
+        await clearToken();
+        throw Exception('登录已过期，请重新登录');
+      }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
     String msg = '请求失败(${res.statusCode})';
@@ -450,11 +522,24 @@ class Api {
       final streamed = await req.send();
       res = await http.Response.fromStream(streamed);
     } catch (e) {
-      throw Exception('$e （地址: $url）');
+      // multipart 发送失败：原始 SocketException/ClientException 用户看不懂 → 中文可读
+      throw Exception(_friendlyNetError(e, path));
     }
     if (res.statusCode == 401) {
-      await clearToken();
-      throw Exception('登录已过期，请重新登录');
+      // 双 token 静默刷新后重发一次（上传请求 multipart 可重新 send）
+      if (await _tryRefreshToken()) {
+        final nt = await _token();
+        if (nt != null && nt.isNotEmpty) req.headers['Authorization'] = 'Bearer $nt';
+        try {
+          final streamed = await req.send();
+          res = await http.Response.fromStream(streamed);
+        } catch (e) {
+          throw Exception(_friendlyNetError(e, path));
+        }
+      } else {
+        await clearToken();
+        throw Exception('登录已过期，请重新登录');
+      }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) {
       if (res.bodyBytes.isEmpty) return {};
@@ -497,11 +582,24 @@ class Api {
       final streamed = await req.send();
       res = await http.Response.fromStream(streamed);
     } catch (e) {
-      throw Exception('$e （地址: $url）');
+      // multipart 发送失败：原始 SocketException/ClientException 用户看不懂 → 中文可读
+      throw Exception(_friendlyNetError(e, path));
     }
     if (res.statusCode == 401) {
-      await clearToken();
-      throw Exception('登录已过期，请重新登录');
+      // 双 token 静默刷新后重发一次（上传请求 multipart 可重新 send）
+      if (await _tryRefreshToken()) {
+        final nt = await _token();
+        if (nt != null && nt.isNotEmpty) req.headers['Authorization'] = 'Bearer $nt';
+        try {
+          final streamed = await req.send();
+          res = await http.Response.fromStream(streamed);
+        } catch (e) {
+          throw Exception(_friendlyNetError(e, path));
+        }
+      } else {
+        await clearToken();
+        throw Exception('登录已过期，请重新登录');
+      }
     }
     if (res.statusCode == 426) {
       // 服务端强制更新门禁：当前版本已低于最低支持版本 → 触发全局更新窗

@@ -19,7 +19,7 @@ import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
-import { request, getApiBase, setApiBase, setToken, setRole, getToken } from '../../api';
+import { request, getApiBase, setApiBase, setToken, setRefreshToken, setRole, getToken } from '../../api';
 import { APP_VERSION } from '../../version';
 
 const baseUrl = ref(getApiBase());
@@ -67,11 +67,15 @@ async function submit() {
         return;
       }
       setToken((d as { token: string }).token);
+      // 双 token：refresh_token 本地保存（access 过期后静默刷新用）
+      const rt = (d as { refresh_token?: string }).refresh_token;
+      if (rt) setRefreshToken(rt);
       setRole((d.user?.role as string) || '');
       uni.setStorageSync('taozhu_username', username.value.trim());
     } else {
-      const d = await request<{ token: string; user?: { role?: string } }>('/auth/bootstrap', 'POST', body);
+      const d = await request<{ token: string; refresh_token?: string; user?: { role?: string } }>('/auth/bootstrap', 'POST', body);
       setToken(d.token);
+      if (d.refresh_token) setRefreshToken(d.refresh_token);
       setRole((d.user?.role as string) || '');
       uni.setStorageSync('taozhu_username', username.value.trim());
     }

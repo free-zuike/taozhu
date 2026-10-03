@@ -177,10 +177,13 @@ const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ ke
 // 附件计数：sale_item（行级）/ sale（无明细备注行的单据级）/ payment（收款单据级）→ id → 张数
 const attachCounts = ref<Record<string, Record<string, number>>>({ sale_item: {}, sale: {}, payment: {} });
 
-/** 行级附件数：有行 id 按 sale_item 查，无明细（备注占位行）按单据级 sale 查 */
+/** 行级附件数：有行 id 按 sale_item 查，行级空回退该单（识别原图挂首个商品行，其他行共用）；
+ *  无明细（备注占位行）直接按单据级 sale 查 */
 function attachOf(l: SaleLine): number {
   const m = attachCounts.value;
-  return l.itemId ? (m.sale_item[l.itemId] || 0) : (m.sale[l.orderId] || 0);
+  if (!l.itemId) return m.sale[l.orderId] || 0;
+  const line = m.sale_item[l.itemId] || 0;
+  return line > 0 ? line : (m.sale[l.orderId] || 0);
 }
 
 /** 批量拉当前页附件数（POST /attachments/counts，一个实体一次） */
@@ -326,7 +329,7 @@ const saleGroups = computed<SaleGroup[]>(() => {
         key: `${s.id}-${it.id}`, date: d || orderDate, week: '', client_name: String(s.client_name || ''),
         item_name: String(it.item_name || ''), note: String(it.note || ''),
         sale_price: Number(it.sale_price || 0), quantity: it.quantity ?? '', unit: String(it.unit || ''),
-        amount: Number(it.amount || 0), cost_price: Number(it.cost_price || 0), category: String(it.category_name || it.category || ''),
+        amount: Number(it.amount || 0), cost_price: Number(it.cost_price || 0), category: String(it.item_category || it.category_name || it.category || ''),
         itemId: String(it.id || ''), orderId: String(s.id), order: s,
       });
     }

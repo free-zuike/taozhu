@@ -1,6 +1,6 @@
 /** 认证端点：登录 / 当前用户 / 首次管理员引导 / 个人资料（改名/改密/头像）/ 两步验证（TOTP） */
 import { Hono } from 'hono';
-import { signToken, verifyToken } from '../lib/jwt';
+import { signToken, verifyToken, verifyTokenFull } from '../lib/jwt';
 import { hashPassword, randomId, verifyPassword } from '../lib/password';
 import { randomSecret, verifyTotp } from '../lib/totp';
 import { authMiddleware } from '../middleware/auth';
@@ -33,8 +33,36 @@ authRouter.post('/bootstrap', async (c) => {
   const displayName = username.includes('@') ? username.split('@')[0] : username;
   await db.prepare('INSERT INTO users (id, username, display_name, password_hash, role) VALUES (?, ?, ?, ?, ?)')
     .bind(id, username, displayName, passwordHash, 'admin').run();
-  const token = await signToken(c.env.JWT_SECRET, { sub: id, username, role: 'admin' });
-  return c.json({ token, user: { id, username, display_name: displayName, role: 'admin' } }, 201);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const access = await signToken(c.env.JWT_SECRET, { sub: id, username, role: 'admin', typ: 'access' }, 24 * 3600, nowSec);
+  const refresh = await signToken(c.env.JWT_SECRET, { sub: id, username, role: 'admin', typ: 'refresh' }, 30 * 24 * 3600, nowSec);
+  await db.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, id).run();
+  return c.json({ token: access, refresh_token: refresh, user: { id, username, display_name: displayName, role: 'admin' } }, 201);
+});
+
+// POST /auth/refresh — 刷新访问令牌（双 token 静默续期）：
+// access 过期后前端带 refresh_token 换新（新 access + 新 refresh，旧 refresh 轮换即作废）。
+// 防重放：服务端 users.refresh_iat 必须等于该 refresh 的签发时刻（payload.iat）；
+// 改密码/踢下线时清空 refresh_iat 即全部作废。旧版单 token（无 refresh_token）不受影响。
+authRouter.post('/refresh', async (c) => {
+  const body = await c.req.json().catch(() => null) as { refresh_token?: string } | null;
+  const rt = body?.refresh_token ?? '';
+  if (!rt) return c.json({ error: '缺少刷新令牌' }, 401);
+  const r = await verifyTokenFull(c.env.JWT_SECRET, rt);
+  if (!r.ok || r.payload.typ !== 'refresh') {
+    return c.json({ error: '刷新令牌无效或已过期，请重新登录' }, 401);
+  }
+  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(r.payload.sub).first<UserRow>();
+  if (!user) return c.json({ error: '用户不存在，请重新登录' }, 401);
+  const storedIat = user.refresh_iat as number | null;
+  if (storedIat !== null && storedIat !== r.payload.iat) {
+    return c.json({ error: '刷新令牌已失效，请重新登录' }, 401);
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const access = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'access' }, 24 * 3600, nowSec);
+  const refresh = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'refresh' }, 30 * 24 * 3600, nowSec);
+  await c.env.DB.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, user.id).run();
+  return c.json({ token: access, refresh_token: refresh });
 });
 
 // POST /auth/login
@@ -77,8 +105,12 @@ authRouter.post('/login', async (c) => {
     const devVer = c.req.header('x-app-version') ?? '';
     await upsertDevice(c.env.DB, user.id, devId, `${platform}端`, platform, devIp, devVer);
   } catch (_) { /* 设备记录失败不阻断登录 */ }
-  const token = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role });
-  return c.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  // 双 token 签发（access 24h + refresh 30 天）；refresh_iat 落库：轮换/作废时按签发时刻比对（旧 refresh 立即失效）
+  const nowSec = Math.floor(Date.now() / 1000);
+  const access = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'access' }, 24 * 3600, nowSec);
+  const refresh = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'refresh' }, 30 * 24 * 3600, nowSec);
+  await c.env.DB.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, user.id).run();
+  return c.json({ token: access, refresh_token: refresh, user: { id: user.id, username: user.username, role: user.role } });
 });
 
 // 登录防爆破限流（login_attempts 表，username:IP 维度滑动窗口）：15 分钟内失败 ≥5 次锁定
@@ -138,15 +170,18 @@ authRouter.patch('/profile', authMiddleware(), async (c) => {
     displayName = dn;
   }
   let passwordHash = row.password_hash;
+  let passwordChanged = false;
   if (body?.password) {
     if (!body.old_password || !(await verifyPassword(body.old_password, row.password_hash))) {
       return c.json({ error: '旧密码不正确' }, 400);
     }
     if (body.password.length < 6) return c.json({ error: '密码至少 6 位' }, 400);
     passwordHash = await hashPassword(body.password);
+    passwordChanged = true;
   }
-  await c.env.DB.prepare('UPDATE users SET display_name = ?, password_hash = ? WHERE id = ?')
-    .bind(displayName, passwordHash, me.id).run();
+  // 改密码=会话失效：清空 refresh_iat（所有 refresh token 立即作废，其他端需重新登录）
+  await c.env.DB.prepare('UPDATE users SET display_name = ?, password_hash = ?, refresh_iat = CASE WHEN ? THEN NULL ELSE refresh_iat END WHERE id = ?')
+    .bind(displayName, passwordHash, passwordChanged ? 1 : 0, me.id).run();
   // 资料变更广播 profile_change：其他在线端收到后 syncMyProfile 拉取最新显示名（对齐参考架构 WS 分发）
   await notifyClients('profile_change');
   return c.json({ user: { id: me.id, username: row.username, display_name: displayName, role: row.role } });

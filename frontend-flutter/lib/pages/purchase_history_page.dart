@@ -39,6 +39,9 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   final Map<String, GlobalKey> _dateHeaderKeys = {};
   Timer? _scrollDebounce;
   bool _scrollPicking = false;
+  /// 附件计数：明细行（purchase_item）与单据（purchase）各一份；行级查空回退单据
+  final Map<String, int> _buyLineAttachCount = {};
+  final Map<String, int> _buyAttachCount = {};
 
   @override
   void initState() {
@@ -204,12 +207,72 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         });
       }
     }
+    unawaited(_loadAttachCounts());
     } catch (e) {
       // 任何加载异常复位 loading，不再转圈
       debugPrint('进货历史加载异常: ${e.toString().split('\n').first}');
     } finally {
       if (mounted && _loading) setState(() => _loading = false);
     }
+  }
+
+  /// 附件计数（对齐出货账本 ledger_page）：本地副本目录优先（原生，零网络），云端 counts 覆盖。
+  /// 进货按明细行 purchase_item；识别原图只挂首个商品行，其他行行级查空回退单据 purchase。
+  Future<void> _loadAttachCounts() async {
+    final lineIds = <String>[];
+    final orderIds = <String>[];
+    for (final p in _purchases) {
+      final oid = '${p['id'] ?? ''}';
+      if (oid.isNotEmpty) orderIds.add(oid);
+      for (final it in ((p['items'] as List?) ?? [])) {
+        if (it is Map) {
+          final lid = '${it['id'] ?? ''}';
+          if (lid.isNotEmpty) lineIds.add(lid);
+        }
+      }
+    }
+    if (lineIds.isEmpty && orderIds.isEmpty) return;
+    if (!kIsWeb) {
+      // ① 本地副本（原生）：attachments/{entity}/{id}/ 目录里有多少文件
+      try {
+        final root = await getApplicationDocumentsDirectory();
+        for (final e in <(String, List<String>)>[
+          ('purchase_item', lineIds),
+          ('purchase', orderIds),
+        ]) {
+          for (final id in e.$2) {
+            try {
+              final dir = Directory('${root.path}/attachments/${e.$1}/$id');
+              if (!dir.existsSync()) continue;
+              final n = dir.listSync().whereType<File>().length;
+              if (n > 0) {
+                if (!mounted) return;
+                setState(() {
+                  (e.$1 == 'purchase_item' ? _buyLineAttachCount : _buyAttachCount)[id] = n;
+                });
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    }
+    // ② 云端批量 counts（Web 直连或同步完成时精确覆盖）
+    Future<void> fetchCounts(String entity, List<String> ids, Map<String, int> into) async {
+      if (ids.isEmpty) return;
+      try {
+        final d = await Api.instance.post('/attachments/counts', {'entity': entity, 'ids': ids});
+        final m = (d['counts'] as Map?) ?? {};
+        if (!mounted) return;
+        setState(() {
+          for (final e in m.entries) {
+            final n = (e.value as num?)?.toInt() ?? 0;
+            if (n > 0) into['${e.key}'] = n;
+          }
+        });
+      } catch (_) {}
+    }
+    await fetchCounts('purchase_item', lineIds, _buyLineAttachCount);
+    await fetchCounts('purchase', orderIds, _buyAttachCount);
   }
 
   /// 行记录 → 假整单数组（同 purchase_id 归并；行自带头部字段 happened_at/note）
@@ -437,6 +500,11 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     final category = '${l['category'] ?? ''}'.trim();
     final rowId = '${l['row_id'] ?? ''}';
     final pp = (l['purchase_price'] as num?)?.toDouble() ?? 0;
+    // 行级附件：明细行独立凭证；行级查空回退该单（识别原图只挂首个商品行，其他行共用同一张图）
+    final lineAttach = rowId.isEmpty ? 0 : (_buyLineAttachCount[rowId] ?? 0);
+    final attachCount = lineAttach > 0
+        ? lineAttach
+        : (_buyAttachCount['${order['id']}'] ?? 0);
     final priceLine = StringBuffer();
     if (pp > 0) priceLine.write('进价 ¥${fmtMoney(pp)} · ');
     priceLine.write('数量 ×$qty$unit');
@@ -505,24 +573,36 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                       InkWell(
                         borderRadius: BorderRadius.circular(6),
                         onTap: () async {
+                          // 行级有独立附件看行级；行级空回退该单（识别原图挂首个商品行，后端
+                          // GET entity=purchase 会叠加该单全部行级附件，此处能看到同一张图）
+                          final isLine = lineAttach > 0;
                           await showAttachmentViewer(
                               context,
-                              rowId.isEmpty ? 'purchase' : 'purchase_item',
-                              rowId.isEmpty ? '${order['id']}' : rowId,
-                              rowId.isEmpty ? '进货单附件' : '进货明细行附件',
+                              isLine ? 'purchase_item' : 'purchase',
+                              isLine ? rowId : '${order['id']}',
+                              isLine ? '进货明细行附件' : '进货单附件',
                               // 整单凭证入口：批量挂到该单全部明细行（每行一份）
-                              lineIds: rowId.isEmpty
-                                  ? [
+                              lineIds: isLine
+                                  ? const []
+                                  : [
                                       for (final it
                                           in ((order['items'] as List?) ?? []))
                                         if (it is Map) '${it['id'] ?? ''}'
-                                    ]
-                                  : const [],
+                                    ],
                             );
+                          _loadAttachCounts();
                         },
                         child: Padding(
                           padding: const EdgeInsets.all(2),
-                          child: Icon(Icons.image_outlined, size: 15, color: c.textSub.withOpacity(0.5)),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            Icon(Icons.image_outlined, size: 15,
+                                color: attachCount > 0 ? c.primary : c.textSub.withOpacity(0.5)),
+                            if (attachCount > 0) ...[
+                              const SizedBox(width: 2),
+                              Text('$attachCount',
+                                  style: TextStyle(fontSize: 10, color: c.primary)),
+                            ],
+                          ]),
                         ),
                       ),
                     ],

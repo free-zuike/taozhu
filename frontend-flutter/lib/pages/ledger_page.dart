@@ -1540,12 +1540,15 @@ class _LedgerPageState extends State<LedgerPage> {
     final costPrice = l['cost_price'] as num?;
     final qtyNum = (l['qty_num'] as num?)?.toDouble() ?? 0;
     final note = '${l['note'] ?? ''}'.trim();
-    final category = '${l['category'] ?? ''}'.trim();
-    // 行级附件：明细行独立凭证；无明细（备注占位行）回退整单附件
+    // 分类：优先行级 item_category（服务器聚合/同步 payload 字段），本地旧镜像无该字段回退 category
+    final category = '${l['item_category'] ?? l['category'] ?? ''}'.trim();
+    // 行级附件：明细行独立凭证；无明细（备注占位行）回退整单附件；
+    // 有明细但该行无独立附件也回退该单（识别原图只挂第一个商品行，其他行共用同一张图）
     final lineId = '${l['item_id'] ?? ''}';
-    final attachCount = lineId.isEmpty
-        ? (_saleAttachCount['${order['id']}'] ?? 0)
-        : (_saleLineAttachCount[lineId] ?? 0);
+    final lineAttach = lineId.isEmpty ? 0 : (_saleLineAttachCount[lineId] ?? 0);
+    final attachCount = lineAttach > 0
+        ? lineAttach
+        : (_saleAttachCount['${order['id']}'] ?? 0);
     // 单行盈亏 = (售价 − 进价快照) × 数量；仅老板可见（店员成本被后端打码为 0 不参与计算）
     double? profit;
     if (!_isStaff && salePrice != null && costPrice != null && qtyNum > 0) {
@@ -1640,20 +1643,23 @@ class _LedgerPageState extends State<LedgerPage> {
                             InkWell(
                               borderRadius: BorderRadius.circular(6),
                               onTap: () async {
+                                // 行级有独立附件看行级；行级空回退该单（识别原图挂首个商品行，后端
+                                // GET entity=sale 会叠加该单全部行级附件，此处能看到同一张图）
+                                final isLine = lineAttach > 0;
                                 await showAttachmentViewer(
                                   context,
-                                  lineId.isEmpty ? 'sale' : 'sale_item',
-                                  lineId.isEmpty ? '${order['id']}' : lineId,
-                                  lineId.isEmpty ? '出货单附件' : '出货明细行附件',
+                                  isLine ? 'sale_item' : 'sale',
+                                  isLine ? lineId : '${order['id']}',
+                                  isLine ? '出货明细行附件' : '出货单附件',
                                   // 整单凭证入口：批量挂到该单全部明细行（每行一份）
-                                  lineIds: lineId.isEmpty
-                                      ? [
+                                  lineIds: isLine
+                                      ? const []
+                                      : [
                                           for (final it
                                               in ((order['items'] as List?) ?? []))
                                             if (it is Map)
                                               '${it['id'] ?? ''}'
-                                        ]
-                                      : const [],
+                                        ],
                                 );
                                 // 附件增删后立即刷新计数，避免图标残留/缺失（无需手动下拉）
                                 _loadAttachCounts();

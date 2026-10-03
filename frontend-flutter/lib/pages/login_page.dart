@@ -77,6 +77,9 @@ class _LoginPageState extends State<LoginPage> {
       // 带着旧账号数据/队列（如老板未推送的变更在店员账号下推送 403）= 数据串号
       final prevAccount = await Api.instance.getAccount();
       await Api.instance.setToken(d['token'] as String);
+      // 双 token：refresh_token 本地保存（access 过期后静默刷新用；旧版单 token 无此字段跳过）
+      final rt = d['refresh_token'] as String?;
+      if (rt != null && rt.isNotEmpty) await Api.instance.setRefreshToken(rt);
       await Api.instance.setRole('${(d['user'] as Map?)?['role'] ?? ''}');
       // 登录账号本地缓存（离线时账号设置页也显示）
       final newAccount = '${(d['user'] as Map?)?['username'] ?? ''}';

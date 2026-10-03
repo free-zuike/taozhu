@@ -357,6 +357,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     await ensureColumn(db, 'users', 'avatar_version', 'INTEGER NOT NULL DEFAULT 0');
     await ensureColumn(db, 'users', 'totp_secret', 'TEXT');
     await ensureColumn(db, 'users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
+    // 双 token：refresh_iat = 当前有效 refresh token 的签发时刻（秒）。/auth/refresh 轮换时
+    // 校验 payload.iat === refresh_iat（旧 refresh 立即作废防重放）；改密码/踢下线时清空即全部作废
+    await ensureColumn(db, 'users', 'refresh_iat', 'INTEGER');
     // v0.17.18.0：users 显示名 display_name（登录账号不可改，用户名=显示名可改；默认取登录账号 @ 前部分）
     if (await ensureColumn(db, 'users', 'display_name', 'TEXT')) {
       await db.prepare(
