@@ -22,6 +22,14 @@
       <view :class="['seg-item', { active: kind === 'purchase' }]" @click="switchKind('purchase')">进货</view>
     </view>
 
+    <!-- 店铺胶囊（出货视图；对齐 App：图标+店名+切换+下箭头，主色描边透明） -->
+    <view v-if="kind === 'sale'" class="shop-pill" @click="pickShop">
+      <text class="shop-ic">🏪</text>
+      <text class="shop-name">{{ shopName }}</text>
+      <text class="shop-switch">切换</text>
+      <text class="shop-caret">▾</text>
+    </view>
+
     <!-- 汇总卡（区间合计；出货/进货维度分别显示，对齐 App 汇总卡） -->
     <view class="card sum-card">
       <view v-if="kind === 'sale'" class="sum-row">
@@ -121,6 +129,10 @@ const ranges = [
 const range = ref('month');
 const customStart = ref('');
 const customEnd = ref('');
+// 店铺维度（出货视图；对齐 App：全部店铺默认，选择后各统计带 client_id）
+const shopName = ref('全部店铺');
+const shopId = ref('');
+const shopClients = ref<Array<{ id: string; name: string }>>([]);
 const kind = ref<'sale' | 'purchase'>('sale');
 const byClient = ref<ByClient[]>([]);
 const monthly = ref<Monthly[]>([]);
@@ -221,6 +233,12 @@ onHide(() => {
 async function load() {
   try {
     const { start, end } = rangeSpan();
+    const cq = kind.value === 'sale' && shopId.value ? `&client_id=${shopId.value}` : '';
+    // 店铺列表首次加载（出货维度店铺胶囊）
+    if (shopClients.value.length === 0) {
+      const cs = await request<{ clients: Array<{ id: string; name: string }> }>('/clients', 'GET').catch(() => null);
+      if (cs?.clients) shopClients.value = cs.clients;
+    }
     // 年月数据与区间/kind 无关，首次加载一次；区间数据每次刷新
     const y = await request<{ years: number[]; first_date?: string }>('/stats/years', 'GET').catch(() => null);
     if (y?.first_date) firstDate.value = y.first_date;
@@ -234,11 +252,11 @@ async function load() {
       yearLabels.value = [`${year.value} 年`];
     }
     const results = await Promise.all([
-      request<Record<string, any>>(`/stats/summary?start=${start}&end=${end}&kind=${kind.value}`, 'GET').catch(() => null),
-      request<{ days: DayRow[]; can_see_profit?: boolean }>(`/stats/daily?start=${start}&end=${end}&kind=${kind.value}`, 'GET').catch(() => null),
+      request<Record<string, any>>(`/stats/summary?start=${start}&end=${end}&kind=${kind.value}${cq}`, 'GET').catch(() => null),
+      request<{ days: DayRow[]; can_see_profit?: boolean }>(`/stats/daily?start=${start}&end=${end}&kind=${kind.value}${cq}`, 'GET').catch(() => null),
       request<{ clients: ByClient[] }>(`/stats/clients?start=${start}&end=${end}`, 'GET').catch(() => null),
       request<{ months: Monthly[]; can_see_profit?: boolean }>(`/stats/monthly-flow?year=${year.value}`, 'GET').catch(() => null),
-      request<{ categories?: Array<{ category: string; quantity: number; amount: number }> }>(`/stats/categories?start=${start}&end=${end}&kind=${kind.value}`, 'GET').catch(() => null),
+      request<{ categories?: Array<{ category: string; quantity: number; amount: number }> }>(`/stats/categories?start=${start}&end=${end}&kind=${kind.value}${cq}`, 'GET').catch(() => null),
     ]);
     const s = results[0];
     if (s) {
@@ -298,6 +316,26 @@ function switchKind(k: 'sale' | 'purchase') {
   load();
 }
 
+function pickShop() {
+  uni.showActionSheet({
+    itemList: ['全部店铺', ...shopClients.value.map((c) => c.name)],
+    success: (r) => {
+      const idx = r.tapIndex;
+      if (idx === 0) {
+        shopId.value = '';
+        shopName.value = '全部店铺';
+      } else {
+        const c = shopClients.value[idx - 1];
+        if (c) {
+          shopId.value = c.id;
+          shopName.value = c.name;
+        }
+      }
+      load();
+    },
+  });
+}
+
 async function onYear(e: { detail: { value: number } }) {
   const y = years.value[e.detail.value];
   if (!y) return;
@@ -323,7 +361,13 @@ async function onYear(e: { detail: { value: number } }) {
 .seg { display: flex; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; }
 .seg-item { flex: 1; text-align: center; font-size: 26rpx; color: var(--text-sub); padding: 12rpx 0; border-radius: 8rpx; }
 .seg-item.active { color: #fff; background: var(--primary); font-weight: 600; }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
+/* 店铺胶囊（对齐 App：主色描边透明，图标+店名+切换+下箭头） */
+.shop-pill { display: flex; align-items: center; border: 1rpx solid var(--primary); border-radius: 20rpx; padding: 14rpx 20rpx; margin-bottom: 16rpx; }
+.shop-ic { font-size: 28rpx; margin-right: 10rpx; }
+.shop-name { flex: 1; font-size: 28rpx; font-weight: 600; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shop-switch { font-size: 22rpx; color: var(--primary); }
+.shop-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 4rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .card-title { display: flex; justify-content: space-between; align-items: center; font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .range-txt { font-size: 22rpx; color: var(--text-sub); font-weight: normal; }
 /* 汇总卡透明（对齐 App 统计头透明：数字直露在渐变背景上，仅下方分隔线） */

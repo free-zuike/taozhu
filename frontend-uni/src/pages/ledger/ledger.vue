@@ -9,12 +9,17 @@
       <text class="export-btn" @click="exportCsv">导出 CSV</text>
     </view>
 
-    <!-- 月度卡（对齐 App：月份居中点击切换 + 四列统计；列表滚动联动月份跟随） -->
+    <!-- 月度卡（对齐 App：左侧年月两层点击切换 + 竖线 + 右侧四列统计；列表全量，月份只影响统计卡） -->
     <view class="month-card">
-      <view class="month-head" @click="pickMonth">
-        <text class="month-label">{{ selYear }}年{{ selMonth }}月</text>
-        <text class="month-caret">▾</text>
+      <view class="month-left" @click="pickMonth">
+        <text class="month-y">{{ selYear }}年</text>
+        <view class="month-row">
+          <text class="month-m">{{ selMonth }}月</text>
+          <text class="month-caret">▾</text>
+        </view>
+        <text class="month-tip">点击切换</text>
       </view>
+      <view class="mdivider"></view>
       <view class="mcols">
         <view class="mcol"><text class="ml">售出</text><text class="mv" style="color:var(--primary)">¥{{ fmtNum(mSold) }}</text></view>
         <view class="mcol"><text class="ml">收入</text><text class="mv" :style="{ color: mIncome > 0 ? '#22c55e' : '#f59e0b' }">¥{{ fmtNum(mIncome) }}</text></view>
@@ -116,7 +121,7 @@
       </view>
     </view>
 
-    <!-- 单商品编辑弹层：点击明细行 = 只编辑该商品（数量/售价/单位/日期，对齐 App 单行编辑） -->
+    <!-- 单商品编辑弹层：点击明细行 = 只编辑该商品（数量/售价/单位/日期/备注，对齐 App 单行编辑） -->
     <view v-if="itemForm.show" class="mask" @click="itemForm.show = false">
       <view class="sheet" @click.stop>
         <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
@@ -124,6 +129,7 @@
         <input class="ipt" v-model="itemForm.unit" placeholder="单位（斤/件/箱…）" />
         <input class="ipt" v-model="itemForm.salePrice" type="digit" :placeholder="itemForm.isPurchase ? '进价（元）' : '售价（元）'" />
         <input class="ipt" v-model="itemForm.date" placeholder="日期 YYYY-MM-DD" />
+        <input class="ipt" v-model="itemForm.note" placeholder="备注（选填）" />
         <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
       </view>
     </view>
@@ -156,11 +162,11 @@ const payForm = ref<{
   show: boolean; id: string; amount: string; date: string; method: string; methodIdx: number; note: string;
 }>({ show: false, id: '', amount: '', date: '', method: '', methodIdx: 0, note: '' });
 
-// 单商品编辑（明细行级）：只改该商品数量/售价/单位/日期——数据本就是按明细行独立存储
+// 单商品编辑（明细行级）：只改该商品数量/售价/单位/日期/备注——数据本就是按明细行独立存储
 const itemForm = ref<{
   show: boolean; isPurchase: boolean; saleId: string; itemId: string; itemName: string;
-  quantity: string; unit: string; salePrice: string; date: string;
-}>({ show: false, isPurchase: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', date: '' });
+  quantity: string; unit: string; salePrice: string; date: string; note: string;
+}>({ show: false, isPurchase: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', date: '', note: '' });
 
 // ── 附件凭证 ──
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({
@@ -349,7 +355,7 @@ function shiftMonth(delta: number) {
   }
   selYear.value = y;
   selMonth.value = m;
-  load();
+  loadMonthly();
 }
 function pickMonth() {
   uni.showActionSheet({
@@ -360,7 +366,7 @@ function pickMonth() {
       else if (r.tapIndex === 2) {
         selYear.value = new Date().getFullYear();
         selMonth.value = new Date().getMonth() + 1;
-        load();
+        loadMonthly();
       }
     },
   });
@@ -419,14 +425,12 @@ function onEditMethod(e: { detail: { value: number } }) {
 
 async function load() {
   try {
-    const { from, to } = monthRange();
+    // 列表始终显示全部数据（对齐 App：月份切换只影响顶部统计卡，列表不按月过滤）
     const cq = filterClientId.value ? `&client_id=${filterClientId.value}` : '';
     const results = await Promise.all([
       // 出货/收款按店铺过滤；进货已在独立 tab（purchase-history），交易页不再拉进货
-      request<{ sales: any[]; sale_items?: any[] }>(`/sales?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
-      request<{ payments: any[] }>(`/payments?date_from=${from}&date_to=${to}&limit=200${cq}`, 'GET'),
-      // 月度结余（对齐 App _loadMonthly 口径）：售出/收入/未回款/结余=毛利（售出−成本）
-      request<Record<string, any>>(`/stats/summary?start=${from}&end=${to}${cq}`, 'GET').catch(() => null),
+      request<{ sales: any[]; sale_items?: any[] }>(`/sales?limit=500${cq}`, 'GET'),
+      request<{ payments: any[] }>(`/payments?limit=500${cq}`, 'GET'),
     ]);
     // 去单据化主结构：优先行级 sale_items（每条商品一行，自带店铺/日期/备注），否则整单嵌套兼容
     const saleItems = results[0].sale_items;
@@ -434,16 +438,27 @@ async function load() {
         ? assembleSalesFromRows(saleItems)
         : (results[0].sales || []);
     payments.value = results[1].payments;
-    const sum = results[2];
+    await loadMonthly();
+    loadAttachCounts();
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
+  }
+}
+
+/// 所选月份统计卡（售出/收入/未回款/结余=毛利），月份切换只重算此处，列表保持全量
+async function loadMonthly() {
+  try {
+    const { from, to } = monthRange();
+    const cq = filterClientId.value ? `&client_id=${filterClientId.value}` : '';
+    const sum = await request<Record<string, any>>(`/stats/summary?start=${from}&end=${to}${cq}`, 'GET').catch(() => null);
     if (sum) {
       mSold.value = Number(sum.sales_total || 0);
       mIncome.value = Number(sum.paid_total || 0);
       mDebt.value = Number(sum.debt || 0);
       mBalance.value = Number(sum.gross_profit || 0);
     }
-    loadAttachCounts();
   } catch (e) {
-    uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
+    // 统计失败不阻断列表
   }
 }
 
@@ -551,6 +566,7 @@ function editSaleLine(l: SaleLine) {
     unit: String(l.unit || ''),
     salePrice: String(l.sale_price ?? ''),
     date: l.date.slice(0, 10),
+    note: String(l.note ?? ''),
   };
 }
 
@@ -587,10 +603,11 @@ function editSaleItem(s: Record<string, any>, it: Record<string, any>) {
     unit: String(it.unit || ''),
     salePrice: String(it.sale_price ?? ''),
     date: String(it.happened_at || s.happened_at || '').slice(0, 10),
+    note: String(it.note ?? ''),
   };
 }
 
-// 点进货明细行 → 只编辑该商品（进价/数量/单位/日期）
+// 点进货明细行 → 只编辑该商品（进价/数量/单位/日期/备注）
 function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
   itemForm.value = {
     show: true,
@@ -602,6 +619,7 @@ function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
     unit: String(it.unit || ''),
     salePrice: String(it.purchase_price ?? it.price ?? ''),
     date: String(it.happened_at || p.happened_at || '').slice(0, 10),
+    note: String(it.note ?? ''),
   };
 }
 
@@ -623,6 +641,7 @@ async function saveItem() {
         unit: itemForm.value.unit,
         purchase_price: Number(itemForm.value.salePrice) || 0,
         happened_at: itemForm.value.date,
+        note: itemForm.value.note,
       });
     } else {
       await request(`/sales/items/${itemForm.value.itemId}`, 'PATCH', {
@@ -630,6 +649,7 @@ async function saveItem() {
         unit: itemForm.value.unit,
         sale_price: Number(itemForm.value.salePrice) || 0,
         happened_at: itemForm.value.date,
+        note: itemForm.value.note,
       });
     }
     uni.showToast({ title: '已保存', icon: 'success' });
@@ -724,18 +744,25 @@ async function removePayment(p: Record<string, any>) {
 .month-nav { display: flex; align-items: center; }
 .month-label { font-size: 28rpx; font-weight: bold; }
 .month-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 6rpx; }
-/* 月度结余四列卡（对齐 App 月度卡：四列横排） */
-.month-card { display: flex; background: transparent; border: none; box-shadow: none; border-radius: 0; padding: 4rpx 0 8rpx; margin-bottom: 4rpx; }
-.mcols { display: flex; } /* 四列容器：横排（缺此样式时 mcol 块级堆叠=竖排） */
-.mcol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6rpx; }
+/* 月度结余卡（对齐 App：左年月两层 + 竖线 + 右四列左对齐；透明无卡底） */
+.month-card { display: flex; align-items: center; background: transparent; border: none; box-shadow: none; border-radius: 0; padding: 4rpx 0 12rpx; margin-bottom: 4rpx; }
+.month-left { display: flex; flex-direction: column; align-items: center; justify-content: center; padding-right: 20rpx; }
+.month-y { font-size: 24rpx; font-weight: 600; color: var(--text-sub); line-height: 1.3; }
+.month-row { display: flex; align-items: center; gap: 4rpx; }
+.month-m { font-size: 40rpx; font-weight: 800; color: var(--primary); line-height: 1.2; }
+.month-caret { font-size: 22rpx; color: var(--text-sub); }
+.month-tip { font-size: 20rpx; color: var(--text-sub); }
+.mdivider { width: 1rpx; height: 80rpx; background: var(--divider); }
+.mcols { flex: 1; display: flex; margin-left: 20rpx; } /* 四列容器：横排 */
+.mcol { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 6rpx; padding-right: 8rpx; }
 .ml { font-size: 22rpx; color: var(--text-sub); }
-.mv { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
+.mv { font-size: 30rpx; font-weight: bold; color: var(--text-main); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .client-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
 .export-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; flex-shrink: 0; }
 .seg { display: flex; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden;}
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }

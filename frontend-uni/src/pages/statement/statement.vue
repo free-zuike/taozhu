@@ -205,7 +205,7 @@ function copyCsv() {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 20rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 20rpx; }
 .field { margin-bottom: 20rpx; }
 .field-inner { display: flex; justify-content: space-between; }
 .label { color: var(--text-sub); font-size: 26rpx; }

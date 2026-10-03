@@ -138,7 +138,7 @@ function go(url: string) {
 /* 两列网格：小程序对 flex gap / calc(50% - x) 兼容性差，用 48% + space-between 最稳 */
 .cards { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
 .card {
-  width: 48%; background: var(--card-bg); border-radius: 16rpx;
+  width: 48%; background: var(--card-bg); border-radius: 24rpx;
   padding: 22rpx 20rpx; box-sizing: border-box; margin-bottom: 16rpx; }
 .cl { display: block; color: var(--text-sub); font-size: 26rpx; margin-bottom: 10rpx; }
 .cv { font-size: 38rpx; font-weight: bold; }

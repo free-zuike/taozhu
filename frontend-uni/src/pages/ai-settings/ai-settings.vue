@@ -209,7 +209,7 @@ async function testAll() {
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { padding: 24rpx;  min-height: 100vh;  background: var(--page-bg); }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 8rpx 24rpx; margin-bottom: 24rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 8rpx 24rpx; margin-bottom: 24rpx; }
 .p-head { display: flex; align-items: center; justify-content: space-between; padding: 20rpx 0 8rpx; }
 .p-info { display: flex; align-items: center; gap: 14rpx; }
 .p-name { font-size: 28rpx; color: var(--text-main); }

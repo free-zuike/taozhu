@@ -125,7 +125,7 @@ function remove(u: User) {
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; }
 .name { font-size: 30rpx; font-weight: bold; }
 .role { margin-left: 16rpx; font-size: 24rpx; color: var(--primary); background: var(--primary-soft); border-radius: 8rpx; padding: 4rpx 12rpx; }

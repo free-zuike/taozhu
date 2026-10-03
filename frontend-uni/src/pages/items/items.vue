@@ -258,7 +258,7 @@ async function remove(id: string) {
 .page { min-height: 100vh;  background: var(--page-bg); }
 .search { background: var(--card-bg); border-radius: 12rpx; padding: 18rpx 24rpx; margin-bottom: 20rpx; font-size: 28rpx; }
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; margin-bottom: 12rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .cat { margin-left: 16rpx; font-size: 24rpx; color: var(--text-sub); }

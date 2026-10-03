@@ -24,20 +24,23 @@
 
     <!-- 明细行 -->
     <view v-for="(row, i) in rows" :key="i" class="row">
-      <picker class="picker" mode="selector" :range="itemNames" @change="(e) => onItem(i, e.detail.value)">
-        <view class="mini-field">{{ row.itemName || '选商品' }}</view>
-      </picker>
-      <picker class="picker" mode="selector" :range="row.priceLabels" @change="(e) => onPrice(i, e.detail.value)">
-        <view class="mini-field">{{ row.priceLabel || '单位' }}</view>
-      </picker>
-      <input class="num" type="digit" v-model="row.quantity" placeholder="数量" />
-      <input class="num" type="digit" v-model="row.salePrice" placeholder="单价" />
-      <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折${row.countUnit}`" />
-      <picker class="date-pick" mode="date" :value="row.happenedAt || date" @change="(e) => (row.happenedAt = e.detail.value)">
-        <view class="mini-field">{{ row.happenedAt ? row.happenedAt.slice(5) : '日期' }}</view>
-      </picker>
-      <text class="amt">¥{{ rowAmount(row) }}</text>
-      <text class="del" @click="rows.splice(i, 1)">删</text>
+      <view class="row-main">
+        <picker class="picker" mode="selector" :range="itemNames" @change="(e) => onItem(i, e.detail.value)">
+          <view class="mini-field">{{ row.itemName || '选商品' }}</view>
+        </picker>
+        <picker class="picker" mode="selector" :range="row.priceLabels" @change="(e) => onPrice(i, e.detail.value)">
+          <view class="mini-field">{{ row.priceLabel || '单位' }}</view>
+        </picker>
+        <input class="num" type="digit" v-model="row.quantity" placeholder="数量" />
+        <input class="num" type="digit" v-model="row.salePrice" placeholder="单价" />
+        <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折${row.countUnit}`" />
+        <picker class="date-pick" mode="date" :value="row.happenedAt || date" @change="(e) => (row.happenedAt = e.detail.value)">
+          <view class="mini-field">{{ row.happenedAt ? row.happenedAt.slice(5) : '日期' }}</view>
+        </picker>
+        <text class="amt">¥{{ rowAmount(row) }}</text>
+        <text class="del" @click="rows.splice(i, 1)">删</text>
+      </view>
+      <input class="row-note" v-model="row.note" placeholder="行备注（选填）" />
     </view>
     <input class="ipt-note" v-model="note" placeholder="整单备注（选填，如：赊账/送货单号…）" />
 
@@ -512,9 +515,10 @@ async function submit() {
 .value { color: var(--text-main); }
 .placeholder { color: var(--text-sub); }
 .row {
-  display: flex; align-items: center; gap: 12rpx;
   background: var(--card-bg); border-radius: 12rpx; padding: 16rpx; margin-bottom: 12rpx;
 }
+.row-main { display: flex; align-items: center; gap: 12rpx; }
+.row-note { background: var(--input-bg); border-radius: 8rpx; padding: 10rpx 14rpx; font-size: 22rpx; margin-top: 10rpx; width: 100%; box-sizing: border-box; }
 .picker { flex: 1; min-width: 0; }
 .date-pick { width: 96rpx; flex-shrink: 0; }
 .mini-field {

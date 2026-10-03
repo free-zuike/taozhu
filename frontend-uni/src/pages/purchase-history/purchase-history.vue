@@ -1,15 +1,21 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <!-- 月份（点击切换）+ 月度支出卡（对齐 App 进货页：仅支出统计） -->
+    <!-- 月份 + 进货统计同一行（对齐 App：左年月两层 + 竖线 + 右三列：进货金额/天数/商品件数；列表全量，月份只影响统计） -->
     <view class="month-card">
-      <view class="month-head" @click="pickMonth">
-        <text class="month-label">{{ selYear }}年{{ selMonth }}月</text>
-        <text class="month-caret">▾</text>
+      <view class="month-left" @click="pickMonth">
+        <text class="month-y">{{ selYear }}年</text>
+        <view class="month-row">
+          <text class="month-m">{{ selMonth }}月</text>
+          <text class="month-caret">▾</text>
+        </view>
+        <text class="month-tip">点击切换</text>
       </view>
-      <view class="mexpense">
-        <text class="ml">本月进货支出</text>
-        <text class="mv red">¥{{ fmt(mExpense) }}</text>
+      <view class="mdivider"></view>
+      <view class="mcols3">
+        <view class="mcol3"><text class="mv red">¥{{ fmt(mExpense) }}</text><text class="ml">进货金额</text></view>
+        <view class="mcol3"><text class="mv">{{ mDays }}</text><text class="ml">天数</text></view>
+        <view class="mcol3"><text class="mv">{{ mItems }}</text><text class="ml">商品件数</text></view>
       </view>
     </view>
 
@@ -93,6 +99,8 @@ const selYear = ref(new Date().getFullYear());
 const selMonth = ref(new Date().getMonth() + 1);
 const purchases = ref<Array<Record<string, any>>>([]);
 const mExpense = ref(0);
+const mDays = ref(0);
+const mItems = ref(0);
 const saving = ref(false);
 const fmt = (n: number) => Number(n || 0).toFixed(2);
 
@@ -181,7 +189,7 @@ function shiftMonth(delta: number) {
   }
   selYear.value = y;
   selMonth.value = m;
-  load();
+  calcMonthly();
 }
 
 function pickMonth() {
@@ -193,7 +201,7 @@ function pickMonth() {
       else if (r.tapIndex === 2) {
         selYear.value = new Date().getFullYear();
         selMonth.value = new Date().getMonth() + 1;
-        load();
+        calcMonthly();
       }
     },
   });
@@ -201,22 +209,52 @@ function pickMonth() {
 
 async function load() {
   try {
-    const { from, to } = monthRange();
+    // 列表始终显示全部数据（对齐 App：月份切换只影响顶部统计，列表不按月过滤）
     const results = await Promise.all([
-      request<{ purchases: any[]; purchase_items?: any[] }>(`/purchases?date_from=${from}&date_to=${to}&limit=200`, 'GET'),
-      request<Record<string, any>>(`/stats/summary?start=${from}&end=${to}`, 'GET').catch(() => null),
+      request<{ purchases: any[]; purchase_items?: any[] }>(`/purchases?limit=500`, 'GET'),
+      request<Record<string, any>>(`/stats/years`, 'GET').catch(() => null),
     ]);
     // 去单据化主结构：优先行级 purchase_items（每条商品一行），否则整单嵌套兼容
     const purchaseItems = results[0].purchase_items;
     purchases.value = (purchaseItems && purchaseItems.length > 0)
         ? assembleFromRows(purchaseItems)
         : (results[0].purchases || []);
-    const sum = results[1];
-    if (sum) mExpense.value = Number(sum.purchase_total || 0);
+    // 当月统计（行级口径：金额/天数/件数按行日期归月度，对齐 App _filterByRange）
+    calcMonthly();
     loadAttachCounts();
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
+}
+
+/// 当月进货统计（列表全量，按所选月份计算三列：进货金额/天数/商品件数）
+function calcMonthly() {
+  const { from, to } = monthRange();
+  const daySet = new Set<string>();
+  let expense = 0;
+  let itemCount = 0;
+  for (const p of purchases.value) {
+    const orderDate = String(p.happened_at || '').slice(0, 10);
+    const items = (p.items as Array<Record<string, any>>) || [];
+    if (items.length === 0) {
+      if (orderDate && orderDate >= from && orderDate <= to) {
+        daySet.add(orderDate);
+        expense += Number(p.total || 0);
+        itemCount += 1;
+      }
+      continue;
+    }
+    for (const it of items) {
+      const d = String(it.happened_at || orderDate).slice(0, 10);
+      if (!d || d < from || d > to) continue;
+      daySet.add(d);
+      expense += Number(it.amount || 0);
+      itemCount += 1;
+    }
+  }
+  mExpense.value = Math.round(expense * 100) / 100;
+  mDays.value = daySet.size;
+  mItems.value = itemCount;
 }
 
 // 行级商品记录 → 假整单数组（同 purchase_id 归并；渲染代码零改动）
@@ -414,15 +452,20 @@ async function loadAttachCounts() {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
-.month-card { background: transparent; border: none; border-radius: 0; padding: 4rpx 0 12rpx; margin-bottom: 4rpx; }
-.month-head { display: flex; align-items: center; justify-content: center; margin-bottom: 14rpx; }
-.month-label { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
-.month-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 6rpx; }
-.mexpense { display: flex; justify-content: space-between; align-items: center; }
-.ml { font-size: 24rpx; color: var(--text-sub); }
-.mv { font-size: 34rpx; font-weight: bold; }
+.month-card { display: flex; align-items: center; background: transparent; border: none; border-radius: 0; padding: 4rpx 0 12rpx; margin-bottom: 4rpx; }
+.month-left { display: flex; flex-direction: column; align-items: center; justify-content: center; padding-right: 20rpx; }
+.month-y { font-size: 24rpx; font-weight: 600; color: var(--text-sub); line-height: 1.3; }
+.month-row { display: flex; align-items: center; gap: 4rpx; }
+.month-m { font-size: 40rpx; font-weight: 800; color: var(--primary); line-height: 1.2; }
+.month-caret { font-size: 22rpx; color: var(--text-sub); }
+.month-tip { font-size: 20rpx; color: var(--text-sub); }
+.mdivider { width: 1rpx; height: 80rpx; background: var(--divider); }
+.mcols3 { flex: 1; display: flex; margin-left: 20rpx; }
+.mcol3 { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 4rpx; padding-right: 8rpx; }
+.ml { font-size: 20rpx; color: var(--text-sub); }
+.mv { font-size: 30rpx; font-weight: 800; color: var(--text-main); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .red { color: #f56c6c; }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 /* 进货流水：日期头 + 行级卡片（对齐 App 流式列表；与出货流水同构） */
 .flow { height: calc(100vh - 260rpx); }
 .day-bar { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 8rpx 10rpx; }

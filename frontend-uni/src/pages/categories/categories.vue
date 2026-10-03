@@ -137,7 +137,7 @@ async function remove(c: Cat) {
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; margin-bottom: 12rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .child { display: flex; align-items: center; padding: 10rpx 0 10rpx 32rpx; border-top: 1rpx solid var(--divider); }

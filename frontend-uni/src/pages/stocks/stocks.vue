@@ -131,7 +131,7 @@ async function save() {
 .pill { padding: 12rpx 24rpx; background: var(--card-bg); border-radius: 24rpx; font-size: 26rpx; color: var(--text-sub); border: 1rpx solid var(--divider); }
 .pill.active { color: #f56c6c; border-color: #f56c6c; background: var(--danger-bg); }
 .total { font-size: 26rpx; color: #67c23a; font-weight: bold; margin-bottom: 12rpx; }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .qty { font-size: 32rpx; font-weight: bold; color: #67c23a; }

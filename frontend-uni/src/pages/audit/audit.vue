@@ -128,7 +128,7 @@ function remove(l: Log) {
 .page { min-height: 100vh; padding: 20rpx; box-sizing: border-box; background: var(--page-bg); }
 .filter-bar { background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; }
 .act-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; display: inline-block; }
-.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 20rpx 24rpx; margin-bottom: 14rpx; }
+.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 20rpx 24rpx; margin-bottom: 14rpx; }
 .head { display: flex; align-items: flex-start; }
 .left { flex: 1; min-width: 0; }
 .who { font-size: 28rpx; font-weight: bold; display: block; color: var(--text-main); }
