@@ -126,7 +126,7 @@ describe('交易附件（R2）', () => {
     const badRead = await call(env, 'GET', `/api/v1/attachments/${key}?token=bad.token.here`, undefined);
     expect(badRead.status).toBe(401);
 
-    const del = await call(env, 'DELETE', `/api/v1/attachments?key=${key}`, token);
+    const del = await call(env, 'DELETE', `/api/v1/attachments?key=${key}&entity=sale&id=s1`, token);
     expect(del.status).toBe(204);
     const after = await (await call(env, 'GET', '/api/v1/attachments?entity=sale&id=s1', token)).json() as {
       attachments: unknown[];
@@ -307,8 +307,8 @@ describe('交易附件（R2）', () => {
     expect(refs.results.length).toBe(1);
     expect(refs.results[0].file_key).toBe(up.key);
 
-    // 删除单个附件 → refs 行被清
-    await call(env, 'DELETE', `/api/v1/attachments?key=${up.key}`, token);
+    // 删除单个附件 → refs 行被清（新格式内容 key 解析不出实体，须带 entity/id 防误删共享）
+    await call(env, 'DELETE', `/api/v1/attachments?key=${up.key}&entity=sale&id=${saleId}`, token);
     const afterDel = await (env.DB as FakeD1).prepare(
       "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
     ).bind(saleId).first<{ n: number }>();
@@ -587,6 +587,27 @@ describe('附件删除走同步变更流（引用变更流驱动：本地删 →
     const refs = await (env.DB as FakeD1).prepare('SELECT id FROM attachment_refs').all<{ id: string }>();
     expect(refs.results.map((r) => r.id)).toEqual(['rb']);
     expect(await env.BUCKET.get('taozhu/images/attachments/sale/s-a/f.jpg')).not.toBeNull();
+  });
+
+  it('新格式内容 key：DELETE 必须带 entity/id（防共用图误删）；带参按实体删引用，零引用才回收 R2', async () => {
+    // 同一张图（同内容=同 key）挂到两个实体引用（同图一份物理文件、两行共享）
+    const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale_item&id=l1`, token, photoForm(), true)).json()) as { key: string };
+    await call(env, 'POST', `/api/v1/attachments?entity=sale_item&id=l2`, token, photoForm(), true);
+    // 新格式 key = md5-only（解析不出实体）：无 entity/id → 拒绝（防误删共享）
+    const bare = await call(env, 'DELETE', `/api/v1/attachments?key=${up.key}`, token);
+    expect(bare.status).toBe(400);
+    // 带实体 → 只删该行引用，另一行引用 + R2 物理文件保留
+    const delL1 = await call(env, 'DELETE', `/api/v1/attachments?key=${up.key}&entity=sale_item&id=l1`, token);
+    expect(delL1.status).toBe(204);
+    const refs1 = await (env.DB as FakeD1).prepare("SELECT entity_id FROM attachment_refs WHERE file_key = ?").bind(up.key).all<{ entity_id: string }>();
+    expect(refs1.results.map((r) => r.entity_id)).toEqual(['l2']);
+    expect(await env.BUCKET.get(up.key)).not.toBeNull();
+    // 删最后一处引用 → 零引用才物理删 R2
+    const delL2 = await call(env, 'DELETE', `/api/v1/attachments?key=${up.key}&entity=sale_item&id=l2`, token);
+    expect(delL2.status).toBe(204);
+    const refs2 = await (env.DB as FakeD1).prepare("SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?").bind(up.key).first<{ n: number }>();
+    expect(refs2?.n ?? 0).toBe(0);
+    expect(await env.BUCKET.get(up.key)).toBeNull();
   });
 
   it('单据 upsert 不带 attachments 字段 → 现有附件引用保留（不收敛不误删）', async () => {

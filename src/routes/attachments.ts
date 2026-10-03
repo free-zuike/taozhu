@@ -384,7 +384,9 @@ attachmentsRouter.get('/:key{.+}', async (c) => {
   return new Response(obj.body, { headers });
 });
 
-// DELETE /attachments?key= — 删除附件（Web/直连路径：删该实体的引用行；共用文件被其他实体引用则保留 R2）
+// DELETE /attachments?key=&entity=&id= — 删除附件（Web/直连路径：删该实体的引用行；共用文件被其他实体引用则保留 R2）。
+// entity/id 参数：新格式内容 key（md5-only）解析不出实体，调用方必须显式带实体（批量=逐行传 sale_item/lid）；
+// 两个都没有 → 拒绝（防误删共用图：直接全删引用会把其他单引用的共享图一并删掉）
 attachmentsRouter.delete('/', async (c) => {
   const key = c.req.query('key');
   if (!key) return c.json({ error: 'key 必填' }, 400);
@@ -392,12 +394,18 @@ attachmentsRouter.delete('/', async (c) => {
   const db = c.env.DB;
   // 实体级引用删除：只删该 key 对应实体的引用行（共用图不误删其他实体引用）
   const parsed = parseAttachmentKey(key);
+  const qEntity = c.req.query('entity') ?? '';
+  const qId = c.req.query('id') ?? '';
   if (parsed) {
     await db.prepare(
       'DELETE FROM attachment_refs WHERE file_key = ? AND entity = ? AND entity_id = ?',
     ).bind(key, parsed.entity, parsed.id).run();
+  } else if (qEntity && qId) {
+    await db.prepare(
+      'DELETE FROM attachment_refs WHERE file_key = ? AND entity = ? AND entity_id = ?',
+    ).bind(key, qEntity, qId).run();
   } else {
-    try { await db.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run(); } catch (_) {}
+    return c.json({ error: '附件删除需 entity/id（共用图保护）' }, 400);
   }
   // 该文件仍被其他实体引用（共用图）→ 保留 R2；零引用才物理删
   const cnt = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(key).first<{ n: number }>();

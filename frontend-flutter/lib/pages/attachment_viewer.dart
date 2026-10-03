@@ -167,7 +167,16 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         }
       }
       for (final name in myFiles.toSet()) {
-        keysByFile.putIfAbsent(name, () => []).add('taozhu/images/attachments/$name');
+        // 优先用服务器真实 key（旧格式含实体段删除才匹配得上），没有（老库引用行）才按新格式重构
+        final rk = refs
+            .where((r) => '${r['file'] ?? ''}' == name)
+            .map((r) => '${r['key'] ?? ''}')
+            .where((k) => k.isNotEmpty)
+            .toList();
+        final keys = rk.isNotEmpty ? rk : <String>['taozhu/images/attachments/$name'];
+        for (final k in keys) {
+          keysByFile.putIfAbsent(name, () => []).add(k);
+        }
       }
     } catch (_) {}
     if (!mounted) return;
@@ -216,13 +225,24 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     final picked = await ImagePicker().pickImage(source: src, maxWidth: 1600, imageQuality: 85);
     if (picked == null) return;
     final bytes = await picked.readAsBytes();
-    // 本地 MD5 去重：公共目录已存过同内容图片则跳过（同图一份，云端同样以 MD5 幂等）
+    // 本地 MD5 去重：该实体（批量=全部行）引用表已存在同内容图则跳过——按引用表判定而非
+    // 公共目录文件（同图一份后公共目录文件可能来自其他实体，文件存在≠本实体已挂载）
     final h = md5.convert(bytes).toString();
     if (!kIsWeb) {
       try {
-        final root = await getApplicationDocumentsDirectory();
-        if (File('${root.path}/attachments/$h.jpg').existsSync()) {
-          toast(context, '该图片已存在，跳过重复上传');
+        final refs = await LocalDb.getAll('attachment_refs');
+        final dup = refs.any((r) {
+          final re = '${r['entity'] ?? ''}';
+          final rid = '${r['entity_id'] ?? ''}';
+          final rf = '${r['file'] ?? ''}'.split('/').last;
+          final mine = _bulk
+              ? (re == _lineEntity && widget.lineIds.contains(rid)) ||
+                    (re == widget.entity && rid == widget.id)
+              : (re == widget.entity && rid == widget.id);
+          return mine && (rf == '$h.jpg');
+        });
+        if (dup && !_bulk) {
+          toast(context, '该图片已存在，跳过重复添加');
           return;
         }
       } catch (_) {}
@@ -387,16 +407,23 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     }
 
     // 本地删除：删该实体引用行；公共副本文件不删（同图可能被其他实体引用，宁留勿删，
-    // 由「重置本地附件副本」/孤儿逻辑统一清理——删除引用后同步会从在用列表移除）
+    // 由「重置本地附件副本」/孤儿逻辑统一清理——删除引用后同步会从在用列表移除）。
+    // 批量模式引用行在每明细行（sale_item/lid）+ 历史单据级（sale/S），全范围删。
     var localDeleted = false;
     if (!kIsWeb) {
       try {
         final refs = await LocalDb.getAll('attachment_refs');
         for (final r in refs) {
-          if ('${r['entity'] ?? ''}' != widget.entity || '${r['entity_id'] ?? ''}' != widget.id) continue;
+          final re = '${r['entity'] ?? ''}';
+          final rid = '${r['entity_id'] ?? ''}';
+          final mine = _bulk
+              ? (re == widget.entity && rid == widget.id) ||
+                    (re == _lineEntity && widget.lineIds.contains(rid))
+              : (re == widget.entity && rid == widget.id);
+          if (!mine) continue;
           final file = '${r['file'] ?? ''}';
           if (keys.any((k) => k == file || k.split('/').last == file)) {
-            await LocalDb.deleteOne('attachment_refs', '${r['entity']}/${r['entity_id']}/${r['file']}');
+            await LocalDb.deleteOne('attachment_refs', '$re/$rid/$file');
             localDeleted = true;
           }
         }
@@ -404,8 +431,22 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     }
     if (kIsWeb) {
       try {
+        // Web 直连删除：旧格式 key 解析出精确实体 → 仅该实体一对；新格式内容 key（md5-only
+        // 解析不出实体）批量模式逐行（sale_item/lid）+ 单据历史级（sale/S）各删一条，
+        // 带 entity/id 参数——后端无实体信息会拒绝防误删共享图
         for (final key in keys) {
-          await Api.instance.delete('/attachments?key=$key');
+          final parsed = parse(key);
+          final targets = parsed != null
+              ? <(String, String)>[(parsed.$1, parsed.$2)]
+              : _bulk
+                  ? [
+                      for (final lid in widget.lineIds) (_lineEntity, lid),
+                      (widget.entity, widget.id),
+                    ]
+                  : <(String, String)>[(widget.entity, widget.id)];
+          for (final t in targets) {
+            await Api.instance.delete('/attachments?key=$key&entity=${t.$1}&id=${t.$2}');
+          }
         }
       } catch (e) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -414,24 +455,37 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     } else {
       for (final key in keys) {
         final parsed = parse(key);
-        try {
-          await SyncService.enqueueChange(
-            entityType: 'attachment',
-            entitySyncId: key,
-            action: 'delete',
-            // entity/id 随变更下发：其他端 pull 时优先用三元组定位本地副本，兼容历史 key 前缀。
-            // 新格式内容 key（md5-only 解析不出实体）→ 直接用当前查看器实体（防共用图误删）
-            payload: {
-              'file_key': key,
-              'entity': parsed != null ? parsed.$1 : widget.entity,
-              'id': parsed != null ? parsed.$2 : widget.id,
-            },
-          );
-        } catch (_) {
-          // 入队失败（本地只读等）：直连兜底删除云端；其余交由同步流程重试
+        // 目标实体集合：旧格式 key 解析出精确实体（sale_item/lid）→ 仅该实体一对；
+        // 新格式内容 key（md5-only）解析不出 → 批量模式逐行（sale_item/lid）+ 单据历史级（sale/S），
+        // 服务器按 file_key+entity+entity_id 精确删行（共用图其他单引用不受影响）
+        final targets = parsed != null
+            ? <(String, String)>[(parsed.$1, parsed.$2)]
+            : _bulk
+                ? [
+                    for (final lid in widget.lineIds) (_lineEntity, lid),
+                    (widget.entity, widget.id),
+                  ]
+                : <(String, String)>[(widget.entity, widget.id)];
+        for (final t in targets) {
           try {
-            await Api.instance.delete('/attachments?key=$key');
-          } catch (_) {}
+            await SyncService.enqueueChange(
+              entityType: 'attachment',
+              entitySyncId: key,
+              action: 'delete',
+              // entity/id 随变更下发：其他端 pull 时优先用三元组定位本地副本，兼容历史 key 前缀。
+              // 新格式内容 key（md5-only 解析不出实体）→ 用目标实体（行级/单据级，防共用图误删）
+              payload: {
+                'file_key': key,
+                'entity': t.$1,
+                'id': t.$2,
+              },
+            );
+          } catch (_) {
+            // 入队失败（本地只读等）：直连兜底删除云端；其余交由同步流程重试
+            try {
+              await Api.instance.delete('/attachments?key=$key&entity=${t.$1}&id=${t.$2}');
+            } catch (_) {}
+          }
         }
       }
     }

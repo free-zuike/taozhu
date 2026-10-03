@@ -136,15 +136,34 @@ class SyncService {
     try {
       final d = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
       inUse = ((d['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
+      // 本地待推送删除的附件引用（entity/id/file 三元组）：删除变更 push 成功前，服务器 in-use
+      // 仍下发旧引用（服务器引用行还没删）。此轮全量刷新若照单覆盖本地表→"删一下又复活"。
+      // 过滤掉待删除三元组：本设备删除过但未同步成功的，本地保持已删（下次 push 成功后再收敛）。
+      final pendingDel = <String>{};
+      try {
+        final pending = await LocalDb.getPendingChanges();
+        for (final c in pending) {
+          if ('${c['entity_type'] ?? ''}' != 'attachment' || '${c['action'] ?? ''}' != 'delete') continue;
+          final p = (c['payload'] as Map<String, dynamic>?) ?? {};
+          final e = '${p['entity'] ?? ''}';
+          final i = '${p['id'] ?? ''}';
+          final f = '${p['file_key'] ?? p['key'] ?? ''}'.split('/').last;
+          if (e.isNotEmpty && i.isNotEmpty && f.isNotEmpty) pendingDel.add('$e/$i/$f');
+        }
+      } catch (_) {}
       // 持久化在用三元组：本地 attachment_refs store（每次同步全量刷新，删除的引用随之消失）
+      // key=服务器真实 file_key（新旧格式都可能：旧格式化含实体段、新格式 md5-only）——
+      // 删除时按真实 key 匹配服务器引用行（重构的新格式 key 匹配不到旧格式存量行）
       final refs = inUse
           .map((a) => {
                 'id': '${a['entity'] ?? ''}/${a['id'] ?? ''}/${a['file'] ?? ''}',
                 'entity': a['entity'] ?? '',
                 'entity_id': a['id'] ?? '',
                 'file': a['file'] ?? '',
+                'key': a['key'] ?? '',
               })
           .where((r) => r['entity'] != '' && r['entity_id'] != '' && r['file'] != '')
+          .where((r) => !pendingDel.contains('${r['entity']}/${r['entity_id']}/${r['file']}'))
           .toList();
       if (refs.isNotEmpty) {
         await LocalDb.putAll('attachment_refs', refs);
