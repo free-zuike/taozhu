@@ -40,9 +40,11 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
   int _clientServerPayments = 0;
   int _clientServerAttach = 0;
 
-  // 全部数据附件（本地副本总数 vs 服务器 R2 总数）
-  int _localAttachTotal = 0;
-  int _serverAttachTotal = 0;
+  // 全部数据附件（实际附件数=引用记录数 vs 服务器在用引用数；物理文件数仅作辅助展示）
+  int _localAttachRefs = 0; // 本地引用表条数（每个商品/单据挂载算一个附件，对齐参考实现口径）
+  int _serverAttachRefs = 0; // 服务器 attachment_refs 在用引用数（/attachments/in-use 条数）
+  int _localAttachTotal = 0; // 本地物理副本文件数（辅助展示，旧版逐行复制会虚高）
+  int _serverAttachTotal = 0; // 服务器 R2 对象数（辅助展示）
 
   // 验证状态：未验证（本地未同步 / 服务器未拉取成功）时差异行显示 —，避免"0=0 假正常"
   bool _localSynced = false; // App 本地库是否已完成首次全量同步
@@ -175,6 +177,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     Map<String, dynamic>? payCounts;
     Map<String, dynamic>? saleLineCounts; // 明细行级附件（v0.17.61+ 每行商品独立凭证）
     Map<String, dynamic>? attachTotal;
+    Map<String, dynamic>? serverInUse; // 服务器在用附件（引用记录 = 实际附件数）
     await Future.wait([
       _safe(() async {
         serverStats = await Api.instance.get('/sync/stats').timeout(const Duration(seconds: 6));
@@ -203,6 +206,10 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       ],
       _safe(() async {
         attachTotal = await Api.instance.get('/attachments/total').timeout(const Duration(seconds: 6));
+      }),
+      // 服务器在用附件数（引用记录数 = 实际附件数，对齐参考实现口径：每笔交易挂载算一个）
+      _safe(() async {
+        serverInUse = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
       }),
     ]);
     // 附件本地副本计数（依赖服务器返回的单据 id）
@@ -237,6 +244,19 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       serverAttachTotal = (tTotal['total'] as num?)?.toInt() ?? 0;
       localAttachTotal = await _localAllAttachCount();
     }
+    // 实际附件数（引用记录口径，对齐参考实现：每个商品/单据挂载算一个附件）——
+    // 服务器=attachment_refs 在用引用数（in-use 条数）；本地=本地附件引用表条数
+    var serverAttachRefs = 0;
+    final inUse = serverInUse;
+    if (inUse != null) {
+      serverAttachRefs = ((inUse['attachments'] as List?) ?? []).length;
+    }
+    var localAttachRefs = 0;
+    if (!kIsWeb) {
+      try {
+        localAttachRefs = (await LocalDb.getAll('attachment_refs')).length;
+      } catch (_) {}
+    }
     if (cStats != null) {
       // 出货/进货按商品明细行数（服务器 /sync/stats 已按明细行统计；进货不分店铺）
       clientServerSales = ((cStats['sale_items'] as num?)?.toInt() ?? 0);
@@ -264,6 +284,8 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       _clientServerPayments = clientServerPayments;
       _localAttachTotal = localAttachTotal;
       _serverAttachTotal = serverAttachTotal;
+      _localAttachRefs = localAttachRefs;
+      _serverAttachRefs = serverAttachRefs;
       _localSynced = localSynced;
       _serverStats = serverStats ?? _serverStats;
       _serverStatsLoaded = statsLoaded;
@@ -511,9 +533,19 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                       _diffRow(c, label,
                           _localSynced ? (_localCounts[store] ?? 0) : null,
                           _serverStatsLoaded ? ((_serverStats[store] as num?)?.toInt() ?? 0) : null),
+                    // 附件：引用记录数 = 实际附件数（对齐参考实现：每个商品/单据挂载算一个）
+                    // 物理文件数仅辅助展示（旧版逐行复制会产生重复副本，重置按钮可清理）
                     _diffRow(c, '附件',
-                        _localSynced ? _localAttachTotal : null,
-                        _attachTotalLoaded ? _serverAttachTotal : null),
+                        _localSynced ? _localAttachRefs : null,
+                        _serverAttachRefs > 0 || _serverStatsLoaded ? _serverAttachRefs : null),
+                    if (_attachTotalLoaded)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 14, right: 14, bottom: 4),
+                        child: Text(
+                          '物理副本（含重复）：本地 $_localAttachTotal 文件 · 服务器 $_serverAttachTotal 对象',
+                          style: TextStyle(fontSize: 11, color: c.textSub),
+                        ),
+                      ),
                     // 附件本地副本重置：删本地副本 → 重新下载服务器在用附件（修旧版逐行复制遗留的
                     // 本地副本数虚高，如"本地 16 / 服务器 6"；服务器数据不受影响）
                     if (_localSynced)
@@ -545,7 +577,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                           _serverStatsLoaded
                               ? '服务器 ${(_serverStats[store] as num?)?.toInt() ?? 0} 条'
                               : '服务器 —'),
-                    _row(c, '附件', _attachTotalLoaded ? '服务器 $_serverAttachTotal 张' : '服务器 —'),
+                    _row(c, '附件', _serverStatsLoaded ? '服务器 $_serverAttachRefs 个' : '服务器 —'),
                   ]),
                 if (!kIsWeb && !_localSynced)
                   Padding(

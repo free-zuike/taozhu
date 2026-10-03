@@ -783,28 +783,40 @@ class _SalePageState extends State<SalePage> {
     _pendingPhoto = null;
     try {
       final fileName = '${md5.convert(img).toString()}.jpg';
-      // 识别原图=这一批商品共用的一张图：只挂一份物理文件（对齐参考实现"附件一份，
-      // 商品行独立记录"），挂在第一个商品行（行级 id 客户端生成服务器保留，不孤儿化）。
-      // 其他商品行图标"行级查空回退该单"照常显示同一张图。不再逐行复制+逐行上传
-      // （批量 11 行=11 份相同文件=本地/服务器数量虚高）。
+      // 识别原图=这一批商品共用的图：**每个商品行各挂一份独立附件记录**（对齐参考实现：
+      // 每笔交易各自有附件记录，删除任一行不影响其他行；行图标各自亮起）。
+      // 行 id 是客户端生成且服务器保留的（服务端重建明细不换 id），行级附件不孤儿化。
       final lineIds = [
         for (final r in rows)
           if (r.rowId.isNotEmpty && r.origSaleId.isEmpty) r.rowId,
       ];
-      final targetId = lineIds.isEmpty ? saleId : lineIds.first;
       if (kIsWeb) {
-        await Api.instance
-            .uploadPhoto('/attachments?entity=${lineIds.isEmpty ? 'sale' : 'sale_item'}&id=$targetId', img, fileName);
+        if (lineIds.isEmpty) {
+          await Api.instance.uploadPhoto('/attachments?entity=sale&id=$saleId', img, fileName);
+        } else {
+          for (final lid in lineIds) {
+            await Api.instance.uploadPhoto('/attachments?entity=sale_item&id=$lid', img, fileName);
+          }
+        }
         if (mounted) toast(context, '识别图片已存为本单附件');
         return;
       }
       final root = await getApplicationDocumentsDirectory();
-      final dir = Directory('${root.path}/attachments/${lineIds.isEmpty ? 'sale' : 'sale_item'}/$targetId');
-      if (!dir.existsSync()) dir.createSync(recursive: true);
-      final f = File('${dir.path}/$fileName');
-      if (!f.existsSync()) await f.writeAsBytes(img);
-      await SyncService.enqueueAttachmentUpload(
-          entity: lineIds.isEmpty ? 'sale' : 'sale_item', id: targetId, fileName: fileName);
+      if (lineIds.isEmpty) {
+        final dir = Directory('${root.path}/attachments/sale/$saleId');
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        await File('${dir.path}/$fileName').writeAsBytes(img);
+        await SyncService.enqueueAttachmentUpload(entity: 'sale', id: saleId, fileName: fileName);
+      } else {
+        for (final lid in lineIds) {
+          final ld = Directory('${root.path}/attachments/sale_item/$lid');
+          if (!ld.existsSync()) ld.createSync(recursive: true);
+          final lf = File('${ld.path}/$fileName');
+          if (lf.existsSync()) continue; // 该行已有同内容图
+          await lf.writeAsBytes(img);
+          await SyncService.enqueueAttachmentUpload(entity: 'sale_item', id: lid, fileName: fileName);
+        }
+      }
       if (mounted) toast(context, '识别图片已存为本单附件（联网后自动上传）');
     } catch (_) {}
   }
