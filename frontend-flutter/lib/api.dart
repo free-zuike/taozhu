@@ -109,6 +109,21 @@ class Api {
     }
   }
 
+  /// 只清登录态（token/角色/账号/头像/缓存），保留本地数据库与待同步队列：
+  /// 「退出登录」用——同一账号重登仍离线秒开；本地库清空由「切换账号」负责（防串号）。
+  Future<void> clearAuthOnly() async {
+    final p = await SharedPreferences.getInstance();
+    p.remove(_tokenKey);
+    p.remove(_roleKey);
+    p.remove(_accountKey);
+    p.remove(_avatarKey);
+    final keys = p.getKeys().where((k) => k.startsWith(_cachePrefix)).toList();
+    for (final k in keys) {
+      await p.remove(k);
+    }
+    // 保留 _usernameKey：本地库在，重登同账号显示名不丢；切换账号清库时一并清
+  }
+
   /// 当前账号角色（登录时缓存；老板=admin / 店员=staff）
   Future<void> setRole(String role) async {
     (await SharedPreferences.getInstance()).setString(_roleKey, role);

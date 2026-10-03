@@ -19,7 +19,7 @@
       </view>
     </view>
 
-    <scroll-view scroll-y class="flow">
+    <scroll-view scroll-y class="flow" @scroll="onFlowScroll">
     <!-- 进货流水：按日期分组 + 行级卡片平铺（对齐 App 出货/进货流式列表） -->
     <view v-for="g in buyGroups" :key="g.date">
       <view class="day-bar">
@@ -37,14 +37,14 @@
         </view>
         <view v-if="l.note" class="buy-note">{{ l.note }}</view>
         <view class="ops">
-          <text class="op" @click.stop="showAttach('purchase_item', l.itemId, 'purchase', l.orderId)">
-            <template v-if="(attachCounts.purchase_item[l.itemId] || 0) > 0">📎{{ attachCounts.purchase_item[l.itemId] }}</template>
-            <template v-else>凭证</template>
-          </text>
-          <text class="op" @click.stop="showAttach('purchase', l.orderId)">
-            <template v-if="(attachCounts.purchase[l.orderId] || 0) > 0">📎单{{ attachCounts.purchase[l.orderId] }}</template>
-            <template v-else>整单凭证</template>
-          </text>
+          <view class="attach-entry" @click.stop="showAttach('purchase_item', l.itemId, 'purchase', l.orderId)">
+            <image class="attach-ic" :src="attachIconSrc" mode="aspectFit" />
+            <text v-if="(attachCounts.purchase_item[l.itemId] || 0) > 0" class="attach-cnt">{{ attachCounts.purchase_item[l.itemId] }}</text>
+          </view>
+          <view class="attach-entry" @click.stop="showAttach('purchase', l.orderId)">
+            <image class="attach-ic" :src="attachIconSrc" mode="aspectFit" />
+            <text v-if="(attachCounts.purchase[l.orderId] || 0) > 0" class="attach-cnt">{{ attachCounts.purchase[l.orderId] }}</text>
+          </view>
           <text class="tip-longpress" @click.stop>长按删除该商品</text>
         </view>
       </view>
@@ -94,6 +94,7 @@ import { ref, computed } from 'vue';
 ;
 ;
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
+import { attachIconSrc } from '../../attach-icon';
 
 const selYear = ref(new Date().getFullYear());
 const selMonth = ref(new Date().getMonth() + 1);
@@ -205,6 +206,20 @@ function pickMonth() {
       }
     },
   });
+}
+
+// 列表滚动 → 顶部月份跟随当前可见日期（对齐 App：滚动到哪月统计卡显示哪月）
+function onFlowScroll() {
+  if (buyGroups.value.length === 0) return;
+  const first = buyGroups.value[0];
+  if (!first || !first.date) return;
+  const m = parseInt(first.date.slice(5, 7), 10);
+  const y = parseInt(first.date.slice(0, 4), 10);
+  if (y && m && (y !== selYear.value || m !== selMonth.value)) {
+    selYear.value = y;
+    selMonth.value = m;
+    calcMonthly();
+  }
 }
 
 async function load() {
@@ -486,10 +501,13 @@ async function loadAttachCounts() {
 .line-name { font-size: 27rpx; color: var(--text-main); display: block; }
 .line-meta { font-size: 22rpx; color: var(--text-sub); margin-top: 2rpx; display: block; }
 .line-amt { font-size: 27rpx; font-weight: bold; color: #f56c6c; margin-left: 16rpx; }
-.ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
+.ops { display: flex; align-items: center; justify-content: flex-end; gap: 20rpx; margin-top: 8rpx; }
 .op { color: var(--primary); font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
-.tip-longpress { color: var(--text-sub); font-size: 22rpx; }
+.attach-entry { display: flex; align-items: center; gap: 2rpx; padding: 2rpx; }
+.attach-ic { width: 28rpx; height: 28rpx; }
+.attach-cnt { font-size: 20rpx; color: var(--primary); font-weight: 600; }
+.tip-longpress { color: var(--text-sub); font-size: 22rpx; margin-left: auto; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }

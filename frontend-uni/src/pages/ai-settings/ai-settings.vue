@@ -22,6 +22,18 @@
         <input class="f-ipt" :value="editKey[p.id] ?? ''" placeholder="留空=保留原值" @input="onKey(p.id, $event)" />
         <text v-if="p.hasKey" class="p-clear" @click="clearKey(p)">清空</text>
       </view>
+      <view class="f-row">
+        <text class="f-lb">文字模型</text>
+        <input class="f-ipt" :value="editModel[p.id]?.text ?? p.textModel ?? ''" placeholder="如 glm-4-flash" @input="onModel(p.id, 'text', $event)" />
+      </view>
+      <view class="f-row">
+        <text class="f-lb">图片模型</text>
+        <input class="f-ipt" :value="editModel[p.id]?.vision ?? p.visionModel ?? ''" placeholder="如 glm-4v-flash（视觉）" @input="onModel(p.id, 'vision', $event)" />
+      </view>
+      <view class="f-row">
+        <text class="f-lb">语音模型</text>
+        <input class="f-ipt" :value="editModel[p.id]?.speech ?? p.audioModel ?? ''" placeholder="如 glm-4-voice（语音转文字）" @input="onModel(p.id, 'speech', $event)" />
+      </view>
     </view>
     <view class="add-btn" @click="showAdd = true">+ 添加自定义服务商</view>
 
@@ -34,7 +46,14 @@
             <view class="r-pick">{{ row.name }} ▾</view>
           </picker>
         </view>
-        <text class="t-btn" @click="testOne(row.cap)">{{ row.testTxt || '测试' }}</text>
+        <view class="test-cell" @click="testOne(row.cap)">
+          <!-- 测试结果状态：通过=绿圆点/失败=红圆点/测试中=转圈/未测=灰点（不弹文字界面） -->
+          <view v-if="testState[row.cap] === 'ok'" class="dot dot-ok"></view>
+          <view v-else-if="testState[row.cap] === 'fail'" class="dot dot-fail"></view>
+          <view v-else-if="testState[row.cap] === 'testing'" class="dot dot-busy"></view>
+          <view v-else class="dot dot-idle"></view>
+          <text class="t-btn" :class="testState[row.cap] === 'fail' ? 't-fail' : ''">测试</text>
+        </view>
       </view>
     </view>
 
@@ -61,10 +80,12 @@ import { request, getToken } from '../../api';
 import { useThemeVars } from '../../theme';
 
 const { tv, patternSrc } = useThemeVars();
-interface Provider { id: string; name: string; isBuiltIn?: boolean; hasKey?: boolean; baseUrl?: string }
+interface Provider { id: string; name: string; isBuiltIn?: boolean; hasKey?: boolean; baseUrl?: string; textModel?: string; visionModel?: string; audioModel?: string }
 const providers = ref<Provider[]>([]);
 const editKey = ref<Record<string, string | undefined>>({});
 const editBase = ref<Record<string, string | undefined>>({});
+// 模型编辑值（undefined=未改、''=清空、非空=覆盖；对齐 App 三能力模型）
+const editModel = ref<Record<string, Partial<{ text: string; vision: string; speech: string }>>>({});
 const bind = ref<Record<string, string>>({ textProviderId: '', visionProviderId: '', speechProviderId: '' });
 const saving = ref(false);
 const testing = ref(false);
@@ -81,7 +102,6 @@ const bindRows = computed(() =>
   caps.map((c) => ({
     ...c,
     name: providers.value.find((p) => p.id === bind.value[c.key])?.name || '智谱GLM(默认)',
-    testTxt: testTxt.value[c.cap] || '',
   }))
 );
 const bindIdx = computed(() => {
@@ -97,6 +117,9 @@ function onKey(id: string, e: any) {
 }
 function onBase(id: string, e: any) {
   editBase.value[id] = e.detail.value;
+}
+function onModel(id: string, cap: 'text' | 'vision' | 'speech', e: any) {
+  (editModel.value[id] ??= {})[cap] = e.detail.value;
 }
 function onBind(key: string, e: any) {
   const p = providers.value[Number(e.detail.value)];
@@ -145,9 +168,9 @@ function addProvider() {
 onShow(async () => {
   if (!getToken()) return;
   try {
-    const d = await request<{ providers: Array<{ id: string; name: string; is_built_in?: boolean; has_key?: boolean; base_url?: string }>; binding: { textProviderId?: string; visionProviderId?: string; speechProviderId?: string } }>('/settings/ai', 'GET');
+    const d = await request<{ providers: Array<{ id: string; name: string; is_built_in?: boolean; has_key?: boolean; base_url?: string; text_model?: string; vision_model?: string; audio_model?: string }>; binding: { textProviderId?: string; visionProviderId?: string; speechProviderId?: string } }>('/settings/ai', 'GET');
     if (d?.providers) {
-      providers.value = d.providers.map((p) => ({ id: p.id, name: p.name, isBuiltIn: Boolean(p.is_built_in), hasKey: Boolean(p.has_key), baseUrl: p.base_url || '' }));
+      providers.value = d.providers.map((p) => ({ id: p.id, name: p.name, isBuiltIn: Boolean(p.is_built_in), hasKey: Boolean(p.has_key), baseUrl: p.base_url || '', textModel: p.text_model || '', visionModel: p.vision_model || '', audioModel: p.audio_model || '' }));
     }
     if (d?.binding) bind.value = { ...bind.value, ...d.binding };
   } catch (e) {
@@ -158,19 +181,24 @@ onShow(async () => {
 async function save() {
   saving.value = true;
   try {
-    // providers 全量：名称/地址/Key（undefined=保留、''=清空、非空=覆盖），含新增/删除
+    // providers 全量：名称/地址/Key/三能力模型（undefined=保留、''=清空、非空=覆盖），含新增/删除
     const provs = providers.value.map((p) => {
       const body: Record<string, string> = { id: p.id, name: p.name };
       if (editBase.value[p.id] !== undefined) body.base_url = editBase.value[p.id] ?? '';
       if (editKey.value[p.id] !== undefined) body.api_key = editKey.value[p.id] ?? '';
+      const m = editModel.value[p.id];
+      if (m?.text !== undefined) body.text_model = m.text ?? '';
+      if (m?.vision !== undefined) body.vision_model = m.vision ?? '';
+      if (m?.speech !== undefined) body.audio_model = m.speech ?? '';
       return body;
     });
     await request('/settings/ai', 'PUT', { providers: provs, binding: { ...bind.value } });
     uni.showToast({ title: '已保存', icon: 'none' });
     editKey.value = {};
     editBase.value = {};
-    const d = await request<{ providers: Array<{ id: string; name: string; is_built_in?: boolean; has_key?: boolean; base_url?: string }> }>('/settings/ai', 'GET');
-    if (d?.providers) providers.value = d.providers.map((p) => ({ id: p.id, name: p.name, isBuiltIn: Boolean(p.is_built_in), hasKey: Boolean(p.has_key), baseUrl: p.base_url || '' }));
+    editModel.value = {};
+    const d = await request<{ providers: Array<{ id: string; name: string; is_built_in?: boolean; has_key?: boolean; base_url?: string; text_model?: string; vision_model?: string; audio_model?: string }> }>('/settings/ai', 'GET');
+    if (d?.providers) providers.value = d.providers.map((p) => ({ id: p.id, name: p.name, isBuiltIn: Boolean(p.is_built_in), hasKey: Boolean(p.has_key), baseUrl: p.base_url || '', textModel: p.text_model || '', visionModel: p.vision_model || '', audioModel: p.audio_model || '' }));
   } catch (e) {
     uni.showToast({ title: '保存失败', icon: 'none' });
   } finally {
@@ -178,30 +206,33 @@ async function save() {
   }
 }
 
-// 单项能力测试（对齐 App：测试当前绑定能力 → 结果就地显示）
+// 单项能力测试（对齐 App：通过=绿图标/失败=红图标，就地显示，不弹文字界面）
+const testState = ref<Record<string, 'idle' | 'testing' | 'ok' | 'fail'>>({});
+
 async function testOne(cap: string) {
-  testTxt.value[cap] = '测试中…';
+  testState.value[cap] = 'testing';
+  testTxt.value[cap] = '';
   try {
     const d = await request<{ ok?: boolean }>(`/ai/test?capability=${cap}`, 'POST', {});
-    testTxt.value[cap] = d?.ok ? '✓ 通过' : '✗ 失败';
+    testState.value[cap] = d?.ok ? 'ok' : 'fail';
   } catch (e) {
-    testTxt.value[cap] = '✗ 失败';
+    testState.value[cap] = 'fail';
   }
 }
 
 async function testAll() {
   testing.value = true;
-  const results: string[] = [];
   for (const c of caps) {
+    testState.value[c.cap] = 'testing';
+    testTxt.value[c.cap] = '';
     try {
       const d = await request<{ ok?: boolean }>(`/ai/test?capability=${c.cap}`, 'POST', {});
-      results.push(`${c.label}:${d?.ok ? '✓' : '✗'}`);
+      testState.value[c.cap] = d?.ok ? 'ok' : 'fail';
     } catch (e) {
-      results.push(`${c.label}:✗`);
+      testState.value[c.cap] = 'fail';
     }
   }
   testing.value = false;
-  uni.showModal({ title: 'AI 测试结果', content: results.join('\n'), showCancel: false });
 }
 </script>
 
@@ -230,6 +261,15 @@ async function testAll() {
 .r-tx { font-size: 28rpx; color: var(--text-main); }
 .r-pick { font-size: 26rpx; color: var(--primary); font-weight: 600; }
 .t-btn { font-size: 22rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 4rpx 14rpx; flex-shrink: 0; }
+/* 测试结果状态点：绿=通过 / 红=失败 / 蓝转圈=测试中 / 灰=未测试（对齐 App 图标色） */
+.test-cell { display: flex; align-items: center; gap: 10rpx; flex-shrink: 0; }
+.dot { width: 22rpx; height: 22rpx; border-radius: 50%; }
+.dot-ok { background: #22c55e; }
+.dot-fail { background: #ef4444; }
+.dot-idle { background: var(--text-sub); opacity: 0.35; }
+.dot-busy { background: var(--primary); animation: dotSpin 0.8s linear infinite; }
+@keyframes dotSpin { to { transform: rotate(360deg); } }
+.t-fail { color: #ef4444; border-color: #ef4444; }
 .btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; margin-top: 16rpx;  }
 .btn.ghost { background: var(--card-bg); color: var(--primary); border: 2rpx solid var(--primary); margin-top: 16rpx; box-shadow: none; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }

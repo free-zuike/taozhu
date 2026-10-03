@@ -1,7 +1,11 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 import '../api.dart';
+import '../local_db.dart';
 import '../log.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../version.dart';
 import '../widgets/bottom_shell.dart';
@@ -68,10 +72,19 @@ class _LoginPageState extends State<LoginPage> {
         _toast('该账号已开启两步验证，请输入验证码');
         return;
       }
+      // 账号切换检测：先读本地已存账号（旧账号），登录成功后再覆盖——
+      // 上一账号本地库（含待同步队列/同步游标）必须清空，否则新账号
+      // 带着旧账号数据/队列（如老板未推送的变更在店员账号下推送 403）= 数据串号
+      final prevAccount = await Api.instance.getAccount();
       await Api.instance.setToken(d['token'] as String);
       await Api.instance.setRole('${(d['user'] as Map?)?['role'] ?? ''}');
       // 登录账号本地缓存（离线时账号设置页也显示）
-      await Api.instance.setAccount('${(d['user'] as Map?)?['username'] ?? ''}');
+      final newAccount = '${(d['user'] as Map?)?['username'] ?? ''}';
+      await Api.instance.setAccount(newAccount);
+      if (prevAccount.isNotEmpty && prevAccount != newAccount) {
+        await _clearAccountLocalData();
+        await Api.instance.setAccount(newAccount);
+      }
       // 登录名/头像状态以 /auth/me 为准（登录响应不含头像）
       try {
         final me = await Api.instance.get('/auth/me');
@@ -96,6 +109,22 @@ class _LoginPageState extends State<LoginPage> {
   void _toast(String msg) {
     if (!mounted) return;
     toast(context, msg);
+  }
+
+  /// 账号切换时清空上一账号本地数据：本地库 + 附件本地副本 + 同步进度游标。
+  /// 关键：本地库清空后同步进度必须一并重置，否则新账号登录只做增量 pull，
+  /// 游标之前的服务器数据（大部分历史）永远拉不到，造成"假同步、数据拉不全"；
+  /// 且旧账号待同步队列残留会在新账号下推送（403）= 数据串号。
+  Future<void> _clearAccountLocalData() async {
+    await LocalDb.clearAll();
+    if (!kIsWeb) {
+      try {
+        final root = await getApplicationDocumentsDirectory();
+        final dir = Directory('${root.path}/attachments');
+        if (dir.existsSync()) await dir.delete(recursive: true);
+      } catch (_) {}
+    }
+    await SyncService.resetSyncState();
   }
 
   @override

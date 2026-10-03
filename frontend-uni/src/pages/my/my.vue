@@ -9,7 +9,7 @@
         <text class="hi">{{ greetIcon }} {{ greeting }}</text>
         <text class="hi-name">{{ user.name || '未登录' }}</text>
       </view>
-      <text class="hi-sub" @click="openServer">{{ user.role === 'staff' ? '店员' : '老板' }} · {{ curBase || '未设置服务器地址' }}</text>
+      <text class="hi-sub" @click="openServer">{{ isAdmin ? '老板' : '店员' }} · {{ curBase || '未设置服务器地址' }}</text>
       <!-- 统计三列（仅老板）：记账天数 / 本店交易（当前店铺，跟随交易页选择） / 店铺结余 -->
       <view v-if="isAdmin" class="stats">
         <view class="stat">
@@ -29,10 +29,10 @@
       </view>
     </view>
 
-    <!-- 账号与同步（对齐 App：第一组无标题卡；同步状态/成员/设备管理） -->
+    <!-- 账号与同步（对齐 App：成员/设备管理；小程序直连无手动同步，去掉同步状态行） -->
     <view class="grp">
-      <view class="row" @click="syncTip">
-        <view class="r-ic ic-blue"><text class="ic-tx">🔄</text></view><view class="r-body"><text class="r-tx">同步状态</text><text class="r-sub">云端直连，数据实时同步</text></view><text class="r-arrow">›</text>
+      <view v-if="isAdmin" class="row" @click="go('/pages/account/account')">
+        <view class="r-ic ic-blue"><text class="ic-tx">👤</text></view><view class="r-body"><text class="r-tx">账号设置</text><text class="r-sub">头像 / 用户名 / 密码 / 两步验证</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/users/users')">
         <view class="r-ic ic-blue"><text class="ic-tx">👥</text></view><view class="r-body"><text class="r-tx">成员</text><text class="r-sub">账号设置 · 店员/老板账号</text></view><text class="r-arrow">›</text>
@@ -50,7 +50,7 @@
       <view v-if="isAdmin" class="row" @click="go('/pages/payments/payments')">
         <view class="r-ic ic-green"><text class="ic-tx">💰</text></view><view class="r-body"><text class="r-tx">收款结账</text><text class="r-sub">登记收款、查看收款历史</text></view><text class="r-arrow">›</text>
       </view>
-      <view v-if="isAdmin" class="row" @click="go('/pages/payments/payments')">
+      <view v-if="isAdmin" class="row" @click="go('/pages/payment-accounts/payment-accounts')">
         <view class="r-ic ic-blue"><text class="ic-tx">🏦</text></view><view class="r-body"><text class="r-tx">收款账户</text><text class="r-sub">收款方式预设：现金/微信/支付宝…（独立页管理）</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/statement/statement')">
@@ -81,9 +81,6 @@
       </view>
       <view class="row" @click="go('/pages/theme-settings/theme-settings')">
         <view class="r-ic ic-gold"><text class="ic-tx">🎨</text></view><view class="r-body"><text class="r-tx">主题设置</text><text class="r-sub">配色主题 / 明暗模式 / 背景</text></view><text class="r-arrow">›</text>
-      </view>
-      <view class="row" @click="checkUpdate">
-        <view class="r-ic ic-blue"><text class="ic-tx">🔄</text></view><view class="r-body"><text class="r-tx">检查更新</text><text class="r-sub">小程序随版本自动更新，刷新即可</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/audit/audit')">
         <view class="r-ic ic-red"><text class="ic-tx">📋</text></view><view class="r-body"><text class="r-tx">操作审计</text><text class="r-sub">登录/删除/修改等关键操作留痕</text></view><text class="r-arrow">›</text>
@@ -230,14 +227,6 @@ function go(url: string) {
   } else {
     uni.navigateTo({ url });
   }
-}
-
-function checkUpdate() {
-  uni.showToast({ title: '小程序随版本自动更新，刷新即可', icon: 'none' });
-}
-
-function syncTip() {
-  uni.showToast({ title: '云端直连，数据实时同步（无需手动操作）', icon: 'none' });
 }
 
 function openServer() {

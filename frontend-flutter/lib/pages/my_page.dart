@@ -382,9 +382,10 @@ class _MyPageState extends State<MyPage> {
     return widgets;
   }
 
-  /// 备份导出/导入已迁移到「数据备份」页（BackupPage）
+  /// 退出登录：只清登录态（token/缓存），保留本地库与待同步队列——
+  /// 同一账号重登离线秒开、本地数据不丢；串号由登录时账号检测+切换账号全清兜底
   Future<void> _logout() async {
-    await _clearAccountData();
+    await Api.instance.clearAuthOnly();
     if (!mounted) return;
     Navigator.of(context)
         .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginPage()), (r) => false);
@@ -404,7 +405,10 @@ class _MyPageState extends State<MyPage> {
       ),
     );
     if (ok != true) return;
-    await _logout();
+    await _clearAccountData();
+    if (!mounted) return;
+    Navigator.of(context)
+        .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginPage()), (r) => false);
   }
 
   /// 清除当前账号本地数据：token/角色/接口缓存/离线队列 + 本地数据库 + 附件本地副本

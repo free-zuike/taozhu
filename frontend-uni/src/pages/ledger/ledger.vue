@@ -6,7 +6,6 @@
       <picker class="client-picker" mode="selector" :range="clientNames" @change="onClientFilter">
         <view class="client-btn">{{ filterClientId ? filterClientName : '全部店铺' }} ▾</view>
       </picker>
-      <text class="export-btn" @click="exportCsv">导出 CSV</text>
     </view>
 
     <!-- 月度卡（对齐 App：左侧年月两层点击切换 + 竖线 + 右侧四列统计；列表全量，月份只影响统计卡） -->
@@ -42,25 +41,27 @@
           <text class="day-total">{{ g.count }} 件 · 合计 ¥{{ fmtNum(g.amount) }}</text>
         </view>
         <view v-for="l in g.lines" :key="l.key" class="card-sale" :class="profitClass(l)" @click="editSaleLine(l)" @longpress="deleteSaleLine(l)">
-          <view class="head">
-            <text class="name">{{ l.client_name }}</text>
+          <view class="line-top">
+            <view class="store-ic"><text class="st-tx">🏪</text></view>
+            <view class="line-main">
+              <!-- ① 商品名+备注（全店视图才前缀店名，选中店铺不显示——对齐 App） -->
+              <text class="line-name">{{ filterClientId ? l.item_name : (l.client_name ? l.client_name + ' · ' + l.item_name : l.item_name) }}<text class="line-note" v-if="l.note">  {{ l.note }}</text></text>
+              <!-- ② 分类 + 凭证（图片图标，对齐 App Icons.image_outlined） -->
+              <view class="line-subrow">
+                <text class="l2-cat">{{ l.category || '未分类' }}</text>
+                <view class="attach-entry" @click.stop="showAttach(l.itemId ? 'sale_item' : 'sale', l.itemId || l.orderId, 'sale', l.orderId)">
+                  <image class="attach-ic" :src="attachIconSrc" mode="aspectFit" />
+                  <text v-if="attachOf(l) > 0" class="attach-cnt">{{ attachOf(l) }}</text>
+                </view>
+              </view>
+            </view>
             <text class="amt">¥{{ Number(l.amount || 0).toFixed(2) }}</text>
           </view>
-          <view class="sale-line1">
-            <text class="line-name">{{ l.item_name }}</text>
-            <text class="line-note" v-if="l.note">{{ l.note }}</text>
-          </view>
-          <view class="sale-line2">
-            <text class="l2-tx">{{ l.sale_price > 0 ? '售价 ¥' + Number(l.sale_price).toFixed(2) : '' }}<text v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</text></text>
-            <text class="l2-cat" v-if="l.category">{{ l.category }}</text>
+          <!-- ③ 进价 · 售价 · 数量（老板看进价；盈亏着色） -->
+          <view class="line-bottom">
+            <text v-if="isAdmin && l.cost_price > 0" class="l2-tx">进价 ¥{{ Number(l.cost_price).toFixed(2) }} · </text>
+            <text class="l2-tx">售价 ¥{{ Number(l.sale_price || 0).toFixed(2) }}<template v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</template></text>
             <text v-if="isAdmin && l.cost_price > 0" class="l2-profit" :class="profitText(l)">{{ profitText(l) }}</text>
-          </view>
-          <view class="ops">
-            <text class="op" @click.stop="showAttach(l.itemId ? 'sale_item' : 'sale', l.itemId || l.orderId, 'sale', l.orderId)">
-              <template v-if="attachOf(l) > 0">📎{{ attachOf(l) }}</template>
-              <template v-else>凭证</template>
-            </text>
-            <text class="tip-longpress" @click.stop>长按删除该商品</text>
           </view>
         </view>
       </view>
@@ -146,6 +147,7 @@ import { ref, computed } from 'vue';
 ;
 ;
 import { request, getToken, getRole, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
+import { attachIconSrc } from '../../attach-icon';
 
 const tab = ref<'sales' | 'payments'>('sales');
 // 老板才显示行级盈亏（进价=毛利敏感数据，店员隐藏；对齐 App 仅老板可见毛利）
@@ -493,35 +495,6 @@ function switchTab(t: 'sales' | 'payments') {
   tab.value = t;
 }
 
-// 当前筛选（月份+店铺）明细导出 CSV：出货行级平铺 + 收款明细（对齐 App 交易页导出）
-function exportCsv() {
-  const head = ['日期', '类型', '店铺', '商品', '数量', '单位', '单价', '金额', '备注'];
-  const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const rows: string[][] = [head];
-  for (const s of sales.value) {
-    const items = (s.items as Array<Record<string, any>>) || [];
-    if (items.length === 0) {
-      rows.push([s.happened_at, '出货', s.client_name, '', '', '', '', fmtNum((s as any).total), s.note]);
-    } else {
-      for (const it of items) {
-        rows.push([
-          s.happened_at || it.happened_at, '出货', it.client_name || s.client_name,
-          it.item_name, it.quantity, it.unit,
-          it.sale_price != null ? fmtNum(it.sale_price) : '', fmtNum(it.amount), it.note,
-        ]);
-      }
-    }
-  }
-  for (const p of payments.value) {
-    rows.push([p.happened_at, '收款', p.client_name, '', '', '', '', fmtNum(p.amount), p.method || '']);
-  }
-  const csv = rows.map((r) => r.map(esc).join(',')).join('\n');
-  uni.setClipboardData({
-    data: csv,
-    success: () => uni.showToast({ title: `已复制 ${rows.length - 1} 行（${selYear}年${selMonth}月）`, icon: 'none' }),
-  });
-}
-
 // 日期分组 → 当前可见首日（滚动联动月份：顶部月份跟随当前可见日期，对齐 App）
 function onFlowScroll(e: { detail: { scrollTop: number } }) {
   const top = e.detail.scrollTop;
@@ -771,15 +744,22 @@ async function removePayment(p: Record<string, any>) {
 .day-bar { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 8rpx 10rpx; }
 .day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); }
 .day-total { font-size: 23rpx; color: var(--text-sub); }
-.card-sale { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 20rpx 22rpx; margin-bottom: 12rpx; box-shadow: none; }
-.card-sale.profit-win { border-color: rgba(34, 197, 94, 0.45); }
-.card-sale.profit-loss { border-color: rgba(239, 68, 68, 0.45); }
-.sale-line1 { display: flex; align-items: baseline; gap: 12rpx; margin-bottom: 6rpx; }
-.line-name { font-size: 28rpx; font-weight: 600; color: var(--text-main); }
-.line-note { font-size: 22rpx; color: var(--text-sub); flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sale-line2 { display: flex; align-items: baseline; gap: 14rpx; }
+.card-sale { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 16rpx 18rpx; margin-bottom: 12rpx; box-shadow: none; }
+.card-sale.profit-win { border-color: rgba(34, 197, 94, 0.4); }
+.card-sale.profit-loss { border-color: rgba(239, 68, 68, 0.4); }
+.line-top { display: flex; align-items: center; gap: 12rpx; }
+.store-ic { width: 56rpx; height: 56rpx; border-radius: 50%; background: var(--primary-soft); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.st-tx { font-size: 26rpx; line-height: 1; }
+.line-main { flex: 1; min-width: 0; }
+.line-name { font-size: 28rpx; font-weight: 600; color: var(--text-main); display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.line-note { font-size: 22rpx; color: var(--text-sub); }
+.line-subrow { display: flex; align-items: center; gap: 8rpx; margin-top: 4rpx; }
+.l2-cat { font-size: 20rpx; color: var(--text-sub); background: var(--input-bg); border-radius: 6rpx; padding: 2rpx 10rpx; }
+.attach-entry { display: flex; align-items: center; gap: 2rpx; padding: 2rpx; }
+.attach-ic { width: 28rpx; height: 28rpx; }
+.attach-cnt { font-size: 20rpx; color: var(--primary); font-weight: 600; }
+.line-bottom { display: flex; align-items: baseline; gap: 12rpx; margin-top: 8rpx; }
 .l2-tx { font-size: 23rpx; color: var(--text-sub); }
-.l2-cat { font-size: 20rpx; color: var(--primary); background: var(--primary-soft); border-radius: 6rpx; padding: 2rpx 10rpx; }
 .l2-profit { font-size: 23rpx; font-weight: bold; margin-left: auto; }
 .card-sale.profit-win .l2-profit { color: #22c55e; }
 .card-sale.profit-loss .l2-profit { color: #ef4444; }
