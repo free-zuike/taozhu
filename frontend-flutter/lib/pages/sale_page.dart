@@ -503,7 +503,10 @@ class _SalePageState extends State<SalePage> {
   }
 
   /// 创建商品：Web 直连 POST /items；原生本地生成 id 落库+入队（离线可用，队列推送跨端生效）
-  Future<String?> _createItem(String name, {String unit = '', double price = 0, String category = ''}) async {
+  /// 新建商品入库：category=分类名称（冗余快照，商品行/列表直接显示）、categoryId=分类 id
+  /// （后端按 id 关联分类；两者都写，避免商品页/交易行把 id 当名称显示）
+  Future<String?> _createItem(String name,
+      {String unit = '', double price = 0, String category = '', String categoryId = ''}) async {
     final u = unit.isEmpty ? '件' : unit;
     try {
       String id, pid;
@@ -511,6 +514,7 @@ class _SalePageState extends State<SalePage> {
         final d = await Api.instance.post('/items', {
           'name': name,
           'category': category,
+          if (categoryId.isNotEmpty) 'category_id': categoryId,
           'prices': [
             {'unit': u, 'purchase_price': 0, 'sale_price': price > 0 ? price : 0},
           ],
@@ -534,7 +538,7 @@ class _SalePageState extends State<SalePage> {
         'id': id,
         'name': name,
         'category': category,
-        'category_id': null,
+        'category_id': categoryId.isEmpty ? null : categoryId,
         'deleted_at': null,
         'prices': [
           {'id': pid, 'item_id': id, 'unit': u, 'purchase_price': 0, 'sale_price': price > 0 ? price : 0, 'active': 1},
@@ -544,7 +548,7 @@ class _SalePageState extends State<SalePage> {
         'id': id,
         'name': name,
         'category': category,
-        'category_id': null,
+        'category_id': categoryId.isEmpty ? null : categoryId,
         'deleted_at': null,
         'prices': [
           {'id': pid, 'item_id': id, 'unit': u, 'purchase_price': 0, 'sale_price': price > 0 ? price : 0, 'active': 1},
@@ -670,7 +674,19 @@ class _SalePageState extends State<SalePage> {
                 isExpanded: true,
                 items: [
                   const DropdownMenuItem(value: '', child: Text('无分类')),
-                  for (final c in cats) DropdownMenuItem(value: '${c['id']}', child: Text('${c['name'] ?? ''}')),
+                  // 两级结构（对齐 _changeCategory）：父分类 + 缩进子分类
+                  for (final p in cats.where((x) => (x['parent_id'] as String? ?? '').isEmpty))
+                    ...[
+                      DropdownMenuItem(value: '${p['id']}', child: Text('${p['name'] ?? ''}')),
+                      for (final ch in cats.where((x) => '${x['parent_id']}' == '${p['id']}'))
+                        DropdownMenuItem(
+                          value: '${ch['id']}',
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 24),
+                            child: Text('${ch['name'] ?? ''}'),
+                          ),
+                        ),
+                    ],
                 ],
                 onChanged: (v) => setDlg(() => category = v ?? ''),
               ),
@@ -686,8 +702,13 @@ class _SalePageState extends State<SalePage> {
       ),
     );
     if (ok != true) return false;
+    // category 变量存的是分类 id（Dropdown value）→ 解析名称为快照 + 传 id 关联
+    final catName = category.isEmpty
+        ? ''
+        : '${cats.where((x) => '${x['id']}' == category).firstOrNull?['name'] ?? ''}';
     final id = await _createItem(name,
-        unit: row.unitCtrl.text.trim(), price: row.salePrice, category: category);
+        unit: row.unitCtrl.text.trim(), price: row.salePrice,
+        category: catName, categoryId: category);
     if (id == null) return false;
     final opt = _items.where((x) => x.id == id).firstOrNull;
     if (opt != null) _selectItem(row, opt);
@@ -887,9 +908,11 @@ class _SalePageState extends State<SalePage> {
         pr ??= match.prices.firstOrNull;
       }
       setState(() {
+        // 识别填充行不固化日期：置空=跟随单据日期（用户改顶部日期后整单生效）；
+        // 需要独立日期再点行内日期单独改（_pickRowDate）
         final row = (_rows.length == 1 && _rows.first.itemId == null && _rows.first.nameCtrl.text.trim().isEmpty)
             ? _rows.first
-            : (_rows..add(_newRow()..happenedAt = _dateCtrl.text.trim())).last;
+            : (_rows..add(_newRow())).last;
         if (match != null && pr != null) {
           row.itemId = match.id;
           row.priceId = pr!['id'] as String?;
@@ -963,7 +986,19 @@ class _SalePageState extends State<SalePage> {
                   isExpanded: true,
                   items: [
                     const DropdownMenuItem(value: '', child: Text('无分类')),
-                    for (final c in cats) DropdownMenuItem(value: '${c['id']}', child: Text('${c['name'] ?? ''}')),
+                    // 两级结构（对齐 _changeCategory）：父分类 + 缩进子分类
+                    for (final p in cats.where((x) => (x['parent_id'] as String? ?? '').isEmpty))
+                      ...[
+                        DropdownMenuItem(value: '${p['id']}', child: Text('${p['name'] ?? ''}')),
+                        for (final ch in cats.where((x) => '${x['parent_id']}' == '${p['id']}'))
+                          DropdownMenuItem(
+                            value: '${ch['id']}',
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 24),
+                              child: Text('${ch['name'] ?? ''}'),
+                            ),
+                          ),
+                      ],
                   ],
                   onChanged: (v) => setDlg(() => category = v ?? ''),
                 ),
@@ -977,11 +1012,16 @@ class _SalePageState extends State<SalePage> {
         ),
       );
       if (picked != 'yes') return;
+      // category 变量存的是分类 id（Dropdown value）→ 解析名称为快照 + 传 id 关联
+      final catName = category.isEmpty
+          ? ''
+          : '${cats.where((x) => '${x['id']}' == category).firstOrNull?['name'] ?? ''}';
       for (final r in _rows) {
         final name = r.nameCtrl.text.trim();
         if (name.isEmpty || r.itemId != null) continue;
         final id = await _createItem(name,
-            unit: r.unitCtrl.text.trim(), price: r.salePrice, category: category);
+            unit: r.unitCtrl.text.trim(), price: r.salePrice,
+            category: catName, categoryId: category);
         if (id == null) return;
         final opt = _items.where((x) => x.id == id).firstOrNull;
         if (opt != null) _selectItem(r, opt);

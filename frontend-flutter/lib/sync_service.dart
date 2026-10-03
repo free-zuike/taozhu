@@ -441,8 +441,9 @@ class SyncService {
       return clients.length + items.length + categories.length + accounts.length +
           sales.length + purchases.length + payments.length +
           saleItemRows.length + purchaseItemRows.length + stockRows.length;
-    } catch (_) {
+    } catch (e) {
       _lastSyncFailed = true;
+      appLog('sync', '全量同步失败：${_friendlyError(e)}', level: 'error');
       return 0;
     }
   }
@@ -484,6 +485,7 @@ class SyncService {
       var since = p.getInt(_cursorKey) ?? 0;
       final did = await deviceId();
       var total = 0;
+      final pulledTypes = <String, int>{}; // 拉取明细：实体类型 → 条数（同步日志可读）
       var hasMore = true;
       // 本地待推送删除的实体（删除尚未落地前，pull 不得把它们恢复，否则"删了又出现"）
       // 值类型是 Future<Set<String>>：putIfAbsent 缓存的是"查询未来的结果"，调用处 double await 解包
@@ -621,6 +623,9 @@ class SyncService {
             }
             if (applied) {
               total++;
+              // 按实体类型累计（同步完成日志可读：拉取了什么内容）
+              (pulledTypes[entityType] ??= 0);
+              pulledTypes[entityType] = pulledTypes[entityType]! + 1;
               // 同实体此前 apply 失败记录自动清除（对齐参考 SyncErrorStore：新 change 应用成功即 resolve）
               await _clearPullError(entityType, id);
             }
@@ -639,9 +644,17 @@ class SyncService {
       }
       // 空拉取也是一次成功同步：流程正常结束（未走 catch）即刷新"上次同步时间"，避免时间停在有数据变更的那次
       await _markSynced();
+      // 拉取明细日志（对齐用户需求：详细推送了什么交易/附件，而非只有"拉取 N 条"）
+      if (total > 0) {
+        final detail = pulledTypes.entries
+            .map((e) => '${e.key} ${e.value} 条')
+            .join('、');
+        appLog('sync', '增量拉取 $total 条：$detail', level: 'info');
+      }
       return total;
-    } catch (_) {
+    } catch (e) {
       _lastSyncFailed = true;
+      appLog('sync', '增量拉取失败：${_friendlyError(e)}', level: 'error');
       return 0;
     } finally {
       _syncing = false;
@@ -684,6 +697,17 @@ class SyncService {
       final d = await Api.instance.post('/sync/push', {'device_id': did, 'changes': changes});
       if (d == null) return 0;
       final accepted = d['accepted'] as int? ?? 0;
+      // 推送明细日志：用户能看到推送了什么（按实体类型分组计数 + 前几个 id）
+      final byType = <String, List<String>>{};
+      for (final ch in changes) {
+        final t = '${ch['entity_type'] ?? ''}';
+        final sid = '${ch['entity_sync_id'] ?? ''}';
+        (byType[t] ??= []).add(sid);
+      }
+      final detail = byType.entries
+          .map((e) => '${e.key} ${e.value.length} 条${e.value.take(2).join('/')}${e.value.length > 2 ? '…' : ''}')
+          .join('、');
+      appLog('sync', '推送 ${changes.length} 条变更：$detail（服务器接受 $accepted 条）', level: 'info');
       // 持久删除集合：仅清除"本地库已确实删掉/软删落库"的条目；
       // 本地库只读导致 tombstone 未写入、行仍活跃的条目必须保留（含原时间戳）——
       // 否则重启后 _load 失去过滤依据，已删商品复活（服务端已删也不影响：集合仅本地过滤用）
@@ -731,10 +755,24 @@ class SyncService {
       // 推送成功后顺便拉取一次（其他设备的变更）
       await pullChanges();
       return accepted;
-    } catch (_) {
+    } catch (e) {
       _lastSyncFailed = true;
+      // 推送失败也要有可读日志（用户曾遇"2条没推送但只有403原文"）：记录实体类型与失败原因
+      appLog('sync', '推送本地变更失败：${_friendlyError(e)}', level: 'error');
       return 0;
     }
+  }
+
+  /// 异常 → 中文可读（复用 api.dart 的友好文案思路：网络/超时/服务端拒绝分开提示）
+  static String _friendlyError(Object e) {
+    final s = e.toString();
+    if (s.contains('403')) return '服务器拒绝（403）：当前账号无权限执行此操作，请确认账号权限或重新登录';
+    if (s.contains('401')) return '登录已过期（401），请重新登录';
+    if (s.contains('host lookup') || s.contains('No address associated with hostname')) return '无法连接服务器（域名解析失败），请检查网络或服务器地址';
+    if (s.contains('Connection refused')) return '无法连接服务器（连接被拒绝），请检查服务器地址';
+    if (s.contains('Timeout')) return '连接服务器超时，请检查网络后重试';
+    if (s.contains('SocketException') || s.contains('ClientException')) return '无法连接服务器，请检查网络或服务器地址';
+    return s.split('\n').first;
   }
 
   /// 入队一条本地变更（写本地优先时调用；触发 debounce 推送）
@@ -807,8 +845,8 @@ class SyncService {
     var pulled = 0;
     var pushed = 0;
     try {
-      // ① 上传待传附件（失败不阻塞主流程，单张静默保留队列下次再传）
-      await uploadPendingAttachments();
+      // ① 上传待传附件（失败不阻塞主流程，单张静默保留队列下次再传）——记录本次上传张数
+      final uploadedAttach = await uploadPendingAttachments();
       // ② push 本地变更（内部成功后顺带拉取一次其他设备变更）
       pushed = await pushPending();
       // ③ 全量/增量拉取：未全量过、或本地库全空（数据被清但游标残留）→ 强制全量拉齐，
@@ -822,7 +860,7 @@ class SyncService {
       }
       // 推送 0 条时标注原因（队列空 = 离线录入已由自动同步推送；避免误读为"没推送"）
       final pendingNow = await LocalDb.getPendingChanges();
-      appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条${pushed == 0 && pendingNow.isEmpty ? '（无待推变更，此前已推送）' : ''}', level: 'info');
+      appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条、上传附件 $uploadedAttach 张${pushed == 0 && pendingNow.isEmpty ? '（无待推变更，此前已推送）' : ''}', level: 'info');
       // ④ 在用附件本地副本补齐（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）：
       // **await 等待附件下载完，同步中的动画/状态行才消失**（完全同步之后再消失）；
       // 单张失败内部静默跳过，下次同步自动重补，不阻塞主流程

@@ -124,6 +124,28 @@ class Api {
     // 保留 _usernameKey：本地库在，重登同账号显示名不丢；切换账号清库时一并清
   }
 
+  /// 网络异常 → 中文可读文案（SocketException/超时等原始堆栈用户看不懂）。
+  /// 提取 hostname 提示域名问题；区分：域名解析失败 / 连接被拒 / 网络不可达 / 超时。
+  static String _friendlyNetError(Object e, String path) {
+    final s = e.toString();
+    // 域名解析失败：Failed host lookup / No address associated with hostname
+    final hostMatch = RegExp(r"host lookup: '([^']+)'|No address associated with hostname, errno = \d+").firstMatch(s);
+    if (s.contains('host lookup') || s.contains('No address associated with hostname')) {
+      final host = hostMatch?.group(1) ?? '';
+      return host.isEmpty ? '无法连接服务器（域名解析失败），请检查网络或服务器地址' : '无法连接服务器（域名解析失败：$host），请检查网络或服务器地址';
+    }
+    if (s.contains('Connection refused') || s.contains('connection refused')) {
+      return '无法连接服务器（服务器拒绝连接），请检查服务器地址';
+    }
+    if (s.contains('TimeoutException') || s.contains('timed out') || s.contains('Timeout')) {
+      return '连接服务器超时，请检查网络后重试';
+    }
+    if (s.contains('SocketException') || s.contains('ClientException') || s.contains('HttpException')) {
+      return '无法连接服务器，请检查网络或服务器地址';
+    }
+    return s.split('\n').first;
+  }
+
   /// 当前账号角色（登录时缓存；老板=admin / 店员=staff）
   Future<void> setRole(String role) async {
     (await SharedPreferences.getInstance()).setString(_roleKey, role);
@@ -284,9 +306,10 @@ class Api {
       res = await retry();
     } catch (e) {
       // 网络/DNS/连接异常：记离线标志（供下载源探测等兜底判断），记日志，页面只给友好提示
+      // 原始异常（SocketException/ClientException 堆栈）用户看不懂 → 转中文可读文案
       _offlineMarked = true;
-      appLog('net', '$method $path → ${e.toString().split('\n').first}', level: 'error');
-      throw Exception('无法连接服务器，请检查网络或服务器地址');
+      appLog('net', '$method $path → ${_friendlyNetError(e, path)}', level: 'error');
+      throw Exception(_friendlyNetError(e, path));
     }
     if (_offlineMarked) _offlineMarked = false;
 
