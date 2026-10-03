@@ -36,7 +36,7 @@
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
-import { useThemeVars, setThemePrimary, setThemeMode, setThemeSkin, getThemeMode, getThemeSkin, isDark, skinPreviewCss, type ThemeMode } from '../../theme';
+import { useThemeVars, setThemePrimary, setThemeMode, setThemeSkin, getThemeMode, getThemeSkin, getThemePrimary, isDark, skinPreviewCss, type ThemeMode } from '../../theme';
 
 const { tv, patternSrc, refresh } = useThemeVars();
 const modes: Array<{ id: ThemeMode; name: string }> = [
@@ -62,7 +62,11 @@ const skins = [
   { id: 'flow', name: '进销', preview: (p: string) => skinPreviewCss('flow', p) },
   { id: 'ripple', name: '涟漪', preview: (p: string) => skinPreviewCss('ripple', p) },
 ];
-const cur = ref('default');
+// 当前选中主题色：从本地已存主题色反推对应预设（不写死 default——
+// 服务器拉取失败/离线时仍回选真实生效色，否则每次重开都显示选中 default）
+const cur = ref(
+  presets.find((p) => p.color.toLowerCase() === getThemePrimary().toLowerCase())?.id ?? 'default',
+);
 const curSkin = ref(getThemeSkin());
 /** 点击即生效 + 自动同步服务器（无保存按钮；主题配置=配置类，点击直接 PUT 服务器，其他端 WS 即时应用） */
 function applyLocal() {

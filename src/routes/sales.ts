@@ -119,16 +119,11 @@ salesRouter.get('/', async (c) => {
 
   let where = ' WHERE 1=1';
   const params: string[] = [];
-  // 店员权限：仅可见当天送货记录（送货对单场景），强制锁定当天，忽略传入日期
-  if (user.role === 'staff') {
-    const today = new Date().toISOString().slice(0, 10);
-    where += ' AND si.happened_at >= ? AND si.happened_at <= ?';
-    params.push(today, today);
-  } else {
-    if (clientId) { where += ' AND si.client_id = ?'; params.push(clientId); }
-    if (dateFrom) { where += ' AND si.happened_at >= ?'; params.push(dateFrom); }
-    if (dateTo) { where += ' AND si.happened_at <= ?'; params.push(dateTo); }
-  }
+  // 店员出货范围：与老板一致走日期/店铺过滤（此前锁定当天——但统计页已暴露全量历史，权限不一致；
+  // 毛利仍由 cost_price 打码保护，见下方响应映射）
+  if (clientId) { where += ' AND si.client_id = ?'; params.push(clientId); }
+  if (dateFrom) { where += ' AND si.happened_at >= ?'; params.push(dateFrom); }
+  if (dateTo) { where += ' AND si.happened_at <= ?'; params.push(dateTo); }
 
   // 去单据化：head 表已物理删除，列表从商品行聚合组装（每单一行：店铺/日期/总额由行派生）
   const aggWhere = where.replace(/si\.happened_at/g, 'happened_at').replace(/si\.client_id/g, 'client_id');
@@ -183,7 +178,11 @@ salesRouter.get('/', async (c) => {
     sales: aggRows.results.map((row) => ({
       id: row.id, client_id: row.client_id, client_name: clientName.get(row.client_id) ?? '',
       happened_at: row.happened_at, note: row.note ?? '', total: row.total,
-      items: bySale.get(row.id) ?? [],
+      // 嵌套兼容数组：店员打码成本价（与行级 sale_items 一致，防止绕过行级主结构看毛利）
+      items: (bySale.get(row.id) ?? []).map((it) => {
+        const r = it as Record<string, unknown>;
+        return user.role === 'staff' ? { ...r, cost_price: 0 } : r;
+      }),
     })),
     // 去单据化主结构：行级商品记录（新客户端优先读，整单 sales 字段兼容保留）
     sale_items: saleItemRows.results.map((x) => {

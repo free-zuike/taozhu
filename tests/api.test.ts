@@ -948,7 +948,7 @@ describe('店员权限收窄（进价打码 / 仅当天出货）', () => {
     expect(adminD.can_see_cost).toBe(true);
   });
 
-  it('店员只能看到当天的出货记录（忽略传入日期）', async () => {
+  it('店员出货范围：与老板一致按日期过滤（放开当天锁定，毛利仍由 cost_price 打码保护）', async () => {
     await env.DB.prepare("INSERT INTO clients (id, name) VALUES (?, ?)").bind('c1', '测试饭店').run();
     await call(env, 'POST', '/api/v1/items', token, { name: '白菜', prices: [{ unit: '斤', purchase_price: 1.5, sale_price: 2.5 }] });
     const items = await call(env, 'GET', '/api/v1/items/summary', token).then((r) => r.json()) as {
@@ -958,11 +958,18 @@ describe('店员权限收窄（进价打码 / 仅当天出货）', () => {
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     await call(env, 'POST', '/api/v1/sales', token, { client_id: 'c1', happened_at: yesterday, items: [{ price_id: items.items[0].prices[0].id, quantity: 2 }] });
     await call(env, 'POST', '/api/v1/sales', token, { client_id: 'c1', happened_at: today, items: [{ price_id: items.items[0].prices[0].id, quantity: 3 }] });
+    // 放开后：传入 date_from 即按区间过滤（不再强制当天），两天都返回
     const d = await call(env, 'GET', '/api/v1/sales?date_from=2020-01-01', staffToken).then((r) => r.json()) as {
       sales: Array<{ happened_at: string }>;
     };
-    expect(d.sales.length).toBe(1);
-    expect(d.sales[0].happened_at.slice(0, 10)).toBe(today);
+    expect(d.sales.length).toBe(2);
+    // 店员行级明细仍打码成本价（毛利保护不随日期放开而放宽）
+    const detail = await call(env, 'GET', '/api/v1/sales?date_from=2020-01-01', staffToken).then((r) => r.json()) as {
+      sales: Array<{ items: Array<{ cost_price: number }> }>;
+    };
+    for (const s of detail.sales) {
+      for (const it of s.items) expect(it.cost_price).toBe(0);
+    }
   });
 });
 describe('单据幂等键（sync_key：离线重放/多端不重复）', () => {
