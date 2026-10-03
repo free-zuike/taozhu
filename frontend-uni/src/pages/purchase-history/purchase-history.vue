@@ -13,34 +13,38 @@
       </view>
     </view>
 
-    <view v-for="p in purchases" :key="p.id" class="card">
-      <view class="head">
-        <text class="name">{{ p.happened_at }} 进货</text>
-        <text class="amt">¥{{ Number(p.total || 0).toFixed(2) }}</text>
+    <scroll-view scroll-y class="flow">
+    <!-- 进货流水：按日期分组 + 行级卡片平铺（对齐 App 出货/进货流式列表） -->
+    <view v-for="g in buyGroups" :key="g.date">
+      <view class="day-bar">
+        <text class="day-name">{{ g.week }}</text>
+        <text class="day-total">{{ g.count }} 件 · 合计 ¥{{ fmt(g.amount) }}</text>
       </view>
-      <view v-for="it in (p.items || [])" :key="it.id" class="line" @click="editPurchaseItem(p, it)" @longpress="deletePurchaseLine(p, it)">
-        <view class="line-left">
-          <view class="line-name-row">
-            <text class="line-name">{{ it.item_name }}</text>
-            <text class="op-attach" @click.stop="showAttach('purchase_item', it.id, 'purchase', p.id)">
-              <template v-if="(attachCounts.purchase_item[it.id] || 0) > 0">📎{{ attachCounts.purchase_item[it.id] }}</template>
-              <template v-else>凭证</template>
-            </text>
-          </view>
-          <text class="line-meta">进价 ¥{{ Number(it.purchase_price || it.price || 0).toFixed(2) }} · ×{{ it.quantity }}{{ it.unit }}<text v-if="it.note"> · {{ it.note }}</text></text>
+      <view v-for="l in g.lines" :key="l.key" class="card-buy" @click="editBuyLine(l)" @longpress="deleteBuyLine(l)">
+        <view class="head">
+          <text class="name">{{ l.item_name }}</text>
+          <text class="amt" style="color:#f59e0b">¥{{ fmt(l.amount) }}</text>
         </view>
-        <text class="line-amt">¥{{ Number(it.amount || 0).toFixed(2) }}</text>
-      </view>
-      <view v-if="(p.items || []).length === 0" class="line"><text class="line-name">备注行</text></view>
-      <view class="ops">
-        <text class="op" @click="showAttach('purchase', p.id)">
-          <template v-if="(attachCounts.purchase[p.id] || 0) > 0">📎{{ attachCounts.purchase[p.id] }}</template>
-          <template v-else>整单凭证</template>
-        </text>
-        <text class="tip-longpress">长按删除该商品</text>
+        <view class="buy-line1">
+          <text class="l2-tx">进价 ¥{{ fmt(l.purchase_price) }}<text v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</text></text>
+          <text class="l2-cat" v-if="l.category">{{ l.category }}</text>
+        </view>
+        <view v-if="l.note" class="buy-note">{{ l.note }}</view>
+        <view class="ops">
+          <text class="op" @click.stop="showAttach('purchase_item', l.itemId, 'purchase', l.orderId)">
+            <template v-if="(attachCounts.purchase_item[l.itemId] || 0) > 0">📎{{ attachCounts.purchase_item[l.itemId] }}</template>
+            <template v-else>凭证</template>
+          </text>
+          <text class="op" @click.stop="showAttach('purchase', l.orderId)">
+            <template v-if="(attachCounts.purchase[l.orderId] || 0) > 0">📎单{{ attachCounts.purchase[l.orderId] }}</template>
+            <template v-else>整单凭证</template>
+          </text>
+          <text class="tip-longpress" @click.stop>长按删除该商品</text>
+        </view>
       </view>
     </view>
-    <view v-if="purchases.length === 0" class="empty">该月暂无进货记录</view>
+    <view v-if="buyGroups.length === 0" class="empty">该月暂无进货记录</view>
+    </scroll-view>
 
     <!-- 附件弹层 -->
     <view v-if="attach.show" class="mask" @click="attach.show = false">
@@ -80,7 +84,7 @@ import { onWs, offWs } from '../../ws';
 
 import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 ;
 ;
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
@@ -91,6 +95,51 @@ const purchases = ref<Array<Record<string, any>>>([]);
 const mExpense = ref(0);
 const saving = ref(false);
 const fmt = (n: number) => Number(n || 0).toFixed(2);
+
+// ── 进货流水：展开为明细行并按日期分组（对齐 App：日期头 + 明细行卡片，非整单嵌套）──
+type BuyLine = {
+  key: string; date: string; week: string; item_name: string; note: string;
+  purchase_price: number; quantity: string | number; unit: string; amount: number;
+  category: string; itemId: string; orderId: string; order: Record<string, any>;
+};
+type BuyGroup = { date: string; week: string; count: number; amount: number; lines: BuyLine[] };
+const buyGroups = computed<BuyGroup[]>(() => {
+  const map = new Map<string, BuyGroup>();
+  const WEEKS = ['日', '一', '二', '三', '四', '五', '六'];
+  const pushLine = (line: BuyLine) => {
+    const g = map.get(line.date) || { date: line.date, week: '', count: 0, amount: 0, lines: [] };
+    const d = new Date(`${line.date}T00:00:00`);
+    g.week = `${line.date.slice(0, 4)}年${line.date.slice(5, 7)}月${line.date.slice(8, 10)}日 周${WEEKS[d.getDay()]}`;
+    g.count += 1;
+    g.amount += Number(line.amount || 0);
+    g.lines.push(line);
+    map.set(line.date, g);
+  };
+  for (const p of purchases.value) {
+    const orderDate = String(p.happened_at || '').slice(0, 10);
+    const items = ((p.items as Array<Record<string, any>>) || []);
+    if (items.length === 0) {
+      pushLine({
+        key: `o-${p.id}`, date: orderDate, week: '', item_name: '备注行', note: String(p.note || ''),
+        purchase_price: 0, quantity: '', unit: '', amount: Number(p.total || 0),
+        category: '', itemId: '', orderId: String(p.id), order: p,
+      });
+      continue;
+    }
+    for (const it of items) {
+      const d = String(it.happened_at || orderDate).slice(0, 10);
+      pushLine({
+        key: `${p.id}-${it.id}`, date: d || orderDate, week: '',
+        item_name: String(it.item_name || ''), note: String(it.note || ''),
+        purchase_price: Number(it.purchase_price || it.price || 0),
+        quantity: it.quantity ?? '', unit: String(it.unit || ''), amount: Number(it.amount || 0),
+        category: String(it.category_name || it.category || ''),
+        itemId: String(it.id || ''), orderId: String(p.id), order: p,
+      });
+    }
+  }
+  return [...map.values()].sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : 0));
+});
 
 const itemForm = ref<{
   show: boolean; orderId: string; itemId: string; itemName: string;
@@ -228,6 +277,11 @@ function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
   };
 }
 
+// 流式行点击编辑（流水行字段与接口行字段命名不同：itemId/date → id/happened_at）
+function editBuyLine(l: BuyLine) {
+  editPurchaseItem(l.order, { ...l, id: l.itemId, happened_at: l.date });
+}
+
 // 明细行长按 → 只删除该商品行（与出货侧对称；不再整单删除）
 async function deletePurchaseLine(p: Record<string, any>, it: Record<string, any>) {
   if (!it.id) {
@@ -242,6 +296,11 @@ async function deletePurchaseLine(p: Record<string, any>, it: Record<string, any
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
   }
+}
+
+// 流式行长按删除（流水行字段适配）
+function deleteBuyLine(l: BuyLine) {
+  deletePurchaseLine(l.order, { ...l, id: l.itemId, happened_at: l.date });
 }
 
 async function saveItem() {
@@ -364,6 +423,16 @@ async function loadAttachCounts() {
 .mv { font-size: 34rpx; font-weight: bold; }
 .red { color: #f56c6c; }
 .card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
+/* 进货流水：日期头 + 行级卡片（对齐 App 流式列表；与出货流水同构） */
+.flow { height: calc(100vh - 260rpx); }
+.day-bar { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 8rpx 10rpx; }
+.day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); }
+.day-total { font-size: 23rpx; color: var(--text-sub); }
+.card-buy { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 20rpx 22rpx; margin-bottom: 12rpx; box-shadow: none; }
+.buy-line1 { display: flex; align-items: baseline; gap: 14rpx; margin-bottom: 6rpx; }
+.l2-tx { font-size: 23rpx; color: var(--text-sub); }
+.l2-cat { font-size: 20rpx; color: var(--primary); background: var(--primary-soft); border-radius: 6rpx; padding: 2rpx 10rpx; }
+.buy-note { font-size: 22rpx; color: var(--text-sub); margin-bottom: 6rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }

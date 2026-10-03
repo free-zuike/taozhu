@@ -1,9 +1,19 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <!-- 范围快速切换（对齐 App stats 页 _quickBar） -->
+    <!-- 范围快速切换（今天/当月/今年/全部/自定义，自定义在最后；对齐 App stats 页 _quickBar） -->
     <view class="quick">
       <view v-for="r in ranges" :key="r.key" :class="['q-item', { active: range === r.key }]" @click="switchRange(r.key)">{{ r.label }}</view>
+    </view>
+    <!-- 自定义区间（range=custom 时显示起止日期选择） -->
+    <view v-if="range === 'custom'" class="custom-bar">
+      <picker mode="date" :value="customStart" @change="onCustomStart">
+        <view class="date-pill">{{ customStart }}</view>
+      </picker>
+      <text class="custom-tilde">~</text>
+      <picker mode="date" :value="customEnd" @change="onCustomEnd">
+        <view class="date-pill">{{ customEnd }}</view>
+      </picker>
     </view>
 
     <!-- 出货/进货切换（对齐 App：统计维度随时切换） -->
@@ -12,15 +22,19 @@
       <view :class="['seg-item', { active: kind === 'purchase' }]" @click="switchKind('purchase')">进货</view>
     </view>
 
-    <!-- 汇总卡（区间合计） -->
+    <!-- 汇总卡（区间合计；出货/进货维度分别显示，对齐 App 汇总卡） -->
     <view class="card sum-card">
-      <view class="sum-row">
+      <view v-if="kind === 'sale'" class="sum-row">
         <view class="sum-cell"><text class="sl">出货额</text><text class="sv" style="color:var(--primary)">¥{{ fmt(sub.sales_total) }}</text></view>
         <view class="sum-cell"><text class="sl">收款</text><text class="sv" style="color:#22c55e">¥{{ fmt(sub.paid_total) }}</text></view>
         <view class="sum-cell"><text class="sl">欠款</text><text class="sv" style="color:#f59e0b">¥{{ fmt(sub.debt) }}</text></view>
         <view class="sum-cell"><text class="sl">毛利</text><text class="sv" :style="{ color: sub.gross_profit >= 0 ? '#22c55e' : '#ef4444' }">¥{{ fmt(sub.gross_profit) }}</text></view>
       </view>
-      <view v-if="kind === 'purchase'" class="sum-sub">进货合计 ¥{{ fmt(sub.purchase_total) }} · {{ sub.sales_count }} 件</view>
+      <view v-else class="sum-row">
+        <view class="sum-cell"><text class="sl">进货额</text><text class="sv" style="color:#f59e0b">¥{{ fmt(sub.purchase_total) }}</text></view>
+        <view class="sum-cell"><text class="sl">天数</text><text class="sv" style="color:var(--text-main)">{{ days.length }}</text></view>
+        <view class="sum-cell"><text class="sl">笔数</text><text class="sv" style="color:var(--text-main)">{{ sub.sales_count }}</text></view>
+      </view>
     </view>
 
     <!-- 日流水柱状图（最近 14 天，纯 view 柱；对齐 App 折线图趋势） -->
@@ -98,12 +112,15 @@ interface Monthly { month: string; sales_total: number; purchase_total: number; 
 interface DayRow { day: string; sales_total: number; paid_total: number; purchase_total: number; gross_profit: number }
 
 const ranges = [
-  { key: 'today', label: '今日' },
-  { key: 'month', label: '本月' },
-  { key: 'year', label: '本年' },
+  { key: 'today', label: '今天' },
+  { key: 'month', label: '当月' },
+  { key: 'year', label: '今年' },
   { key: 'all', label: '全部' },
+  { key: 'custom', label: '自定义' },
 ];
 const range = ref('month');
+const customStart = ref('');
+const customEnd = ref('');
 const kind = ref<'sale' | 'purchase'>('sale');
 const byClient = ref<ByClient[]>([]);
 const monthly = ref<Monthly[]>([]);
@@ -127,6 +144,12 @@ function rangeSpan() {
   if (range.value === 'today') return { start: today, end: today };
   if (range.value === 'month') return { start: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`, end: today };
   if (range.value === 'year') return { start: `${now.getFullYear()}-01-01`, end: today };
+  if (range.value === 'custom' && customStart.value && customEnd.value) {
+    // 起止日期可倒置，统一为 start <= end
+    return customStart.value <= customEnd.value
+      ? { start: customStart.value, end: customEnd.value }
+      : { start: customEnd.value, end: customStart.value };
+  }
   // 全部：最早一笔记账日到今天
   return { start: firstDate.value || `${now.getFullYear()}-01-01`, end: today };
 }
@@ -248,6 +271,24 @@ async function load() {
 function switchRange(k: string) {
   if (range.value === k) return;
   range.value = k;
+  // 首次进入自定义：默认近一个月区间（起止今天往前 30 天）
+  if (k === 'custom') {
+    const now = new Date();
+    const end = dStr(now);
+    const start = dStr(new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()));
+    customStart.value = start;
+    customEnd.value = end;
+  }
+  load();
+}
+
+function onCustomStart(e: { detail: { value: string } }) {
+  customStart.value = e.detail.value;
+  load();
+}
+
+function onCustomEnd(e: { detail: { value: string } }) {
+  customEnd.value = e.detail.value;
   load();
 }
 
@@ -276,6 +317,9 @@ async function onYear(e: { detail: { value: number } }) {
 .quick { display: flex; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; }
 .q-item { flex: 1; text-align: center; font-size: 26rpx; color: var(--text-sub); padding: 12rpx 0; border-radius: 8rpx; }
 .q-item.active { color: #fff; background: var(--primary); font-weight: 600; }
+.custom-bar { display: flex; align-items: center; justify-content: center; gap: 16rpx; margin-bottom: 16rpx; }
+.date-pill { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 10rpx 20rpx; background: var(--card-bg); }
+.custom-tilde { font-size: 26rpx; color: var(--text-sub); }
 .seg { display: flex; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; }
 .seg-item { flex: 1; text-align: center; font-size: 26rpx; color: var(--text-sub); padding: 12rpx 0; border-radius: 8rpx; }
 .seg-item.active { color: #fff; background: var(--primary); font-weight: 600; }

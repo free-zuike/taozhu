@@ -28,6 +28,7 @@ class _StatsPageState extends State<StatsPage> {
   String _quick = 'rolling';
   DateTime? _customStart;
   DateTime? _customEnd;
+  String _firstDate = ''; // 最早一笔记账日（/stats/years first_date，"全部"区间起点）
 
   List<String> _years = [];
   String? _year;
@@ -101,6 +102,7 @@ class _StatsPageState extends State<StatsPage> {
     final cachedYears = await Api.instance.getCachedRaw('/stats/years');
     if (cachedYears != null) {
       _years = ((cachedYears['years'] as List?) ?? []).map((e) => '$e').toList();
+      _firstDate = '${cachedYears['first_date'] ?? ''}';
     }
     // 统计本地优先加载（有缓存秒开）；网络刷新只由同步完成/下拉触发，页面加载不发请求
     if (kIsWeb) {
@@ -115,6 +117,7 @@ class _StatsPageState extends State<StatsPage> {
         if (!mounted) return;
         _clients = ((results[0]['clients'] as List?) ?? []).cast<Map<String, dynamic>>();
         _years = ((results[1]['years'] as List?) ?? []).map((e) => '$e').toList();
+        _firstDate = '${results[1]['first_date'] ?? ''}';
         if (_years.isNotEmpty && !_years.contains(_year)) _year = _years.last;
       } catch (e) {
         appLog('net', '统计店铺/年份刷新失败: ${e.toString().split('\n').first}', level: 'error');
@@ -164,20 +167,21 @@ class _StatsPageState extends State<StatsPage> {
       case 'today':
         final d = _fmtDate(now);
         return (d, d);
-      case 'last':
-        // 上一结账周期（按店铺起始日）
-        return _periodOf(_msd, DateTime(now.year, now.month - 1, now.day.clamp(1, 28)));
-      case 'rolling':
-        // 当月（1 号至今天；用户要求「当月」而非近 30 天窗口）
-        return (_fmtDate(DateTime(now.year, now.month, 1)), _fmtDate(now));
+      case 'year':
+        // 今年：1月1日到今天
+        return (_fmtDate(DateTime(now.year, 1, 1)), _fmtDate(now));
+      case 'all':
+        // 全部：最早一笔记账日到今天
+        final f = _firstDate.isEmpty ? _fmtDate(DateTime(now.year, 1, 1)) : _firstDate;
+        return (f, _fmtDate(now));
       case 'custom':
         if (_customStart != null && _customEnd != null) {
           return (_fmtDate(_customStart!), _fmtDate(_customEnd!));
         }
         return (_fmtDate(DateTime(now.year, now.month, 1)), _fmtDate(now));
       default:
-        // 本月 = 当前结账周期（按店铺起始日）
-        return _periodOf(_msd, now);
+        // 当月（1 号至今天；用户要求「当月」而非近 30 天窗口）
+        return (_fmtDate(DateTime(now.year, now.month, 1)), _fmtDate(now));
     }
   }
 
@@ -547,14 +551,16 @@ class _StatsPageState extends State<StatsPage> {
     );
   }
 
-  // ── 周期胶囊 ──
+  // ── 周期胶囊（对齐小程序：今天 / 当月 / 今年 / 全部 / 自定义，自定义在最后）──
   Widget _quickBar() {
     return Wrap(
       spacing: 8,
       runSpacing: 8,
       children: [
-        _pill('今日', 'today'),
+        _pill('今天', 'today'),
         _pill('当月', 'rolling'),
+        _pill('今年', 'year'),
+        _pill('全部', 'all'),
         _pill('自定义', 'custom', icon: Icons.date_range),
       ],
     );
@@ -823,7 +829,7 @@ class _StatsPageState extends State<StatsPage> {
           children: [
             Padding(
               padding: const EdgeInsets.only(left: 4),
-              child: Text('出货 ¥${fmtMoney(values.fold<double>(0, (a, b) => a + b))}',
+              child: Text('${_isBuy ? '进货' : '出货'} ¥${fmtMoney(values.fold<double>(0, (a, b) => a + b))}',
                   style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: _main)),
             ),
             const SizedBox(height: 8),

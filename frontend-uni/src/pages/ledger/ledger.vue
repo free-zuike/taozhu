@@ -36,7 +36,7 @@
           <text class="day-name">{{ g.week }}</text>
           <text class="day-total">{{ g.count }} 件 · 合计 ¥{{ fmtNum(g.amount) }}</text>
         </view>
-        <view v-for="l in g.lines" :key="l.key" class="card-sale" @click="editSaleLine(l)" @longpress="deleteSaleLine(l)">
+        <view v-for="l in g.lines" :key="l.key" class="card-sale" :class="profitClass(l)" @click="editSaleLine(l)" @longpress="deleteSaleLine(l)">
           <view class="head">
             <text class="name">{{ l.client_name }}</text>
             <text class="amt">¥{{ Number(l.amount || 0).toFixed(2) }}</text>
@@ -45,7 +45,11 @@
             <text class="line-name">{{ l.item_name }}</text>
             <text class="line-note" v-if="l.note">{{ l.note }}</text>
           </view>
-          <view class="sale-line2">售价 ¥{{ Number(l.sale_price || 0).toFixed(2) }} · ×{{ l.quantity }}{{ l.unit }}</view>
+          <view class="sale-line2">
+            <text class="l2-tx">{{ l.sale_price > 0 ? '售价 ¥' + Number(l.sale_price).toFixed(2) : '' }}<text v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</text></text>
+            <text class="l2-cat" v-if="l.category">{{ l.category }}</text>
+            <text v-if="isAdmin && l.cost_price > 0" class="l2-profit" :class="profitText(l)">{{ profitText(l) }}</text>
+          </view>
           <view class="ops">
             <text class="op" @click.stop="showAttach(l.itemId ? 'sale_item' : 'sale', l.itemId || l.orderId, 'sale', l.orderId)">
               <template v-if="attachOf(l) > 0">📎{{ attachOf(l) }}</template>
@@ -135,9 +139,11 @@ const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 ;
 ;
-import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
+import { request, getToken, getRole, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 
 const tab = ref<'sales' | 'payments'>('sales');
+// 老板才显示行级盈亏（进价=毛利敏感数据，店员隐藏；对齐 App 仅老板可见毛利）
+const isAdmin = ref(getRole() !== 'staff');
 const sales = ref<Array<Record<string, any>>>([]);
 const payments = ref<Array<Record<string, any>>>([]);
 const saving = ref(false);
@@ -260,10 +266,26 @@ function fmtNum(n: number): string {
   return (Number(n) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// 行级盈亏 = (售价 − 成本) × 数量（对齐 App 盈亏着色：盈绿/亏红/平无色）
+function profitOf(l: SaleLine): number {
+  return (Number(l.sale_price) - Number(l.cost_price)) * Number(l.quantity || 0);
+}
+function profitClass(l: SaleLine): string {
+  if (!isAdmin.value || Number(l.cost_price) <= 0 || Number(l.quantity) === 0) return '';
+  const p = profitOf(l);
+  return p > 0 ? 'profit-win' : p < 0 ? 'profit-loss' : '';
+}
+function profitText(l: SaleLine): string {
+  const p = profitOf(l);
+  if (!p) return '';
+  return `${p > 0 ? '盈 +' : '亏 '}¥${fmtNum(Math.abs(p))}`;
+}
+
 // ── 出货流水：展开为明细行并按日期分组（对齐 App：日期头 + 明细行卡片，非整单嵌套）──
 type SaleLine = {
   key: string; date: string; week: string; client_name: string; item_name: string;
   note: string; sale_price: number; quantity: string | number; unit: string; amount: number;
+  cost_price: number; category: string;
   itemId: string; orderId: string; order: Record<string, any>;
 };
 type SaleGroup = { date: string; week: string; count: number; amount: number; lines: SaleLine[] };
@@ -273,7 +295,7 @@ const saleGroups = computed<SaleGroup[]>(() => {
   const pushLine = (line: SaleLine) => {
     const g = map.get(line.date) || { date: line.date, week: '', count: 0, amount: 0, lines: [] };
     const d = new Date(`${line.date}T00:00:00`);
-    g.week = `${line.date.slice(5, 7)}月${line.date.slice(8, 10)}日 周${WEEKS[d.getDay()]}`;
+    g.week = `${line.date.slice(0, 4)}年${line.date.slice(5, 7)}月${line.date.slice(8, 10)}日 周${WEEKS[d.getDay()]}`;
     g.count += 1;
     g.amount += Number(line.amount || 0);
     g.lines.push(line);
@@ -286,7 +308,7 @@ const saleGroups = computed<SaleGroup[]>(() => {
       pushLine({
         key: `o-${s.id}`, date: orderDate, week: '', client_name: String(s.client_name || ''),
         item_name: '备注行', note: String(s.note || ''), sale_price: 0, quantity: '', unit: '',
-        amount: Number(s.total || 0), itemId: '', orderId: String(s.id), order: s,
+        amount: Number(s.total || 0), cost_price: 0, category: '', itemId: '', orderId: String(s.id), order: s,
       });
       continue;
     }
@@ -296,7 +318,8 @@ const saleGroups = computed<SaleGroup[]>(() => {
         key: `${s.id}-${it.id}`, date: d || orderDate, week: '', client_name: String(s.client_name || ''),
         item_name: String(it.item_name || ''), note: String(it.note || ''),
         sale_price: Number(it.sale_price || 0), quantity: it.quantity ?? '', unit: String(it.unit || ''),
-        amount: Number(it.amount || 0), itemId: String(it.id || ''), orderId: String(s.id), order: s,
+        amount: Number(it.amount || 0), cost_price: Number(it.cost_price || 0), category: String(it.category_name || it.category || ''),
+        itemId: String(it.id || ''), orderId: String(s.id), order: s,
       });
     }
   }
@@ -717,6 +740,22 @@ async function removePayment(p: Record<string, any>) {
 .name { font-size: 30rpx; font-weight: bold; }
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }
 .sub { font-size: 26rpx; color: var(--text-sub); margin-bottom: 12rpx; }
+/* 出货流水：日期头 + 行级卡片（对齐 App _saleLineTile：圆角10 + 1px 描边无阴影 + 盈亏着色） */
+.day-bar { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 8rpx 10rpx; }
+.day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); }
+.day-total { font-size: 23rpx; color: var(--text-sub); }
+.card-sale { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 20rpx 22rpx; margin-bottom: 12rpx; box-shadow: none; }
+.card-sale.profit-win { border-color: rgba(34, 197, 94, 0.45); }
+.card-sale.profit-loss { border-color: rgba(239, 68, 68, 0.45); }
+.sale-line1 { display: flex; align-items: baseline; gap: 12rpx; margin-bottom: 6rpx; }
+.line-name { font-size: 28rpx; font-weight: 600; color: var(--text-main); }
+.line-note { font-size: 22rpx; color: var(--text-sub); flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sale-line2 { display: flex; align-items: baseline; gap: 14rpx; }
+.l2-tx { font-size: 23rpx; color: var(--text-sub); }
+.l2-cat { font-size: 20rpx; color: var(--primary); background: var(--primary-soft); border-radius: 6rpx; padding: 2rpx 10rpx; }
+.l2-profit { font-size: 23rpx; font-weight: bold; margin-left: auto; }
+.card-sale.profit-win .l2-profit { color: #22c55e; }
+.card-sale.profit-loss .l2-profit { color: #ef4444; }
 .line { display: flex; justify-content: space-between; align-items: center; padding: 10rpx 0; border-top: 1rpx solid var(--divider); }
 .line-left { flex: 1; min-width: 0; }
 .line-name { font-size: 27rpx; color: var(--text-main); display: block; }

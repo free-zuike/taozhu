@@ -1,100 +1,92 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <!-- 头部：头像 + 问候语与名字一行（对齐 App） -->
+    <!-- 顶部用户块（对齐 App my_page _userHeader：头像居中一行 + 问候/名字居中一行 + 统计三列，透明露背景） -->
     <view class="head">
       <image v-if="avatarUrl" class="avatar-img" :src="avatarUrl" mode="aspectFill" @click="changeAvatar" />
       <view v-else class="avatar" @click="changeAvatar">{{ (user.name || '陶').slice(0, 1) }}</view>
-      <view class="head-info">
-        <view class="hi-line">
-          <text class="hi">{{ greeting }}</text>
-          <text class="hi-name">{{ user.name || '未登录' }}</text>
+      <view class="hi-line">
+        <text class="hi">{{ greetIcon }} {{ greeting }}</text>
+        <text class="hi-name">{{ user.name || '未登录' }}</text>
+      </view>
+      <text class="hi-sub" @click="openServer">{{ user.role === 'staff' ? '店员' : '老板' }} · {{ curBase || '未设置服务器地址' }}</text>
+      <!-- 统计三列（仅老板）：记账天数 / 本店交易（当前店铺，跟随交易页选择） / 店铺结余 -->
+      <view v-if="isAdmin" class="stats">
+        <view class="stat">
+          <text class="st-value">{{ stats.bookDays }}</text>
+          <text class="st-label">记账天数</text>
         </view>
-        <text class="hi-sub">{{ user.role === 'staff' ? '店员' : '老板' }} · {{ curBase || '未设置服务器地址' }}</text>
-      </view>
-      <text class="server-tag" @click="openServer">切换 ▾</text>
-    </view>
-
-    <!-- 当前店铺切换（对齐 App 我的页主档切换：统计随当前店铺） -->
-    <view class="shop-row" @click="pickClient">
-      <text class="shop-label">当前店铺</text>
-      <text class="shop-name">{{ curClientName || '全部店铺' }}</text>
-      <text class="r-arrow">›</text>
-    </view>
-
-    <!-- 统计三列（老板）：记账天数 / 本店交易 / 店铺结余 -->
-    <view v-if="isAdmin" class="stats">
-      <view class="stat">
-        <text class="st-value">{{ stats.bookDays }}</text>
-        <text class="st-label">记账天数</text>
-      </view>
-      <view class="stat-line"></view>
-      <view class="stat">
-        <text class="st-value">{{ stats.clientCount }}</text>
-        <text class="st-label">本店交易</text>
-      </view>
-      <view class="stat-line"></view>
-      <view class="stat">
-        <text class="st-value" :class="{ green: stats.balance >= 0, red: stats.balance < 0 }">¥{{ fmt(stats.balance) }}</text>
-        <text class="st-label">店铺结余</text>
+        <view class="stat-line"></view>
+        <view class="stat">
+          <text class="st-value">{{ stats.clientCount }}</text>
+          <text class="st-label">本店交易</text>
+        </view>
+        <view class="stat-line"></view>
+        <view class="stat">
+          <text class="st-value" :class="{ green: stats.balance >= 0, red: stats.balance < 0 }">¥{{ fmt(stats.balance) }}</text>
+          <text class="st-label">店铺结余</text>
+        </view>
       </view>
     </view>
 
     <view class="group-title">经营</view>
     <view class="grp">
       <view v-if="isAdmin" class="row" @click="go('/pages/clients/clients')">
-        <view class="r-ic ic-blue"><text class="ic-tx">🏪</text></view><text class="r-tx">店铺管理</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="ic-tx">🏪</text></view><view class="r-body"><text class="r-tx">店铺管理</text><text class="r-sub">店铺列表、新增、编辑</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/payments/payments')">
-        <view class="r-ic ic-green"><text class="ic-tx">💰</text></view><text class="r-tx">收款结账</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-green"><text class="ic-tx">💰</text></view><view class="r-body"><text class="r-tx">收款结账</text><text class="r-sub">登记收款、查看收款历史</text></view><text class="r-arrow">›</text>
+      </view>
+      <view v-if="isAdmin" class="row" @click="go('/pages/payments/payments')">
+        <view class="r-ic ic-blue"><text class="ic-tx">🏦</text></view><view class="r-body"><text class="r-tx">收款账户</text><text class="r-sub">收款方式预设：现金/微信/支付宝…</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/statement/statement')">
-        <view class="r-ic ic-orange"><text class="ic-tx">📄</text></view><text class="r-tx">对账单</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-orange"><text class="ic-tx">📄</text></view><view class="r-body"><text class="r-tx">对账单</text><text class="r-sub">按店铺+周期生成对账明细</text></view><text class="r-arrow">›</text>
       </view>
     </view>
 
     <view class="group-title">商品与库存</view>
     <view class="grp">
       <view class="row" @click="go('/pages/stocks/stocks')">
-        <view class="r-ic ic-blue"><text class="ic-tx">📊</text></view><text class="r-tx">库存</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="ic-tx">📊</text></view><view class="r-body"><text class="r-tx">库存</text><text class="r-sub">进货/出货自动维护，盘点与预警</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="go('/pages/items/items')">
-        <view class="r-ic ic-green"><text class="ic-tx">📦</text></view><text class="r-tx">商品管理</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-green"><text class="ic-tx">📦</text></view><view class="r-body"><text class="r-tx">商品管理</text><text class="r-sub">商品与多单位价格</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="go('/pages/categories/categories')">
-        <view class="r-ic ic-orange"><text class="ic-tx">🗂️</text></view><text class="r-tx">分类管理</text><text class="r-arrow">›</text>
-      </view>
-      <view class="row" @click="go('/pages/stats/stats')">
-        <view class="r-ic ic-purple"><text class="ic-tx">📈</text></view><text class="r-tx">统计</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-orange"><text class="ic-tx">🗂️</text></view><view class="r-body"><text class="r-tx">分类管理</text><text class="r-sub">商品分类 / 店铺分类（两级）</text></view><text class="r-arrow">›</text>
       </view>
     </view>
 
     <view class="group-title">系统</view>
     <view class="grp">
       <view v-if="isAdmin" class="row" @click="go('/pages/users/users')">
-        <view class="r-ic ic-blue"><text class="ic-tx">👥</text></view><text class="r-tx">账号管理</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="ic-tx">👥</text></view><view class="r-body"><text class="r-tx">账号管理</text><text class="r-sub">店员/老板账号管理</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/audit/audit')">
-        <view class="r-ic ic-red"><text class="ic-tx">📋</text></view><text class="r-tx">操作审计</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-red"><text class="ic-tx">📋</text></view><view class="r-body"><text class="r-tx">操作审计</text><text class="r-sub">登录/删除/修改等关键操作留痕</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/ai-settings/ai-settings')">
-        <view class="r-ic ic-purple"><text class="ic-tx">🤖</text></view><text class="r-tx">AI 识别设置</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-purple"><text class="ic-tx">🤖</text></view><view class="r-body"><text class="r-tx">AI 识别设置</text><text class="r-sub">配置 AI 记账 Key 与模型</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="go('/pages/theme-settings/theme-settings')">
-        <view class="r-ic ic-gold"><text class="ic-tx">🎨</text></view><text class="r-tx">主题设置</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-gold"><text class="ic-tx">🎨</text></view><view class="r-body"><text class="r-tx">主题设置</text><text class="r-sub">配色主题 / 明暗模式 / 背景</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/devices/devices')">
-        <view class="r-ic ic-green"><text class="ic-tx">📱</text></view><text class="r-tx">设备管理</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-green"><text class="ic-tx">📱</text></view><view class="r-body"><text class="r-tx">设备管理</text><text class="r-sub">登录设备列表，可删除</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/backup/backup')">
-        <view class="r-ic ic-orange"><text class="ic-tx">💾</text></view><text class="r-tx">数据备份</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-orange"><text class="ic-tx">💾</text></view><view class="r-body"><text class="r-tx">数据备份</text><text class="r-sub">导出全库存档 / 从备份合并恢复</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="checkUpdate">
-        <view class="r-ic ic-blue"><text class="ic-tx">🔄</text></view><text class="r-tx">检查更新</text><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="ic-tx">🔄</text></view><view class="r-body"><text class="r-tx">检查更新</text><text class="r-sub">小程序随版本自动更新，刷新即可</text></view><text class="r-arrow">›</text>
       </view>
     </view>
 
-    <button class="logout" @click="logout">退出登录</button>
+    <view class="bottom">
+      <button class="btn-logout" @click="logout">退出登录</button>
+      <button class="btn-switch" @click="switchAccount">切换账号</button>
+    </view>
     <view class="ver">陶朱 小程序</view>
 
     <!-- 服务器设置弹层：切换域名（保存后清 token 回登录页重新登录） -->
@@ -121,13 +113,20 @@ const user = ref({ name: '', role: '' });
 const isAdmin = ref(true);
 // 头像（/auth/avatar?token= 带鉴权，小程序 image 组件无法带 header）
 const avatarUrl = ref('');
-// 问候语（对齐 App：早上好/下午好/晚上好）
+// 问候语（对齐 App：早上好/下午好/晚上好）+ 时段图标
 const greeting = computed(() => {
   const h = new Date().getHours();
   if (h >= 5 && h < 12) return '早上好';
   if (h >= 12 && h < 18) return '下午好';
   if (h >= 18 && h < 23) return '晚上好';
   return '夜深了，注意休息';
+});
+const greetIcon = computed(() => {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 12) return '🌅';
+  if (h >= 12 && h < 18) return '☀️';
+  if (h >= 18 && h < 23) return '🌙';
+  return '🌌';
 });
 // 对齐 App 我的页统计卡：记账天数 / 本店交易（商品行数） / 店铺结余（当前店铺毛利）
 const stats = ref({ bookDays: 0, clientCount: 0, balance: 0 });
@@ -137,9 +136,7 @@ const showServer = ref(false);
 const saving = ref(false);
 const curBase = ref(getApiBase());
 const serverInput = ref(getApiBase());
-// 当前店铺切换（对齐 App 我的页主档切换；存 taozhu_cur_client，统计随店铺）
-const curClientName = ref('');
-const clientChoices = ref<Array<{ id: string; name: string }>>([]);
+// 当前店铺由交易页选择（taozhu_cur_client），我的页统计随交易页对齐，不再单独选择
 
 // 头像更换：选图 → 上传 /auth/avatar（multipart photo，header 带 token）→ 刷新（对齐 App 头像更换）
 function changeAvatar() {
@@ -169,37 +166,6 @@ function changeAvatar() {
   });
 }
 
-async function loadClients() {
-  try {
-    const d = await request<{ clients: Array<{ id: string; name: string }> }>('/clients', 'GET').catch(() => null);
-    clientChoices.value = d?.clients || [];
-  } catch (e) {
-    // 店铺列表拉取失败不阻塞
-  }
-}
-
-function pickClient() {
-  const names = ['全部店铺', ...clientChoices.value.map((c) => c.name)];
-  uni.showActionSheet({
-    itemList: names.slice(0, 6),
-    success: (r) => {
-      const idx = r.tapIndex;
-      const items = names.slice(0, 6);
-      if (idx === 0) {
-        uni.removeStorageSync('taozhu_cur_client');
-        curClientName.value = '';
-      } else {
-        const c = clientChoices.value[idx - 1];
-        if (c) {
-          uni.setStorageSync('taozhu_cur_client', c.id);
-          curClientName.value = c.name;
-        }
-      }
-      loadStats();
-    },
-  });
-}
-
 onShow(async () => {
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
@@ -220,9 +186,6 @@ onShow(async () => {
     // 用户信息拉取失败不阻塞页面
   }
   loadStats();
-  loadClients();
-  const cid = (uni.getStorageSync('taozhu_cur_client') as string) || '';
-  curClientName.value = cid ? clientChoices.value.find((c) => c.id === cid)?.name || '当前店铺' : '';
 });
 
 async function loadStats() {
@@ -303,40 +266,49 @@ function logout() {
     },
   });
 }
+
+function switchAccount() {
+  uni.showModal({
+    title: '切换账号',
+    content: '将清除当前账号的本地登录状态，返回登录页换号登录。',
+    success: (r) => {
+      if (r.confirm) {
+        clearToken();
+        uni.reLaunch({ url: '/pages/login/login' });
+      }
+    },
+  });
+}
 </script>
 
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
-.page { min-height: 100vh; padding-bottom: 60rpx;  background: var(--page-bg); }
+.page { min-height: 100vh; padding: 24rpx 24rpx 60rpx; box-sizing: border-box; background: var(--page-bg); }
+/* 顶部用户块：透明露背景（对齐 App _userHeader 无卡片底），头像居中一行 + 问候/名字一行居中 + 统计三列 */
 .head {
-  display: flex; align-items: center; gap: 20rpx;
-  background: linear-gradient(135deg, var(--primary), #60a5fa);
-  border-radius: 20rpx; padding: 32rpx 28rpx; margin-bottom: 20rpx; color: #fff;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 20rpx 0 12rpx; margin-bottom: 24rpx;
 }
-.avatar-img { width: 108rpx; height: 108rpx; border-radius: 50%; border: 4rpx solid rgba(255,255,255,0.5); flex-shrink: 0; }
+.avatar-img { width: 144rpx; height: 144rpx; border-radius: 50%; border: 4rpx solid var(--card-border); flex-shrink: 0; }
 .avatar {
-  width: 108rpx; height: 108rpx; border-radius: 50%; background: rgba(255,255,255,0.25);
-  display: flex; align-items: center; justify-content: center; font-size: 48rpx; font-weight: bold; flex-shrink: 0;
+  width: 144rpx; height: 144rpx; border-radius: 50%; background: var(--primary-soft); color: var(--primary);
+  display: flex; align-items: center; justify-content: center; font-size: 64rpx; font-weight: bold; flex-shrink: 0;
 }
-.head-info { flex: 1; display: flex; flex-direction: column; gap: 8rpx; }
-.hi-line { display: flex; align-items: baseline; }
-.hi { font-size: 26rpx; font-weight: 600; margin-right: 12rpx; opacity: 0.95; }
-.hi-name { font-size: 34rpx; font-weight: bold; max-width: 220rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hi-sub { font-size: 22rpx; opacity: 0.85; word-break: break-all; }
-.server-tag { font-size: 24rpx; background: rgba(255,255,255,0.2); border-radius: 999rpx; padding: 8rpx 20rpx; flex-shrink: 0; }
-.shop-row { display: flex; align-items: center; background: transparent; border: var(--card-border); border-radius: 16rpx; padding: 22rpx 24rpx; margin-bottom: 20rpx; }
-.shop-label { font-size: 26rpx; color: var(--text-sub); margin-right: 20rpx; }
-.shop-name { flex: 1; font-size: 28rpx; color: var(--primary); font-weight: 600; }
-.stats { display: flex; align-items: stretch; background: transparent; border: var(--card-border); border-radius: 16rpx; padding: 26rpx 10rpx; margin-bottom: 24rpx; }
-.stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8rpx; justify-content: center; }
-.stat-line { width: 1rpx; background: var(--divider); margin: 6rpx 0; }
+.hi-line { display: flex; align-items: baseline; gap: 12rpx; margin-top: 20rpx; }
+.hi { font-size: 28rpx; font-weight: 600; color: var(--primary); }
+.hi-name { font-size: 36rpx; font-weight: bold; max-width: 320rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-main); }
+.hi-sub { font-size: 24rpx; color: var(--text-sub); margin-top: 10rpx; word-break: break-all; padding: 0 24rpx; }
+/* 统计三列（仅老板）：宽松间距 + 分隔线（对齐 App cell 17w800/11 标签 + 30px 分隔线） */
+.stats { display: flex; align-items: stretch; width: 100%; margin-top: 28rpx; padding: 28rpx 8rpx 12rpx; border-top: 1rpx solid var(--divider); }
+.stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 12rpx; justify-content: center; }
+.stat-line { width: 1rpx; background: var(--divider); margin: 8rpx 0; }
 .st-label { font-size: 22rpx; color: var(--text-sub); }
-.st-value { font-size: 32rpx; font-weight: bold; color: var(--text-main); }
+.st-value { font-size: 38rpx; font-weight: 800; color: var(--text-main); }
 .green { color: #67c23a; }
 .red { color: #f56c6c; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 12rpx; }
 .grp { background: var(--card-bg); border: var(--card-border); border-radius: 16rpx; margin-bottom: 20rpx; overflow: hidden; }
-.row { display: flex; align-items: center; padding: 26rpx 24rpx; border-bottom: 1rpx solid var(--divider); }
+.row { display: flex; align-items: center; padding: 22rpx 24rpx; border-bottom: 1rpx solid var(--divider); }
 .row:last-child { border-bottom: none; }
 .r-ic {
   width: 56rpx; height: 56rpx; border-radius: 16rpx; margin-right: 20rpx;
@@ -345,9 +317,13 @@ function logout() {
 .ic-blue { background: var(--primary-soft); } .ic-green { background: var(--ok-bg); }
 .ic-orange { background: var(--warn-bg); } .ic-purple { background: var(--violet-bg); } .ic-gold { background: var(--warn-bg); } .ic-red { background: var(--danger-bg); }
 .ic-tx { font-size: 28rpx; line-height: 1; }
-.r-tx { flex: 1; font-size: 28rpx; color: var(--text-main); }
+.r-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4rpx; }
+.r-tx { font-size: 28rpx; color: var(--text-main); }
+.r-sub { font-size: 22rpx; color: var(--text-sub); }
 .r-arrow { font-size: 34rpx; color: var(--text-sub); }
-.logout { margin: 24rpx 0 16rpx; background: var(--card-bg); color: #f56c6c; border-radius: 16rpx; font-size: 30rpx; border: 1rpx solid #f56c6c; }
+.bottom { display: flex; gap: 20rpx; margin: 24rpx 0 16rpx; }
+.btn-logout { flex: 1; background: var(--card-bg); color: #f56c6c; border-radius: 16rpx; font-size: 30rpx; border: 1rpx solid #f56c6c; }
+.btn-switch { flex: 1; background: var(--primary); color: #fff; border-radius: 16rpx; font-size: 30rpx; }
 .ver { text-align: center; color: var(--text-sub); font-size: 22rpx; margin-top: 8rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }

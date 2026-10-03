@@ -33,9 +33,13 @@
       <input class="num" type="digit" v-model="row.quantity" placeholder="数量" />
       <input class="num" type="digit" v-model="row.salePrice" placeholder="单价" />
       <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折${row.countUnit}`" />
+      <picker class="date-pick" mode="date" :value="row.happenedAt || date" @change="(e) => (row.happenedAt = e.detail.value)">
+        <view class="mini-field">{{ row.happenedAt ? row.happenedAt.slice(5) : '日期' }}</view>
+      </picker>
       <text class="amt">¥{{ rowAmount(row) }}</text>
       <text class="del" @click="rows.splice(i, 1)">删</text>
     </view>
+    <input class="ipt-note" v-model="note" placeholder="整单备注（选填，如：赊账/送货单号…）" />
 
     <!-- 底部固定悬浮栏（对齐 App：合计+添加+提交固定在底部，滚动列表时始终可见） -->
     <view class="bottom-bar">
@@ -63,6 +67,8 @@ interface Row {
   priceId: string; priceLabel: string; unit: string;
   quantity: string; salePrice: string; countQty: string;
   countUnit: string; // 商品计数单位（袋/个…，有才显示折合计数输入框）
+  happenedAt: string; // 行独立日期（缺省用单据日期；对齐 App 行级日期）
+  note: string; // 行级备注（缺省空；对齐 App 行备注）
 }
 
 const clientId = ref('');
@@ -72,6 +78,7 @@ const clients = ref<Array<{ id: string; name: string }>>([]);
 const items = ref<Item[]>([]);
 const itemNames = ref<string[]>([]);
 const date = ref('');
+const note = ref(''); // 整单备注（对齐 App：单据级备注，提交时挂各行）
 const rows = ref<Row[]>([]);
 const saving = ref(false);
 const loading = ref(false);
@@ -131,12 +138,16 @@ async function loadEdit() {
         priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`, unit: price.unit,
         quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
+        happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
       });
     }
     if (rows.value.length === 0) {
       rows.value = [];
       addRow();
     }
+    // 整单备注 = 首行备注（后端 MIN(note) 聚合语义）
+    const first = d.items?.[0];
+    if (first && first.note) note.value = String(first.note);
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载单据失败', icon: 'none' });
   }
@@ -172,9 +183,12 @@ async function copyLast() {
         priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`, unit: price.unit,
         quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
+        happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
       });
     }
     if (rows.value.length === 0) addRow();
+    const first = last.items?.[0];
+    if (first && first.note) note.value = String(first.note);
     uni.showToast({ title: '已复制上一笔，可修改后提交', icon: 'none' });
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '复制失败', icon: 'none' });
@@ -314,7 +328,7 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', date = ''
     const match = items.value.find((it) => it.name === name || it.name.includes(name) || name.includes(it.name));
     let row = rows.value.find((r) => !r.itemId && !r.itemName);
     if (!row) {
-      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '' });
+      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '' });
       row = rows.value[rows.value.length - 1];
     }
     if (match) {
@@ -348,7 +362,7 @@ function onDate(e: { detail: { value: string } }) {
 }
 
 function addRow() {
-  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '' });
+  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '' });
 }
 
 function onItem(i: number, idx: number) {
@@ -454,7 +468,8 @@ async function submit() {
     const body = {
       client_id: clientId.value,
       happened_at: date.value,
-      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0 })),
+      note: note.value.trim(),
+      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || note.value.trim() })),
     };
     let savedId = editId.value;
     if (editId.value) {
@@ -501,12 +516,14 @@ async function submit() {
   background: var(--card-bg); border-radius: 12rpx; padding: 16rpx; margin-bottom: 12rpx;
 }
 .picker { flex: 1; min-width: 0; }
+.date-pick { width: 96rpx; flex-shrink: 0; }
 .mini-field {
   background: var(--input-bg); border-radius: 8rpx; padding: 12rpx; font-size: 24rpx; text-align: center;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 .num { width: 90rpx; background: var(--input-bg); border-radius: 8rpx; padding: 12rpx; font-size: 24rpx; text-align: center; }
 .num.count { width: 110rpx; }
+.ipt-note { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 26rpx; }
 .amt { width: 110rpx; font-size: 24rpx; color: #f56c6c; }
 .del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; }
 .footer { display: flex; justify-content: space-between; align-items: center; margin: 20rpx 0; }
