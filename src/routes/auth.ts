@@ -36,7 +36,9 @@ authRouter.post('/bootstrap', async (c) => {
   const nowSec = Math.floor(Date.now() / 1000);
   const access = await signToken(c.env.JWT_SECRET, { sub: id, username, role: 'admin', typ: 'access' }, 24 * 3600, nowSec);
   const refresh = await signToken(c.env.JWT_SECRET, { sub: id, username, role: 'admin', typ: 'refresh' }, 30 * 24 * 3600, nowSec);
-  await db.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, id).run();
+  try {
+    await db.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, id).run();
+  } catch (_) { /* 老库缺列（迁移尚未执行）时降级：refresh 防重放不比对，登录不受影响 */ }
   return c.json({ token: access, refresh_token: refresh, user: { id, username, display_name: displayName, role: 'admin' } }, 201);
 });
 
@@ -61,7 +63,9 @@ authRouter.post('/refresh', async (c) => {
   const nowSec = Math.floor(Date.now() / 1000);
   const access = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'access' }, 24 * 3600, nowSec);
   const refresh = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'refresh' }, 30 * 24 * 3600, nowSec);
-  await c.env.DB.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, user.id).run();
+  try {
+    await c.env.DB.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, user.id).run();
+  } catch (_) { /* 老库缺列时降级：刷新仍成功，防重放下次再比对 */ }
   return c.json({ token: access, refresh_token: refresh });
 });
 
@@ -109,7 +113,9 @@ authRouter.post('/login', async (c) => {
   const nowSec = Math.floor(Date.now() / 1000);
   const access = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'access' }, 24 * 3600, nowSec);
   const refresh = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'refresh' }, 30 * 24 * 3600, nowSec);
-  await c.env.DB.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, user.id).run();
+  try {
+    await c.env.DB.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, user.id).run();
+  } catch (_) { /* 老库缺列（迁移尚未执行）时降级：refresh 防重放不比对，登录不受影响 */ }
   return c.json({ token: access, refresh_token: refresh, user: { id: user.id, username: user.username, role: user.role } });
 });
 
@@ -180,8 +186,14 @@ authRouter.patch('/profile', authMiddleware(), async (c) => {
     passwordChanged = true;
   }
   // 改密码=会话失效：清空 refresh_iat（所有 refresh token 立即作废，其他端需重新登录）
-  await c.env.DB.prepare('UPDATE users SET display_name = ?, password_hash = ?, refresh_iat = CASE WHEN ? THEN NULL ELSE refresh_iat END WHERE id = ?')
-    .bind(displayName, passwordHash, passwordChanged ? 1 : 0, me.id).run();
+  // 老库缺列（迁移尚未执行）时降级：改密成功但 refresh 防重放暂不生效
+  try {
+    await c.env.DB.prepare('UPDATE users SET display_name = ?, password_hash = ?, refresh_iat = CASE WHEN ? THEN NULL ELSE refresh_iat END WHERE id = ?')
+      .bind(displayName, passwordHash, passwordChanged ? 1 : 0, me.id).run();
+  } catch (_) {
+    await c.env.DB.prepare('UPDATE users SET display_name = ?, password_hash = ? WHERE id = ?')
+      .bind(displayName, passwordHash, me.id).run();
+  }
   // 资料变更广播 profile_change：其他在线端收到后 syncMyProfile 拉取最新显示名（对齐参考架构 WS 分发）
   await notifyClients('profile_change');
   return c.json({ user: { id: me.id, username: row.username, display_name: displayName, role: row.role } });

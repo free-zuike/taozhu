@@ -102,9 +102,9 @@ describe('schema.sql 完整建表与幂等', () => {
     await db.prepare('CREATE TABLE payment_accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)').run();
     resetSchemaState();
     await expect(ensureSchema(db as never)).resolves.toBeUndefined();
-    // 标记表已补建且有行（v0.17.229 设备 IP/版本列 → 快检版本 '5'）
+    // 标记表已补建且有行（0.17.278 双 token → users.refresh_iat 列 → 快检版本 '6'）
     const meta = await db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").first<{ value: string }>();
-    expect(meta?.value).toBe('5');
+    expect(meta?.value).toBe('6');
     // 二次调用（模拟后续请求）不抛
     resetSchemaState();
     await expect(ensureSchema(db as never)).resolves.toBeUndefined();
