@@ -30,9 +30,10 @@
         <text class="range-txt">{{ rangeLabel }}</text>
       </view>
       <view v-if="bars.length" class="chart">
-        <view class="bar-col" v-for="b in bars" :key="b.day">
-          <view class="bar-wrap"><view class="bar" :style="{ height: b.h + '%', background: kind === 'purchase' ? '#f59e0b' : 'var(--primary)' }"></view></view>
-          <text class="bar-label">{{ b.label }}</text>
+        <!-- 折线图（对齐 App 折线趋势；SVG data URI 由 image 渲染，圆点为流水日金额） -->
+        <image class="line-chart" :src="lineSvg" mode="widthFix" />
+        <view class="x-labels">
+          <text class="bar-label" v-for="b in bars" :key="b.day">{{ b.label }}</text>
         </view>
       </view>
       <view v-else class="empty">该区间暂无流水</view>
@@ -134,7 +135,7 @@ const rangeLabel = computed(() => {
   return s.start === s.end ? (s.start || '') : `${s.start} ~ ${s.end}`;
 });
 
-// 日柱状图：最近 14 天（无流水日金额 0，柱高按最大值归一化）
+// 日流水数据：最近 14 天（无流水日金额 0，归一化供折线/标签）
 const bars = computed(() => {
   const list = days.value.slice(-14);
   if (!list.length) return [];
@@ -144,6 +145,41 @@ const bars = computed(() => {
     label: d.day.length >= 10 ? `${Number(d.day.slice(5, 7))}/${Number(d.day.slice(8, 10))}` : d.day,
     h: Math.max(2, Math.round((Number(d.sales_total) / max) * 100)),
   }));
+});
+
+// ASCII-only 简易 base64（小程序无 btoa；对齐 theme.ts 自实现，SVG 折线 data URI 用）
+function svgB64(svg: string): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let out = '';
+  for (let i = 0; i < svg.length; i += 3) {
+    const b0 = svg.charCodeAt(i);
+    const b1 = i + 1 < svg.length ? svg.charCodeAt(i + 1) : NaN;
+    const b2 = i + 2 < svg.length ? svg.charCodeAt(i + 2) : NaN;
+    out += chars[b0 >> 2];
+    out += chars[((b0 & 3) << 4) | (isNaN(b1) ? 0 : b1 >> 4)];
+    out += isNaN(b1) ? '=' : chars[((b1 & 15) << 2) | (isNaN(b2) ? 0 : b2 >> 6)];
+    out += isNaN(b2) ? '=' : chars[b2 & 63];
+  }
+  return out;
+}
+
+/// 日流水折线图（对齐 App：折线+数据圆点，随出货/进货切换颜色）
+const lineSvg = computed(() => {
+  if (!bars.value.length) return '';
+  const W = 360, H = 130;
+  const n = bars.value.length;
+  const stroke = kind.value === 'purchase' ? '#f59e0b' : '#409eff';
+  const pts = bars.value.map((b, i) => {
+    const x = n === 1 ? W / 2 : (W * i) / (n - 1);
+    const y = H - 12 - (b.h / 100) * (H - 34);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
+    `<polyline fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${pts.join(' ')}"/>` +
+    pts.map((p) => `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="3.5" fill="${stroke}"/>`).join('') +
+    '</svg>';
+  return 'data:image/svg+xml;base64,' + svgB64(svg);
 });
 
 onShow(async () => {
@@ -237,26 +273,26 @@ async function onYear(e: { detail: { value: number } }) {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh; padding: 20rpx; box-sizing: border-box; background: var(--page-bg); }
-.quick { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+.quick { display: flex; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; }
 .q-item { flex: 1; text-align: center; font-size: 26rpx; color: var(--text-sub); padding: 12rpx 0; border-radius: 8rpx; }
 .q-item.active { color: #fff; background: var(--primary); font-weight: 600; }
-.seg { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+.seg { display: flex; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; padding: 8rpx; margin-bottom: 16rpx; }
 .seg-item { flex: 1; text-align: center; font-size: 26rpx; color: var(--text-sub); padding: 12rpx 0; border-radius: 8rpx; }
 .seg-item.active { color: #fff; background: var(--primary); font-weight: 600; }
-.card { background: var(--card-bg); border-radius: 16rpx; padding: 24rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .card-title { display: flex; justify-content: space-between; align-items: center; font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .range-txt { font-size: 22rpx; color: var(--text-sub); font-weight: normal; }
-.sum-card { background: var(--card-bg); }
+/* 汇总卡透明（对齐 App 统计头透明：数字直露在渐变背景上，仅下方分隔线） */
+.sum-card { background: transparent; border: none; padding: 8rpx 0 16rpx; margin-bottom: 8rpx; }
 .sum-row { display: flex; }
 .sum-cell { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8rpx; }
 .sl { font-size: 22rpx; color: var(--text-sub); }
 .sv { font-size: 30rpx; font-weight: bold; }
 .sum-sub { margin-top: 16rpx; font-size: 24rpx; color: var(--text-sub); text-align: center; }
-.chart { display: flex; align-items: flex-end; height: 240rpx; gap: 8rpx; padding-top: 10rpx; }
-.bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-.bar-wrap { flex: 1; width: 100%; display: flex; align-items: flex-end; }
-.bar { width: 100%; min-height: 2rpx; border-radius: 4rpx 4rpx 0 0; }
-.bar-label { font-size: 18rpx; color: var(--text-sub); margin-top: 8rpx; }
+.chart { position: relative; padding-top: 10rpx; }
+.line-chart { width: 100%; height: 130rpx; }
+.x-labels { display: flex; justify-content: space-between; margin-top: 10rpx; }
+.bar-label { font-size: 18rpx; color: var(--text-sub); }
 .year-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
 .row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); }
 .left { flex: 1; min-width: 0; }

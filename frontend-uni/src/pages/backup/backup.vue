@@ -85,7 +85,7 @@ function restore(b: BackupItem) {
 .badge { display: inline-block; background: var(--primary-soft); color: var(--primary); border-radius: 999rpx; padding: 2rpx 14rpx; font-size: 20rpx; margin-left: 12rpx; }
 .empty { background: var(--card-bg); border-radius: 20rpx; text-align: center; color: var(--text-sub); padding: 60rpx 0; font-size: 26rpx; }
 .list { display: flex; flex-direction: column; gap: 16rpx; }
-.card { background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; display: flex; align-items: center; justify-content: space-between; box-shadow: var(--card-shadow);}
+.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; display: flex; align-items: center; justify-content: space-between; }
 .info { display: flex; flex-direction: column; gap: 6rpx; }
 .b-name { font-size: 28rpx; font-weight: 600; color: var(--text-main); }
 .b-size { font-size: 22rpx; color: var(--text-sub); }

@@ -257,8 +257,8 @@ async function remove(id: string) {
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
 .search { background: var(--card-bg); border-radius: 12rpx; padding: 18rpx 24rpx; margin-bottom: 20rpx; font-size: 28rpx; }
-.btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
-.card { background: var(--card-bg); border-radius: 16rpx; padding: 24rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+.btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
+.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; margin-bottom: 12rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .cat { margin-left: 16rpx; font-size: 24rpx; color: var(--text-sub); }
@@ -278,5 +278,5 @@ async function remove(id: string) {
 .price-row { display: flex; gap: 12rpx; align-items: center; }
 .price-row .s { flex: 1; min-width: 0; }
 .btn-sub { background: var(--card-bg); border: 1rpx solid var(--primary); color: var(--primary); border-radius: 10rpx; font-size: 26rpx; margin-bottom: 16rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

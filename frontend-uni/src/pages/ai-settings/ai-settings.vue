@@ -209,7 +209,7 @@ async function testAll() {
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { padding: 24rpx;  min-height: 100vh;  background: var(--page-bg); }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; }
-.card { background: var(--card-bg); border-radius: 16rpx; padding: 8rpx 24rpx; margin-bottom: 24rpx; box-shadow: var(--card-shadow);}
+.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 8rpx 24rpx; margin-bottom: 24rpx; }
 .p-head { display: flex; align-items: center; justify-content: space-between; padding: 20rpx 0 8rpx; }
 .p-info { display: flex; align-items: center; gap: 14rpx; }
 .p-name { font-size: 28rpx; color: var(--text-main); }
@@ -230,7 +230,7 @@ async function testAll() {
 .r-tx { font-size: 28rpx; color: var(--text-main); }
 .r-pick { font-size: 26rpx; color: var(--primary); font-weight: 600; }
 .t-btn { font-size: 22rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 4rpx 14rpx; flex-shrink: 0; }
-.btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; margin-top: 16rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade); }
+.btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; margin-top: 16rpx;  }
 .btn.ghost { background: var(--card-bg); color: var(--primary); border: 2rpx solid var(--primary); margin-top: 16rpx; box-shadow: none; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }

@@ -697,22 +697,22 @@ async function removePayment(p: Record<string, any>) {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
-.filter-bar { display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 20rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+.filter-bar { display: flex; justify-content: space-between; align-items: center; background: transparent; border-radius: 12rpx; padding: 8rpx 4rpx 12rpx; margin-bottom: 4rpx;}
 .month-nav { display: flex; align-items: center; }
 .month-label { font-size: 28rpx; font-weight: bold; }
 .month-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 6rpx; }
 /* 月度结余四列卡（对齐 App 月度卡：四列横排） */
-.month-card { display: flex; background: var(--card-bg); border-radius: 12rpx; padding: 20rpx 16rpx; margin-bottom: 16rpx; border: 1rpx solid var(--divider); box-shadow: var(--card-shadow);}
+.month-card { display: flex; background: transparent; border: none; box-shadow: none; border-radius: 0; padding: 4rpx 0 8rpx; margin-bottom: 4rpx; }
 .mcols { display: flex; } /* 四列容器：横排（缺此样式时 mcol 块级堆叠=竖排） */
 .mcol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6rpx; }
 .ml { font-size: 22rpx; color: var(--text-sub); }
 .mv { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
 .client-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
 .export-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; flex-shrink: 0; }
-.seg { display: flex; background: var(--card-bg); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; box-shadow: var(--card-shadow);}
+.seg { display: flex; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden;}
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
 .seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
-.card { background: var(--card-bg); border-radius: 16rpx; padding: 24rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }
@@ -736,7 +736,7 @@ async function removePayment(p: Record<string, any>) {
 .label { color: var(--text-sub); font-size: 28rpx; }
 .value { color: var(--text-main); font-size: 28rpx; }
 .placeholder { color: var(--text-sub); }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 /* 附件弹层 */
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
@@ -744,5 +744,5 @@ async function removePayment(p: Record<string, any>) {
 .attach-del { color: #f56c6c; font-size: 26rpx; margin-left: auto; }
 .attach-actions { display: flex; gap: 16rpx; }
 .attach-actions .btn-sub { flex: 1; }
-.attach-actions .btn-save { flex: 1; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.attach-actions .btn-save { flex: 1; }
 </style>

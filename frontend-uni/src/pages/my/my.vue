@@ -324,10 +324,10 @@ function logout() {
 .hi-name { font-size: 34rpx; font-weight: bold; max-width: 220rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hi-sub { font-size: 22rpx; opacity: 0.85; word-break: break-all; }
 .server-tag { font-size: 24rpx; background: rgba(255,255,255,0.2); border-radius: 999rpx; padding: 8rpx 20rpx; flex-shrink: 0; }
-.shop-row { display: flex; align-items: center; background: var(--card-bg); border-radius: 16rpx; padding: 22rpx 24rpx; margin-bottom: 20rpx; }
+.shop-row { display: flex; align-items: center; background: transparent; border: var(--card-border); border-radius: 16rpx; padding: 22rpx 24rpx; margin-bottom: 20rpx; }
 .shop-label { font-size: 26rpx; color: var(--text-sub); margin-right: 20rpx; }
 .shop-name { flex: 1; font-size: 28rpx; color: var(--primary); font-weight: 600; }
-.stats { display: flex; align-items: stretch; background: var(--card-bg); border-radius: 20rpx; padding: 26rpx 10rpx; margin-bottom: 24rpx; }
+.stats { display: flex; align-items: stretch; background: transparent; border: var(--card-border); border-radius: 16rpx; padding: 26rpx 10rpx; margin-bottom: 24rpx; }
 .stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8rpx; justify-content: center; }
 .stat-line { width: 1rpx; background: var(--divider); margin: 6rpx 0; }
 .st-label { font-size: 22rpx; color: var(--text-sub); }
@@ -335,7 +335,7 @@ function logout() {
 .green { color: #67c23a; }
 .red { color: #f56c6c; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 12rpx; }
-.grp { background: var(--card-bg); border-radius: 20rpx; margin-bottom: 20rpx; overflow: hidden; box-shadow: var(--card-shadow);}
+.grp { background: var(--card-bg); border: var(--card-border); border-radius: 16rpx; margin-bottom: 20rpx; overflow: hidden; }
 .row { display: flex; align-items: center; padding: 26rpx 24rpx; border-bottom: 1rpx solid var(--divider); }
 .row:last-child { border-bottom: none; }
 .r-ic {
@@ -354,6 +354,6 @@ function logout() {
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .server-cur { font-size: 24rpx; color: var(--text-sub); margin-bottom: 16rpx; word-break: break-all; }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
 .btn-cancel { background: var(--input-bg); color: var(--text-sub); border-radius: 12rpx; font-size: 30rpx; }
 </style>

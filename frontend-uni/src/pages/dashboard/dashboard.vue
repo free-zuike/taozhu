@@ -139,7 +139,7 @@ function go(url: string) {
 .cards { display: flex; flex-wrap: wrap; justify-content: space-between; margin-bottom: 24rpx; }
 .card {
   width: 48%; background: var(--card-bg); border-radius: 16rpx;
-  padding: 22rpx 20rpx; box-sizing: border-box; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+  padding: 22rpx 20rpx; box-sizing: border-box; margin-bottom: 16rpx; }
 .cl { display: block; color: var(--text-sub); font-size: 26rpx; margin-bottom: 10rpx; }
 .cv { font-size: 38rpx; font-weight: bold; }
 .green { color: #67c23a; }
@@ -162,6 +162,6 @@ function go(url: string) {
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .server-cur { font-size: 24rpx; color: var(--text-sub); margin-bottom: 16rpx; word-break: break-all; }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 12rpx; }
 .btn-cancel { background: var(--input-bg); color: var(--text-sub); border-radius: 12rpx; font-size: 30rpx; }
 </style>

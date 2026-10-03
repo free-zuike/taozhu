@@ -131,7 +131,7 @@ async function save() {
 .pill { padding: 12rpx 24rpx; background: var(--card-bg); border-radius: 24rpx; font-size: 26rpx; color: var(--text-sub); border: 1rpx solid var(--divider); }
 .pill.active { color: #f56c6c; border-color: #f56c6c; background: var(--danger-bg); }
 .total { font-size: 26rpx; color: #67c23a; font-weight: bold; margin-bottom: 12rpx; }
-.card { background: var(--card-bg); border-radius: 16rpx; padding: 24rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .qty { font-size: 32rpx; font-weight: bold; color: #67c23a; }
@@ -145,5 +145,5 @@ async function save() {
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .form-item { font-size: 28rpx; color: var(--text-main); margin-bottom: 16rpx; }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

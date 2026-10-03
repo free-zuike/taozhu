@@ -37,12 +37,15 @@
       <text class="del" @click="rows.splice(i, 1)">删</text>
     </view>
 
-    <view class="footer">
-      <button class="btn-add" @click="addRow">+ 添加商品</button>
-      <button class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
-      <text class="total">合计 <text class="total-num">¥{{ total }}</text></text>
+    <!-- 底部固定悬浮栏（对齐 App：合计+添加+提交固定在底部，滚动列表时始终可见） -->
+    <view class="bottom-bar">
+      <view class="footer">
+        <button class="btn-add" @click="addRow">+ 添加商品</button>
+        <button class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
+        <text class="total">合计 <text class="total-num">¥{{ total }}</text></text>
+      </view>
+      <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (editId ? '保存修改' : '提交出货单') }}</button>
     </view>
-    <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (editId ? '保存修改' : '提交出货单') }}</button>
   </view>
 </template>
 
@@ -507,7 +510,10 @@ async function submit() {
 .amt { width: 110rpx; font-size: 24rpx; color: #f56c6c; }
 .del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; }
 .footer { display: flex; justify-content: space-between; align-items: center; margin: 20rpx 0; }
-.btn-add { font-size: 28rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+/* 底部固定悬浮栏（对齐 App 固定栏）：页面留白避免内容被栏遮挡 */
+.bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 16rpx 24rpx 20rpx; background: var(--page-bg); border-top: 1rpx solid var(--divider); z-index: 20; }
+.page { padding-bottom: 220rpx; }
+.btn-add { font-size: 28rpx; }
 .btn-voucher { font-size: 26rpx; background: var(--card-bg); color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; padding: 0 20rpx; height: 76rpx; line-height: 76rpx; }
 .total { font-size: 28rpx; }
 .total-num { color: #f56c6c; font-weight: bold; font-size: 34rpx; }

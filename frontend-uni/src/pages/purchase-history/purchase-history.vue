@@ -355,7 +355,7 @@ async function loadAttachCounts() {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
-.month-card { background: var(--card-bg); border-radius: 16rpx; padding: 20rpx 24rpx; margin-bottom: 20rpx; border: 1rpx solid var(--divider); box-shadow: var(--card-shadow);}
+.month-card { background: transparent; border: none; border-radius: 0; padding: 4rpx 0 12rpx; margin-bottom: 4rpx; }
 .month-head { display: flex; align-items: center; justify-content: center; margin-bottom: 14rpx; }
 .month-label { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
 .month-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 6rpx; }
@@ -363,7 +363,7 @@ async function loadAttachCounts() {
 .ml { font-size: 24rpx; color: var(--text-sub); }
 .mv { font-size: 34rpx; font-weight: bold; }
 .red { color: #f56c6c; }
-.card { background: var(--card-bg); border-radius: 16rpx; padding: 24rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
 .name { font-size: 30rpx; font-weight: bold; }
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }
@@ -383,12 +383,12 @@ async function loadAttachCounts() {
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
 .attach-img { width: 120rpx; height: 120rpx; border-radius: 8rpx; flex-shrink: 0; }
 .attach-del { color: #f56c6c; font-size: 26rpx; margin-left: auto; }
 .attach-actions { display: flex; gap: 16rpx; }
 .attach-actions .btn-sub { flex: 1; }
-.attach-actions .btn-save { flex: 1; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.attach-actions .btn-save { flex: 1; }
 </style>

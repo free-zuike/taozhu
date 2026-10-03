@@ -313,8 +313,10 @@ export function useThemeVars() {
         // 页面 CSS 背景只用渐变（小程序 WXSS 支持；SVG 图案由 image 组件铺层，不依赖 CSS data URI）
         '--page-bg': bg.gradientCss,
         '--card-bg': cardBg,
-        // 卡片投影（浅色轻、深色重）：与圆角/半透明共同构成 App 卡片族层次
-        '--card-shadow': dark ? '0 4rpx 16rpx rgba(0,0,0,0.35)' : '0 4rpx 16rpx rgba(0,0,0,0.06)',
+        // 卡片描边（对齐 App c.card：半透明+圆角+描边、无阴影 elevation:0——小程序不再用投影）
+        '--card-border': dark ? '1rpx solid rgba(255,255,255,0.08)' : '1rpx solid rgba(0,0,0,0.06)',
+        // 卡片投影（对齐 App 无阴影：统一置透明，仅保留描边层次）
+        '--card-shadow': 'none',
         // 弹层底（遮罩下需更实，避免内容透穿模糊）
         '--sheet-bg': dark ? 'rgba(35,40,51,0.97)' : 'rgba(255,255,255,0.97)',
         '--text-main': textMain,

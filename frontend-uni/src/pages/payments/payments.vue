@@ -373,7 +373,7 @@ async function remove(id: string) {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
-.card { background: var(--card-bg); border-radius: 16rpx; padding: 24rpx; margin-bottom: 16rpx; box-shadow: var(--card-shadow);}
+.card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .card-title { font-size: 30rpx; font-weight: bold; margin-bottom: 16rpx; }
 .field { margin-bottom: 16rpx; }
 .field-inner { display: flex; justify-content: space-between; padding: 18rpx 0; }
@@ -382,7 +382,7 @@ async function remove(id: string) {
 .placeholder { color: var(--text-sub); }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .debt-tip { color: #f56c6c; font-size: 24rpx; margin: -8rpx 0 16rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; box-shadow: 0 6rpx 18rpx var(--primary-fade);}
+.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .pay-row { display: flex; align-items: center; padding: 16rpx 0; border-bottom: 1rpx solid var(--divider); }
 .pay-left { flex: 1; min-width: 0; }
 .pay-name { display: block; font-size: 28rpx; }
