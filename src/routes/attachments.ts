@@ -5,7 +5,7 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { verifyToken } from '../lib/jwt';
 import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
-import { imageKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from '../lib/image-key';
+import { attachmentContentKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from '../lib/image-key';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -38,16 +38,32 @@ const prefixOf = (entity: string, id: string) => `taozhu/images/attachments/${en
 const legacyPrefixesOf = (entity: string, id: string) =>
   LEGACY_IMAGE_PREFIXES.map((p) => `${p}${entity}/${id}/`);
 
-// GET /attachments?entity=&id= — 列出某交易的全部附件（兼容历史前缀，按 key 去重排序）
+// GET /attachments?entity=&id= — 列出某交易的全部附件。
+// 引用表权威（含新格式内容 key，同图共享一份）；历史前缀 R2 列兜底（旧格式 key 含实体前缀）
 attachmentsRouter.get('/', async (c) => {
   const entity = c.req.query('entity');
   const id = c.req.query('id');
   if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment 或明细行级 sale_item/purchase_item' }, 400);
   if (!id) return c.json({ error: '缺少 id' }, 400);
   const store = createStorage(c.env);
+  const byKey = new Map<string, { key: string; size: number; uploaded?: Date }>();
+  // ① 引用表（权威）：该实体引用的全部 file_key（新旧格式都记录在引用表；size 用 list(key) 补）
+  try {
+    const refs = await c.env.DB.prepare(
+      'SELECT file_key FROM attachment_refs WHERE entity = ? AND entity_id = ?',
+    ).bind(entity, id).all<{ file_key: string }>();
+    for (const r of refs.results) {
+      let size = 0;
+      try {
+        const o = await store.list(r.file_key);
+        if (o.objects.length > 0) size = o.objects[0].size;
+      } catch (_) {}
+      byKey.set(r.file_key, { key: r.file_key, size });
+    }
+  } catch (_) {}
+  // ② 历史前缀 R2 列（旧格式 key 引用行缺失的极老数据兜底）
   const prefixes = [prefixOf(entity, id), ...legacyPrefixesOf(entity, id)];
   const groups = await Promise.all(prefixes.map((p) => store.list(p)));
-  const byKey = new Map<string, { key: string; size: number; uploaded?: Date }>();
   for (const group of groups) for (const o of group.objects) byKey.set(o.key, o);
   const attachments = [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
   return c.json({
@@ -73,10 +89,11 @@ attachmentsRouter.post('/', async (c) => {
   if (file.size === 0 || file.size > 10 * 1024 * 1024) return c.json({ error: '图片过大（上限 10MB）' }, 400);
 
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const key = imageKey('attachments', [entity, id], bytes);
+  // 附件内容 key（同图一份物理文件）：key 仅按内容 md5 命名；同内容多实体引用 = R2 一份 + 引用表多行
+  const key = attachmentContentKey(bytes);
   await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
   // 附件引用表（引用驱动）：记录"哪个实体引用了哪个文件"。幂等：同 entity+entity_id+key 已存在则跳过，
-  // 不同实体引用同一内容（同 md5 不同 key）各自一行——多单共用不互相影响
+  // 不同实体引用同一内容（同 md5 同 key）各自一行——多行/多单共享一份物理文件互不影响
   await c.env.DB.prepare(
     'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
   ).bind(`${entity}:${id}:${key}`, entity, id, key, key.split('/').pop()?.replace('.jpg', '') ?? '').run();
@@ -91,7 +108,6 @@ attachmentsRouter.post('/counts', async (c) => {
   const body = await c.req.json().catch(() => null) as { entity?: string; ids?: string[]; client_id?: string } | null;
   const entity = body?.entity;
   if (!entity || !VALID_ENTITY.includes(entity)) return c.json({ error: 'entity 必须为 sale/purchase/payment 或明细行级 sale_item/purchase_item' }, 400);
-  const store = createStorage(c.env);
   let ids: string[] = [];
   const clientId = body?.client_id?.trim();
   if (clientId && entity === 'sale') {
@@ -114,38 +130,30 @@ attachmentsRouter.post('/counts', async (c) => {
     ids = (body?.ids ?? []).filter((x) => x.trim().length > 0).slice(0, 500);
   }
   if (ids.length === 0) return c.json({ counts: {}, total: 0, ids: [] });
+  // 引用表计数（对齐参考实现口径：每个商品/单据挂载算一个附件=一条引用记录；同图多实体各算 1）
   const counts: Record<string, number> = {};
-  await Promise.all(ids.map(async (id) => {
-    const prefixes = [prefixOf(entity, id), ...legacyPrefixesOf(entity, id)];
-    const groups = await Promise.all(prefixes.map((p) => store.list(p)));
-    const seen = new Set<string>();
-    for (const group of groups) for (const o of group.objects) seen.add(o.key);
-    counts[id] = seen.size;
-  }));
-  // 单据级（sale/purchase）统计：计入该单全部明细行前缀的附件——
-  // 整单凭证入口上传的图实际批量存入各明细行（行级引用），单据图标/面板口径需含行级。
+  const refRows = await c.env.DB.prepare(
+    `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${ids.map(() => '?').join(',')}) GROUP BY entity_id`,
+  ).bind(entity, ...ids).all<{ entity_id: string; cnt: number }>();
+  for (const r of refRows.results) counts[r.entity_id] = Number(r.cnt);
+  // 单据级（sale/purchase）统计：计入该单全部明细行的行级引用——
+  // 整单凭证入口上传的图实际批量挂各明细行（行级引用），单据图标/面板口径需含行级。
   if (entity === 'sale' || entity === 'purchase') {
     const lineEntity = entity === 'sale' ? 'sale_item' : 'purchase_item';
     const rows = await c.env.DB.prepare(
       `SELECT id, ${entity}_id AS order_id FROM ${lineEntity}s WHERE ${entity}_id IN (${ids.map(() => '?').join(',')})`,
     ).bind(...ids).all<{ id: string; order_id: string }>();
-    const lineIdsByOrder = new Map<string, string[]>();
-    for (const r of rows.results) {
-      const list = lineIdsByOrder.get(r.order_id) ?? [];
-      list.push(r.id);
-      lineIdsByOrder.set(r.order_id, list);
-    }
-    await Promise.all([...lineIdsByOrder.entries()].map(async ([orderId, lineIds]) => {
-      let n = 0;
-      for (const lid of lineIds) {
-        const prefixes = [prefixOf(lineEntity, lid), ...legacyPrefixesOf(lineEntity, lid)];
-        const groups = await Promise.all(prefixes.map((p) => store.list(p)));
-        const seen = new Set<string>();
-        for (const group of groups) for (const o of group.objects) seen.add(o.key);
-        n += seen.size;
+    if (rows.results.length > 0) {
+      const lineIds = rows.results.map((r) => r.id);
+      const lineRefs = await c.env.DB.prepare(
+        `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${lineIds.map(() => '?').join(',')}) GROUP BY entity_id`,
+      ).bind(lineEntity, ...lineIds).all<{ entity_id: string; cnt: number }>();
+      const lineCountByLineId = new Map(lineRefs.results.map((r) => [r.entity_id, Number(r.cnt)] as const));
+      for (const r of rows.results) {
+        const n = lineCountByLineId.get(r.id) ?? 0;
+        if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
       }
-      if (n > 0) counts[orderId] = (counts[orderId] ?? 0) + n;
-    }));
+    }
   }
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return c.json({ counts, total, ids });
@@ -283,6 +291,9 @@ attachmentsRouter.get('/orphans', async (c) => {
   purchases.results.forEach((r) => add('purchase', r.id));
   purchaseItems.results.forEach((r) => add('purchase_item', r.id));
   payments.results.forEach((r) => add('payment', r.id));
+  // 引用表 file_key 集合：新格式内容 key（md5-only，解析不出实体）凭引用表判定在用/孤儿
+  const refRowsAll = await db.prepare('SELECT file_key FROM attachment_refs').all<{ file_key: string }>();
+  const refKeys = new Set(refRowsAll.results.map((r) => r.file_key));
   const orphans: Array<{ key: string; entity: string; id: string; size: number }> = [];
   // 附件前缀同 in-use：限定实体前缀扫描，避免空前缀全 bucket（含备份/头像）拖慢列表
   const scanPrefixes = ['taozhu/images/attachments/', 'taozhu/attachments/', 'sale/', 'sale_item/', 'purchase/', 'purchase_item/', 'payment/'];
@@ -292,7 +303,13 @@ attachmentsRouter.get('/orphans', async (c) => {
       const r = await store.list(prefix, cursor);
       for (const o of r.objects) {
         const parsed = parseAttachmentKey(o.key);
-        if (!parsed) continue;
+        if (!parsed) {
+          // 新格式内容 key（md5-only）：引用表有=在用（同图共享），无=孤儿
+          if (!refKeys.has(o.key)) {
+            orphans.push({ key: o.key, entity: '', id: '', size: o.size });
+          }
+          continue;
+        }
         if (!(inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) {
           orphans.push({ key: o.key, entity: parsed.entity, id: parsed.id, size: o.size });
         }
@@ -339,8 +356,13 @@ attachmentsRouter.delete('/orphans', adminOnly(), async (c) => {
   let deleted = 0;
   for (const key of keys) {
     const parsed = parseAttachmentKey(key);
-    if (!parsed) continue;
-    if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) continue; // 在用防误删
+    if (parsed) {
+      if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) continue; // 在用防误删
+    } else {
+      // 新格式内容 key（md5-only）：引用表有=在用（同图共享）防误删；无=孤儿可删
+      const ref = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(key).first<{ n: number }>();
+      if ((ref?.n ?? 0) > 0) continue;
+    }
     try {
       await store.delete(key);
       // 引用行同步清理（孤儿本来就不应存在引用；防御性删除防脏引用残留）

@@ -675,18 +675,16 @@ class _PurchasePageState extends State<PurchasePage> {
         return;
       }
       final root = await getApplicationDocumentsDirectory();
+      // 本地副本按内容存公共目录 attachments/{file}（同图一份）；每行入队上传同文件——
+      // 服务器同内容幂等同 key（R2 一份）+ 引用表每行一行（每个商品算一个附件）
+      final adir = Directory('${root.path}/attachments');
+      if (!adir.existsSync()) adir.createSync(recursive: true);
+      final af = File('${adir.path}/$fileName');
+      if (!af.existsSync()) await af.writeAsBytes(img);
       if (lineIds.isEmpty) {
-        final dir = Directory('${root.path}/attachments/purchase/$purchaseId');
-        if (!dir.existsSync()) dir.createSync(recursive: true);
-        await File('${dir.path}/$fileName').writeAsBytes(img);
         await SyncService.enqueueAttachmentUpload(entity: 'purchase', id: purchaseId, fileName: fileName);
       } else {
         for (final lid in lineIds) {
-          final ld = Directory('${root.path}/attachments/purchase_item/$lid');
-          if (!ld.existsSync()) ld.createSync(recursive: true);
-          final lf = File('${ld.path}/$fileName');
-          if (lf.existsSync()) continue; // 该行已有同内容图
-          await lf.writeAsBytes(img);
           await SyncService.enqueueAttachmentUpload(entity: 'purchase_item', id: lid, fileName: fileName);
         }
       }

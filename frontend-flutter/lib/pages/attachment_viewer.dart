@@ -84,8 +84,6 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     await _load();
   }
 
-  String get _subPath => 'attachments/${widget.entity}/${widget.id}';
-
   /// 批量模式下对应的行级实体名（sale→sale_item / purchase→purchase_item）
   String get _lineEntity =>
       widget.entity == 'sale' ? 'sale_item' : 'purchase_item';
@@ -100,19 +98,6 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         .cast<Map<String, dynamic>>()
         .map((x) => '${x['key']}')
         .toList();
-  }
-
-  /// 本地副本目录；Web 端无文件系统返回 null（附件仅云端）
-  Future<Directory?> _dir() async {
-    if (kIsWeb) return null;
-    try {
-      final root = await getApplicationDocumentsDirectory();
-      final d = Directory('${root.path}/$_subPath');
-      if (!d.existsSync()) d.createSync(recursive: true);
-      return d;
-    } catch (_) {
-      return null;
-    }
   }
 
   Future<void> _load() async {
@@ -150,36 +135,44 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       }
       return;
     }
-    // 原生/桌面：本地副本目录（同步时下载，零网络）。批量模式读单据目录 + 各行目录。
+    // 原生/桌面：本地公共副本目录（同步时下载一份）+ 本地引用表（每实体一行）零网络。
     final root = await getApplicationDocumentsDirectory();
     final locals = <String, String>{};
     final keysByFile = <String, List<String>>{};
-    void scan(Directory d, String entity, String id) {
-      if (!d.existsSync()) return;
-      try {
-        for (final f in d.listSync()) {
+    // 新结构：本地公共副本目录 attachments/{file}（同图一份）+ 本地引用表（每实体一行）——
+    // 该实体（+批量行）引用的文件即它的附件，公共目录有副本则本地预览
+    try {
+      final adir = Directory('${root.path}/attachments');
+      if (adir.existsSync()) {
+        for (final f in adir.listSync()) {
           if (f is! File) continue;
-          final name = f.uri.pathSegments.last;
-          locals.putIfAbsent(name, () => f.path);
-          keysByFile.putIfAbsent(name, () => [])
-              .add('taozhu/images/attachments/$entity/$id/$name');
+          locals.putIfAbsent(f.uri.pathSegments.last, () => f.path);
         }
-      } catch (_) {}
-    }
-
-    final orderDir = Directory('${root.path}/$_subPath');
-    scan(orderDir, widget.entity, widget.id);
-    if (_bulk) {
-      for (final lid in widget.lineIds) {
-        scan(Directory('${root.path}/attachments/$_lineEntity/$lid'),
-            _lineEntity, lid);
       }
-    }
+    } catch (_) {}
+    try {
+      final refs = await LocalDb.getAll('attachment_refs');
+      final myFiles = <String>[];
+      for (final r in refs) {
+        if (_bulk) {
+          if ('${r['entity'] ?? ''}' == _lineEntity &&
+              widget.lineIds.contains('${r['entity_id'] ?? ''}')) {
+            myFiles.add('${r['file'] ?? ''}');
+          }
+        } else if ('${r['entity'] ?? ''}' == widget.entity &&
+            '${r['entity_id'] ?? ''}' == widget.id) {
+          myFiles.add('${r['file'] ?? ''}');
+        }
+      }
+      for (final name in myFiles.toSet()) {
+        keysByFile.putIfAbsent(name, () => []).add('taozhu/images/attachments/$name');
+      }
+    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _items = [
-        for (final e in locals.entries)
-          _Item(e.key, e.value, keysByFile[e.key] ?? []),
+        for (final e in keysByFile.entries)
+          _Item(e.value.first, locals[e.key], e.value),
       ];
       _resetIndex();
       _loading = false;
@@ -221,15 +214,16 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     final picked = await ImagePicker().pickImage(source: src, maxWidth: 1600, imageQuality: 85);
     if (picked == null) return;
     final bytes = await picked.readAsBytes();
-    // 本地 MD5 去重：本地已存过同内容图片则跳过（云端同样以 MD5 命名幂等）
+    // 本地 MD5 去重：公共目录已存过同内容图片则跳过（同图一份，云端同样以 MD5 幂等）
     final h = md5.convert(bytes).toString();
-    final dir = await _dir();
-    if (dir != null) {
-      final localFile = File('${dir.path}/$h.jpg');
-      if (localFile.existsSync()) {
-        toast(context, '该图片已存在，跳过重复上传');
-        return;
-      }
+    if (!kIsWeb) {
+      try {
+        final root = await getApplicationDocumentsDirectory();
+        if (File('${root.path}/attachments/$h.jpg').existsSync()) {
+          toast(context, '该图片已存在，跳过重复上传');
+          return;
+        }
+      } catch (_) {}
     }
     toast(context, kIsWeb ? '上传中…' : '添加中…');
     try {
@@ -254,18 +248,17 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
           toast(context, '已添加附件');
         }
       } else {
-        // 本地优先：先落本地副本 + 登记待上传——附件上传是同步流程一部分，
-        // 页面不直连云端；联网后由「同步状态」同步动作统一上传（失败自动重试）
+        // 本地优先：先落公共目录副本（同内容一份，对齐参考实现）——附件上传是同步流程一部分，
+        // 页面不直连云端；联网后由同步统一上传（失败自动重试）
+        final root = await getApplicationDocumentsDirectory();
+        final adir = Directory('${root.path}/attachments');
+        if (!adir.existsSync()) adir.createSync(recursive: true);
+        final af = File('${adir.path}/$h.jpg');
+        if (!af.existsSync()) await af.writeAsBytes(bytes);
         if (_bulk) {
-          // 批量模式：复制到该单每个明细行目录（各自行级引用）+ 入队每行一条
-          final root = await getApplicationDocumentsDirectory();
+          // 批量模式：同图一份物理文件，每行入队（服务器同内容幂等同 key + 引用表每行一行）
           var added = 0;
           for (final lid in widget.lineIds) {
-            final ld = Directory('${root.path}/attachments/$_lineEntity/$lid');
-            if (!ld.existsSync()) ld.createSync(recursive: true);
-            final lf = File('${ld.path}/$h.jpg');
-            if (lf.existsSync()) continue; // 该行已有同内容图
-            await lf.writeAsBytes(bytes);
             await SyncService.enqueueAttachmentUpload(
                 entity: _lineEntity, id: lid, fileName: '$h.jpg');
             added++;
@@ -274,9 +267,6 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
               ? '已添加附件（已关联全部商品，联网后自动上传）'
               : '全部商品均已存在该图片，跳过重复添加');
         } else {
-          if (dir != null) {
-            await File('${dir.path}/$h.jpg').writeAsBytes(bytes);
-          }
           await SyncService.enqueueAttachmentUpload(
             entity: widget.entity, id: widget.id, fileName: '$h.jpg',
           );
@@ -336,22 +326,21 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       return null;
     }
 
-    // 本地删全部份（批量模式文件分布在各行目录）
+    // 本地删除：删该实体引用行；公共副本文件不删（同图可能被其他实体引用，宁留勿删，
+    // 由「重置本地附件副本」/孤儿逻辑统一清理——删除引用后同步会从在用列表移除）
     var localDeleted = false;
     if (!kIsWeb) {
-      final root = await getApplicationDocumentsDirectory();
-      for (final key in keys) {
-        final parsed = parse(key);
-        if (parsed == null) continue;
-        try {
-          final f = File(
-              '${root.path}/attachments/${parsed.$1}/${parsed.$2}/${parsed.$3}');
-          if (f.existsSync()) {
-            f.deleteSync();
+      try {
+        final refs = await LocalDb.getAll('attachment_refs');
+        for (final r in refs) {
+          if ('${r['entity'] ?? ''}' != widget.entity || '${r['entity_id'] ?? ''}' != widget.id) continue;
+          final file = '${r['file'] ?? ''}';
+          if (keys.any((k) => k == file || k.split('/').last == file)) {
+            await LocalDb.deleteOne('attachment_refs', '${r['entity']}/${r['entity_id']}/${r['file']}');
             localDeleted = true;
           }
-        } catch (_) {}
-      }
+        }
+      } catch (_) {}
     }
     if (kIsWeb) {
       try {
@@ -370,11 +359,12 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
             entityType: 'attachment',
             entitySyncId: key,
             action: 'delete',
-            // entity/id 随变更下发：其他端 pull 时优先用三元组定位本地副本，兼容历史 key 前缀
+            // entity/id 随变更下发：其他端 pull 时优先用三元组定位本地副本，兼容历史 key 前缀。
+            // 新格式内容 key（md5-only 解析不出实体）→ 直接用当前查看器实体（防共用图误删）
             payload: {
               'file_key': key,
-              if (parsed != null) 'entity': parsed.$1,
-              if (parsed != null) 'id': parsed.$2,
+              'entity': parsed != null ? parsed.$1 : widget.entity,
+              'id': parsed != null ? parsed.$2 : widget.id,
             },
           );
         } catch (_) {

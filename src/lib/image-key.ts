@@ -10,6 +10,13 @@ export function imageKey(type: string, segments: string[], bytes: Uint8Array): s
   return `taozhu/images/${type}/${segments.join('/')}/${h}.jpg`;
 }
 
+/** 附件内容 key（对齐参考实现"同图一份物理文件"）：key 仅按内容 md5 命名，不含实体/行 id——
+ *  同一张图被 N 个商品/单据引用时 R2 只存 1 份，attachment_refs 表按实体各写一行引用。
+ *  兼容：旧格式 key（含实体前缀，v0.17.281 前）仍按 parseAttachmentKey 兼容解析与展示。 */
+export function attachmentContentKey(bytes: Uint8Array): string {
+  return `taozhu/images/attachments/${md5(bytes)}.jpg`;
+}
+
 /** 历史前缀（去重兼容）：list 时一并查询，避免旧数据"消失" */
 export const LEGACY_IMAGE_PREFIXES: readonly string[] = ['taozhu/attachments/', ''];
 
@@ -34,14 +41,27 @@ export function parseAttachmentKey(key: string): { entity: string; id: string } 
   return null;
 }
 
-/** 删除某交易的全部附件对象（分页列 + 逐个删；删除交易后调用，避免 R2 残留孤儿文件）。
- *  同时删除 attachment_refs 引用行。顺序：**先删引用行**（引用是 in-use/下载的权威来源，
- *  实体删除即引用删除，绝不残留"引用在文件无"的坏引用 → 其他端同步下载 404 刷屏）；
- *  R2 文件删除失败不阻断（残留文件由孤儿扫描/清理页兜底） */
+/** 删除某交易/明细行的全部附件（删除交易后调用，避免 R2 残留孤儿文件）。
+ *  顺序：**先删引用行**（引用是 in-use/下载的权威来源，实体删除即引用删除，绝不残留"引用在文件无"的坏引用）；
+ *  R2 文件**仅当无其他实体引用时才删**（同内容多实体共享一份物理文件，对齐参考实现"同图一份"）；
+ *  引用行缺失的历史旧格式 key（v0.17.84 前存量）按前缀兜底删。R2 删除失败不阻断（残留由孤儿扫描兜底） */
 export async function deleteEntityAttachments(env: Env, entity: string, id: string): Promise<void> {
   try {
+    const refs = await env.DB.prepare(
+      'SELECT file_key FROM attachment_refs WHERE entity = ? AND entity_id = ?',
+    ).bind(entity, id).all<{ file_key: string }>();
     await env.DB.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind(entity, id).run();
+    const store: AttachmentStorage = createStorage(env);
+    for (const r of refs.results) {
+      const others = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM attachment_refs WHERE file_key = ?')
+        .bind(r.file_key).first<{ cnt: number }>();
+      if ((others?.cnt ?? 0) > 0) continue; // 仍有其他实体引用 → 保留文件（共享）
+      try {
+        await store.delete(r.file_key);
+      } catch (_) {}
+    }
   } catch (_) {}
+  // 兼容历史：旧格式前缀（含实体 id）兜底删——极老数据引用行缺失时仍能清
   const store: AttachmentStorage = createStorage(env);
   for (const prefix of attachmentPrefixesOf(entity, id)) {
     let cursor: string | undefined;

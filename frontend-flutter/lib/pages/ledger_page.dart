@@ -412,17 +412,18 @@ class _LedgerPageState extends State<LedgerPage> {
       'sale_item': {}, 'sale': {},
       'payment': {},
     };
-    // ① 本地副本（原生）：attachments/{entity}/{id}/ 目录里有多少文件
+    // ① 本地副本（原生）：按本地附件引用表计数（每实体一条引用=一个附件；同图共享一份文件，
+    //    文件存公共目录 attachments/{file}，不再按实体目录逐行复制）
     if (!kIsWeb && (saleLineIds.isNotEmpty || payIds.isNotEmpty || saleOrderIds.isNotEmpty)) {
       try {
-        final root = await getApplicationDocumentsDirectory();
-        for (final e in [(saleLineIds, 'sale_item'), (saleOrderIds, 'sale'), (payIds, 'payment')]) {
-          for (final id in e.$1) {
-            final dir = Directory('${root.path}/attachments/${e.$2}/$id');
-            if (dir.existsSync()) {
-              final n = dir.listSync().whereType<File>().length;
-              if (n > 0) counts[e.$2]![id] = n;
-            }
+        final refs = await LocalDb.getAll('attachment_refs');
+        for (final r in refs) {
+          final ent = '${r['entity'] ?? ''}';
+          final eid = '${r['entity_id'] ?? ''}';
+          if (ent.isEmpty || eid.isEmpty) continue;
+          if (ent == 'sale_item' || ent == 'sale' || ent == 'payment') {
+            final ids = ent == 'sale_item' ? saleLineIds : (ent == 'sale' ? saleOrderIds : payIds);
+            if (ids.contains(eid)) counts[ent]![eid] = (counts[ent]![eid] ?? 0) + 1;
           }
         }
       } catch (_) {}

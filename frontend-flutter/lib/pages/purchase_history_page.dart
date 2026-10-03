@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
@@ -235,25 +233,21 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     }
     if (lineIds.isEmpty && orderIds.isEmpty) return;
     if (!kIsWeb) {
-      // ① 本地副本（原生）：attachments/{entity}/{id}/ 目录里有多少文件
+      // ① 本地副本（原生）：按本地附件引用表计数（每实体一条引用=一个附件；同图共享一份文件，
+      //    文件存公共目录 attachments/{file}，不再按实体目录逐行复制）
       try {
-        final root = await getApplicationDocumentsDirectory();
-        for (final e in <(String, List<String>)>[
-          ('purchase_item', lineIds),
-          ('purchase', orderIds),
-        ]) {
-          for (final id in e.$2) {
-            try {
-              final dir = Directory('${root.path}/attachments/${e.$1}/$id');
-              if (!dir.existsSync()) continue;
-              final n = dir.listSync().whereType<File>().length;
-              if (n > 0) {
-                if (!mounted) return;
-                setState(() {
-                  (e.$1 == 'purchase_item' ? _buyLineAttachCount : _buyAttachCount)[id] = n;
-                });
-              }
-            } catch (_) {}
+        final refs = await LocalDb.getAll('attachment_refs');
+        for (final r in refs) {
+          final ent = '${r['entity'] ?? ''}';
+          final eid = '${r['entity_id'] ?? ''}';
+          if (ent.isEmpty || eid.isEmpty) continue;
+          final ids = ent == 'purchase_item' ? lineIds : (ent == 'purchase' ? orderIds : <String>[]);
+          if (ids.contains(eid)) {
+            if (!mounted) return;
+            setState(() {
+              final map = ent == 'purchase_item' ? _buyLineAttachCount : _buyAttachCount;
+              map[eid] = (map[eid] ?? 0) + 1;
+            });
           }
         }
       } catch (_) {}

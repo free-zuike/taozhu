@@ -103,7 +103,9 @@ describe('交易附件（R2）', () => {
     if (up.status !== 201) console.log('DEBUG upload:', up.status, await up.text());
     expect(up.status).toBe(201);
     const { key } = (await up.json()) as { key: string };
-    expect(key.startsWith('taozhu/images/attachments/sale/s1/')).toBe(true);
+    // 同图一份物理文件：key 按内容 md5 命名（不含实体/行 id，对齐参考实现；实体挂载在引用表）
+    expect(key.startsWith('taozhu/images/attachments/')).toBe(true);
+    expect(key.endsWith('.jpg')).toBe(true);
 
     const list = await (await call(env, 'GET', '/api/v1/attachments?entity=sale&id=s1', token)).json() as {
       attachments: Array<{ key: string; size: number }>;
@@ -344,11 +346,15 @@ describe('交易附件（R2）', () => {
     };
     const [line1, line2] = detail.items.map((x) => x.id);
 
-    // 两行各传一张凭证（行级 sale_item 引用）
+    // 两行各传一张凭证（行级 sale_item 引用；不同内容 = 不同 key 物理文件，同图则共享一份）
     const up1 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale_item&id=${line1}`, token, photoForm(), true)).json()) as { key: string };
-    const up2 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale_item&id=${line2}`, token, photoForm(), true)).json()) as { key: string };
-    expect(up1.key).toContain(`sale_item/${line1}/`);
-    expect(up2.key).toContain(`sale_item/${line2}/`);
+    const fd2 = new FormData();
+    fd2.append('photo', new File([new Uint8Array([0xff, 0xd8, 0xff, 0x05])], 'photo2.jpg', { type: 'image/jpeg' }));
+    const up2 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale_item&id=${line2}`, token, fd2, true)).json()) as { key: string };
+    // 同图一份物理文件：key 按内容 md5 命名（不含行 id，对齐参考实现）
+    expect(up1.key.startsWith('taozhu/images/attachments/')).toBe(true);
+    expect(up2.key.startsWith('taozhu/images/attachments/')).toBe(true);
+    expect(up1.key).not.toBe(up2.key);
     const total0 = (await (await call(env, 'GET', '/api/v1/attachments/total', token)).json()) as { total: number };
     expect(total0.total).toBe(2);
 
@@ -483,7 +489,8 @@ describe('附件删除走同步变更流（引用变更流驱动：本地删 →
         {
           entity_type: 'attachment', entity_sync_id: up1.key, action: 'delete',
           updated_at: new Date().toISOString(),
-          payload: { file_key: up1.key },
+          // 新格式内容 key 解析不出实体 → payload 带 entity/id（对齐新客户端，防共用图误删）
+          payload: { file_key: up1.key, entity: 'sale', id: saleId },
         },
       ],
     });
@@ -530,7 +537,9 @@ describe('附件删除走同步变更流（引用变更流驱动：本地删 →
       device_id: 'dev-c',
       changes: [{
         entity_type: 'attachment', entity_sync_id: upA.key, action: 'delete',
-        updated_at: new Date().toISOString(), payload: { file_key: upA.key },
+        updated_at: new Date().toISOString(),
+        // 新客户端带 entity/id（新格式内容 key 解析不出实体，靠三元组定位，防共用图误删）
+        payload: { file_key: upA.key, entity: 'sale', id: saleId },
       }],
     });
     expect(((await delPush.json()) as { accepted: number }).accepted).toBe(1);

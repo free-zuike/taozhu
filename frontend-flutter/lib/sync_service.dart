@@ -164,9 +164,10 @@ class SyncService {
         final file = '${a['file'] ?? ''}';
         // 后端已规范化三元组，此处不再做 key 正则解析（此前前后端正则不一致会产生 // 空段路径）
         if (entity.isEmpty || id.isEmpty || file.isEmpty) return false;
-        final dir = Directory('${root.path}/attachments/$entity/$id');
-        final target = File('${dir.path}/$file');
-        if (target.existsSync()) return false; // 已有副本
+        // 本地副本按内容存公共目录 attachments/{file}（file=md5.jpg；同图多实体共享一份，
+        // 对齐参考实现"同图一份物理文件"）；附件引用表仍按实体各一行（每个商品/单据算一个附件）
+        final target = File('${root.path}/attachments/$file');
+        if (target.existsSync()) return false; // 已有副本（同图共享）
         final key = a['key'] ?? '$entity/$id/$file';
         Object? lastError;
         for (var attempt = 0; attempt < 3; attempt++) {
@@ -175,7 +176,7 @@ class SyncService {
                 await Api.instance.getRaw('/attachments/$key').timeout(const Duration(seconds: 12));
             if (bytes.isNotEmpty) {
               bytesCache[key] = bytes;
-              if (!dir.existsSync()) dir.createSync(recursive: true);
+              if (!target.parent.existsSync()) target.parent.createSync(recursive: true);
               await target.writeAsBytes(bytes);
               return true;
             }
@@ -264,7 +265,13 @@ class SyncService {
       if (entity.isEmpty || id.isEmpty || fileName.isEmpty) return;
       try {
         final root = await getApplicationDocumentsDirectory();
-        final f = File('${root.path}/attachments/$entity/$id/$fileName');
+        // 本地副本按内容存公共目录 attachments/{file}（同图一份，对齐参考实现）；
+        // 旧版按实体目录存的存量副本（attachments/{entity}/{id}/{file}）兼容回退
+        var f = File('${root.path}/attachments/$fileName');
+        if (!f.existsSync()) {
+          final old = File('${root.path}/attachments/$entity/$id/$fileName');
+          if (old.existsSync()) f = old;
+        }
         if (!f.existsSync()) {
           // 本地副本缺失：不静默丢弃——记日志并保留队列（可能是路径/挂载不一致，待排查；
           // 宁留勿丢：若此时清空整队列，其他待传附件也一并丢失 = "待推送 0 但服务器没收齐"）
@@ -929,34 +936,15 @@ class SyncService {
     return null;
   }
 
-  /// 清理本地附件副本（单据级目录 + 明细行级目录）：
-  /// 本地副本按 attachments/{entity}/{id}/ 组织；行级 = attachments/sale_item|purchase_item/{lineId}/。
-  /// **必须在本地镜像删除之前调用**——明细行级目录定位依赖镜像 items 里的行 id
-  /// （sale/purchase 的镜像一旦删除就读不到行）。删除引用流驱动：服务端删 → 其他端 pull 删；本端删 → 删镜像前清副本。
+  /// 清理某实体的本地附件引用（删除单据/商品行时调用）：删本地附件引用表该实体条目；
+  /// 公共副本文件（attachments/{file}）**不删**——同图可能被其他商品行共享（宁留勿删，
+  /// 孤儿文件由同步扫描/「重置本地附件副本」统一清理）。
   static Future<void> cleanupLocalAttachmentsOf(String entityType, String id) async {
     try {
-      final root = await getApplicationDocumentsDirectory();
-      final base = Directory('${root.path}/attachments');
-      if (!base.existsSync()) return;
-      // 单据级目录
-      final orderDir = Directory('${base.path}/$entityType/$id');
-      if (orderDir.existsSync()) {
-        try { orderDir.deleteSync(recursive: true); } catch (_) {}
-      }
-      // 行级目录：从本地镜像读取明细行 id（删除前的快照）
-      final store = _storeOf(entityType);
-      if (store == 'sales' || store == 'purchases') {
-        final lineEntity = store == 'sales' ? 'sale_item' : 'purchase_item';
-        final local = await LocalDb.getOne(store, id);
-        final items = (local?['items'] as List?) ?? [];
-        for (final it in items) {
-          if (it is! Map) continue;
-          final lineId = '${it['id'] ?? ''}';
-          if (lineId.isEmpty) continue;
-          final lineDir = Directory('${base.path}/$lineEntity/$lineId');
-          if (lineDir.existsSync()) {
-            try { lineDir.deleteSync(recursive: true); } catch (_) {}
-          }
+      final refs = await LocalDb.getAll('attachment_refs');
+      for (final r in refs) {
+        if ('${r['entity'] ?? ''}' == entityType && '${r['entity_id'] ?? ''}' == id) {
+          await LocalDb.deleteOne('attachment_refs', '${r['entity']}/${r['entity_id']}/${r['file']}');
         }
       }
     } catch (_) {}

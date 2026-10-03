@@ -604,19 +604,19 @@ export async function applyChange(
           if (!key) return { ok: false, error: 'attachment 删除需 file_key' };
           // 实体级引用删除：payload 优先带 entity/entity_id（新客户端），否则从 key 解析（兼容历史）
           let entity = String(p?.entity ?? '').trim();
-          let entityId = String(p?.entity_id ?? '').trim();
+          let entityId = String(p?.entity_id ?? p?.id ?? '').trim();
           if (!entity || !entityId) {
             const parsed = parseAttachmentKey(key);
             if (parsed) { entity = parsed.entity; entityId = parsed.id; }
           }
-          if (entity && entityId) {
-            await db.prepare(
-              'DELETE FROM attachment_refs WHERE file_key = ? AND entity = ? AND entity_id = ?',
-            ).bind(key, entity, entityId).run();
-          } else {
-            // 解析不出实体（脏 key）→ 兜底删全部该 key 引用（历史行为）
-            await db.prepare('DELETE FROM attachment_refs WHERE file_key = ?').bind(key).run();
+          if (!entity || !entityId) {
+            // 新格式内容 key（md5-only 解析不出实体）且 payload 无实体信息 → 无法定位引用，
+            // 拒绝删除防误删共用图（同图被多实体引用时兜底删全部=误删共享）
+            return { ok: false, error: '附件删除需 entity/entity_id（共用图保护）' };
           }
+          await db.prepare(
+            'DELETE FROM attachment_refs WHERE file_key = ? AND entity = ? AND entity_id = ?',
+          ).bind(key, entity, entityId).run();
           // 删除后该文件仍被其他实体引用（共用图）→ 不删 R2；零引用才物理删
           const cnt = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(key).first<{ n: number }>();
           if ((cnt?.n ?? 0) === 0) {
