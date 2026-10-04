@@ -75,7 +75,8 @@ purchasesRouter.post('/', async (c) => {
     if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
     const priceIn = Number(item.purchase_price);
     const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
-    const amount = roundMoney(qty * effective, money);
+    // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
+    const amount = qty * effective;
     total += amount;
     // 折合计数数量：记单时显式填（count_qty）> 价格行规格 per（quantity×per）> 缺省 quantity（按原单位）
     const countQty = Number(item.count_qty);
@@ -110,6 +111,7 @@ purchasesRouter.get('/', async (c) => {
   const params: string[] = [];
   if (dateFrom) { where += ' AND pi.happened_at >= ?'; params.push(dateFrom); }
   if (dateTo) { where += ' AND pi.happened_at <= ?'; params.push(dateTo); }
+  const money = await getRoundingConfig(c.env.DB);
 
   // 去单据化：head 表已物理删除，列表从商品行聚合组装（每单一行：日期/总额由行派生）
   const aggWhere = where.replace(/pi\.happened_at/g, 'happened_at');
@@ -153,7 +155,7 @@ purchasesRouter.get('/', async (c) => {
   return c.json({
     total: countRow?.cnt ?? 0,
     purchases: aggRows.results.map((row) => ({
-      id: row.id, happened_at: row.happened_at, note: row.note ?? '', total: row.total, items: byId.get(row.id) ?? [],
+      id: row.id, happened_at: row.happened_at, note: row.note ?? '', total: roundMoney(Number(row.total) || 0, money), items: byId.get(row.id) ?? [],
     })),
     // 去单据化主结构：行级商品记录（新客户端优先读，整单 purchases 字段兼容保留）
     purchase_items: purchaseItemRows.results.map((x) => {
@@ -177,7 +179,7 @@ purchasesRouter.get('/:id', async (c) => {
     id,
     happened_at: rows.results.map((r) => `${r.happened_at ?? ''}`).reduce((a, b) => (a >= b ? a : b), ''),
     note: `${first.note ?? ''}`,
-    total,
+    total: roundMoney(total, await getRoundingConfig(c.env.DB)),
     items: rows.results,
   });
 });
@@ -233,7 +235,8 @@ purchasesRouter.patch('/items/:id', async (c) => {
   if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
   const note = body?.note !== undefined ? (body.note ?? '').trim() : (row.note ?? '');
 
-  const amount = roundMoney(qty * purchasePrice, await getRoundingConfig(c.env.DB));
+  // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
+  const amount = qty * purchasePrice;
   const batch: D1PreparedStatement[] = [
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1), // 回滚旧值
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, count_unit: row.count_unit }, 1),  // 按新值增加
@@ -298,7 +301,7 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
       const priceIn = Number(item.purchase_price);
       const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
-      total += roundMoney(qty * effective, await getRoundingConfig(c.env.DB));
+      total += qty * effective;
     }
     batch.push(c.env.DB.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
     for (const item of items) {
@@ -307,7 +310,7 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       const qty = Number(item.quantity);
       const priceIn = Number(item.purchase_price);
       const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
-      const amount2 = roundMoney(qty * effective, await getRoundingConfig(c.env.DB));
+      const amount2 = qty * effective;
       // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity
       const countQty = Number(item.count_qty);
       const per = Number(price.per ?? 0);

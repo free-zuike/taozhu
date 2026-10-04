@@ -196,7 +196,12 @@ describe('金额舍入配置（/settings/rounding）', () => {
       items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
     });
     const body = (await sale.json()) as { total: number };
-    // 1.235 → 5舍6入 → 1.23；四舍五入则是 1.24
+    // API 返回按配置换算展示：1.235 → 5舍6入 → 1.23；四舍五入则是 1.24
     expect(body.total).toBe(1.23);
+    // 存储=浮点原值（对齐参考项目 REAL：入库不取整，DB 行 amount 保留 1.235）
+    const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sales: Array<{ items: Array<{ amount: number }> }>;
+    };
+    expect(list.sales[0].items[0].amount).toBe(1.235);
   });
 });

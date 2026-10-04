@@ -8,7 +8,6 @@ import '../local_db.dart';
 import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
-import '../utils/money.dart';
 import '../widgets/date_field.dart';
 import 'router.dart';
 
@@ -157,8 +156,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
       try {
         await Api.instance.post('/payments', {
           'client_id': _clientId,
-          'amount': Money.round(amount),
-          'waived': Money.round(waived),
+          'amount': amount,
+          'waived': waived,
           'happened_at': _dateCtrl.text.trim(),
           'method': _method,
           'note': _noteCtrl.text.trim(),
@@ -181,8 +180,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
     final payload = {
       'id': payId,
       'client_id': _clientId,
-      'amount': Money.round(amount),
-      'waived': Money.round(waived),
+      'amount': amount,
+      'waived': waived,
       'happened_at': _dateCtrl.text.trim(),
       'method': _method,
       'note': _noteCtrl.text.trim(),

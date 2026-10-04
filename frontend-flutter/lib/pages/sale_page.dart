@@ -1073,7 +1073,8 @@ class _SalePageState extends State<SalePage> {
     for (final r in valid) {
       final opt = _items.where((x) => x.id == r.itemId).firstOrNull;
       final price = opt?.prices.where((p) => p['id'] == r.priceId).firstOrNull;
-      final amount = Money.round(r.quantity * r.salePrice);
+      // 存储浮点原值（对齐参考项目 REAL：本地镜像/提交不取整；舍入配置只在统计/欠款/展示层换算）
+      final amount = r.quantity * r.salePrice;
       totalCalc += amount;
       // 批量直编：行保留各自原单号（该日可能多单，统一挂新单会把原单行搬走→本地/服务器错乱）
       final rowSaleId = isDateRows ? (r.origSaleId.isNotEmpty ? r.origSaleId : saleId) : saleId;
@@ -1101,7 +1102,7 @@ class _SalePageState extends State<SalePage> {
       'client_name': clientName,
       'happened_at': orderDate,
       'note': _noteCtrl.text.trim(),
-      'total': Money.round(totalCalc),
+      'total': totalCalc,
       'items': itemsPayload,
     };
     if (kIsWeb) {

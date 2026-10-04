@@ -102,12 +102,13 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       const clientRow = await db.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>();
       const happenedAt = rows.results.map((r) => `${r.happened_at ?? ''}`).reduce((a, b) => (a >= b ? a : b), '');
       const total = rows.results.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const money = await getRoundingConfig(db);
       const refs = await db.prepare(
         "SELECT entity, entity_id, file_key FROM attachment_refs WHERE (entity = 'sale' AND entity_id = ?) OR (entity = 'sale_item' AND entity_id IN (SELECT id FROM sale_items WHERE sale_id = ?))",
       ).bind(id, id).all<{ entity: string; entity_id: string; file_key: string }>();
       return {
         id, client_id: clientId, client_name: clientRow?.name ?? '',
-        happened_at: happenedAt, note: `${rows.results[0].note ?? ''}`, total,
+        happened_at: happenedAt, note: `${rows.results[0].note ?? ''}`, total: roundMoney(total, money),
         items: rows.results,
         attachments: refs.results.map((x) => x.file_key),
       };
@@ -120,11 +121,12 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       if (rows.results.length === 0) return null;
       const happenedAt = rows.results.map((r) => `${r.happened_at ?? ''}`).reduce((a, b) => (a >= b ? a : b), '');
       const total = rows.results.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const money = await getRoundingConfig(db);
       const refs = await db.prepare(
         "SELECT entity, entity_id, file_key FROM attachment_refs WHERE (entity = 'purchase' AND entity_id = ?) OR (entity = 'purchase_item' AND entity_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?))",
       ).bind(id, id).all<{ entity: string; entity_id: string; file_key: string }>();
       return {
-        id, happened_at: happenedAt, note: `${rows.results[0].note ?? ''}`, total,
+        id, happened_at: happenedAt, note: `${rows.results[0].note ?? ''}`, total: roundMoney(total, money),
         items: rows.results,
         attachments: refs.results.map((x) => x.file_key),
       };
@@ -209,7 +211,6 @@ export function maskPayload(entityType: string, payload: unknown): unknown {
 // ---------------------------------------------------------------------------
 
 async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any>): Promise<void> {
-  const money = await getRoundingConfig(db);
   // 明细行缺失/为空（客户端异常 payload）→ 拒绝应用，保留服务器已有明细——防全量覆盖后丢数据
   const items = p.items as Record<string, any>[] | undefined;
   if (!Array.isArray(items) || items.length === 0) {
@@ -228,14 +229,14 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
     const itemId = String(it.item_id ?? '').trim();
     // 行级校验：数量 ≤0 或 item_id 为空（客户端坏行/脏数据）→ 跳过不插入，防 JOIN items 失败产出"无明细/未分类/价0"脏行
     if (qty <= 0 || itemId === '') continue;
-    const amount = Number(it.amount) || roundMoney(qty * (Number(it.sale_price) || 0), money);
+    const amount = Number(it.amount) || qty * (Number(it.sale_price) || 0);
     const clientId = String(it.client_id ?? p.client_id ?? '');
     const countQty = Number(it.count_qty);
     const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : qty;
     batch.push(db.prepare(
       'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(it.id ?? randomId(), id, clientId, itemId, it.unit ?? '', qty, effCount === qty ? null : effCount,
-      Number(it.sale_price) || 0, Number(it.cost_price) || 0, roundMoney(amount, money),
+      Number(it.sale_price) || 0, Number(it.cost_price) || 0, amount,
       it.happened_at || p.happened_at || null, it.note ?? ''));
     batch.push(stockDeltaFor(db, { item_id: itemId, unit: it.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: it.count_unit ?? null }, -1));
   }
@@ -243,7 +244,6 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
 }
 
 async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string, any>): Promise<void> {
-  const money = await getRoundingConfig(db);
   // 明细行缺失/为空（客户端异常 payload）→ 拒绝应用，保留服务器已有明细——防全量覆盖后丢数据
   const items = p.items as Record<string, any>[] | undefined;
   if (!Array.isArray(items) || items.length === 0) {
@@ -261,13 +261,13 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
     const itemId = String(it.item_id ?? '').trim();
     // 行级校验：数量 ≤0 或 item_id 为空（客户端坏行/脏数据）→ 跳过不插入，防 JOIN items 失败产出"无明细/未分类/价0"脏行
     if (qty <= 0 || itemId === '') continue;
-    const amount = Number(it.amount) || roundMoney(qty * (Number(it.purchase_price) || 0), money);
+    const amount = Number(it.amount) || qty * (Number(it.purchase_price) || 0);
     const countQty = Number(it.count_qty);
     const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : qty;
     batch.push(db.prepare(
       'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(it.id ?? randomId(), id, itemId, it.unit ?? '', qty, effCount === qty ? null : effCount,
-      Number(it.purchase_price) || 0, roundMoney(amount, money),
+      Number(it.purchase_price) || 0, amount,
       it.happened_at || p.happened_at || null, it.note ?? ''));
     batch.push(stockDeltaFor(db, { item_id: itemId, unit: it.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: it.count_unit ?? null }, 1));
   }
@@ -329,8 +329,6 @@ export async function applyChange(
   const { entity_type, entity_sync_id: id, action } = ch;
   const p = (ch.payload ?? {}) as Record<string, any>;
   try {
-    // 金额舍入：与路由同口径（服务端权威，重算行金额对齐配置）
-    const money = await getRoundingConfig(db);
     switch (entity_type) {
       case 'client':
         if (action === 'delete') break; // 店铺为软删（deleted_at），不做物理删除
@@ -414,7 +412,7 @@ export async function applyChange(
         const itemId = String(p.item_id ?? '').trim();
         if (qty <= 0 || itemId === '') return { ok: false, error: '出货商品缺数量或商品' };
         const saleId = String(p.sale_id ?? '');
-        const amount = Number(p.amount) || roundMoney(qty * (Number(p.sale_price) || 0), money);
+        const amount = Number(p.amount) || qty * (Number(p.sale_price) || 0);
         const countQty = Number(p.count_qty);
         const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : qty;
         // 库存联动：出货扣减（行级 upsert——App 主同步路径；旧行存在=修改，先恢复旧卖出量再按新扣）
@@ -436,7 +434,7 @@ export async function applyChange(
                quantity = excluded.quantity, count_qty = excluded.count_qty, sale_price = excluded.sale_price, cost_price = excluded.cost_price,
                amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note, client_id = excluded.client_id`,
           ).bind(id, saleId, itemId, p.unit ?? '', qty, effCount === qty ? null : effCount,
-            Number(p.sale_price) || 0, Number(p.cost_price) || 0, roundMoney(amount, money),
+            Number(p.sale_price) || 0, Number(p.cost_price) || 0, amount,
             p.happened_at || null, p.note ?? '', p.client_id ?? ''),
           ...stock,
         ]);
@@ -480,7 +478,7 @@ export async function applyChange(
         const itemId2 = String(p.item_id ?? '').trim();
         if (qty2 <= 0 || itemId2 === '') return { ok: false, error: '进货商品缺数量或商品' };
         const purchaseId = String(p.purchase_id ?? '');
-        const amount2 = Number(p.amount) || roundMoney(qty2 * (Number(p.purchase_price) || 0), money);
+        const amount2 = Number(p.amount) || qty2 * (Number(p.purchase_price) || 0);
         const countQty2 = Number(p.count_qty);
         const effCount2 = Number.isFinite(countQty2) && countQty2 > 0 ? countQty2 : qty2;
         // 库存联动：进货增加（行级 upsert——App 主同步路径；旧行存在=修改，先恢复旧进货量再按新加）
@@ -502,7 +500,7 @@ export async function applyChange(
                quantity = excluded.quantity, count_qty = excluded.count_qty, purchase_price = excluded.purchase_price,
                amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note`,
           ).bind(id, purchaseId, itemId2, p.unit ?? '', qty2, effCount2 === qty2 ? null : effCount2,
-            Number(p.purchase_price) || 0, roundMoney(amount2, money),
+            Number(p.purchase_price) || 0, amount2,
             p.happened_at || null, p.note ?? ''),
           ...stock2,
         ]);

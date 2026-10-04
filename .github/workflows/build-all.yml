@@ -86,8 +86,8 @@ jobs:
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
           REL="taozhu-v${VERSION}"
           git fetch --tags --quiet || true
-          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
-          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
+          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -241,10 +241,9 @@ jobs:
             ABI=$(basename "$APK" | sed 's/^app-//; s/-release\.apk$//')
             cp "$APK" "/tmp/taozhu-app-${VERSION}-${ABI}.apk"
           done
-          # 更新说明：上个版本 tag 以来的提交摘要
+          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
           git fetch --tags --quiet || true
-          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
-          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK（按 ABI 拆包）/ Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
@@ -348,10 +347,9 @@ jobs:
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
           cd frontend-flutter/build/linux/x64/release/bundle && zip -qr "/tmp/taozhu-linux-${VERSION}.zip" . && cd -
-          # 更新说明：上个版本 tag 以来的提交摘要
+          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
           git fetch --tags --quiet || true
-          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
-          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
@@ -485,8 +483,7 @@ jobs:
           if (-not $VERSION) { Write-Error "版本提取失败"; exit 1 }
           Compress-Archive -Path "frontend-flutter/build/windows/x64/runner/Release/*" -DestinationPath "$env:TEMP/taozhu-windows-${VERSION}.zip"
           git fetch --tags --quiet 2>$null
-          $prev = (git tag --sort=-version:refname | Where-Object { $_ -ne "taozhu-v$VERSION" } | Select-Object -First 1)
-          if ($prev) { $log = git log --format='- %s' --no-merges "$prev..HEAD" } else { $log = git log --format='- %s' --no-merges -8 }
+          $log = bash .github/release-notes.sh $VERSION 2>$null
           if (-not $log) { $log = "- 同步版本 $VERSION" }
           $notes = "陶朱 v$VERSION 更新内容：`n$log`n`n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。"
           $REL = "taozhu-v$VERSION"
@@ -561,9 +558,9 @@ jobs:
         run: |
           VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1 || exit 1)
           cd frontend-flutter/build/macos/Build/Products/Release && zip -qr "/tmp/taozhu-macos-${VERSION}.zip" taozhu_app.app && cd -
+          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
           git fetch --tags --quiet || true
-          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
-          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
@@ -642,9 +639,9 @@ jobs:
         run: |
           VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1 || exit 1)
           cd frontend-flutter/build/ios/iphoneos && zip -qr "/tmp/taozhu-ios-${VERSION}-unsigned.zip" Runner.app && cd -
+          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
           git fetch --tags --quiet || true
-          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
-          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"
@@ -750,9 +747,9 @@ jobs:
         run: |
           VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || exit 1)
           cd frontend-uni/dist/build/mp-weixin && zip -qr "/tmp/taozhu-miniprogram-${VERSION}.zip" . && cd -
+          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
           git fetch --tags --quiet || true
-          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^taozhu-v${VERSION}$" | head -1)
-          if [ -n "$PREV_TAG" ]; then LOG=$(git log --format='- %s' --no-merges "$PREV_TAG..HEAD"); else LOG=$(git log --format='- %s' --no-merges -8); fi
+          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
           REL="taozhu-v${VERSION}"

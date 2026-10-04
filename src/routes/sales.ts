@@ -85,7 +85,8 @@ salesRouter.post('/', async (c) => {
     if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
     const salePrice = Number(item.sale_price);
     const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
-    const amount = roundMoney(qty * effectiveSale, money);
+    // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
+    const amount = qty * effectiveSale;
     total += amount;
     const siId = randomId();
     saleItemIds.push(siId);
@@ -126,6 +127,7 @@ salesRouter.get('/', async (c) => {
   if (clientId) { where += ' AND si.client_id = ?'; params.push(clientId); }
   if (dateFrom) { where += ' AND si.happened_at >= ?'; params.push(dateFrom); }
   if (dateTo) { where += ' AND si.happened_at <= ?'; params.push(dateTo); }
+  const money = await getRoundingConfig(c.env.DB);
 
   // 去单据化：head 表已物理删除，列表从商品行聚合组装（每单一行：店铺/日期/总额由行派生）
   const aggWhere = where.replace(/si\.happened_at/g, 'happened_at').replace(/si\.client_id/g, 'client_id');
@@ -179,7 +181,7 @@ salesRouter.get('/', async (c) => {
     total: countRow?.cnt ?? 0,
     sales: aggRows.results.map((row) => ({
       id: row.id, client_id: row.client_id, client_name: clientName.get(row.client_id) ?? '',
-      happened_at: row.happened_at, note: row.note ?? '', total: row.total,
+      happened_at: row.happened_at, note: row.note ?? '', total: roundMoney(Number(row.total) || 0, money),
       // 嵌套兼容数组：店员打码成本价（与行级 sale_items 一致，防止绕过行级主结构看毛利）
       items: (bySale.get(row.id) ?? []).map((it) => {
         const r = it as Record<string, unknown>;
@@ -240,7 +242,7 @@ salesRouter.get('/:id', async (c) => {
     client_name: clientRow?.name ?? '',
     happened_at: rows.results.map((r) => `${r.happened_at ?? ''}`).reduce((a, b) => (a >= b ? a : b), ''),
     note: `${first.note ?? ''}`,
-    total,
+    total: roundMoney(total, await getRoundingConfig(c.env.DB)),
     items: rows.results,
   });
 });
@@ -267,7 +269,8 @@ salesRouter.patch('/items/:id', async (c) => {
   if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
   const note = body?.note !== undefined ? (body.note ?? '').trim() : (row.note ?? '');
 
-  const amount = roundMoney(qty * salePrice, await getRoundingConfig(c.env.DB));
+  // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
+  const amount = qty * salePrice;
   const batch: D1PreparedStatement[] = [
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, 1),  // 出货扣减恢复（旧值）
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, count_unit: row.count_unit }, -1), // 按新值扣减
@@ -340,7 +343,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
       const salePrice = Number(item.sale_price);
       const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
-      total += roundMoney(qty * effectiveSale, money2);
+      total += qty * effectiveSale;
     }
     batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
     const happenedAt = body?.happened_at?.trim() || '';
@@ -350,7 +353,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       const qty = Number(item.quantity);
       const salePrice = Number(item.sale_price);
       const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
-      const amount = roundMoney(qty * effectiveSale, money2);
+      const amount = qty * effectiveSale;
       // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity（按原单位）
       const countQty = Number(item.count_qty);
       const per = Number(price.per ?? 0);

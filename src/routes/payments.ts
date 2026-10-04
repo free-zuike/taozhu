@@ -5,7 +5,6 @@ import { authMiddleware, adminOnly } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
-import { getRoundingConfig, roundMoney } from '../lib/money';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -38,12 +37,12 @@ paymentsRouter.post('/', adminOnly(), async (c) => {
   if (!client) return c.json({ error: '店铺不存在' }, 404);
   const id = randomId();
   const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
-  const money = await getRoundingConfig(c.env.DB);
+  // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
   await c.env.DB.prepare(
     'INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(id, clientId, happenedAt, roundMoney(amount, money), roundMoney(waived, money), body?.method?.trim() ?? '', body?.note?.trim() ?? '', user.id, syncKey || null).run();
+  ).bind(id, clientId, happenedAt, amount, waived, body?.method?.trim() ?? '', body?.note?.trim() ?? '', user.id, syncKey || null).run();
   await recordChange(c.env.DB, { entity_type: 'payment', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'payment', id), updated_by_username: user.username });
-  return c.json({ id, client_id: clientId, happened_at: happenedAt, amount: roundMoney(amount, money), waived: roundMoney(waived, money), method: body?.method?.trim() ?? '', note: body?.note?.trim() ?? '' }, 201);
+  return c.json({ id, client_id: clientId, happened_at: happenedAt, amount, waived, method: body?.method?.trim() ?? '', note: body?.note?.trim() ?? '' }, 201);
 });
 
 // GET /payments?client_id=&method=&date_from=&date_to=&limit=&offset=
@@ -88,11 +87,11 @@ paymentsRouter.patch('/:id', adminOnly(), async (c) => {
   if (!Number.isFinite(amount) || amount <= 0) return c.json({ error: '收款金额必须大于 0' }, 400);
   const waived = body?.waived !== undefined ? Number(body.waived) : pay.waived;
   if (!Number.isFinite(waived) || waived < 0) return c.json({ error: '平账减免金额不能为负数' }, 400);
-  const money = await getRoundingConfig(c.env.DB);
+  // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
   await c.env.DB.prepare(
     'UPDATE payments SET client_id = ?, happened_at = ?, amount = ?, waived = ?, method = ?, note = ? WHERE id = ?')
-    .bind(clientId, body?.happened_at?.trim() || pay.happened_at, roundMoney(amount, money),
-      roundMoney(waived, money), body?.method?.trim() ?? pay.method ?? '', body?.note?.trim() ?? pay.note ?? '', id).run();
+    .bind(clientId, body?.happened_at?.trim() || pay.happened_at, amount,
+      waived, body?.method?.trim() ?? pay.method ?? '', body?.note?.trim() ?? pay.note ?? '', id).run();
   await recordChange(c.env.DB, { entity_type: 'payment', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'payment', id), updated_by_username: c.get('user').username });
   await recordAudit(c.env.DB, { username: c.get('user').username, action: 'update', entity_type: 'payment', entity_id: id, detail: `修改收款：金额 ¥${amount}${waived > 0 ? `、平账减免 ¥${waived}` : ''}` });
   return c.json({ ok: true });
