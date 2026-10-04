@@ -235,6 +235,9 @@ attachmentsRouter.get('/in-use', async (c) => {
   // ② 历史兜底：R2 所有附件 key 对照 D1 在用单据 id，未写入引用表的视为在用（仅一次性补列，不写表）
   // 附件前缀：现行规范 + 历史规范 + 根级历史（sale/s1/a.jpg）。不用空前缀扫全 bucket——
   // 全桶含备份/头像等大量对象，list 分页慢→前端 in-use 拉取超时→本地孤儿扫不出（性能根因）。
+  // 兜底扫描到在用对象后**补写引用表**（幂等 upsert）：引用表补全后 in-use 全引用表驱动，
+  // 本地 putAll 与服务器 in-use 完全对齐（修"本地91/服务器95 差4"：4 个 R2 在用对象引用表没行，
+  // 本地全量刷新始终少这几条）。
   const scanPrefixes = ['taozhu/images/attachments/', 'taozhu/attachments/', 'sale/', 'sale_item/', 'purchase/', 'purchase_item/', 'payment/'];
   for (const prefix of scanPrefixes) {
     let cursor: string | undefined;
@@ -245,6 +248,19 @@ attachmentsRouter.get('/in-use', async (c) => {
         const parsed = parseAttachmentKey(o.key);
         if (!parsed) continue;
         if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) {
+          // 在用但引用表无行（v0.17.84 之前存量的旧格式 key）：补写引用表（id 幂等），
+          // 此后该对象走 ① 引用表权威路径（同 key 多实体共享时各实体各一行，补行不误删）
+          try {
+            await db.prepare(
+              'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
+            ).bind(
+              `${parsed.entity}:${parsed.id}:${o.key}`,
+              parsed.entity,
+              parsed.id,
+              o.key,
+              o.key.split('/').pop()?.replace('.jpg', '') ?? '',
+            ).run();
+          } catch (_) {}
           seen.add(o.key);
           out.push({
             key: o.key,

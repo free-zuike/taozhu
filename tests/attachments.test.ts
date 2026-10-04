@@ -251,6 +251,44 @@ describe('交易附件（R2）', () => {
     expect(hit.file).toBe(up1.key.split('/').pop());
   });
 
+  it('历史兜底补写引用表：旧格式在用对象（引用表无行）→ in-use 列出并补写，二次调用走引用表权威', async () => {
+    // 在用 sale + 旧格式 R2 对象（未写引用表的存量：如 v0.17.84 前 sale/s1/a.jpg 根级前缀）
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-03',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    // 直接塞 R2 旧格式在用对象（不经过上传接口 = 引用表无行），并放一个无关孤儿对象
+    const legacyKey = `sale/${saleId}/legacy.jpg`;
+    await env.BUCKET.put(legacyKey, new Uint8Array([7, 7, 7]));
+    const ghostKey = 'taozhu/images/attachments/sale/ghost456/deadbeef.jpg';
+    await env.BUCKET.put(ghostKey, new Uint8Array([9, 9, 9]));
+
+    const first = await (await call(env, 'GET', '/api/v1/attachments/in-use', token)).json() as {
+      attachments: Array<{ key: string; id: string; entity: string; file: string }>;
+    };
+    expect(first.attachments.some((o) => o.key === legacyKey)).toBe(true); // 在用旧格式对象列入
+    expect(first.attachments.some((o) => o.key === ghostKey)).toBe(false); // 孤儿不列
+
+    // 补写引用表后：二次调用 in-use 该对象仍列出且引用表已有行（幂等收敛，本地 putAll 可对齐）
+    const second = await (await call(env, 'GET', '/api/v1/attachments/in-use', token)).json() as {
+      attachments: Array<{ key: string; id: string; entity: string; file: string }>;
+    };
+    expect(second.attachments.some((o) => o.key === legacyKey)).toBe(true);
+    const row = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ? AND entity = 'sale' AND entity_id = ?",
+    ).bind(legacyKey, saleId).first<{ n: number }>();
+    expect(row?.n ?? 0).toBe(1);
+  });
+
   it('in-use 引用自愈：实体已删但引用残留 → 不列出并清除坏引用（防同步下载 404 刷屏）', async () => {
     // 真实单据 + 正常引用（应保留并列出）
     await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });

@@ -134,7 +134,21 @@ class SyncService {
     if (kIsWeb) return;
     List<Map<String, dynamic>> inUse;
     try {
-      final d = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
+      // 在用列表拉取重试 2 次（网络抖动/服务器 R2 扫描慢偶发超时——失败静默会导致本地引用表
+      // 与物理副本停在旧值，"本地91/服务器95 差4/重置没用"的直接根因）
+      Map<String, dynamic> d = {};
+      for (var attempt = 0; attempt < 3; attempt++) {
+        try {
+          d = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
+          break;
+        } catch (e) {
+          if (attempt < 2) {
+            await Future.delayed(Duration(seconds: 1 << attempt));
+          } else {
+            rethrow;
+          }
+        }
+      }
       inUse = ((d['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
       // 本地待推送删除的附件引用（entity/id/file 三元组）：删除变更 push 成功前，服务器 in-use
       // 仍下发旧引用（服务器引用行还没删）。此轮全量刷新若照单覆盖本地表→"删一下又复活"。
@@ -829,40 +843,44 @@ class SyncService {
       // pull 又拉回旧值）。用服务器时间给未推送成功的条目重刷 updated_at，下次推送必能胜出。
       final serverTime = DateTime.tryParse('${d['server_time'] ?? ''}')?.toUtc();
       final offset = serverTime?.difference(DateTime.now().toUtc());
-      // 附件删除变更被拒兜底：旧客户端入队的删除变更 payload 只有 md5-only 内容 key（解析不出
-      // 实体）→ 服务器按"共用图保护"拒绝（400）。此类变更若一直 push 失败，pendingDel 过滤会让
-      // 本地引用表永远少 N 条（同步面板"本地84/服务器95"差 11 的根因）。这里用服务器 in-use 的
-      // 规范化三元组补 entity/id 直连删除——服务器引用行真正删掉，pull 后本地表收敛对齐。
+      // 附件删除变更兜底收敛：旧客户端入队的删除变更 payload 只有 md5-only 内容 key（解析不出
+      // 实体）→ 服务器按"共用图保护"拒绝（400）；LWW/其他原因被拒也会留队列。此类变更若一直
+      // push 失败，pendingDel 过滤会让本地引用表永远少 N 条（同步面板"本地91/服务器95"差 4 的根因）。
+      // 这里对**本地队列全部附件删除变更**做收敛（不只看 rejected samples）：
+      // 服务器 in-use 仍有该 key → 用其规范化三元组直连删除（引用行真正删掉，pull 后本地表对齐）；
+      // in-use 已无该 key → 说明服务器此前已删/无此引用，本地队列残留直接清掉。
       try {
-        final samples = (d['conflict_samples'] as List?) ?? [];
-        final rejected = samples
-            .where((s) => '${s['reason'] ?? ''}' == 'apply_failed' && '${s['entity_type'] ?? ''}' == 'attachment')
-            .map((s) => '${s['entity_sync_id'] ?? ''}')
-            .toSet();
-        if (rejected.isNotEmpty) {
+        final attachDeletes = pending
+            .where((x) => '${x['entity_type'] ?? ''}' == 'attachment' && '${x['action'] ?? ''}' == 'delete')
+            .toList();
+        if (attachDeletes.isNotEmpty) {
           final inUse = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
           final inUseList = ((inUse['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
-          for (final x in pending) {
+          for (final x in attachDeletes) {
             final sid = '${x['entity_sync_id'] ?? ''}';
-            if ('${x['entity_type'] ?? ''}' != 'attachment' || '${x['action'] ?? ''}' != 'delete') continue;
-            if (!rejected.contains(sid)) continue;
-            final match = inUseList
-                .where((a) => '${a['key'] ?? ''}' == sid || '${a['file'] ?? ''}' == sid.split('/').last)
-                .firstOrNull;
-            if (match != null) {
-              final e = '${match['entity'] ?? ''}';
-              final i = '${match['id'] ?? ''}';
-              if (e.isNotEmpty && i.isNotEmpty) {
-                try {
-                  await Api.instance.delete('/attachments?key=$sid&entity=$e&id=$i');
-                  appLog('sync', '附件删除兜底成功：$sid（$e/$i）', level: 'info');
-                  final id = x['id'];
-                  if (id is int) await LocalDb.removePendingChange(id);
-                  continue;
-                } catch (_) {}
+            // 优先用 payload 携带的 entity/id（新客户端删除带三元组），否则用服务器 in-use 匹配
+            final p = (x['payload'] as Map<String, dynamic>?) ?? {};
+            var e = '${p['entity'] ?? ''}'.trim();
+            var i = '${p['id'] ?? ''}'.trim();
+            if (e.isEmpty || i.isEmpty) {
+              final match = inUseList
+                  .where((a) => '${a['key'] ?? ''}' == sid || '${a['file'] ?? ''}' == sid.split('/').last)
+                  .firstOrNull;
+              if (match != null) {
+                e = '${match['entity'] ?? ''}';
+                i = '${match['id'] ?? ''}';
               }
             }
-            // 服务器 in-use 已无该引用（此前已删成功）→ 本地队列残留直接清掉
+            if (e.isNotEmpty && i.isNotEmpty) {
+              try {
+                await Api.instance.delete('/attachments?key=$sid&entity=$e&id=$i');
+                appLog('sync', '附件删除兜底成功：$sid（$e/$i）', level: 'info');
+                final id = x['id'];
+                if (id is int) await LocalDb.removePendingChange(id);
+                continue;
+              } catch (_) {}
+            }
+            // 服务器 in-use 已无该引用（此前已删成功/引用本就不存在）→ 本地队列残留直接清掉
             appLog('sync', '附件删除已在服务器生效，清理本地残留变更：$sid', level: 'info');
             final id = x['id'];
             if (id is int) await LocalDb.removePendingChange(id);
