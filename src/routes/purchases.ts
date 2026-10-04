@@ -303,7 +303,11 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
       total += qty * effective;
     }
+    // 记录旧行 id：重建换 id 的行其 purchase_item 附件引用会残留（服务器多计），重建后清理
+    const oldLineIds = (await c.env.DB.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
+      .all<{ id: string }>()).results.map((r) => r.id);
     batch.push(c.env.DB.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
+    const newLineIds: string[] = [];
     for (const item of items) {
       const price = priceMap.get(item.price_id);
       if (!price) continue;
@@ -315,14 +319,22 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       const countQty = Number(item.count_qty);
       const per = Number(price.per ?? 0);
       const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
+      const newId = item.id ?? randomId();
+      newLineIds.push(newId);
       batch.push(
         c.env.DB.prepare(
           'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(item.id ?? randomId(), id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount2,
+        ).bind(newId, id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount2,
           item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id),
       );
       // 按新明细增加库存（进销单位换算：折合过则按计数单位累计）
       batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
+    }
+    // 重建换 id 的行：旧行 purchase_item 附件引用残留（服务器多计）→ 级联清理
+    const keep = new Set(newLineIds);
+    for (const lid of oldLineIds) {
+      if (keep.has(lid)) continue;
+      batch.push(c.env.DB.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind('purchase_item', lid));
     }
   } else {
     const tot = await c.env.DB.prepare('SELECT COALESCE(SUM(amount),0) AS total FROM purchase_items WHERE purchase_id = ?').bind(id).first<{ total: number }>();

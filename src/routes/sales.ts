@@ -326,6 +326,9 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
     for (const it of oldItems.results) {
       batch.push(stockDeltaFor(c.env.DB, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1));
     }
+    // 记录旧行 id：重建换 id 的行其 sale_item 附件引用会残留（服务器多计），重建后清理
+    const oldLineIds = (await c.env.DB.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
+      .all<{ id: string }>()).results.map((r) => r.id);
     const priceIds = items.map((i) => i.price_id);
     if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
     const placeholders = priceIds.map(() => '?').join(',');
@@ -347,6 +350,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
     }
     batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
     const happenedAt = body?.happened_at?.trim() || '';
+    const newLineIds: string[] = [];
     for (const item of items) {
       const price = priceMap.get(item.price_id);
       if (!price || !price.active) continue;
@@ -358,14 +362,22 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       const countQty = Number(item.count_qty);
       const per = Number(price.per ?? 0);
       const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
+      const newId = item.id ?? randomId();
+      newLineIds.push(newId);
       batch.push(
         c.env.DB.prepare(
           'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(item.id ?? randomId(), id, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, price.purchase_price, amount,
+        ).bind(newId, id, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, price.purchase_price, amount,
           item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', c.get('user').id),
       );
       // 按新明细扣减库存（进销单位换算：折合过则按计数单位扣减）
       batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, -1));
+    }
+    // 重建换 id 的行：旧行 sale_item 附件引用残留（服务器多计）→ 级联清理（引用驱动：行没了引用即删）
+    const keep = new Set(newLineIds);
+    for (const lid of oldLineIds) {
+      if (keep.has(lid)) continue;
+      batch.push(c.env.DB.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind('sale_item', lid));
     }
   } else {
     const tot = await c.env.DB.prepare('SELECT COALESCE(SUM(amount),0) AS total FROM sale_items WHERE sale_id = ?').bind(id).first<{ total: number }>();

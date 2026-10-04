@@ -8,6 +8,7 @@ import '../local_db.dart';
 import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../utils/money.dart';
 import 'router.dart';
 
 class ItemsPage extends StatefulWidget {
@@ -27,6 +28,7 @@ class _ItemsPageState extends State<ItemsPage> {
   bool _loading = true;
   bool _isStaff = false; // 店员不可见进价
   Timer? _searchTimer;
+  final TextEditingController _searchCtrl = TextEditingController(); // 搜索词常驻：编辑/新增返回后恢复上次搜索结果
 
   @override
   void initState() {
@@ -42,6 +44,7 @@ class _ItemsPageState extends State<ItemsPage> {
   void dispose() {
     SyncService.version.removeListener(_onSync);
     _searchTimer?.cancel();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -74,8 +77,10 @@ class _ItemsPageState extends State<ItemsPage> {
     } catch (_) {}
   }
 
-  Future<void> _load({String q = ''}) async {
-    final searching = q.isNotEmpty;
+  Future<void> _load({String? q}) async {
+    // 未显式传词时用搜索框当前内容（编辑/新增返回、同步刷新都保持搜索状态，不再跳回全部）
+    final query = (q ?? _searchCtrl.text.trim());
+    final searching = query.isNotEmpty;
     // 本地库兜底：剔除 deleted_at 非空的行（旧版本全量同步可能把已软删商品写进本地库）
     List<Map<String, dynamic>> alive(List<Map<String, dynamic>> list) =>
         [for (final x in list) if ('${x['deleted_at'] ?? ''}'.isEmpty) x];
@@ -99,7 +104,7 @@ class _ItemsPageState extends State<ItemsPage> {
       // ② 网络刷新 + 写本地库（静默；失败保留本地展示）
       try {
         final d = await Api.instance
-            .get(searching ? '/items?q=${Uri.encodeQueryComponent(q)}' : '/items');
+            .get(searching ? '/items?q=${Uri.encodeQueryComponent(query)}' : '/items');
         final rows = hideDeleted(alive(((d['items'] as List?) ?? []).cast<Map<String, dynamic>>()));
         // 本地已删除但尚未推送落地的商品：过滤掉再展示/写库，防止"删了又出现"
         //（推送成功后的 pull 会以 deleted_at 变化正式删除本地行）
@@ -133,7 +138,7 @@ class _ItemsPageState extends State<ItemsPage> {
     if (mounted) {
       setState(() {
         _items = searching
-            ? visible.where((x) => '${x['name'] ?? ''}'.contains(q)).toList()
+            ? visible.where((x) => '${x['name'] ?? ''}'.contains(query)).toList()
             : visible;
         _loading = false;
       });
@@ -240,6 +245,7 @@ class _ItemsPageState extends State<ItemsPage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: TextField(
+              controller: _searchCtrl,
               decoration: InputDecoration(
                 prefixIcon: const Icon(Icons.search, size: 20),
                 hintText: '搜索商品（名称关键字）',
@@ -247,6 +253,7 @@ class _ItemsPageState extends State<ItemsPage> {
               ),
               onChanged: (v) {
                 _searchTimer?.cancel();
+                _searchCtrl.text = v; // 常驻搜索词（返回后恢复用）
                 final q = v.trim();
                 _searchTimer =
                     Timer(const Duration(milliseconds: 350), () => _load(q: q));
@@ -296,8 +303,8 @@ class _ItemsPageState extends State<ItemsPage> {
                                       padding: const EdgeInsets.symmetric(vertical: 2),
                                       child: Text(
                                           _isStaff
-                                              ? '${p['unit']}：售价 ¥${p['sale_price']}'
-                                              : '${p['unit']}：进价 ¥${p['purchase_price']} → 售价 ¥${p['sale_price']}',
+                                              ? '${p['unit']}：售价 ¥${fmtMoney((p['sale_price'] as num?)?.toDouble() ?? 0)}'
+                                              : '${p['unit']}：进价 ¥${fmtMoney((p['purchase_price'] as num?)?.toDouble() ?? 0)} → 售价 ¥${fmtMoney((p['sale_price'] as num?)?.toDouble() ?? 0)}',
                                           style: TextStyle(color: _c.textSub, fontSize: 13)),
                                     ),
                                 ],

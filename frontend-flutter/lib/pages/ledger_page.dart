@@ -606,7 +606,6 @@ class _LedgerPageState extends State<LedgerPage> {
     }
     // 网络值（精确，含其他设备写入）优先；未加载时本地快照兜底
     final sold = _mLoaded ? _mSold : localSold;
-    final income = _mLoaded ? _mIncome : localPaid;
     final gross = _mLoaded ? _mGross : localGross;
     final debt = _mLoaded ? _mDebt : (localSold - localPaid);
     final balance = _mLoaded ? _mBalance : localGross; // 结余 = 毛利（售出 − 成本，不含进货）
@@ -664,13 +663,12 @@ class _LedgerPageState extends State<LedgerPage> {
           ),
           Container(width: 1, height: 40, color: c.divider),
           const SizedBox(width: 10),
-          // 右侧：四列统计（售出/收入/未回款/结余）
+          // 右侧：三列统计（售出/未回款/结余——收入=收款在收款流水页有记录，顶部不再占用；
+          // 结余=毛利（售出−成本，不含进货）。三列留白更多，金额大时也不挤）
           Expanded(
             child: Row(
               children: [
                 col('售出', sold, c.primary),
-                const SizedBox(width: 3),
-                col('收入', income, income > 0 ? c.success : c.warning),
                 const SizedBox(width: 3),
                 col('未回款', debt, debt > 0 ? c.warning : c.textSub),
                 const SizedBox(width: 3),
@@ -1121,7 +1119,7 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   Future<void> _deletePayment(Map<String, dynamic> p) async {
-    if (!await _confirm('撤销收款', '确定撤销 ${_date('${p['happened_at']}')} ${_clientNameOf(p)} 的收款（¥${p['amount']}）吗？')) {
+    if (!await _confirm('撤销收款', '确定撤销 ${_date('${p['happened_at']}')} ${_clientNameOf(p)} 的收款（¥${fmtMoney((p['amount'] as num?)?.toDouble() ?? 0)}）吗？')) {
       return;
     }
     try {
@@ -1136,7 +1134,7 @@ class _LedgerPageState extends State<LedgerPage> {
         unawaited(SyncService.pushPending());
       }
       toast(context, '已撤销，正在同步');
-      appLog('op', '收款 撤销：${_clientNameOf(p)} ¥${p['amount']}（${_date('${p['happened_at']}')}）');
+      appLog('op', '收款 撤销：${_clientNameOf(p)} ¥${fmtMoney((p['amount'] as num?)?.toDouble() ?? 0)}（${_date('${p['happened_at']}')}）');
       SyncService.version.notifyListeners();
       _load();
     } catch (e) {

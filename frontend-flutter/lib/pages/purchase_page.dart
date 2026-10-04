@@ -327,7 +327,9 @@ class _PurchasePageState extends State<PurchasePage> {
         final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
         final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
         final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
-        if (itemId.isEmpty || match == null || price == null) {
+        // 仅商品已删/停用才跳过；单位与商品库价格组合不匹配（如识别单位差异）不跳过——
+        // 保留行（priceId 空、价格沿用原单识别值），老板保存时按实际单位校验
+        if (itemId.isEmpty || match == null) {
           skipped++;
           continue;
         }
@@ -335,7 +337,7 @@ class _PurchasePageState extends State<PurchasePage> {
         final keepLineDate = lineDate.isNotEmpty && lineDate.substring(0, 10) != hd.substring(0, 10);
         _rows.add(_PRow()
           ..itemId = itemId
-          ..priceId = price['id'] as String?
+          ..priceId = price?['id'] as String?
           ..quantity = qty
           ..purchasePrice = pp
           ..happenedAt = keepLineDate ? lineDate : ''
@@ -370,13 +372,26 @@ class _PurchasePageState extends State<PurchasePage> {
     }
   }
 
-  /// 名称输入变化：精确匹配到已有商品 → 选中；否则视为新商品名（可点「新增」入库）
+  /// 名称输入变化：精确匹配到已有商品 → 关联（**不覆盖识别/手填的价格与单位**——
+  /// AI 识别填行改错名时只关联商品，识别价保留）；否则视为新商品名（可点「新增」入库）
   void _onNameChanged(_PRow row, String v) {
     final name = v.trim();
     final match = _items.where((x) => '${x['name']}' == name).firstOrNull;
     if (match != null) {
       if (row.itemId != '${match['id']}') {
-        _selectItem(row, match);
+        // 行上还没有有效价格（全新行）→ 带出商品库默认价；已有识别/手填价 → 只关联商品与价格 id
+        final hasPrice = (row.purchasePrice > 0) || row.priceCtrl.text.trim().isNotEmpty;
+        if (!hasPrice) {
+          _selectItem(row, match);
+        } else {
+          row.itemId = '${match['id']}';
+          row.nameCtrl.text = '${match['name'] ?? ''}';
+          final prices = ((match['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+          final pr = row.unitCtrl.text.trim().isNotEmpty
+              ? prices.where((p) => '${p['unit']}' == row.unitCtrl.text).firstOrNull
+              : prices.where((p) => (p['active'] as num?) != 0).firstOrNull ?? prices.firstOrNull;
+          if (pr != null) row.priceId = pr['id'] as String?;
+        }
         setState(() {});
       }
       return;

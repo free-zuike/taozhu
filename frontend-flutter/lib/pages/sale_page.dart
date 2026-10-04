@@ -368,7 +368,9 @@ class _SalePageState extends State<SalePage> {
             : (double.tryParse('${it['sale_price']}') ?? 0);
         final opt = _items.where((x) => x.id == itemId).firstOrNull;
         final price = opt?.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
-        if (itemId.isEmpty || opt == null || price == null) {
+        // 仅商品已删/停用才跳过；单位与商品库价格组合不匹配（如识别单位差异）不跳过——
+        // 保留行（priceId 空、价格沿用原单识别值），老板保存时按实际单位校验
+        if (itemId.isEmpty || opt == null) {
           skipped++;
           continue;
         }
@@ -376,7 +378,7 @@ class _SalePageState extends State<SalePage> {
         final keepLineDate = lineDate.length >= 10 && lineDate.substring(0, 10) != hd.substring(0, 10);
         _rows.add(_Row()
           ..itemId = itemId
-          ..priceId = price['id'] as String?
+          ..priceId = price?['id'] as String?
           ..quantity = qty
           ..salePrice = sp
           ..happenedAt = keepLineDate ? lineDate : ''
@@ -410,13 +412,25 @@ class _SalePageState extends State<SalePage> {
     }
   }
 
-  /// 名称输入变化：精确匹配到已有商品 → 选中；否则视为新商品名（可点「新增」入库）
+  /// 名称输入变化：精确匹配到已有商品 → 关联（**不覆盖识别/手填的价格与单位**——
+  /// AI 识别填行改错名时只关联商品，识别价保留）；否则视为新商品名（可点「新增」入库）
   void _onNameChanged(_Row row, String v) {
     final name = v.trim();
     final match = _items.where((x) => x.name == name).firstOrNull;
     if (match != null) {
       if (row.itemId != match.id) {
-        _selectItem(row, match);
+        // 行上还没有有效价格（全新行）→ 带出商品库默认价；已有识别/手填价 → 只关联商品与价格 id
+        final hasPrice = (row.salePrice > 0) || row.saleCtrl.text.trim().isNotEmpty;
+        if (!hasPrice) {
+          _selectItem(row, match);
+        } else {
+          row.itemId = match.id;
+          row.nameCtrl.text = match.name;
+          final pr = row.unitCtrl.text.trim().isNotEmpty
+              ? match.prices.where((p) => '${p['unit']}' == row.unitCtrl.text).firstOrNull
+              : match.prices.where((p) => (p['active'] as num?) != 0).firstOrNull ?? match.prices.firstOrNull;
+          if (pr != null) row.priceId = pr['id'] as String?;
+        }
         setState(() {});
       }
       return;

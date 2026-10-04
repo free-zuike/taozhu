@@ -131,27 +131,36 @@ attachmentsRouter.post('/counts', async (c) => {
   }
   if (ids.length === 0) return c.json({ counts: {}, total: 0, ids: [] });
   // 引用表计数（对齐参考实现口径：每个商品/单据挂载算一个附件=一条引用记录；同图多实体各算 1）
+  // D1 绑定参数上限 100：ids 多时分批 IN 查询合并，避免超限 500
   const counts: Record<string, number> = {};
-  const refRows = await c.env.DB.prepare(
-    `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${ids.map(() => '?').join(',')}) GROUP BY entity_id`,
-  ).bind(entity, ...ids).all<{ entity_id: string; cnt: number }>();
-  for (const r of refRows.results) counts[r.entity_id] = Number(r.cnt);
+  const CHUNK = 90;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const part = ids.slice(i, i + CHUNK);
+    const refRows = await c.env.DB.prepare(
+      `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${part.map(() => '?').join(',')}) GROUP BY entity_id`,
+    ).bind(entity, ...part).all<{ entity_id: string; cnt: number }>();
+    for (const r of refRows.results) counts[r.entity_id] = (counts[r.entity_id] ?? 0) + Number(r.cnt);
+  }
   // 单据级（sale/purchase）统计：计入该单全部明细行的行级引用——
   // 整单凭证入口上传的图实际批量挂各明细行（行级引用），单据图标/面板口径需含行级。
   if (entity === 'sale' || entity === 'purchase') {
     const lineEntity = entity === 'sale' ? 'sale_item' : 'purchase_item';
-    const rows = await c.env.DB.prepare(
-      `SELECT id, ${entity}_id AS order_id FROM ${lineEntity}s WHERE ${entity}_id IN (${ids.map(() => '?').join(',')})`,
-    ).bind(...ids).all<{ id: string; order_id: string }>();
-    if (rows.results.length > 0) {
-      const lineIds = rows.results.map((r) => r.id);
-      const lineRefs = await c.env.DB.prepare(
-        `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${lineIds.map(() => '?').join(',')}) GROUP BY entity_id`,
-      ).bind(lineEntity, ...lineIds).all<{ entity_id: string; cnt: number }>();
-      const lineCountByLineId = new Map(lineRefs.results.map((r) => [r.entity_id, Number(r.cnt)] as const));
-      for (const r of rows.results) {
-        const n = lineCountByLineId.get(r.id) ?? 0;
-        if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
+    const orderCol = `${entity}_id`;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const part = ids.slice(i, i + CHUNK);
+      const rows = await c.env.DB.prepare(
+        `SELECT id, ${orderCol} AS order_id FROM ${lineEntity}s WHERE ${orderCol} IN (${part.map(() => '?').join(',')})${clientId ? ' AND client_id = ?' : ''}`,
+      ).bind(...part, ...(clientId ? [clientId] : [])).all<{ id: string; order_id: string }>();
+      if (rows.results.length > 0) {
+        const lineIds = rows.results.map((r) => r.id);
+        const lineRefs = await c.env.DB.prepare(
+          `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${lineIds.map(() => '?').join(',')}) GROUP BY entity_id`,
+        ).bind(lineEntity, ...lineIds).all<{ entity_id: string; cnt: number }>();
+        const lineCountByLineId = new Map(lineRefs.results.map((r) => [r.entity_id, Number(r.cnt)] as const));
+        for (const r of rows.results) {
+          const n = lineCountByLineId.get(r.id) ?? 0;
+          if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
+        }
       }
     }
   }

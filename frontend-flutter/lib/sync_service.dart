@@ -181,7 +181,9 @@ class SyncService {
           .toList();
       // 待上传队列中的本地登记（添加附件立即可见，还没传到服务器/已传但 in-use 未回）：
       // 全量刷新不能把它们冲掉，否则图标"添加后灭一次、上传成功才亮"——本地优先应始终亮。
-      // 合并：本地表中属于待上传队列且未被待删除过滤的行，保留在本次刷新结果里
+      // 合并：本地表中属于待上传队列且未被待删除过滤的行，保留在本次刷新结果里。
+      // 队列清空时机=downloadInUseAttachments 确认 in-use 已含该引用后（见下方 putAll 后清理），
+      // 上传成功不立即清队列——否则 in-use 未回时 putAll([]) 会把已登记行冲掉（图标闪烁根因）。
       try {
         final p = await SharedPreferences.getInstance();
         final pendingUploads = (p.getStringList(kPendingUploadsKey) ?? [])
@@ -205,6 +207,27 @@ class SyncService {
         // 全部删光也清空本地表（否则已删引用残留、图标不灭）
         await LocalDb.putAll('attachment_refs', []);
       }
+      // in-use 已确认包含的待上传条目 → 从队列移除（上传成功且服务器已落引用行；
+      // 未含的保留在队列，下次合并保护继续生效——图标"添加后灭一次"根因修复）
+      try {
+        final p = await SharedPreferences.getInstance();
+        final list = p.getStringList(kPendingUploadsKey) ?? [];
+        if (list.isNotEmpty) {
+          final inUseIds = refs.map((r) => '${r['entity']}/${r['entity_id']}/${'${r['file'] ?? ''}'.split('/').last}').toSet();
+          final next = list.where((e) {
+            try {
+              final m = jsonDecode(e) as Map<String, dynamic>;
+              final id3 = '${m['entity'] ?? ''}/${m['id'] ?? ''}/${'${m['fileName'] ?? ''}'.split('/').last}';
+              return !inUseIds.contains(id3);
+            } catch (_) {
+              return false; // 脏条目丢弃
+            }
+          }).toList();
+          if (next.length != list.length) {
+            await p.setStringList(kPendingUploadsKey, next);
+          }
+        }
+      } catch (_) {}
     } catch (e) {
       // 在用列表拉取失败：本地引用表保持旧值（不覆盖为 0），下次同步再刷新；
       // 记日志便于定位"本地84/服务器95 不收敛"类问题（in-use 超时/网络失败都会静默走到这里）
@@ -396,15 +419,10 @@ class SyncService {
       await Future.wait(batch.map(one));
       idx += 4;
     }
-    try {
-      final p = await SharedPreferences.getInstance();
-      if (failed.isEmpty) {
-        await p.remove(kPendingUploadsKey);
-      } else {
-        await p.setStringList(kPendingUploadsKey, failed);
-      }
-    } catch (_) {}
-    if (uploaded > 0) appLog('sync', '已上传附件 $uploaded 张', level: 'info');
+    // 上传结果不立即清空待上传队列：成功条目保留，由 downloadInUseAttachments 确认
+    // in-use 已含该引用后逐条移除（否则合并保护失效，putAll([]) 冲掉已登记行 → 图标闪烁）；
+    // 失败条目同样保留重试（宁留勿丢，幂等）。队列清理见 downloadInUseAttachments。
+    if (uploaded > 0) appLog('sync', '已上传附件 $uploaded 张（待 in-use 确认后清队列）', level: 'info');
     return uploaded;
   }
 

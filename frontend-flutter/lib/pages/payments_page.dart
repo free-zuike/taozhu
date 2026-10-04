@@ -197,7 +197,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
     toast(context, waived > 0
         ? '已登记：实收 ¥${fmtMoney(amount)}，平账 ¥${fmtMoney(waived)}'
         : '已登记收款 ¥${fmtMoney(amount)}');
-    appLog('op', '收款 登记：${_clients.where((x) => '${x['id']}' == _clientId).map((x) => x['name']).firstOrNull ?? _clientId} ¥${(amount * 100).round() / 100}${waived > 0 ? '（平账 ${(waived * 100).round() / 100}）' : ''}（${_dateCtrl.text.trim()}）');
+    appLog('op', '收款 登记：${_clients.where((x) => '${x['id']}' == _clientId).map((x) => x['name']).firstOrNull ?? _clientId} ¥${fmtMoney(amount)}${waived > 0 ? '（平账 ${fmtMoney(waived)}）' : ''}（${_dateCtrl.text.trim()}）');
     SyncService.version.notifyListeners();
     _amountCtrl.clear();
     _waivedCtrl.clear();
@@ -305,7 +305,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('撤销收款'),
-        content: Text('确定撤销 ${p['client_name']} 的 ¥${p['amount']} 这笔收款吗？'),
+        content: Text('确定撤销 ${p['client_name']} 的 ¥${fmtMoney((p['amount'] as num?)?.toDouble() ?? 0)} 这笔收款吗？'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(
