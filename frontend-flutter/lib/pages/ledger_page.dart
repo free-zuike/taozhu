@@ -163,11 +163,12 @@ class _LedgerPageState extends State<LedgerPage> {
       }
       if (!mounted) return;
       setState(() {
-        _mSold = sold;
-        _mIncome = paid;
-        _mGross = gross;
-        _mDebt = debt;
-        _mBalance = gross; // 结余 = 毛利（售出 − 成本）
+        // 本地/网络值统一按当前舍入口径（与服务器统计一致；历史存储不变，展示实时换算）
+        _mSold = Money.round(sold);
+        _mIncome = Money.round(paid);
+        _mGross = Money.round(gross);
+        _mDebt = Money.round(debt);
+        _mBalance = Money.round(gross); // 结余 = 毛利（售出 − 成本）
         _mLoaded = true;
       });
     } catch (_) {
@@ -333,6 +334,9 @@ class _LedgerPageState extends State<LedgerPage> {
           ? saved
           : '${firstLocal.first['id']}';
       await SyncService.saveSelectedClientId(_clientId!);
+      // 顶部月度统计重算：页面刚打开时 _loadMonthly 在店铺恢复前跑过一遍（_clientId 还是
+      // null=全部店铺），这里把统计切到恢复出来的当前店铺（否则打开一直是"全部"数据）
+      _loadMonthly();
     }
     if (_clientId != null) {
       sales = _filterByClient(sales, _clientId!);
@@ -469,6 +473,9 @@ class _LedgerPageState extends State<LedgerPage> {
             ? saved
             : '${clients.first['id']}';
         await SyncService.saveSelectedClientId(_clientId!);
+        // Web 无本地库：店铺恢复走网络加载路径（_load 分支拿不到店铺）；
+        // 顶部月度统计在店铺恢复前按"全部店铺"跑过，这里切回当前店铺重算
+        _loadMonthly();
       }
       final results = await Future.wait([
         Api.instance.get('/sales${_clientQuery()}'),

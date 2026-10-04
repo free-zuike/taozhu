@@ -326,7 +326,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         itemCount += 1;
       }
     }
-    _monthExpense = (expense * 100).round() / 100;
+    _monthExpense = Money.round(expense);
     _monthCount = daySet.length;
     _monthItems = itemCount;
     return rows;

@@ -86,6 +86,7 @@ const { tv, patternSrc } = useThemeVars();
 import { computed, ref } from 'vue';
 import { onLoad, onShow } from '@dcloudio/uni-app';
 import { request, getToken, uploadAi, uploadAttachment } from '../../api';
+import { fmtAmount, initRounding } from '../../utils/money';
 
 interface Price { id: string; unit: string; sale_price: number; purchase_price: number }
 interface Item { id: string; name: string; prices: Price[]; count_unit?: string }
@@ -140,13 +141,14 @@ onLoad((options) => {
 const total = computed(() =>
   rows.value.reduce((s, r) => s + (Number(r.quantity) || 0) * (Number(r.salePrice) || 0), 0),
 );
-const rowAmount = (r: Row) => ((Number(r.quantity) || 0) * (Number(r.salePrice) || 0)).toFixed(2);
+const rowAmount = (r: Row) => fmtAmount((Number(r.quantity) || 0) * (Number(r.salePrice) || 0));
 
 onShow(async () => {
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
   }
+  initRounding(); // 金额舍入口径（展示/本地预览按配置，服务器为最终权威）
   date.value = todayLocal();
   // 加载饭店与商品（懒加载，进入页面即拉取）
   try {
@@ -534,7 +536,7 @@ async function submit() {
     } else {
       const d = await request<{ id: string }>('/sales', 'POST', body);
       savedId = d.id;
-      uni.showToast({ title: `已提交 ¥${total.value.toFixed(2)}`, icon: 'success' });
+      uni.showToast({ title: `已提交 ¥${fmtAmount(total.value)}`, icon: 'success' });
       rows.value = [];
       addRow();
     }

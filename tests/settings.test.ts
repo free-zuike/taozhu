@@ -151,3 +151,52 @@ describe('系统设置（AI 配置）', () => {
     expect(((await res.json()) as { error: string }).error).toContain('图片格式不支持');
   });
 });
+
+describe('金额舍入配置（/settings/rounding）', () => {
+  let env: Parameters<typeof call>[0];
+  let token: string;
+  beforeEach(async () => { env = (await setup()).env; token = await boot(env); });
+
+  it('默认四舍五入 2 位（无配置）', async () => {
+    const res = await call(env, 'GET', '/api/v1/settings/rounding', token);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ carry: 0.5, digits: 2 });
+  });
+
+  it('店员可读（记账本地预览同口径），不可写', async () => {
+    const st = await staffToken(env, token);
+    const get = await call(env, 'GET', '/api/v1/settings/rounding', st);
+    expect(get.status).toBe(200);
+    expect((await get.json()) as object).toMatchObject({ carry: 0.5, digits: 2 });
+    expect((await call(env, 'PUT', '/api/v1/settings/rounding', st, { carry: 0.6, digits: 1 })).status).toBe(403);
+  });
+
+  it('老板保存 5舍6入 1位（角）→ 回读一致；非法参数 400', async () => {
+    const put = await call(env, 'PUT', '/api/v1/settings/rounding', token, { carry: 0.6, digits: 1 });
+    expect(put.status).toBe(200);
+    const get = (await (await call(env, 'GET', '/api/v1/settings/rounding', token)).json()) as { carry: number; digits: number };
+    expect(get).toEqual({ carry: 0.6, digits: 1 });
+    // 非法
+    expect((await call(env, 'PUT', '/api/v1/settings/rounding', token, { carry: 2, digits: 2 })).status).toBe(400);
+    expect((await call(env, 'PUT', '/api/v1/settings/rounding', token, { carry: 0.5, digits: 9 })).status).toBe(400);
+  });
+
+  it('金额计算按配置（出货行金额走 roundMoney）', async () => {
+    await call(env, 'PUT', '/api/v1/settings/rounding', token, { carry: 0.6, digits: 2 }); // 5舍6入
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 1, sale_price: 1.235 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-01',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const body = (await sale.json()) as { total: number };
+    // 1.235 → 5舍6入 → 1.23；四舍五入则是 1.24
+    expect(body.total).toBe(1.23);
+  });
+});

@@ -3,10 +3,17 @@ import { Hono } from 'hono';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ZHIPU_PROVIDER, DEFAULT_BINDING, type AiConfig, type AiProviderConfig, type AiBinding } from '../services/ai-parse';
 import { notifyClients } from '../services/sync-hub';
+import { getRoundingConfig, DEFAULT_ROUNDING } from '../lib/money';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
 export const settingsRouter = new Hono<{ Bindings: Env; Variables: V }>();
+
+// ── 金额舍入配置：所有登录用户可读（店员记账本地预览需同口径）；写入仅老板（下方 use 之后） ──
+settingsRouter.get('/rounding', authMiddleware(), async (c) => {
+  const cfg = await getRoundingConfig(c.env.DB);
+  return c.json({ carry: cfg.carry, digits: cfg.digits });
+});
 
 settingsRouter.use('*', authMiddleware(), adminOnly());
 
@@ -179,4 +186,22 @@ settingsRouter.put('/theme_config', async (c) => {
   }));
   await notifyClients('theme_config');
   return c.json({ ok: true });
+});
+
+// ── 金额舍入配置（仅老板）：进位临界 carry（0.5=四舍五入、0.6=5舍6入，0~1 可自定义）+ 精度 digits（0/1/2=元/角/分） ──
+const KEY_ROUND_CARRY = 'round_carry';
+const KEY_ROUND_DIGITS = 'round_digits';
+
+settingsRouter.put('/rounding', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { carry?: number; digits?: number } | null;
+  if (!body) return c.json({ error: '参数错误' }, 400);
+  const carry = Number(body.carry);
+  const digitsRaw = Number(body.digits);
+  if (!Number.isFinite(carry) || carry <= 0 || carry > 1) return c.json({ error: '进位临界需在 0~1 之间' }, 400);
+  if (![0, 1, 2].includes(digitsRaw)) return c.json({ error: '精度需为 0（元）/1（角）/2（分）' }, 400);
+  await upsertSetting(c.env.DB, KEY_ROUND_CARRY, String(carry));
+  await upsertSetting(c.env.DB, KEY_ROUND_DIGITS, String(digitsRaw));
+  // 广播 rounding：其他端收到后更新本地舍入口径（新记账即时按新规则，统计展示已有服务器数据重算）
+  await notifyClients('rounding');
+  return c.json({ carry, digits: digitsRaw, ok: true });
 });

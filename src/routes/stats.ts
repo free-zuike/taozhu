@@ -1,6 +1,7 @@
 /** 统计：工作台概览 / 按店 / 按月 —— 毛利 = Σ(售价-进价快照)*数量 */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
+import { getRoundingConfig, roundMoney } from '../lib/money';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -46,7 +47,8 @@ statsRouter.get('/overview', async (c) => {
      ORDER BY (sales_total - paid_total) DESC LIMIT 5`,
   ).all<{ id: string; name: string; sales_total: number; paid_total: number }>();
 
-  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const money = await getRoundingConfig(c.env.DB);
+  const r = (n: unknown) => roundMoney(Number(n || 0), money);
   return c.json({
     date,
     can_see_profit: canSeeProfit,
@@ -84,7 +86,8 @@ statsRouter.get('/clients', async (c) => {
       COALESCE((SELECT SUM((si.sale_price - si.cost_price) * si.quantity) FROM sale_items si WHERE si.client_id = c.id ${saleCond}), 0) AS gross_profit
      FROM clients c WHERE c.deleted_at IS NULL ORDER BY sales_total DESC`,
   ).bind(...params).all<{ id: string; name: string; sales_total: number; paid_total: number; gross_profit: number }>();
-  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const money = await getRoundingConfig(c.env.DB);
+  const r = (n: unknown) => roundMoney(Number(n || 0), money);
   return c.json({
     can_see_profit: canSeeProfit,
     clients: rows.results.map((c2) => ({
@@ -120,7 +123,8 @@ statsRouter.get('/monthly', async (c) => {
          FROM payments WHERE happened_at >= ? AND happened_at <= ? GROUP BY month ORDER BY month`,
       ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; paid_total: number }>();
   const paidMap = new Map(paidRows.results.map((p) => [p.month, p.paid_total]));
-  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const money = await getRoundingConfig(c.env.DB);
+  const r = (n: unknown) => roundMoney(Number(n || 0), money);
   return c.json({
     year, kind,
     can_see_profit: canSeeProfit,
@@ -150,7 +154,8 @@ statsRouter.get('/monthly-flow', async (c) => {
      GROUP BY month ORDER BY month`,
   ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; purchase_total: number }>();
   const buyMap = new Map(buyRows.results.map((r) => [r.month, r.purchase_total]));
-  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const money = await getRoundingConfig(c.env.DB);
+  const r = (n: unknown) => roundMoney(Number(n || 0), money);
   const months = salesRows.results.map((s) => {
     const sales = r(s.sales_total);
     const buys = r(buyMap.get(s.month) ?? 0);
@@ -193,7 +198,8 @@ statsRouter.get('/categories', async (c) => {
        WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}
        GROUP BY COALESCE(cat.name, '未分类') ORDER BY amount DESC`,
   ).bind(...params).all<{ category: string; quantity: number; amount: number }>();
-  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const money = await getRoundingConfig(c.env.DB);
+  const r = (n: unknown) => roundMoney(Number(n || 0), money);
   return c.json({
     kind,
     categories: rows.results.map((x) => ({ category: x.category, quantity: r(x.quantity), amount: r(x.amount) })),
@@ -229,7 +235,8 @@ statsRouter.get('/summary', async (c) => {
   if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
   const clientId = c.req.query('client_id')?.trim();
   const db = c.env.DB;
-  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const money = await getRoundingConfig(c.env.DB);
+  const r = (n: unknown) => roundMoney(Number(n || 0), money);
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
 
   // 出货（或进货）区间汇总：kind=purchase 走 purchase_items（无店铺维度、无毛利）
@@ -288,7 +295,8 @@ statsRouter.get('/daily', async (c) => {
   if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
   const clientId = c.req.query('client_id')?.trim();
   const db = c.env.DB;
-  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const money = await getRoundingConfig(c.env.DB);
+  const r = (n: unknown) => roundMoney(Number(n || 0), money);
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
 
   const sParams: unknown[] = [start, end];
@@ -356,7 +364,8 @@ statsRouter.get('/items', async (c) => {
          GROUP BY si.item_id, si.unit
          ORDER BY amount DESC LIMIT 15`,
   ).bind(...params).all<{ name: string; unit: string; quantity: number; amount: number }>();
-  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const money = await getRoundingConfig(c.env.DB);
+  const r = (n: unknown) => roundMoney(Number(n || 0), money);
   return c.json({
     kind,
     items: rows.results.map((x) => ({
@@ -395,7 +404,8 @@ statsRouter.get('/category-statement', async (c) => {
   ).bind(start, end, start, end, start, end, end, end, categoryId).all<{
     id: string; name: string; sales_total: number; paid_total: number; waived_total: number; debt: number;
   }>();
-  const r = (n: unknown) => Math.round(Number(n || 0) * 100) / 100;
+  const money = await getRoundingConfig(c.env.DB);
+  const r = (n: unknown) => roundMoney(Number(n || 0), money);
   const clients = rows.results.map((x) => ({
     id: x.id, name: x.name,
     sales_total: r(x.sales_total), paid_total: r(x.paid_total),

@@ -7,6 +7,7 @@ import '../local_db.dart';
 import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../utils/money.dart';
 import '../version.dart';
 import '../widgets/bottom_shell.dart';
 import 'router.dart';
@@ -100,6 +101,8 @@ class _LoginPageState extends State<LoginPage> {
       } catch (_) {}
       if (!mounted) return;
       appLog('auth', '登录成功', level: 'info');
+      // 金额舍入口径初始化：读本地缓存 + 后台拉服务器配置（记单/统计/收款本地计算用同口径）
+      Money.ensure();
       Navigator.of(context)
           .pushReplacement(MaterialPageRoute(builder: (_) => const BottomShell()));
     } catch (e) {

@@ -6,6 +6,7 @@ import { parsePage } from '../lib/paging';
 import { stockDelta, stockDeltaFor } from '../lib/stock';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
+import { getRoundingConfig, roundMoney } from '../lib/money';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -69,6 +70,7 @@ salesRouter.post('/', async (c) => {
   const note = body?.note?.trim() ?? '';
   const saleItemIds: string[] = [];
   let total = 0;
+  const money = await getRoundingConfig(c.env.DB);
 
   const batch = [
     // 去单据化：无 sales 头表（已物理删除），行即主记录，销售批次由 sale_id 关联
@@ -83,7 +85,7 @@ salesRouter.post('/', async (c) => {
     if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
     const salePrice = Number(item.sale_price);
     const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
-    const amount = Math.round(qty * effectiveSale * 100) / 100;
+    const amount = roundMoney(qty * effectiveSale, money);
     total += amount;
     const siId = randomId();
     saleItemIds.push(siId);
@@ -105,8 +107,8 @@ salesRouter.post('/', async (c) => {
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: user.username });
   // 审计留痕带店铺名（不是 id 长串）：创建时店铺必存在
   const clientName = (await c.env.DB.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>())?.name ?? clientId;
-  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'sale', entity_id: saleId, detail: `添加出货：店铺 ${clientName}，${items.length} 件商品，合计 ¥${(Math.round(total * 100) / 100).toFixed(2)}` });
-  return c.json({ id: saleId, client_id: clientId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100, items: saleItemIds.length }, 201);
+  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'sale', entity_id: saleId, detail: `添加出货：店铺 ${clientName}，${items.length} 件商品，合计 ¥${roundMoney(total, money).toFixed(money.digits)}` });
+  return c.json({ id: saleId, client_id: clientId, happened_at: happenedAt, note, total: roundMoney(total, money), items: saleItemIds.length }, 201);
 });
 
 // GET /sales?client_id=&date_from=&date_to=&limit=&offset= — 出货单列表（含明细与总额，分页）
@@ -265,7 +267,7 @@ salesRouter.patch('/items/:id', async (c) => {
   if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
   const note = body?.note !== undefined ? (body.note ?? '').trim() : (row.note ?? '');
 
-  const amount = Math.round(qty * salePrice * 100) / 100;
+  const amount = roundMoney(qty * salePrice, await getRoundingConfig(c.env.DB));
   const batch: D1PreparedStatement[] = [
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, 1),  // 出货扣减恢复（旧值）
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, count_unit: row.count_unit }, -1), // 按新值扣减
@@ -330,6 +332,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
     ).bind(...priceIds).all<{ id: string; item_id: string; unit: string; purchase_price: number; sale_price: number; active: number; per?: number | null; count_unit?: string | null }>();
     const priceMap = new Map(priceRows.results.map((p) => [p.id, p]));
     total = 0;
+    const money2 = await getRoundingConfig(c.env.DB);
     for (const item of items) {
       const price = priceMap.get(item.price_id);
       if (!price || !price.active) return c.json({ error: `价格不存在或已停用: ${item.price_id}` }, 400);
@@ -337,7 +340,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
       const salePrice = Number(item.sale_price);
       const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
-      total += Math.round(qty * effectiveSale * 100) / 100;
+      total += roundMoney(qty * effectiveSale, money2);
     }
     batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
     const happenedAt = body?.happened_at?.trim() || '';
@@ -347,7 +350,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       const qty = Number(item.quantity);
       const salePrice = Number(item.sale_price);
       const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
-      const amount = Math.round(qty * effectiveSale * 100) / 100;
+      const amount = roundMoney(qty * effectiveSale, money2);
       // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity（按原单位）
       const countQty = Number(item.count_qty);
       const per = Number(price.per ?? 0);
@@ -371,7 +374,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
     username: c.get('user').username, action: 'update', entity_type: 'sale', entity_id: id,
     detail: `修改出货记录${body?.happened_at ? `：日期 ${body.happened_at.trim()}` : ''}${body?.client_id ? ` 店铺 ${body.client_id}` : ''}${body?.items ? `（${body.items.length} 件商品）` : ''}`,
   });
-  return c.json({ id, client_id: clientId, happened_at: body?.happened_at?.trim() || '', note: body?.note?.trim() ?? '', total: Math.round(total * 100) / 100 });
+  return c.json({ id, client_id: clientId, happened_at: body?.happened_at?.trim() || '', note: body?.note?.trim() ?? '', total: roundMoney(total, await getRoundingConfig(c.env.DB)) });
 });
 
 // DELETE /sales/items/:id — 删除单条出货明细行（出货流水行级删除；回滚该行库存，重算单据日期）

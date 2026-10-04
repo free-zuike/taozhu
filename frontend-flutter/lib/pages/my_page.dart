@@ -17,6 +17,7 @@ import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
 import 'ai_settings_page.dart';
+import 'rounding_settings_page.dart';
 import 'theme_settings_page.dart';
 import 'categories_page.dart';
 import 'clients_page.dart';
@@ -328,7 +329,7 @@ class _MyPageState extends State<MyPage> {
       setState(() {
         _bookDays = days;
         _curClientCount = curCount;
-        _totalBalance = grossProfit;
+        _totalBalance = Money.round(grossProfit);
       });
     } catch (_) {}
   }
@@ -1111,6 +1112,9 @@ class _MyPageState extends State<MyPage> {
             if (_role != 'staff')
               _item(Icons.auto_awesome_outlined, c.primary, 'AI 识别设置', '配置 AI 记账 Key 与模型（拍照/文字/语音识别）',
                   () => goPage(context, const AiSettingsPage())),
+            if (_role != 'staff')
+              _item(Icons.calculate_outlined, c.primary, '金额舍入', '所有金额计算的进位方式与精度（四舍五入/5舍6入/分角元）',
+                  () => goPage(context, const RoundingSettingsPage())),
             _item(Icons.palette_outlined, c.primary, '主题设置', '配色主题 / 明暗模式 / 背景（静态主题）',
                 () => goPage(context, const ThemeSettingsPage())),
             _item(Icons.system_update_alt_outlined, c.primary, '检查更新',

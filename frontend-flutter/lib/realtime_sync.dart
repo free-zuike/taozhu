@@ -6,6 +6,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'api.dart';
 import 'sync_service.dart';
 import 'theme.dart';
+import 'utils/money.dart';
 
 /// 实时同步：保持一条 WebSocket 连接（SyncHub Durable Object），
 /// 服务端推送类型化消息（对齐参考架构 WS 分发模型）：
@@ -93,6 +94,9 @@ class RealtimeSync {
       } else if (type == 'theme_config') {
         // 主题配置变更（其他端改了预设/图案/背景）：拉取并应用
         ThemeConfig.instance.pullTheme();
+      } else if (type == 'rounding') {
+        // 金额舍入配置变更（老板在其他端改了进位/精度）：刷新本地口径，新记账即生效
+        Money.refresh();
       } else if (type == 'audit' || type == 'devices') {
         // 审计/设备列表变更（其他端删除等）：notify version——各页（audit_page/devices_page）监听后重拉
         SyncService.version.notifyListeners();

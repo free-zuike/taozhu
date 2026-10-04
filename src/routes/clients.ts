@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { buildPayload, recordChange } from '../lib/sync';
+import { getRoundingConfig, roundMoney } from '../lib/money';
 import { recordAudit } from './audit';
 import type { AuthUser, ClientRow, Env } from '../types';
 
@@ -32,6 +33,7 @@ clientsRouter.get('/', async (c) => {
   const rows = q
     ? await c.env.DB.prepare(`${sql} AND c.name LIKE ? ORDER BY c.name`).bind(`%${q}%`).all()
     : await c.env.DB.prepare(`${sql} ORDER BY c.name`).all();
+  const money = await getRoundingConfig(c.env.DB);
   return c.json({ clients: rows.results.map((r) => {
     const row = r as unknown as ClientRow & { sales_total: number; paid_total: number; sale_count: number; payment_count: number; category_name: string | null; first_book_date: string | null };
     return {
@@ -42,7 +44,8 @@ clientsRouter.get('/', async (c) => {
       category_id: row.category_id ?? '', category_name: row.category_name ?? '',
       sales_total: row.sales_total, paid_total: row.paid_total,
       sale_count: row.sale_count ?? 0, payment_count: row.payment_count ?? 0,
-      debt: Number((row.sales_total - row.paid_total).toFixed(2)),
+      // 欠款实时按当前舍入规则重算（展示口径；存储不变）
+      debt: roundMoney(Number(row.sales_total) - Number(row.paid_total), money),
     };
   }) });
 });

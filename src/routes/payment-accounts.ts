@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { recordChange } from '../lib/sync';
+import { getRoundingConfig, roundMoney } from '../lib/money';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -30,12 +31,13 @@ paymentAccountsRouter.get('/stats', async (c) => {
      FROM payments WHERE method IS NOT NULL AND method != ''
      GROUP BY method ORDER BY total DESC`,
   ).bind(ym, ym).all<{ method: string; cnt: number; total: number; month_total: number; month_count: number }>();
+  const money = await getRoundingConfig(c.env.DB);
   return c.json({
     stats: rows.results.map((r) => ({
       method: r.method,
       count: r.cnt,
-      total: Math.round(Number(r.total || 0) * 100) / 100,
-      month_total: Math.round(Number(r.month_total || 0) * 100) / 100,
+      total: roundMoney(Number(r.total || 0), money),
+      month_total: roundMoney(Number(r.month_total || 0), money),
       month_count: r.month_count || 0,
     })),
   });

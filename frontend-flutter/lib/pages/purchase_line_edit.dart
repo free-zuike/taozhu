@@ -4,6 +4,7 @@ import '../api.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../utils/money.dart';
 import 'attachment_viewer.dart';
 import 'change_category.dart';
 import 'router.dart';
@@ -207,7 +208,7 @@ Future<Map<String, dynamic>?> editPurchaseLine(
         itMap['unit'] = unit;
         itMap['count_qty'] = countQty;
         itMap['purchase_price'] = price;
-        itMap['amount'] = (qty * price * 100).round() / 100;
+        itMap['amount'] = Money.round(qty * price);
         itMap['happened_at'] = date;
         itMap['note'] = note;
       }

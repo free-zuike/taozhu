@@ -918,7 +918,7 @@ class _PurchasePageState extends State<PurchasePage> {
       final opt = _items.where((x) => x['id'] == r.itemId).firstOrNull;
       final prices = ((opt?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
       final price = prices.where((p) => p['id'] == r.priceId).firstOrNull;
-      final amount = (r.quantity * r.purchasePrice * 100).round() / 100;
+      final amount = Money.round(r.quantity * r.purchasePrice);
       totalCalc += amount;
       // 批量直编：行保留各自原单号（该日可能多单，统一挂新单会把原单行搬走→本地/服务器错乱）
       final rowPurchaseId = isDateRows ? (r.origPurchaseId.isNotEmpty ? r.origPurchaseId : purchaseId) : purchaseId;
@@ -942,7 +942,7 @@ class _PurchasePageState extends State<PurchasePage> {
       'id': purchaseId,
       'happened_at': orderDate,
       'note': _noteCtrl.text.trim(),
-      'total': (totalCalc * 100).round() / 100,
+      'total': Money.round(totalCalc),
       'items': itemsPayload,
     };
     if (kIsWeb) {

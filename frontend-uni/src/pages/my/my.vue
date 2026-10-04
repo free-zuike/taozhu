@@ -79,6 +79,9 @@
       <view v-if="isAdmin" class="row" @click="go('/pages/ai-settings/ai-settings')">
         <view class="r-ic ic-purple"><text class="ic-tx">🤖</text></view><view class="r-body"><text class="r-tx">AI 识别设置</text><text class="r-sub">配置 AI 记账 Key 与模型</text></view><text class="r-arrow">›</text>
       </view>
+      <view v-if="isAdmin" class="row" @click="go('/pages/rounding-settings/rounding-settings')">
+        <view class="r-ic ic-green"><text class="ic-tx">🧮</text></view><view class="r-body"><text class="r-tx">金额舍入</text><text class="r-sub">所有金额计算的进位方式与精度</text></view><text class="r-arrow">›</text>
+      </view>
       <view class="row" @click="go('/pages/theme-settings/theme-settings')">
         <view class="r-ic ic-gold"><text class="ic-tx">🎨</text></view><view class="r-body"><text class="r-tx">主题设置</text><text class="r-sub">配色主题 / 明暗模式 / 背景</text></view><text class="r-arrow">›</text>
       </view>

@@ -680,18 +680,19 @@ class _StatsPageState extends State<StatsPage> {
     final paid = _mode == 'year'
         ? _months.fold<double>(0, (s, x) => s + _num(x['paid_total']))
         : _num(_summary['paid_total']);
-    // 进货视图：进货额 + 笔数（无毛利/收款/欠款维度）
+    // 进货视图：进货额 + 笔数（无毛利/收款/欠款维度）；年期汇总=12 月舍入值求和有尾差，
+    // 统一按当前舍入口径（与服务器统计/单月展示一致）
     final data = _isBuy
         ? <String, double>{
-            '进货': sales,
+            '进货': Money.round(sales),
             if (_mode != 'year') '天数': _days.length.toDouble(),
           }
         : <String, double>{
-            '出货': sales,
-            if (_canSeeProfit) '毛利': gross,
-            '收款': paid,
-            if (_mode != 'year') '进货': _num(_summary['purchase_total']),
-            if (_mode != 'year') '欠款': _num(_summary['debt']),
+            '出货': Money.round(sales),
+            if (_canSeeProfit) '毛利': Money.round(gross),
+            '收款': Money.round(paid),
+            if (_mode != 'year') '进货': Money.round(_num(_summary['purchase_total'])),
+            if (_mode != 'year') '欠款': Money.round(_num(_summary['debt'])),
           };
     final w = MediaQuery.of(context).size.width;
     final itemW = (w.clamp(200.0, 900.0) - 16 * 2 - 12) / 2;

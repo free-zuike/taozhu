@@ -103,6 +103,12 @@
 			}
 		},
 		{
+			"path": "pages/rounding-settings/rounding-settings",
+			"style": {
+				"navigationBarTitleText": "金额舍入"
+			}
+		},
+		{
 			"path": "pages/devices/devices",
 			"style": {
 				"navigationBarTitleText": "设备管理"

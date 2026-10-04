@@ -6,6 +6,7 @@ import { parsePage } from '../lib/paging';
 import { stockDelta, stockDeltaFor } from '../lib/stock';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
+import { getRoundingConfig, roundMoney } from '../lib/money';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -61,6 +62,7 @@ purchasesRouter.post('/', async (c) => {
   const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
   const note = body?.note?.trim() ?? '';
   let total = 0;
+  const money = await getRoundingConfig(c.env.DB);
 
   const batch = [
     // 去单据化：无 purchases 头表（已物理删除），行即主记录，进货批次由 purchase_id 关联
@@ -73,7 +75,7 @@ purchasesRouter.post('/', async (c) => {
     if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
     const priceIn = Number(item.purchase_price);
     const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
-    const amount = Math.round(qty * effective * 100) / 100;
+    const amount = roundMoney(qty * effective, money);
     total += amount;
     // 折合计数数量：记单时显式填（count_qty）> 价格行规格 per（quantity×per）> 缺省 quantity（按原单位）
     const countQty = Number(item.count_qty);
@@ -93,8 +95,8 @@ purchasesRouter.post('/', async (c) => {
 
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: purchaseId, payload: await buildPayload(c.env.DB, 'purchase', purchaseId), updated_by_username: user.username });
-  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'purchase', entity_id: purchaseId, detail: `添加进货：${items.length} 件商品，合计 ¥${(Math.round(total * 100) / 100).toFixed(2)}` });
-  return c.json({ id: purchaseId, happened_at: happenedAt, note, total: Math.round(total * 100) / 100, items: items.length }, 201);
+  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'purchase', entity_id: purchaseId, detail: `添加进货：${items.length} 件商品，合计 ¥${roundMoney(total, money).toFixed(money.digits)}` });
+  return c.json({ id: purchaseId, happened_at: happenedAt, note, total: roundMoney(total, money), items: items.length }, 201);
 });
 
 // GET /purchases?date_from=&date_to=&limit=&offset=
@@ -231,7 +233,7 @@ purchasesRouter.patch('/items/:id', async (c) => {
   if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
   const note = body?.note !== undefined ? (body.note ?? '').trim() : (row.note ?? '');
 
-  const amount = Math.round(qty * purchasePrice * 100) / 100;
+  const amount = roundMoney(qty * purchasePrice, await getRoundingConfig(c.env.DB));
   const batch: D1PreparedStatement[] = [
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1), // 回滚旧值
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, count_unit: row.count_unit }, 1),  // 按新值增加
@@ -296,7 +298,7 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
       const priceIn = Number(item.purchase_price);
       const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
-      total += Math.round(qty * effective * 100) / 100;
+      total += roundMoney(qty * effective, await getRoundingConfig(c.env.DB));
     }
     batch.push(c.env.DB.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
     for (const item of items) {
@@ -305,7 +307,7 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       const qty = Number(item.quantity);
       const priceIn = Number(item.purchase_price);
       const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
-      const amount = Math.round(qty * effective * 100) / 100;
+      const amount2 = roundMoney(qty * effective, await getRoundingConfig(c.env.DB));
       // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity
       const countQty = Number(item.count_qty);
       const per = Number(price.per ?? 0);
@@ -313,7 +315,7 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       batch.push(
         c.env.DB.prepare(
           'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(item.id ?? randomId(), id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount,
+        ).bind(item.id ?? randomId(), id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount2,
           item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id),
       );
       // 按新明细增加库存（进销单位换算：折合过则按计数单位累计）
@@ -329,7 +331,7 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
     username: c.get('user').username, action: 'update', entity_type: 'purchase', entity_id: id,
     detail: `修改进货记录${body?.happened_at ? `：日期 ${body.happened_at.trim()}` : ''}${body?.items ? `（${body.items.length} 件商品）` : ''}`,
   });
-  return c.json({ id, happened_at: body?.happened_at?.trim() ?? '', note: body?.note?.trim() ?? '', total: Math.round(total * 100) / 100 });
+  return c.json({ id, happened_at: body?.happened_at?.trim() ?? '', note: body?.note?.trim() ?? '', total: roundMoney(total, await getRoundingConfig(c.env.DB)) });
 });
 
 // DELETE /purchases/items/:id — 删除单条进货明细行（进货记录行级删除；回滚该行库存，重算单据日期）
