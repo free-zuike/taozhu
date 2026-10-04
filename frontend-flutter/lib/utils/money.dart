@@ -2,14 +2,15 @@ import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
 
-/// 金额格式化：千分位 + 两位小数（如 12345.6 → 12,345.60）
+/// 金额格式化：千分位 + 当前舍入设置位数（digits=2 分/1 角/0 元，默认 2）。
+/// 先按配置（carry 进位临界）换算再格式化——与统计/欠款同口径，避免"计算 1 位、显示 2 位"不一致。
 String fmtMoney(num v) {
-  final s = v.toStringAsFixed(2);
+  final s = roundMoney(v.toDouble(), Money.carry, Money.digits).toStringAsFixed(Money.digits);
   final neg = s.startsWith('-');
   final body = neg ? s.substring(1) : s;
   final parts = body.split('.');
   final intPart = parts[0].replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
-  return '${neg ? '-' : ''}$intPart.${parts[1]}';
+  return '${neg ? '-' : ''}$intPart${parts.length > 1 ? '.${parts[1]}' : ''}';
 }
 
 /// 金额舍入口径（与服务器 /settings/rounding 一致）：carry 进位临界（0.5=四舍五入、

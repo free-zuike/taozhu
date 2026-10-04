@@ -1044,7 +1044,7 @@ class _PurchasePageState extends State<PurchasePage> {
     for (final r in valid) {
       await Freq.saveLastQty(r.priceId ?? '', r.quantity);
     }
-    toast(context, _editing ? '已保存，正在同步' : '已提交，合计 ¥${_total.toStringAsFixed(2)}');
+    toast(context, _editing ? '已保存，正在同步' : '已提交，合计 ¥${fmtMoney(_total)}');
     // 关键事件实时落日志（日志页可即时查看，便于复现）＋通知进货历史刷新（列表/统计即时更新）
     appLog('sync', '本地保存进货 ${valid.length} 行（${_editing ? '编辑' : '新增'}），已入队待推送${_pendingPhoto != null ? '，识别原图待上传为附件' : ''}', level: 'info');
     SyncService.version.notifyListeners();

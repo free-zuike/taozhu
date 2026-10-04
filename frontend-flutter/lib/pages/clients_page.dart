@@ -7,6 +7,7 @@ import '../local_db.dart';
 import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../utils/money.dart';
 import 'router.dart';
 
 class ClientsPage extends StatefulWidget {
@@ -460,7 +461,7 @@ class _ClientsPageState extends State<ClientsPage> {
                                 Container(width: 1, height: 28, color: _c.divider),
                                 Expanded(
                                   child: Column(children: [
-                                    Text('¥${_debt(c).toStringAsFixed(2)}',
+                                    Text('¥${fmtMoney(_debt(c))}',
                                         style: TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.w700,

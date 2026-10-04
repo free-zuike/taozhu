@@ -8,6 +8,7 @@ import '../local_db.dart';
 import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../utils/money.dart';
 import '../widgets/date_field.dart';
 import 'router.dart';
 
@@ -164,8 +165,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
           'sync_key': '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(0x7fffffff)}',
         });
         toast(context, waived > 0
-            ? '已登记：实收 ¥${amount.toStringAsFixed(2)}，平账 ¥${waived.toStringAsFixed(2)}'
-            : '已登记收款 ¥${amount.toStringAsFixed(2)}');
+            ? '已登记：实收 ¥${fmtMoney(amount)}，平账 ¥${fmtMoney(waived)}'
+            : '已登记收款 ¥${fmtMoney(amount)}');
         _amountCtrl.clear();
         _waivedCtrl.clear();
       } catch (e) {
@@ -194,8 +195,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
       payload: payload,
     );
     toast(context, waived > 0
-        ? '已登记：实收 ¥${amount.toStringAsFixed(2)}，平账 ¥${waived.toStringAsFixed(2)}'
-        : '已登记收款 ¥${amount.toStringAsFixed(2)}');
+        ? '已登记：实收 ¥${fmtMoney(amount)}，平账 ¥${fmtMoney(waived)}'
+        : '已登记收款 ¥${fmtMoney(amount)}');
     appLog('op', '收款 登记：${_clients.where((x) => '${x['id']}' == _clientId).map((x) => x['name']).firstOrNull ?? _clientId} ¥${(amount * 100).round() / 100}${waived > 0 ? '（平账 ${(waived * 100).round() / 100}）' : ''}（${_dateCtrl.text.trim()}）');
     SyncService.version.notifyListeners();
     _amountCtrl.clear();
@@ -374,7 +375,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             items: _clients
                                 .map((c) => DropdownMenuItem(
                                     value: c['id'] as String,
-                                    child: Text('${c['name']}（欠 ¥${_debtOf(c).toStringAsFixed(2)}）')))
+                                    child: Text('${c['name']}（欠 ¥${fmtMoney(_debtOf(c))}）')))
                                 .toList(),
                             onChanged: (v) => setState(() {
                               _clientId = v;
@@ -385,7 +386,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                           if (_clientId != null)
                             Padding(
                               padding: const EdgeInsets.only(top: 6, bottom: 4),
-                              child: Text('应收 ¥${_selDebt.toStringAsFixed(2)}',
+                              child: Text('应收 ¥${fmtMoney(_selDebt)}',
                                   style: TextStyle(color: _c.danger, fontSize: 13)),
                             ),
                           const SizedBox(height: 8),
@@ -401,7 +402,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             Row(
                               children: [
                                 Expanded(
-                                  child: Text('平账减免（自动）：¥${_autoWaived.toStringAsFixed(2)}',
+                                  child: Text('平账减免（自动）：¥${fmtMoney(_autoWaived)}',
                                       style: TextStyle(fontSize: 14, color: _c.danger, fontWeight: FontWeight.w600)),
                                 ),
                                 TextButton(
@@ -475,10 +476,10 @@ class _PaymentsPageState extends State<PaymentsPage> {
                         title: Text(_clientNameOf(p)),
                         subtitle: Text([
                           _date(p['happened_at']),
-                          if (((p['waived'] as num?) ?? 0) > 0) '平账 ¥${p['waived']}',
+                          if (((p['waived'] as num?) ?? 0) > 0) '平账 ¥${fmtMoney((p['waived'] as num?)?.toDouble() ?? 0)}',
                           if (p['note'] != null && '${p['note']}'.isNotEmpty) '${p['note']}',
                         ].join(' · ')),
-                        trailing: Text('¥${p['amount']}',
+                        trailing: Text('¥${fmtMoney((p['amount'] as num?)?.toDouble() ?? 0)}',
                             style: TextStyle(fontWeight: FontWeight.w700, color: _c.success)),
                         // 交互与出货统一：点击=编辑、长按=撤销（不再放三个点菜单）
                         onTap: () => _edit(p),

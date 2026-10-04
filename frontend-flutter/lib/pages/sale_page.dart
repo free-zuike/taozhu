@@ -1212,7 +1212,7 @@ class _SalePageState extends State<SalePage> {
     for (final r in valid) {
       await Freq.saveLastQty(r.priceId ?? '', r.quantity);
     }
-    toast(context, _editing ? '已保存，正在同步' : '已提交，合计 ¥${_total.toStringAsFixed(2)}');
+    toast(context, _editing ? '已保存，正在同步' : '已提交，合计 ¥${fmtMoney(_total)}');
     // 关键事件实时落日志（日志页可即时查看，便于复现）＋通知账本/统计页刷新
     // （选择店铺弹层的笔数/欠款、顶部结余随本地镜像立即更新，不再等重启/同步）
     appLog('sync', '本地保存出货 ${valid.length} 行（${_editing ? '编辑' : '新增'}），已入队待推送${_pendingPhoto != null ? '，识别原图待上传为附件' : ''}', level: 'info');

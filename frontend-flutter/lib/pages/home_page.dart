@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../utils/money.dart';
 import 'router.dart';
 import 'stats_page.dart';
 
@@ -40,7 +41,7 @@ class _HomePageState extends State<HomePage> {
 
   String _fmt(Object? n) {
     final v = (n is num ? n.toDouble() : double.tryParse(n?.toString() ?? '')) ?? 0;
-    return v.toStringAsFixed(2);
+    return fmtMoney(v);
   }
 
   @override

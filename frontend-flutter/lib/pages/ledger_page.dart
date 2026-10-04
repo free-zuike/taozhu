@@ -774,7 +774,7 @@ class _LedgerPageState extends State<LedgerPage> {
       subtitle: _isStaff
           ? null // 店员不显示商品数量/欠款（经营数据）
           : Text(
-              '商品 ${_statCount(c)} 件 · 欠 ¥${_statDebt(c).toStringAsFixed(2)}',
+              '商品 ${_statCount(c)} 件 · 欠 ¥${fmtMoney(_statDebt(c))}',
               style: TextStyle(
                 fontSize: 12,
                 color: Theme.of(context).brightness == Brightness.dark
