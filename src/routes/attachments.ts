@@ -153,10 +153,17 @@ attachmentsRouter.post('/counts', async (c) => {
       ).bind(...part, ...(clientId ? [clientId] : [])).all<{ id: string; order_id: string }>();
       if (rows.results.length > 0) {
         const lineIds = rows.results.map((r) => r.id);
-        const lineRefs = await c.env.DB.prepare(
-          `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${lineIds.map(() => '?').join(',')}) GROUP BY entity_id`,
-        ).bind(lineEntity, ...lineIds).all<{ entity_id: string; cnt: number }>();
-        const lineCountByLineId = new Map(lineRefs.results.map((r) => [r.entity_id, Number(r.cnt)] as const));
+        // 行数也可能超 D1 参数上限（一批 90 单据 × 每单多行）：行级引用查询同样分批合并
+        const lineCountByLineId = new Map<string, number>();
+        for (let j = 0; j < lineIds.length; j += CHUNK) {
+          const linePart = lineIds.slice(j, j + CHUNK);
+          const lineRefs = await c.env.DB.prepare(
+            `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${linePart.map(() => '?').join(',')}) GROUP BY entity_id`,
+          ).bind(lineEntity, ...linePart).all<{ entity_id: string; cnt: number }>();
+          for (const r of lineRefs.results) {
+            lineCountByLineId.set(r.entity_id, (lineCountByLineId.get(r.entity_id) ?? 0) + Number(r.cnt));
+          }
+        }
         for (const r of rows.results) {
           const n = lineCountByLineId.get(r.id) ?? 0;
           if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;

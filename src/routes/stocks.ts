@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { stockUpsert } from '../lib/stock';
+import { chunkQuery } from '../lib/query';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -35,14 +36,15 @@ stocksRouter.get('/', async (c) => {
     const itemIds = [...ph].map((k) => k.split('\u0000')[0]);
     const units = [...ph].map((k) => k.split('\u0000')[1]);
     // 按 商品+单位 近 30 天出货行均值（避免跨单位混算；商品行自带日期，不再 JOIN 单据头）
-    const avgRows = await c.env.DB.prepare(
-      `SELECT si.item_id, si.unit, AVG(si.quantity) AS avg_qty
-       FROM sale_items si
-       WHERE si.happened_at >= date('now','-30 day')
-         AND si.item_id IN (${itemIds.map(() => '?').join(',')})
-       GROUP BY si.item_id, si.unit`,
-    ).bind(...itemIds).all<{ item_id: string; unit: string; avg_qty: number }>();
-    suggest = new Map(avgRows.results.map((r) => [
+    const avgRows = await chunkQuery(itemIds, (chunk) =>
+      c.env.DB.prepare(
+        `SELECT si.item_id, si.unit, AVG(si.quantity) AS avg_qty
+         FROM sale_items si
+         WHERE si.happened_at >= date('now','-30 day')
+           AND si.item_id IN (${chunk.map(() => '?').join(',')})
+         GROUP BY si.item_id, si.unit`,
+      ).bind(...chunk).all<{ item_id: string; unit: string; avg_qty: number }>().then((r) => r.results));
+    suggest = new Map(avgRows.map((r) => [
       `${r.item_id}\u0000${r.unit}`,
       Math.round((Number(r.avg_qty) || 0) * 0.4 * 100) / 100,
     ]));

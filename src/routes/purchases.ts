@@ -7,6 +7,7 @@ import { stockDelta, stockDeltaFor } from '../lib/stock';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
 import { getRoundingConfig, roundMoney } from '../lib/money';
+import { chunkQuery } from '../lib/query';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -51,13 +52,13 @@ purchasesRouter.post('/', async (c) => {
 
   const priceIds = items.map((i) => i.price_id);
   if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
-  const placeholders = priceIds.map(() => '?').join(',');
-  const priceRows = await c.env.DB.prepare(
-    `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.per, i.count_unit
-     FROM item_prices p LEFT JOIN items i ON i.id = p.item_id WHERE p.id IN (${placeholders})`,
-  ).bind(...priceIds).all<{ id: string; item_id: string; unit: string; purchase_price: number; per?: number | null; count_unit?: string | null }>();
+  const priceRows = await chunkQuery(priceIds, (chunk) =>
+    c.env.DB.prepare(
+      `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.per, i.count_unit
+       FROM item_prices p LEFT JOIN items i ON i.id = p.item_id WHERE p.id IN (${chunk.map(() => '?').join(',')})`,
+    ).bind(...chunk).all<{ id: string; item_id: string; unit: string; purchase_price: number; per?: number | null; count_unit?: string | null }>().then((r) => r.results));
 
-  const priceMap = new Map(priceRows.results.map((p) => [p.id, p]));
+  const priceMap = new Map(priceRows.map((p) => [p.id, p]));
   const purchaseId = randomId();
   const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
   const note = body?.note?.trim() ?? '';
@@ -131,34 +132,35 @@ purchasesRouter.get('/', async (c) => {
   if (aggRows.results.length === 0) return c.json({ purchases: [], total: 0, purchase_items: [] });
 
   const ids = aggRows.results.map((r) => r.id);
-  const ph = ids.map(() => '?').join(',');
-  const detail = await c.env.DB.prepare(
-    `SELECT pi.*, i.name AS item_name, i.category AS item_category FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${ph}) ORDER BY pi.created_at`,
-  ).bind(...ids).all();
+  const detail = await chunkQuery(ids, (chunk) =>
+    c.env.DB.prepare(
+      `SELECT pi.*, i.name AS item_name, i.category AS item_category FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')}) ORDER BY pi.created_at`,
+    ).bind(...chunk).all().then((r) => r.results));
   const byId = new Map<string, unknown[]>();
-  for (const d of detail.results) {
+  for (const d of detail) {
     const pid = (d as { purchase_id: string }).purchase_id;
     const list = byId.get(pid) ?? [];
     list.push(d);
     byId.set(pid, list);
   }
   // 行级主记录数组（去单据化：每条商品一行，自带日期/备注/金额——客户端主读数）
-  const purchaseItemRows = await c.env.DB.prepare(
-    `SELECT pi.id, pi.purchase_id, pi.item_id, i.name AS item_name, i.category AS item_category,
+  const purchaseItemRows = await chunkQuery(ids, (chunk) =>
+    c.env.DB.prepare(
+      `SELECT pi.id, pi.purchase_id, pi.item_id, i.name AS item_name, i.category AS item_category,
             pi.unit, pi.quantity, pi.purchase_price, pi.amount,
             pi.happened_at, pi.note, pi.created_by
      FROM purchase_items pi
      LEFT JOIN items i ON i.id = pi.item_id
-     WHERE pi.purchase_id IN (${ph})
+     WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')})
      ORDER BY pi.created_at`,
-  ).bind(...ids).all();
+    ).bind(...chunk).all().then((r) => r.results));
   return c.json({
     total: countRow?.cnt ?? 0,
     purchases: aggRows.results.map((row) => ({
       id: row.id, happened_at: row.happened_at, note: row.note ?? '', total: roundMoney(Number(row.total) || 0, money), items: byId.get(row.id) ?? [],
     })),
     // 去单据化主结构：行级商品记录（新客户端优先读，整单 purchases 字段兼容保留）
-    purchase_items: purchaseItemRows.results.map((x) => {
+    purchase_items: purchaseItemRows.map((x) => {
       const r = x as Record<string, unknown>;
       return user.role === 'staff' ? { ...r, purchase_price: 0 } : r;
     }),
@@ -193,11 +195,12 @@ purchasesRouter.post('/items/date', async (c) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(u.happened_at!)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
   }
   const ids = updates.map((u) => u.item_id!);
-  const rows = await c.env.DB.prepare(
-    `SELECT id, purchase_id FROM purchase_items WHERE id IN (${ids.map(() => '?').join(',')})`,
-  ).bind(...ids).all<{ id: string; purchase_id: string }>();
-  if (rows.results.length === 0) return c.json({ error: '明细行不存在' }, 404);
-  const byId = new Map(rows.results.map((r) => [r.id, r.purchase_id]));
+  const rows = await chunkQuery(ids, (chunk) =>
+    c.env.DB.prepare(
+      `SELECT id, purchase_id FROM purchase_items WHERE id IN (${chunk.map(() => '?').join(',')})`,
+    ).bind(...chunk).all<{ id: string; purchase_id: string }>().then((r) => r.results));
+  if (rows.length === 0) return c.json({ error: '明细行不存在' }, 404);
+  const byId = new Map(rows.map((r) => [r.id, r.purchase_id]));
   const batch: D1PreparedStatement[] = [];
   for (const u of updates) {
     const purchaseId = byId.get(u.item_id!);
@@ -205,7 +208,7 @@ purchasesRouter.post('/items/date', async (c) => {
   }
   await c.env.DB.batch(batch);
   // 无头表：组装时 happened_at=明细行最大日期，无需再同步 head
-  const purchaseIds = [...new Set(rows.results.map((r) => r.purchase_id))];
+  const purchaseIds = [...new Set(rows.map((r) => r.purchase_id))];
   for (const pid of purchaseIds) {
     await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: pid, payload: await buildPayload(c.env.DB, 'purchase', pid), updated_by_username: c.get('user').username });
   }
@@ -287,12 +290,12 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
     }
     const priceIds = items.map((i) => i.price_id);
     if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
-    const placeholders = priceIds.map(() => '?').join(',');
-    const priceRows = await c.env.DB.prepare(
-      `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.per, i.count_unit
-       FROM item_prices p LEFT JOIN items i ON i.id = p.item_id WHERE p.id IN (${placeholders})`,
-    ).bind(...priceIds).all<{ id: string; item_id: string; unit: string; purchase_price: number; per?: number | null; count_unit?: string | null }>();
-    const priceMap = new Map(priceRows.results.map((p) => [p.id, p]));
+    const priceRows = await chunkQuery(priceIds, (chunk) =>
+      c.env.DB.prepare(
+        `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.per, i.count_unit
+         FROM item_prices p LEFT JOIN items i ON i.id = p.item_id WHERE p.id IN (${chunk.map(() => '?').join(',')})`,
+      ).bind(...chunk).all<{ id: string; item_id: string; unit: string; purchase_price: number; per?: number | null; count_unit?: string | null }>().then((r) => r.results));
+    const priceMap = new Map(priceRows.map((p) => [p.id, p]));
     total = 0;
     for (const item of items) {
       const price = priceMap.get(item.price_id);

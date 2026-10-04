@@ -5,6 +5,7 @@
  */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
+import { chunkQuery } from '../lib/query';
 import { applyChange, buildPayload, latestChange, maskPayload, maxCursor, recordChange } from '../lib/sync';
 import type { AuthUser, Env } from '../types';
 
@@ -187,17 +188,18 @@ syncRouter.get('/full', async (c) => {
      FROM sale_items si GROUP BY si.sale_id ORDER BY happened_at DESC`,
   ).all();
   const saleIds = salesRows.results.map((r) => (r as { id: string }).id);
-  const clientNameRows = await db.prepare(
-    `SELECT id, name FROM clients WHERE id IN (${[...new Set(salesRows.results.map((r) => (r as { client_id: string }).client_id))].map(() => '?').join(',')})`,
-  ).bind(...[...new Set(salesRows.results.map((r) => (r as { client_id: string }).client_id))]).all<{ id: string; name: string }>();
-  const clientNameOf = new Map(clientNameRows.results.map((c) => [c.id, c.name]));
-  const saleDetail = saleIds.length > 0
-    ? await db.prepare(
-        `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id IN (${saleIds.map(() => '?').join(',')}) ORDER BY si.created_at`,
-      ).bind(...saleIds).all()
-    : { results: [] as unknown[] };
+  const clientIds = [...new Set(salesRows.results.map((r) => (r as { client_id: string }).client_id))];
+  const clientNameRows = await chunkQuery(clientIds, (chunk) =>
+    db.prepare(
+      `SELECT id, name FROM clients WHERE id IN (${chunk.map(() => '?').join(',')})`,
+    ).bind(...chunk).all<{ id: string; name: string }>().then((r) => r.results));
+  const clientNameOf = new Map(clientNameRows.map((c) => [c.id, c.name]));
+  const saleDetail = await chunkQuery(saleIds, (chunk) =>
+    db.prepare(
+      `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id IN (${chunk.map(() => '?').join(',')}) ORDER BY si.created_at`,
+    ).bind(...chunk).all().then((r) => r.results));
   const bySale = new Map<string, unknown[]>();
-  for (const d of saleDetail.results) {
+  for (const d of saleDetail) {
     const list = bySale.get((d as { sale_id: string }).sale_id) ?? [];
     list.push(d);
     bySale.set((d as { sale_id: string }).sale_id, list);
@@ -225,13 +227,12 @@ syncRouter.get('/full', async (c) => {
      FROM purchase_items pi GROUP BY pi.purchase_id ORDER BY happened_at DESC`,
   ).all();
   const purchaseIds = purchaseRows.results.map((r) => (r as { id: string }).id);
-  const purchaseDetail = purchaseIds.length > 0
-    ? await db.prepare(
-        `SELECT pi.*, i.name AS item_name FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${purchaseIds.map(() => '?').join(',')}) ORDER BY pi.created_at`,
-      ).bind(...purchaseIds).all()
-    : { results: [] as unknown[] };
+  const purchaseDetail = await chunkQuery(purchaseIds, (chunk) =>
+    db.prepare(
+      `SELECT pi.*, i.name AS item_name FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')}) ORDER BY pi.created_at`,
+    ).bind(...chunk).all().then((r) => r.results));
   const byPurchase = new Map<string, unknown[]>();
-  for (const d of purchaseDetail.results) {
+  for (const d of purchaseDetail) {
     const list = byPurchase.get((d as { purchase_id: string }).purchase_id) ?? [];
     list.push(d);
     byPurchase.set((d as { purchase_id: string }).purchase_id, list);
