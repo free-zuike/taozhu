@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
-import '../money.dart';
-import '../widgets/center_sheet.dart';
+import '../utils/money.dart';
+import 'router.dart';
 
 /// 金额舍入设置（仅老板）：进位临界（四舍五入/5舍6入/自定义 0~1）+ 精度（元/角/分）。
 /// 保存 PUT /settings/rounding（服务器权威），广播后各端刷新本地口径；本地缓存同步更新。
