@@ -304,9 +304,10 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     } catch (_) {}
   }
 
-  /// 全部本地附件副本计数（App 文档目录 attachments/ 递归；Web 无本地副本返回 0）。
-  /// **直接数附件目录全部文件数**（本地实际存在多少副本就是多少，与服务器 R2 总数对应对比，
-  /// 不做在用/孤儿过滤——孤儿归存储清理页决策）。
+  /// 全部本地附件物理副本计数（App 文档目录 attachments/ 直接文件数；Web 无本地副本返回 0）。
+  /// 0.17.282 同图改造后副本存公共目录 attachments/{file}（同图一份，md5 命名）——
+  /// 只数第一层文件（不再遍历 entity/id 旧三层结构，旧版逐行复制目录已废弃）。
+  /// 物理文件数仅辅助展示（对齐服务器 R2 对象数），附件语义计数走引用表（_localAttachRefs）。
   Future<int> _localAllAttachCount() async {
     if (kIsWeb) return 0;
     try {
@@ -315,14 +316,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       if (!dir.existsSync()) return 0;
       var n = 0;
       try {
-        // att/{entity}/{id}/file.jpg 三层结构
-        for (final e in dir.listSync()) {
-          if (e is! Directory) continue;
-          for (final f in e.listSync()) {
-            if (f is! Directory) continue;
-            n += f.listSync().whereType<File>().length;
-          }
-        }
+        n = dir.listSync().whereType<File>().length;
       } catch (_) {}
       return n;
     } catch (_) {
@@ -330,19 +324,18 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     }
   }
 
-  /// 本地附件副本计数（App 文档目录 attachments/{entity}/{id}/；Web 无本地副本返回 0）
+  /// 本地引用记录计数（App 本地 attachment_refs 表，按 entity + entity_id 过滤）。
+  /// 口径与服务器 counts 一致（引用记录数=实际附件数，对齐参考实现：每个商品/单据挂载算一个）。
+  /// 0.17.282 同图改造后本地副本存公共目录 attachments/{file}，不再按实体目录存放，
+  /// 物理文件数不能代表附件数——引用表才是权威。
   Future<int> _localAttachCount(String entity, List<String> ids) async {
     if (kIsWeb || ids.isEmpty) return 0;
     try {
-      final root = await getApplicationDocumentsDirectory();
-      var n = 0;
-      for (final id in ids) {
-        final dir = Directory('${root.path}/attachments/$entity/$id');
-        if (dir.existsSync()) {
-          n += dir.listSync().whereType<File>().length;
-        }
-      }
-      return n;
+      final refs = await LocalDb.getAll('attachment_refs');
+      final idSet = ids.toSet();
+      return refs
+          .where((r) => '${r['entity'] ?? ''}' == entity && idSet.contains('${r['entity_id'] ?? ''}'))
+          .length;
     } catch (_) {
       return 0;
     }
