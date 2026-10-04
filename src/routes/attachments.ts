@@ -277,6 +277,60 @@ attachmentsRouter.get('/in-use', async (c) => {
       cursor = r.truncated ? r.cursor : undefined;
     } while (cursor);
   }
+  // ③ 存量凭证迁移（幂等，仅补写行级引用，不删原单据级）：0.17.281 之前老版本把识别图
+  // 挂在「单据级 sale/purchase」或仅首行。用户规格=每商品行独立凭证（编辑页该行查行级附件、
+  // 行图标各自亮、删任一行不影响其他行）。这里把单据级/首行引用的 file_key 补挂为该单
+  // **全部明细行**（attachment_refs 行级写入，id=`行entity:行id:key` 幂等）；此后编辑页
+  // 每行都能看到凭证。out 维持本轮原样，下轮 in-use 全引用表驱动自然包含新行级行。
+  const migrateKeysByOrder = async (orderType: 'sale' | 'purchase') => {
+    const lineType = orderType === 'sale' ? 'sale_item' : 'purchase_item';
+    const orderCol = `${orderType}_id`;
+    const orderRefs = await db.prepare(
+      `SELECT entity, entity_id, file_key FROM attachment_refs WHERE entity IN (?, ?)`,
+    ).bind(orderType, lineType).all<{ entity: string; entity_id: string; file_key: string }>();
+    if (orderRefs.results.length === 0) return;
+    // 单据 id → 该单全部明细行 id
+    const lineRows = await db.prepare(
+      `SELECT id, ${orderCol} AS order_id FROM ${lineType}s`,
+    ).all<{ id: string; order_id: string }>();
+    const linesOfOrder = new Map<string, string[]>();
+    for (const r of lineRows.results) {
+      const list = linesOfOrder.get(r.order_id) ?? [];
+      list.push(r.id);
+      linesOfOrder.set(r.order_id, list);
+    }
+    const lineIdByRowId = new Map(lineRows.results.map((r) => [r.id, r.order_id] as const));
+    // 单条引用（单据级或某行） → 该单据 id 集合（可能同时出现）
+    const touched = new Set<string>();
+    for (const r of orderRefs.results) {
+      if (r.entity === orderType) {
+        touched.add(r.entity_id);
+      } else {
+        const orderId = lineIdByRowId.get(r.entity_id);
+        if (orderId) touched.add(orderId);
+      }
+    }
+    // 逐单：把该单现有引用的 file_key 补挂到全部行（幂等 INSERT OR IGNORE）
+    for (const orderId of touched) {
+      const rows = linesOfOrder.get(orderId) ?? [];
+      if (rows.length === 0) continue;
+      const keys = new Set(orderRefs.results
+        .filter((r) =>
+          r.entity === orderType ? r.entity_id === orderId : lineIdByRowId.get(r.entity_id) === orderId)
+        .map((r) => r.file_key));
+      for (const lid of rows) {
+        for (const key of keys) {
+          try {
+            await db.prepare(
+              'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
+            ).bind(`${lineType}:${lid}:${key}`, lineType, lid, key, key.split('/').pop()?.replace('.jpg', '') ?? '').run();
+          } catch (_) {}
+        }
+      }
+    }
+  };
+  await migrateKeysByOrder('sale');
+  await migrateKeysByOrder('purchase');
   return c.json({
     attachments: out,
     total: out.length,

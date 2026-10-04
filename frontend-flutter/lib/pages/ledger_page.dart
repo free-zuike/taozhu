@@ -356,8 +356,10 @@ class _LedgerPageState extends State<LedgerPage> {
       });
     }
     if (kIsWeb) await _loadNetwork(firstLocal);
-    // 附件计数（有附件才显示图标）：本地目录扫描零网络；云端 counts 仅同步完成/Web 直连时刷新
-    _loadAttachCounts(withCloud: kIsWeb);
+    // 附件计数（有附件才显示图标）：本地目录扫描零网络即时显示；
+    // App also 拉云端 counts 精确校正（此前 withCloud=kIsWeb 导致 App 只看本地表，
+    // Web 上传/其他端新增的附件本地表没同步到 → 图标不显示——同一数据 Web 亮 App 暗根因）
+    _loadAttachCounts(withCloud: true);
     } catch (e) {
       // 任何加载异常：复位 loading 不再转圈（保留上次数据或空态）
       debugPrint('账本加载异常: ${e.toString().split('\n').first}');

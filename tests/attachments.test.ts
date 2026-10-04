@@ -734,6 +734,43 @@ describe('附件删除走同步变更流（引用变更流驱动：本地删 →
     expect(await env.BUCKET.get(up1.key)).not.toBeNull();
     expect(await env.BUCKET.get(up2.key)).not.toBeNull();
   });
+
+  it('存量迁移：单据级引用 → in-use 后补挂为该单全部明细行的行级引用（编辑页每行凭证可见）', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-01-11',
+      items: [
+        { price_id: items.items[0].prices[0].id, quantity: 1 },
+        { price_id: items.items[0].prices[0].id, quantity: 2 },
+        { price_id: items.items[0].prices[0].id, quantity: 3 },
+      ],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const lineRows = await (env.DB as FakeD1).prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(saleId).all<{ id: string }>();
+    expect(lineRows.results.length).toBe(3);
+    // 模拟旧结构：仅单据级引用（0.17.281 前识别图挂在单据级/首行）
+    const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+    // in-use 拉取触发迁移：单据级引用的 file_key 补挂到全部明细行
+    await call(env, 'GET', '/api/v1/attachments/in-use', token);
+    for (const line of lineRows.results) {
+      const refs = await (env.DB as FakeD1).prepare(
+        "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale_item' AND entity_id = ? AND file_key = ?",
+      ).bind(line.id, up.key).first<{ n: number }>();
+      expect(refs?.n ?? 0).toBe(1);
+    }
+    // 单据级原引用保留（不删旧行，双向可查）
+    const orderRef = await (env.DB as FakeD1).prepare(
+      "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
+    ).bind(saleId).first<{ n: number }>();
+    expect(orderRef?.n ?? 0).toBe(1);
+  });
 });
 
 describe('附件存储工厂（createStorage）', () => {

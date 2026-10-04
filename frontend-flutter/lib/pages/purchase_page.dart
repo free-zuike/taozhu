@@ -671,13 +671,14 @@ class _PurchasePageState extends State<PurchasePage> {
     _pendingPhoto = null;
     try {
       final fileName = '${md5.convert(img).toString()}.jpg';
-      // 归属本单的明细行（批量直编时原单行 origPurchaseId 非空不属于本单，不挂）
-      final lineIds = [
-        for (final r in rows)
-          if (r.rowId.isNotEmpty && r.origPurchaseId.isEmpty) r.rowId,
-      ];
       // 识别原图=这一批商品共用的图：**每个商品行各挂一份独立附件记录**（对齐参考实现：
       // 每笔交易各自有附件记录，删除任一行不影响其他行；行图标各自亮起）。
+      // 凡有 rowId 的行都挂行级（含按日期批量直编/编辑时带 origPurchaseId 的原单行——
+      // 行级引用的锚点是行 id 与单号无关，此前过滤 origPurchaseId 导致这些行编辑页凭证为空）。
+      final lineIds = [
+        for (final r in rows)
+          if (r.rowId.isNotEmpty) r.rowId,
+      ];
       if (kIsWeb) {
         if (lineIds.isEmpty) {
           await Api.instance.uploadPhoto('/attachments?entity=purchase&id=$purchaseId', img, fileName);
