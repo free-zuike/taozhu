@@ -486,6 +486,10 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
               await Api.instance.delete('/attachments?key=$key&entity=${t.$1}&id=${t.$2}');
             } catch (_) {}
           }
+          // 同实体同文件若还在待上传队列（添加未同步过），一并移除——否则残留队列条目
+          // 会在下次上传时把已删引用重新传回服务器（"删了又出现"的另一个来源）
+          await SyncService.removePendingUpload(
+            entity: t.$1, id: t.$2, fileName: key.split('/').last);
         }
       }
     }

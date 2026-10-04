@@ -165,8 +165,31 @@ class SyncService {
           .where((r) => r['entity'] != '' && r['entity_id'] != '' && r['file'] != '')
           .where((r) => !pendingDel.contains('${r['entity']}/${r['entity_id']}/${r['file']}'))
           .toList();
+      // 待上传队列中的本地登记（添加附件立即可见，还没传到服务器/已传但 in-use 未回）：
+      // 全量刷新不能把它们冲掉，否则图标"添加后灭一次、上传成功才亮"——本地优先应始终亮。
+      // 合并：本地表中属于待上传队列且未被待删除过滤的行，保留在本次刷新结果里
+      try {
+        final p = await SharedPreferences.getInstance();
+        final pendingUploads = (p.getStringList(kPendingUploadsKey) ?? [])
+            .map((e) => jsonDecode(e))
+            .whereType<Map<String, dynamic>>()
+            .map((m) => '${m['entity'] ?? ''}/${m['id'] ?? ''}/${'${m['fileName'] ?? ''}'.split('/').last}')
+            .toSet();
+        if (pendingUploads.isNotEmpty) {
+          final locals = await LocalDb.getAll('attachment_refs');
+          for (final r in locals) {
+            final id3 = '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${'${r['file'] ?? ''}'.split('/').last}';
+            if (!pendingUploads.contains(id3)) continue;
+            if (pendingDel.contains(id3)) continue;
+            if (!refs.any((x) => '${x['id']}' == id3)) refs.add(r);
+          }
+        }
+      } catch (_) {}
       if (refs.isNotEmpty) {
         await LocalDb.putAll('attachment_refs', refs);
+      } else {
+        // 全部删光也清空本地表（否则已删引用残留、图标不灭）
+        await LocalDb.putAll('attachment_refs', []);
       }
     } catch (_) {
       return;
@@ -249,12 +272,42 @@ class SyncService {
       list.add(entry);
       await p.setStringList(kPendingUploadsKey, list);
     } catch (_) {}
+    // 本地引用表立即登记：图标/计数无需等上传+同步（本地优先：离线添加也立即可见）。
+    // 行 id 用 entity/id/fileName（与同步全量刷新 putAll 的 id 拼法一致，幂等覆盖）；
+    // key 按新格式内容 key 命名（同图一份；旧库/存量格式由同步以服务器真实 key 刷新覆盖）
+    try {
+      await LocalDb.upsertOne('attachment_refs', {
+        'id': '${entity.trim()}/${id.trim()}/${fileName.trim()}',
+        'entity': entity.trim(),
+        'entity_id': id.trim(),
+        'file': fileName.trim(),
+        'key': 'taozhu/images/attachments/$fileName',
+      });
+    } catch (_) {}
+    version.notifyListeners(); // 账本附件图标计数/列表即时联动（无需等下一次同步）
     // 即时上传：添加附件后立即触发一轮上传（不再等手动同步才传）——
     // 上传实时反馈；失败保留队列，由同步/下次重试兜底（离线可挂图不变）
     if (!_attUploadLock) {
       _attUploadLock = true;
       unawaited(uploadPendingAttachments().whenComplete(() => _attUploadLock = false));
     }
+  }
+
+  /// 删除附件时调用：从待上传队列移除对应条目（否则已删引用会在下次上传时"复活"——
+  /// 服务器同内容幂等同 key，删除后队列残留条目再传一遍 = 引用又写回服务器）
+  static Future<void> removePendingUpload({
+    required String entity,
+    required String id,
+    required String fileName,
+  }) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final list = p.getStringList(kPendingUploadsKey) ?? [];
+      final entry = jsonEncode({'entity': entity, 'id': id, 'fileName': fileName});
+      if (!list.contains(entry)) return;
+      final next = list.where((e) => e != entry).toList();
+      await p.setStringList(kPendingUploadsKey, next);
+    } catch (_) {}
   }
 
   /// 同步编排第一步：上传待传附件（对齐参考 sync()：push 前先传附件，引用先写云端）。
@@ -549,6 +602,14 @@ class SyncService {
                     ? {'entity': entity, 'id': eid}
                     : _parseAttachmentKey(key);
                 if (parsed != null) {
+                  // 本地待上传队列同步移除（同实体同文件）：其他端已删，本端残留待传条目
+                  // 不应再传回去（否则删除被上传复活）
+                  try {
+                    await removePendingUpload(
+                        entity: '${parsed['entity'] ?? ''}',
+                        id: '${parsed['id'] ?? ''}',
+                        fileName: key.split('/').last);
+                  } catch (_) {}
                   final f = File('${root.path}/attachments/${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
                   if (f.existsSync()) f.deleteSync();
                   // 同步删除本地引用行（在下次 in-use 全量刷新前保持本地表一致，避免误判在用）
