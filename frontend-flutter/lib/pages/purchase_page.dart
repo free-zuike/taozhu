@@ -661,50 +661,30 @@ class _PurchasePageState extends State<PurchasePage> {
     }
   }
 
-  /// 提交成功后上传识别原图为本单附件（失败静默，可稍后在凭证处手动添加）。
+  /// 提交成功后上传识别原图为本单凭证（失败静默，可稍后在凭证处手动添加）。
   /// 文件名用内容 md5（与云端 R2 key 同名：本地副本=云端 basename，下载覆盖不重复，
-  /// 本地/服务器计数与引用表一致）；挂载本单明细行（行级 purchase_item，进货历史/凭证
-  /// 按行展示，与手动"整单凭证批量挂行"一致）；无明细（备注占位行）回退单据级 purchase/{purchaseId}。
+  /// 本地/服务器计数与引用表一致）；挂载**单据级一份**（entity=purchase/{purchaseId}，对齐参考实现
+  /// =交易级单记录：一张识别图=一条附件记录，全商品行共享可见——进货历史/编辑页按单据级计数与回退）。
+  /// 此前逐行挂 purchase_item（每行一条引用）导致 9 行=9 条待上传/服务器计数虚高/删除一条复活其他。
   Future<void> _uploadPending(String purchaseId, List<_PRow> rows) async {
     final img = _pendingPhoto;
     if (img == null) return;
     _pendingPhoto = null;
     try {
       final fileName = '${md5.convert(img).toString()}.jpg';
-      // 识别原图=这一批商品共用的图：**每个商品行各挂一份独立附件记录**（对齐参考实现：
-      // 每笔交易各自有附件记录，删除任一行不影响其他行；行图标各自亮起）。
-      // 凡有 rowId 的行都挂行级（含按日期批量直编/编辑时带 origPurchaseId 的原单行——
-      // 行级引用的锚点是行 id 与单号无关，此前过滤 origPurchaseId 导致这些行编辑页凭证为空）。
-      final lineIds = [
-        for (final r in rows)
-          if (r.rowId.isNotEmpty) r.rowId,
-      ];
       if (kIsWeb) {
-        if (lineIds.isEmpty) {
-          await Api.instance.uploadPhoto('/attachments?entity=purchase&id=$purchaseId', img, fileName);
-        } else {
-          for (final lid in lineIds) {
-            await Api.instance.uploadPhoto('/attachments?entity=purchase_item&id=$lid', img, fileName);
-          }
-        }
-        if (mounted) toast(context, '识别图片已存为本单附件');
+        await Api.instance.uploadPhoto('/attachments?entity=purchase&id=$purchaseId', img, fileName);
+        if (mounted) toast(context, '识别图片已存为本单凭证');
         return;
       }
       final root = await getApplicationDocumentsDirectory();
-      // 本地副本按内容存公共目录 attachments/{file}（同图一份）；每行入队上传同文件——
-      // 服务器同内容幂等同 key（R2 一份）+ 引用表每行一行（每个商品算一个附件）
+      // 本地副本按内容存公共目录 attachments/{file}（同图一份）；整单一条引用入队上传
       final adir = Directory('${root.path}/attachments');
       if (!adir.existsSync()) adir.createSync(recursive: true);
       final af = File('${adir.path}/$fileName');
       if (!af.existsSync()) await af.writeAsBytes(img);
-      if (lineIds.isEmpty) {
-        await SyncService.enqueueAttachmentUpload(entity: 'purchase', id: purchaseId, fileName: fileName);
-      } else {
-        for (final lid in lineIds) {
-          await SyncService.enqueueAttachmentUpload(entity: 'purchase_item', id: lid, fileName: fileName);
-        }
-      }
-      if (mounted) toast(context, '识别图片已存为本单附件（联网后自动上传）');
+      await SyncService.enqueueAttachmentUpload(entity: 'purchase', id: purchaseId, fileName: fileName);
+      if (mounted) toast(context, '识别图片已存为本单凭证（联网后自动上传）');
     } catch (_) {}
   }
 

@@ -27,27 +27,11 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
   @override
   void initState() {
     super.initState();
-    // 本地优先：先渲染本地缓存口径（不转圈/离线可用），后台拉服务器核对后覆盖
+    // 本地优先：只读本地缓存口径（离线秒开、不拉网络不跳动）。
+    // 联网后的最新值由实时 WS 'rounding' 事件（Money.refresh）维护，本页不再打开即拉服务器。
     _carry = Money.carry;
     _digits = Money.digits;
     _loading = false;
-    _refreshFromServer();
-  }
-
-  Future<void> _refreshFromServer() async {
-    try {
-      final d = await Api.instance.get('/settings/rounding').timeout(const Duration(seconds: 8));
-      if (!mounted) return;
-      // 仅当服务器返回合法值才覆盖（其余情况保持本地渲染值）
-      final carry = (d['carry'] as num?)?.toDouble() ?? 0.5;
-      final digits = (d['digits'] as num?)?.toInt() ?? 2;
-      if (carry > 0 && carry <= 1 && [0, 1, 2].contains(digits)) {
-        setState(() {
-          _carry = carry;
-          _digits = digits;
-        });
-      }
-    } catch (_) {}
   }
 
   Future<void> _save() async {

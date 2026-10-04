@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'theme.dart';
+import 'utils/money.dart';
 import 'pages/login_page.dart';
 import 'widgets/bottom_shell.dart';
 
@@ -11,6 +12,10 @@ void main() async {
   final p = await SharedPreferences.getInstance();
   themeNotifier.value = restoreThemeMode(p.getString('theme_mode'));
   await ThemeConfig.instance.init();
+  // 本地优先：启动即读本地缓存设置金额舍入口径（已登录用户重启不经过登录页，
+  // 此前 ensure 只在登录时调用 → 静态值恒为默认 2 位——"显示默认 2 位"根因）。
+  // 只读缓存不拉网络（不跳动）；联网后由实时 WS rounding 事件刷新。
+  Money.loadFromPrefs(p);
   runApp(const TaoZhuApp());
 }
 

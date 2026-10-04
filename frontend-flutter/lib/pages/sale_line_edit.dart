@@ -135,7 +135,9 @@ Future<Map<String, dynamic>?> editSaleLine(
                   ),
                   TextButton(
                     onPressed: () async {
-                      await showAttachmentViewer(context, 'sale_item', '$itemId', '出货明细行附件');
+                      // 凭证=单据级一份（对齐参考实现交易级单记录）：识别原图整单一条记录，
+                      // 全商品行共享可见；此前查行级 sale_item 导致"编辑该条凭证附件为空"
+                      await showAttachmentViewer(context, 'sale', '${order['id']}', '出货凭证附件');
                       if (ctx.mounted) setDlg(() {});
                     },
                     child: const Text('查看/添加'),

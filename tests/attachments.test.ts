@@ -735,7 +735,7 @@ describe('附件删除走同步变更流（引用变更流驱动：本地删 →
     expect(await env.BUCKET.get(up2.key)).not.toBeNull();
   });
 
-  it('存量迁移：单据级引用 → in-use 后补挂为该单全部明细行的行级引用（编辑页每行凭证可见）', async () => {
+  it('收敛迁移：同单同图行级引用 → in-use 后合并为单据级一条（识别图整单一份），单行独立凭证保留', async () => {
     await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
     const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
     await call(env, 'POST', '/api/v1/items', token, {
@@ -755,21 +755,34 @@ describe('附件删除走同步变更流（引用变更流驱动：本地删 →
     const saleId = ((await sale.json()) as { id: string }).id;
     const lineRows = await (env.DB as FakeD1).prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(saleId).all<{ id: string }>();
     expect(lineRows.results.length).toBe(3);
-    // 模拟旧结构：仅单据级引用（0.17.281 前识别图挂在单据级/首行）
-    const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
-    // in-use 拉取触发迁移：单据级引用的 file_key 补挂到全部明细行
-    await call(env, 'GET', '/api/v1/attachments/in-use', token);
-    for (const line of lineRows.results) {
-      const refs = await (env.DB as FakeD1).prepare(
-        "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale_item' AND entity_id = ? AND file_key = ?",
-      ).bind(line.id, up.key).first<{ n: number }>();
-      expect(refs?.n ?? 0).toBe(1);
+    const lines = lineRows.results.map((r) => r.id);
+    const db = env.DB as FakeD1;
+    // 模拟 0.17.295/296 扩散产物：同一张识别图（同 file_key）挂满全部 3 个明细行
+    const sharedKey = 'taozhu/images/attachments/diffused.jpg';
+    const singleKey = 'taozhu/images/attachments/single.jpg';
+    for (const lid of lines) {
+      await db.prepare(
+        'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
+      ).bind(`sale_item:${lid}:${sharedKey}`, 'sale_item', lid, sharedKey, 'diffused').run();
     }
-    // 单据级原引用保留（不删旧行，双向可查）
-    const orderRef = await (env.DB as FakeD1).prepare(
-      "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
-    ).bind(saleId).first<{ n: number }>();
+    // 模拟真实单行凭证：仅挂第一个明细行、独立 key
+    await db.prepare(
+      'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
+    ).bind(`sale_item:${lines[0]}:${singleKey}`, 'sale_item', lines[0], singleKey, 'single').run();
+    // in-use 触发收敛：扩散产物 → 单据级一条；单行独立凭证保留
+    await call(env, 'GET', '/api/v1/attachments/in-use', token);
+    const orderRef = await db.prepare(
+      "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale' AND entity_id = ? AND file_key = ?",
+    ).bind(saleId, sharedKey).first<{ n: number }>();
     expect(orderRef?.n ?? 0).toBe(1);
+    const sharedLeft = await db.prepare(
+      "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale_item' AND file_key = ?",
+    ).bind(sharedKey).first<{ n: number }>();
+    expect(sharedLeft?.n ?? 0).toBe(0);
+    const singleLeft = await db.prepare(
+      "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale_item' AND entity_id = ? AND file_key = ?",
+    ).bind(lines[0], singleKey).first<{ n: number }>();
+    expect(singleLeft?.n ?? 0).toBe(1);
   });
 });
 

@@ -826,17 +826,14 @@ class SyncService {
       final d = await Api.instance.post('/sync/push', {'device_id': did, 'changes': changes});
       if (d == null) return 0;
       final accepted = d['accepted'] as int? ?? 0;
-      // 推送明细日志：用户能看到推送了什么（按实体类型分组计数 + 前几个 id）
-      final byType = <String, List<String>>{};
+      // 推送明细日志：逐条记录（用户要一条变更一条日志，不聚合——"推送 N 条"看不出具体推了什么）
       for (final ch in changes) {
         final t = '${ch['entity_type'] ?? ''}';
         final sid = '${ch['entity_sync_id'] ?? ''}';
-        (byType[t] ??= []).add(sid);
+        final act = '${ch['action'] ?? 'upsert'}';
+        appLog('sync', '推送 $t $sid（$act）', level: 'info');
       }
-      final detail = byType.entries
-          .map((e) => '${e.key} ${e.value.length} 条${e.value.take(2).join('/')}${e.value.length > 2 ? '…' : ''}')
-          .join('、');
-      appLog('sync', '推送 ${changes.length} 条变更：$detail（服务器接受 $accepted 条）', level: 'info');
+      appLog('sync', '本轮共推送 ${changes.length} 条变更，服务器接受 $accepted 条', level: 'info');
       // 持久删除集合：仅清除"本地库已确实删掉/软删落库"的条目；
       // 本地库只读导致 tombstone 未写入、行仍活跃的条目必须保留（含原时间戳）——
       // 否则重启后 _load 失去过滤依据，已删商品复活（服务端已删也不影响：集合仅本地过滤用）

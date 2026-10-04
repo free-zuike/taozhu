@@ -3,6 +3,11 @@ main = "src/index.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
+# 实时日志（Cloudflare 控制台 → Workers → taozhu → 实时日志）：开启后 console.* 输出与
+# 请求日志可见，便于排查运行时 500（如附件上传失败），用户要求 2026-10-04
+[observability]
+enabled = true
+
 # 静态资源：前端构建产物放 ./public，由 Workers 直接托管（同源，与 API 同域）
 [assets]
 directory = "./public"

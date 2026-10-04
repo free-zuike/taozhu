@@ -45,7 +45,17 @@ class Money {
     } catch (_) {}
   }
 
-  /// 初始化：先读本地缓存再后台刷新（页面计算前调用一次即可）
+  /// 本地优先：从 SharedPreferences 同步读缓存设置口径（启动/登录时调用，**不拉网络不跳动**）。
+  /// 网络值仅由实时 WS 'rounding' 事件（其他端改设置）或 refresh() 显式核对后覆盖。
+  static void loadFromPrefs(SharedPreferences p) {
+    final c = p.getDouble('money_carry');
+    final d = p.getInt('money_digits');
+    if (c != null && c > 0 && c <= 1) _carry = c;
+    if (d != null && [0, 1, 2].contains(d)) _digits = d;
+    _loaded = true;
+  }
+
+  /// 初始化：读本地缓存 + 后台核对服务器（登录后调用一次；仅同步后覆盖，不阻塞展示）
   static Future<void> ensure() async {
     if (_loaded) return;
     _loaded = true;

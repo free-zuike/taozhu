@@ -88,18 +88,24 @@ attachmentsRouter.post('/', async (c) => {
   if (!file) return c.json({ error: '请选择图片上传' }, 400);
   if (file.size === 0 || file.size > 10 * 1024 * 1024) return c.json({ error: '图片过大（上限 10MB）' }, 400);
 
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  // 附件内容 key（同图一份物理文件）：key 仅按内容 md5 命名；同内容多实体引用 = R2 一份 + 引用表多行
-  const key = attachmentContentKey(bytes);
-  await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
-  // 附件引用表（引用驱动）：记录"哪个实体引用了哪个文件"。幂等：同 entity+entity_id+key 已存在则跳过，
-  // 不同实体引用同一内容（同 md5 同 key）各自一行——多行/多单共享一份物理文件互不影响
-  await c.env.DB.prepare(
-    'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
-  ).bind(`${entity}:${id}:${key}`, entity, id, key, key.split('/').pop()?.replace('.jpg', '') ?? '').run();
-  // 附件增删实时同步：广播 {type:'sync'}，其他在线端收到后拉取并刷新附件计数/图标
-  await notifyClients();
-  return c.json({ key }, 201);
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    // 附件内容 key（同图一份物理文件）：key 仅按内容 md5 命名；同内容多实体引用 = R2 一份 + 引用表多行
+    const key = attachmentContentKey(bytes);
+    await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
+    // 附件引用表（引用驱动）：记录"哪个实体引用了哪个文件"。幂等：同 entity+entity_id+key 已存在则跳过，
+    // 不同实体引用同一内容（同 md5 同 key）各自一行——多行/多单共享一份物理文件互不影响
+    await c.env.DB.prepare(
+      'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
+    ).bind(`${entity}:${id}:${key}`, entity, id, key, key.split('/').pop()?.replace('.jpg', '') ?? '').run();
+    // 附件增删实时同步：广播 {type:'sync'}，其他在线端收到后拉取并刷新附件计数/图标
+    await notifyClients();
+    return c.json({ key }, 201);
+  } catch (e) {
+    // 500 明细进 Cloudflare 实时日志（控制台 → Workers → 实时日志可见），定位 R2/D1 失败原因
+    console.error('[taozhu] 附件上传失败', entity, id, (e as Error)?.message ?? String(e), (e as Error)?.stack ?? '');
+    return c.json({ error: `附件上传失败: ${(e as Error)?.message ?? String(e)}` }, 500);
+  }
 });
 
 // POST /attachments/counts — 统计一批单据/明细行的附件数（同步面板「当前店铺附件差异」用）。
@@ -277,38 +283,42 @@ attachmentsRouter.get('/in-use', async (c) => {
       cursor = r.truncated ? r.cursor : undefined;
     } while (cursor);
   }
-  // ③ 存量凭证迁移（幂等，仅补写行级引用，不删原单据级）：0.17.281 之前老版本把识别图
-  // 挂在「单据级 sale/purchase」或仅首行。用户规格=每商品行独立凭证（编辑页该行查行级附件、
-  // 行图标各自亮、删任一行不影响其他行）。这里把单据级/首行引用的 file_key 补挂为该单
-  // **全部明细行**（attachment_refs 行级写入，id=`行entity:行id:key` 幂等）；此后编辑页
-  // 每行都能看到凭证。out 维持本轮原样，下轮 in-use 全引用表驱动自然包含新行级行。
-  // 注意：必须用单条 INSERT..SELECT 批量补挂（此前 JS 循环逐行 INSERT 在数据多时把
-  // in-use 响应拖超 25s → App 本地引用表拉取超时不刷新 → 同步面板数字差 → 图标暗）。
-  const migrateKeysByOrder = async (orderType: 'sale' | 'purchase') => {
+  // ③ 存量凭证收敛迁移（幂等，单条 SQL 无 JS 循环）：0.17.281-296 期间实现为「每商品行各挂
+  // 一份行级引用」（识别原图扩散到每行），用户规格已回调=对齐参考实现「交易级单记录」——
+  // 同一批识别图=整单凭证，**只记录一份（单据级 sale/purchase）**，全商品行共享可见；
+  // 逐行扩散导致：9 行=9 条待上传/服务器计数虚高/删除一条复活其他/并发上传 500。
+  // 收敛规则=同单同 file_key 的行级引用（扩散产物）合并为单据级一条并删行级；
+  // 单行独立 key 的行级引用（真实单行凭证）保留不动。
+  const consolidateLineRefs = async (orderType: 'sale' | 'purchase') => {
     const lineType = orderType === 'sale' ? 'sale_item' : 'purchase_item';
     const orderCol = `${orderType}_id`;
     const lineTable = `${lineType}s`;
-    // 来源①：单据级引用（entity=sale 且 file_key）——脚注到该单全部行
-    // 来源②：已存在的行级引用（该行已有图，补挂同单其他行）
+    // ① 扩散产物（同单同 key 行级引用 ≥2）→ 补单据级引用（INSERT OR IGNORE 幂等，已有则跳过）
     await db.prepare(
       `INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5)
-       SELECT '${lineType}:' || si.id || ':' || r.file_key, '${lineType}', si.id, r.file_key, r.file_key
+       SELECT '${orderType}:' || g.${orderCol} || ':' || g.file_key, '${orderType}', g.${orderCol}, g.file_key, g.file_key
        FROM (
-         SELECT file_key, entity_id AS order_id FROM attachment_refs WHERE entity = ?
-         UNION ALL
-         SELECT ref.file_key, l.${orderCol} AS order_id
-         FROM attachment_refs ref JOIN ${lineTable} l ON l.id = ref.entity_id
-         WHERE ref.entity = ?
-       ) r
-       JOIN ${lineTable} si ON si.${orderCol} = r.order_id
-       WHERE NOT EXISTS (
-         SELECT 1 FROM attachment_refs x
-         WHERE x.entity = ? AND x.entity_id = si.id AND x.file_key = r.file_key
+         SELECT si.${orderCol}, r.file_key
+         FROM attachment_refs r JOIN ${lineTable} si ON si.id = r.entity_id
+         WHERE r.entity = ?
+         GROUP BY si.${orderCol}, r.file_key
+         HAVING COUNT(*) > 1
+       ) g`,
+    ).bind(lineType).run();
+    // ② 凡该单已有单据级同 key 引用的行级引用 → 删除（合并完成；真实单行凭证=单据级无同 key，保留）
+    await db.prepare(
+      `DELETE FROM attachment_refs
+       WHERE entity = ? AND file_key IN (
+         SELECT r.file_key FROM attachment_refs r JOIN ${lineTable} si ON si.id = r.entity_id
+         WHERE r.entity = ? AND EXISTS (
+           SELECT 1 FROM attachment_refs o
+           WHERE o.entity = ? AND o.entity_id = si.${orderCol} AND o.file_key = r.file_key
+         )
        )`,
-    ).bind(orderType, lineType, lineType).run();
+    ).bind(lineType, lineType, orderType).run();
   };
-  await migrateKeysByOrder('sale');
-  await migrateKeysByOrder('purchase');
+  await consolidateLineRefs('sale');
+  await consolidateLineRefs('purchase');
   return c.json({
     attachments: out,
     total: out.length,
