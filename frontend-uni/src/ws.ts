@@ -57,6 +57,11 @@ function connect() {
         const d = JSON.parse(res.data as string);
         if (typeof d === 'object' && d && typeof (d as Record<string, unknown>).type === 'string') {
           const type = (d as { type: string }).type;
+          // 金额舍入配置变更广播：先刷新本地口径缓存，再通知页面（页面重渲时读到新口径）
+          if (type === 'rounding') {
+            void import('./utils/money').then(async (m) => { await m.initRounding(); fire(type); fire('*'); });
+            return;
+          }
           fire(type);
           fire('*'); // 兜底：未知类型也通知（业务数据变更）
         }

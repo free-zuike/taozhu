@@ -34,7 +34,7 @@ import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
 import { useThemeVars } from '../../theme';
-import { initRounding, roundingCfg } from '../../utils/money';
+import { initRounding, applyRounding, roundingCfg } from '../../utils/money';
 
 const tv = useThemeVars();
 const presets = [
@@ -72,7 +72,9 @@ async function save() {
   saving.value = true;
   try {
     await request('/settings/rounding', 'PUT', { carry: carry.value, digits: digits.value });
-    await initRounding(); // 刷新本地口径（展示层立即生效）
+    // 本地优先：服务器已接受 → 同步写本地缓存（立即生效且重进仍生效，不依赖网络回读）
+    applyRounding(carry.value, digits.value);
+    initRounding(); // 后台与服务器核对（失败静默，本地值已正确）
     uni.showToast({ title: '已保存（新记账按新规则）', icon: 'success' });
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '保存失败', icon: 'none' });

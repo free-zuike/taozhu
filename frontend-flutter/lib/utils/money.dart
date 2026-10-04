@@ -61,6 +61,19 @@ class Money {
 
   /// 按当前口径舍入金额（同步实现，供记单/收款/本地统计调用）
   static double round(double value) => roundMoney(value, _carry, _digits);
+
+  /// 保存后同步写入本地口径（不依赖网络回读——网络抖动失败也会静默，导致退出重进读旧缓存）。
+  /// 随后可再调 refresh() 与服务器核对；本地先更新保证"保存即生效、重进仍生效"。
+  static Future<void> apply(double carry, int digits) async {
+    if (!(carry > 0 && carry <= 1) || ![0, 1, 2].contains(digits)) return;
+    _carry = carry;
+    _digits = digits;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setDouble('money_carry', carry);
+      await p.setInt('money_digits', digits);
+    } catch (_) {}
+  }
 }
 
 /// 按配置舍入金额（进位临界 + 精度）。临界位判定用放大取整，避免浮点误差；负数对称处理。

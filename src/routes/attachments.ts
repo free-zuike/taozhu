@@ -159,27 +159,14 @@ attachmentsRouter.post('/counts', async (c) => {
   return c.json({ counts, total, ids });
 });
 
-// GET /attachments/total — 全部附件总数（同步面板「全部数据」附件差异行；含新旧前缀，分页统计）
+// GET /attachments/total — 在用附件物理文件数（同步面板「物理副本/总计」差异行用）。
+// 口径=引用表 DISTINCT file_key（本地下载只下在用文件、同图一份，与此一致）——
+// 不计 R2 孤儿/历史残留对象（孤儿由清理页单独扫描删除，避免"本地7/服务器11"类虚高差异）。
 attachmentsRouter.get('/total', async (c) => {
-  const store = createStorage(c.env);
-  // 规范前缀 + 历史前缀家族（taozhu/attachments/ 与根级 sale|purchase|payment/），互不重叠
-  const prefixes = [
-    'taozhu/images/attachments/',
-    'taozhu/attachments/',
-    'sale/',
-    'purchase/',
-    'payment/',
-  ];
-  let total = 0;
-  await Promise.all(prefixes.map(async (p) => {
-    let cursor: string | undefined;
-    do {
-      const r = await store.list(p, cursor);
-      total += r.objects.length;
-      cursor = r.truncated ? r.cursor : undefined;
-    } while (cursor);
-  }));
-  return c.json({ total });
+  const row = await c.env.DB.prepare(
+    'SELECT COUNT(DISTINCT file_key) AS n FROM attachment_refs',
+  ).first<{ n: number }>();
+  return c.json({ total: row?.n ?? 0 });
 });
 
 // GET /attachments/in-use — 列出云端"在用"附件（与 orphans 对称）：

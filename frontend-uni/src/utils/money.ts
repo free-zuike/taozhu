@@ -35,6 +35,13 @@ export async function initRounding() {
   } catch (_) {}
 }
 
+/** 保存成功后同步写本地口径（不依赖网络回读——网络抖动失败也会静默，导致重进读旧缓存） */
+export function applyRounding(carry: number, digits: number) {
+  if (!(carry > 0 && carry <= 1) || ![0, 1, 2].includes(digits)) return;
+  cached = { carry, digits };
+  try { uni.setStorageSync(KEY, JSON.stringify(cached)); } catch (_) {}
+}
+
 /** 按配置舍入金额（进位临界 + 精度）；负数对称 */
 export function roundMoney(value: number, carry: number, digits: number): number {
   const f = Math.pow(10, digits);

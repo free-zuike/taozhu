@@ -27,26 +27,27 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
   @override
   void initState() {
     super.initState();
-    _load();
+    // 本地优先：先渲染本地缓存口径（不转圈/离线可用），后台拉服务器核对后覆盖
+    _carry = Money.carry;
+    _digits = Money.digits;
+    _loading = false;
+    _refreshFromServer();
   }
 
-  Future<void> _load() async {
+  Future<void> _refreshFromServer() async {
     try {
       final d = await Api.instance.get('/settings/rounding').timeout(const Duration(seconds: 8));
       if (!mounted) return;
-      setState(() {
-        _carry = (d['carry'] as num?)?.toDouble() ?? 0.5;
-        _digits = (d['digits'] as num?)?.toInt() ?? 2;
-        _loading = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _carry = Money.carry;
-        _digits = Money.digits;
-        _loading = false;
-      });
-    }
+      // 仅当服务器返回合法值才覆盖（其余情况保持本地渲染值）
+      final carry = (d['carry'] as num?)?.toDouble() ?? 0.5;
+      final digits = (d['digits'] as num?)?.toInt() ?? 2;
+      if (carry > 0 && carry <= 1 && [0, 1, 2].contains(digits)) {
+        setState(() {
+          _carry = carry;
+          _digits = digits;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _save() async {
@@ -56,13 +57,18 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
         'carry': _carry,
         'digits': _digits,
       });
-      await Money.refresh(); // 本地口径立即更新（新记账即按新规则）
-      toast(context, '已保存（新记账按新规则计算）');
     } catch (e) {
+      // 保存失败：不更新本地（本地口径仍是上次生效值，避免"失败的保存"污染展示）
       toast(context, e.toString().replaceFirst('Exception: ', ''));
+      return;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+    // 本地优先：服务器已接受 → 同步写本地缓存（立即生效且重进仍生效，不依赖网络回读）。
+    // 广播后各端 WS 刷新；本端 apply 保证即使 refresh 抖动失败也不丢已保存值
+    await Money.apply(_carry, _digits);
+    Money.refresh(); // 后台与服务器核对（失败静默，本地值已正确）
+    toast(context, '已保存（新记账按新规则计算）');
   }
 
   String _digitsLabel(int d) => switch (d) { 0 => '元（整数）', 1 => '角（1 位小数）', _ => '分（2 位小数）' };

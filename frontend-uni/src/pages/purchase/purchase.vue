@@ -41,7 +41,7 @@
       <view class="footer">
         <button class="btn-add" @click="addRow">+ 添加商品</button>
         <button class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
-        <text class="total">合计 <text class="total-num">¥{{ total }}</text></text>
+        <text class="total">合计 <text class="total-num">¥{{ fmtAmount(total) }}</text></text>
       </view>
       <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (editId ? '保存修改' : '提交进货单') }}</button>
     </view>
@@ -76,9 +76,10 @@
 import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { computed, ref } from 'vue';
-import { onLoad, onShow } from '@dcloudio/uni-app';
+import { onLoad, onShow, onHide } from '@dcloudio/uni-app';
 import { request, getToken, uploadAi, uploadAttachment } from '../../api';
 import { fmtAmount, initRounding } from '../../utils/money';
+import { onWs, offWs } from '../../ws';
 
 interface Price { id: string; unit: string; sale_price: number; purchase_price: number; stock?: number }
 interface Item { id: string; name: string; prices: Price[]; count_unit?: string }
@@ -125,6 +126,13 @@ onLoad((options) => {
   editId.value = options?.id || '';
   if (editId.value) uni.setNavigationBarTitle({ title: '编辑进货单' });
 });
+
+// 金额舍入配置变更（其他端改设置）→ 先刷新本地口径再触发页面重渲（合计/行金额按新位数显示）
+onShow(() => onWs('rounding', refreshRounding));
+onHide(() => offWs('rounding', refreshRounding));
+function refreshRounding() {
+  rows.value = [...rows.value]; // 浅拷贝触发模板重渲（fmtAmount 读最新本地口径）
+}
 
 const total = computed(() =>
   rows.value.reduce((s, r) => s + (Number(r.quantity) || 0) * (Number(r.purchasePrice) || 0), 0),

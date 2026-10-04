@@ -242,12 +242,19 @@ describe('附件按店铺统计（/attachments/counts）', () => {
     expect(res.counts['s1']).toBe(1);
   });
 
-  it('总数统计 /attachments/total 含新旧前缀', async () => {
+  it('总数统计 /attachments/total = 在用去重物理文件数（不含无引用的孤儿对象）', async () => {
     await call(env, 'POST', '/api/v1/attachments?entity=sale&id=s1', token, photoForm(), true);
-    await env.BUCKET.put('taozhu/attachments/sale/s1/old.jpg', new Uint8Array([1, 2, 3]));
+    // 手塞 R2 对象：s1 在用的旧格式对象不算孤儿（实体在用）；sX 不存在 = 真孤儿
     await env.BUCKET.put('sale/s1/bare.jpg', new Uint8Array([1, 2, 3]));
+    await env.BUCKET.put('sale/sX/ghost.jpg', new Uint8Array([1, 2, 3]));
     const d = await (await call(env, 'GET', '/api/v1/attachments/total', token)).json() as { total: number };
-    expect(d.total).toBe(3);
+    expect(d.total).toBe(1); // 引用表 DISTINCT file_key：只数在用引用的物理文件（上传那张），手塞 R2 对象无引用不计
+    // 孤儿对象仍可被清理页扫出（在用判定权威=引用表/在用实体）
+    const orphans = await (await call(env, 'GET', '/api/v1/attachments/orphans', token)).json() as {
+      orphans: Array<{ key: string }>;
+    };
+    expect(orphans.orphans.some((o) => o.key === 'sale/sX/ghost.jpg')).toBe(true);
+    expect(orphans.orphans.some((o) => o.key === 'sale/s1/bare.jpg')).toBe(false);
   });
 
   it('参数校验：非法 entity → 400', async () => {
