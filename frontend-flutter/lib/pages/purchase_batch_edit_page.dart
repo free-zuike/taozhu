@@ -30,6 +30,8 @@ class PurchaseBatchEditPage extends StatefulWidget {
 
 class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
   late List<Map<String, dynamic>> _lines;
+  /// 行级凭证数：明细行 id（row_id 字段）→ 张数（本地引用表零网络；Web 云端 counts）
+  Map<String, int> _attachCount = {};
 
   @override
   void initState() {
@@ -70,6 +72,40 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
     if (!mounted) return;
     if (lines.isEmpty) lines = List.of(widget.lines);
     setState(() => _lines = lines);
+    unawaited(_loadAttachCounts());
+  }
+
+  /// 行级凭证计数：本地附件引用表优先（零网络，对齐账本行卡片）；Web 无本地库拉云端 counts
+  Future<void> _loadAttachCounts() async {
+    final ids = [
+      for (final l in _lines)
+        if ('${l['row_id'] ?? ''}'.isNotEmpty) '${l['row_id']}',
+    ].toSet().toList();
+    if (ids.isEmpty) return;
+    final map = <String, int>{};
+    if (!kIsWeb) {
+      try {
+        final refs = await LocalDb.getAll('attachment_refs');
+        for (final r in refs) {
+          final eid = '${r['entity_id'] ?? ''}';
+          if ('${r['entity'] ?? ''}' == 'purchase_item' && ids.contains(eid)) {
+            map[eid] = (map[eid] ?? 0) + 1;
+          }
+        }
+      } catch (_) {}
+    } else {
+      try {
+        final d = await Api.instance
+            .post('/attachments/counts', {'entity': 'purchase_item', 'ids': ids})
+            .timeout(const Duration(seconds: 3));
+        for (final e in ((d['counts'] as Map?) ?? {}).entries) {
+          final n = (e.value as num?)?.toInt() ?? 0;
+          if (n > 0) map['${e.key}'] = n;
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() => _attachCount = map);
   }
 
   /// 明细行 → 流水行（与进货记录页 _buildList 同构）
@@ -303,6 +339,31 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
               ),
             ),
             const SizedBox(width: 8),
+            // 行级凭证入口（对齐账本行卡片：有附件亮+数量，无附件灰态，点开查看/添加该行凭证）
+            InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () async {
+                final lid = '${l['row_id'] ?? ''}';
+                if (lid.isEmpty) return;
+                await showAttachmentViewer(context, 'purchase_item', lid, '进货明细行凭证');
+                unawaited(_loadAttachCounts());
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.image_outlined, size: 15,
+                      color: (_attachCount['${l['row_id']}'] ?? 0) > 0
+                          ? c.primary
+                          : c.textSub.withOpacity(0.5)),
+                  if ((_attachCount['${l['row_id']}'] ?? 0) > 0) ...[
+                    const SizedBox(width: 2),
+                    Text('${_attachCount['${l['row_id']}']}',
+                        style: TextStyle(fontSize: 10, color: c.primary, fontWeight: FontWeight.w600)),
+                  ],
+                ]),
+              ),
+            ),
+            const SizedBox(width: 4),
             Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
             const SizedBox(width: 2),
