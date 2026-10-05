@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
@@ -67,6 +68,8 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
   String _base = '';
   String _token = '';
   final _pageCtrl = PageController();
+  /// 本次打开的引用表（file 名 → keys），下载落盘后重建视图用
+  Map<String, List<String>> _keysByFile = {};
 
   @override
   void initState() {
@@ -183,26 +186,10 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         }
       }
     } catch (_) {}
-    // 云端引用合并兜底（在线）：本地引用表缺失/未同步时仍能看到并删除云端已有附件——
-    // 否则查看器空态→无删除入口→残留引用只能删整单才清（"本地/服务器对不上、删不掉"根因）。
-    // 云端 key 插最前（真实 key 优先：删除/网络加载用）；3s 紧凑超时；失败静默保留本地视图。
-    try {
-      final cloudKeys = <String>[];
-      if (_bulk) {
-        cloudKeys.addAll(await _cloudKeys(widget.entity, widget.id));
-        for (final lid in widget.lineIds) {
-          cloudKeys.addAll(await _cloudKeys(_lineEntity, lid));
-        }
-      } else {
-        cloudKeys.addAll(await _cloudKeys(widget.entity, widget.id));
-      }
-      for (final k in cloudKeys) {
-        final name = k.split('/').last;
-        final keys = keysByFile[name] ??= <String>[];
-        if (!keys.contains(k)) keys.insert(0, k);
-      }
-    } catch (_) {}
     if (!mounted) return;
+    // **本地优先铁律：只显示本地已有的东西（副本/引用），零网络、立即上屏、绝不转圈**。
+    // 本地缺副图的附件，由后台同步语义下载落盘（见 _downloadMissingCopies），不直连展示。
+    _keysByFile = keysByFile;
     setState(() {
       _items = [
         for (final e in keysByFile.entries)
@@ -211,6 +198,54 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       _resetIndex();
       _loading = false;
     });
+    unawaited(_downloadMissingCopies());
+  }
+
+  /// 云端副本下载落盘（同步语义，非查看器直连展示）：本地引用有而副本缺的附件，
+  /// 后台逐张下载到公共目录 attachments/{file} 后刷新显示——"云端的图先进本地"。
+  /// 失败静默（保留"去同步"提示，由全量同步兜底），全程不阻塞、不转圈。
+  Future<void> _downloadMissingCopies() async {
+    if (kIsWeb) return;
+    final pending = [
+      for (final it in _items)
+        if (it.key.startsWith('taozhu/') &&
+            (it.localPath == null || !File(it.localPath!).existsSync()))
+          it,
+    ];
+    if (pending.isEmpty) return;
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final adir = Directory('${root.path}/attachments');
+      var saved = 0;
+      for (final it in pending) {
+        try {
+          final bytes = await Api.instance.getRaw('/attachments/${it.key}');
+          if (bytes.isEmpty) continue;
+          if (!adir.existsSync()) adir.createSync(recursive: true);
+          final f = File('${adir.path}/${it.key.split('/').last}');
+          if (!f.existsSync() || f.lengthSync() != bytes.length) {
+            await f.writeAsBytes(bytes);
+          }
+          saved++;
+        } catch (_) {}
+      }
+      if (saved == 0 || !mounted) return;
+      // 重建本地视图：新副本路径生效（同一份 keysByFile，同图多实体共用一份文件）
+      final locals = <String, String>{};
+      if (adir.existsSync()) {
+        for (final f in adir.listSync()) {
+          if (f is! File) continue;
+          locals.putIfAbsent(f.uri.pathSegments.last, () => f.path);
+        }
+      }
+      setState(() {
+        _items = [
+          for (final e in _keysByFile.entries)
+            _Item(e.value.first, locals[e.key], e.value),
+        ];
+        _resetIndex();
+      });
+    } catch (_) {}
   }
 
   /// 修正当前索引到合法范围（列表重建后调用）
@@ -591,52 +626,43 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     );
   }
 
-  /// 单张图片：**本地副本优先，本地没有就不显示网络兜底**——
-  /// App/桌面端附件副本只由同步状态页同步下载（本地优先铁律"同步从同步状态获取"）；
-  /// 本地无副本 → 提示去同步，避免"联网能看到、离线看不到"的错觉。
+  /// 单张图片：**本地副本优先，不直连云端展示**——App/桌面端附件副本只由同步下载
+  /// （全量同步 / 打开时的后台按需下载 _downloadMissingCopies）；本地无副本 → 提示去同步。
+  /// 无转圈：打开即本地视图，缺副本由后台静默下载落盘，成功后才显示；下载失败给提示。
   /// Web 端无本地库/文件系统，直连云端展示是 Web 固有形态（保留）。
   Widget _page(_Item it) {
     final local = it.localPath;
     final hasLocal = local != null && File(local).existsSync();
-    // 无本地副本时一律在线加载（App/Web 同路径——本地表缺失/未同步时仍可见可删；
-    // 加载失败/离线才提示去同步，避免"看不到又删不了"的残留死锁）
     final Widget content = hasLocal
         ? Image.file(File(local), fit: BoxFit.contain, errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF), size: 40))
-        : Image.network(
-            '$_base/api/v1/attachments/${it.key}',
-            fit: BoxFit.contain,
-            headers: _token.isEmpty ? null : {'Authorization': 'Bearer $_token'},
-            loadingBuilder: (_, child, progress) => progress == null
-                ? child
-                : const Center(
-                    child: SizedBox(
-                      width: 28,
-                      height: 28,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    ),
+        : kIsWeb
+            ? Image.network(
+                '$_base/api/v1/attachments/${it.key}',
+                fit: BoxFit.contain,
+                headers: _token.isEmpty ? null : {'Authorization': 'Bearer $_token'},
+                errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF), size: 40),
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.cloud_download_outlined, size: 44, color: Color(0xFF6B7280)),
+                  const SizedBox(height: 12),
+                  const Text('本地无此附件副本', style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
+                  const SizedBox(height: 6),
+                  const Text('正在后台同步下载，或点「立即同步」一次补齐',
+                      style: TextStyle(color: Color(0xFF6B7280), fontSize: 12), textAlign: TextAlign.center),
+                  const SizedBox(height: 10),
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF409EFF)),
+                    onPressed: () {
+                      SyncService.sync();
+                      toast(context, '已开始同步，完成后自动下载附件副本');
+                    },
+                    child: const Text('立即同步'),
                   ),
-            errorBuilder: (_, __, ___) => Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.cloud_download_outlined, size: 44, color: Color(0xFF6B7280)),
-                const SizedBox(height: 12),
-                const Text('本地无此附件副本', style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
-                const SizedBox(height: 6),
-                const Text('在线加载失败或当前离线，请在「我的 → 同步状态」同步后查看',
-                    style: TextStyle(color: Color(0xFF6B7280), fontSize: 12), textAlign: TextAlign.center),
-                const SizedBox(height: 10),
-                OutlinedButton(
-                  style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF409EFF)),
-                  onPressed: () {
-                    SyncService.sync();
-                    toast(context, '已开始同步，完成后自动下载附件副本');
-                  },
-                  child: const Text('立即同步'),
-                ),
-              ],
-            ),
-          );
+                ],
+              );
     return Container(
       color: Colors.black,
       alignment: Alignment.center,
