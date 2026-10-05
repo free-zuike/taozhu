@@ -48,6 +48,7 @@ const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
+import { fmtAmount } from '../../utils/money';
 
 interface Acct { id: string; name: string; bank_name?: string; card_last_four?: string }
 const accounts = ref<Acct[]>([]);
@@ -56,7 +57,8 @@ const saving = ref(false);
 const showForm = ref(false);
 const editId = ref('');
 const form = ref({ name: '', bankName: '', cardLastFour: '' });
-const fmt = (n: number) => Number(n || 0).toFixed(2);
+// 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
+const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
 const totalIncome = computed(() =>
   Object.values(stats.value).reduce((s, x) => s + Number(x.total || 0), 0),

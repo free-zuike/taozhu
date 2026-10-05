@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="toolbar">
@@ -43,6 +43,7 @@ import { ref } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
+import { fmtAmount } from '../../utils/money';
 
 interface Stock { id: string; item_name: string; unit: string; quantity: number; min_stock: number; low: boolean }
 
@@ -74,7 +75,8 @@ async function load() {
     stocks.value = d.stocks;
     if (!belowOnly.value && d.stocks.length) {
       const sum = d.stocks.reduce((s, x) => s + (Number(x.quantity) || 0) * (Number((x as any).cost_price) || 0), 0);
-      totalLabel.value = `库存金额合计（按当前进价）¥${sum.toFixed(2)}`;
+      // 金额合计按「我的 → 金额舍入」设置的位数（对齐 App fmtMoney）
+      totalLabel.value = `库存金额合计（按当前进价）¥${fmtAmount(sum)}`;
     } else {
       totalLabel.value = '';
     }

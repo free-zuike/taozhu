@@ -342,6 +342,11 @@ class _LedgerPageState extends State<LedgerPage> {
       sales = _filterByClient(sales, _clientId!);
       payments = _filterByClient(payments, _clientId!);
     }
+    // 附件计数：渲染前先把本地引用表计数算好（零网络、首帧图标即有，杜绝"先无后有"闪烁——
+    // 此前渲染先行、云端 counts 返回才 setState，打开页面图标必然晚到；此处传本次加载数据，
+    // 冷启动首次 State 未就绪也能按本次列表统计）；渲染后仍拉云端 counts 精确校正
+    // （Web 上传/其他端新增的附件本地表没同步到 → 图标不显示，App 也以云端为准）
+    if (!kIsWeb) await _loadAttachCounts(sales: sales, payments: payments);
     // Web 无本地库（本地渲染恒空）：跳过"先渲染空列表"，直接网络加载并保留旧列表——
     // 否则每次 WS 通知重载都会"空白→填充"跳动；原生保持本地优先渲染
     if (!kIsWeb && mounted) {
@@ -356,9 +361,6 @@ class _LedgerPageState extends State<LedgerPage> {
       });
     }
     if (kIsWeb) await _loadNetwork(firstLocal);
-    // 附件计数（有附件才显示图标）：本地目录扫描零网络即时显示；
-    // App also 拉云端 counts 精确校正（此前 withCloud=kIsWeb 导致 App 只看本地表，
-    // Web 上传/其他端新增的附件本地表没同步到 → 图标不显示——同一数据 Web 亮 App 暗根因）
     _loadAttachCounts(withCloud: true);
     } catch (e) {
       // 任何加载异常：复位 loading 不再转圈（保留上次数据或空态）
@@ -405,15 +407,23 @@ class _LedgerPageState extends State<LedgerPage> {
 
   /// 统计当前可见出货明细行/收款单的附件数：本地副本目录优先（原生，零网络），云端批量 counts 精确覆盖。
   /// 出货按明细行（sale_item，每行商品独立凭证）；收款按单据。
-  Future<void> _loadAttachCounts({bool withCloud = false}) async {
+  /// sales/payments 缺省用当前 State 数据；渲染前调用需传本次加载结果——
+  /// 否则冷启动首次加载时 State 还是空列表，本地计数落空，图标仍会后到（闪烁）。
+  Future<void> _loadAttachCounts({
+    bool withCloud = false,
+    List<Map<String, dynamic>>? sales,
+    List<Map<String, dynamic>>? payments,
+  }) async {
+    final srcSales = sales ?? _sales;
+    final srcPayments = payments ?? _payments;
     final saleLineIds = [
-      for (final s in _sales)
+      for (final s in srcSales)
         for (final it in ((s['items'] as List?) ?? []) as List)
           '${(it as Map)['id'] ?? ''}',
     ].where((x) => x.isNotEmpty).toSet().toList();
     // 无明细（备注行）整单附件仍按单据级展示
-    final saleOrderIds = _sales.map((s) => '${s['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
-    final payIds = _payments.map((p) => '${p['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
+    final saleOrderIds = srcSales.map((s) => '${s['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
+    final payIds = srcPayments.map((p) => '${p['id']}').whereType<String>().where((x) => x.isNotEmpty).toSet().toList();
     final counts = <String, Map<String, int>>{
       'sale_item': {}, 'sale': {},
       'payment': {},
@@ -439,7 +449,9 @@ class _LedgerPageState extends State<LedgerPage> {
       Future<void> fetch(String entity, List<String> ids) async {
         if (ids.isEmpty) return;
         try {
-          final d = await Api.instance.post('/attachments/counts', {'entity': entity, 'ids': ids});
+          final d = await Api.instance
+              .post('/attachments/counts', {'entity': entity, 'ids': ids})
+              .timeout(const Duration(seconds: 3));
           final m = (d['counts'] as Map?) ?? {};
           for (final e in m.entries) {
             final n = (e.value as num?)?.toInt() ?? 0;

@@ -65,6 +65,7 @@ import { ref } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
+import { fmtAmount } from '../../utils/money';
 
 interface Client {
   id: string;
@@ -83,7 +84,8 @@ const clients = ref<Client[]>([]);
 const showForm = ref(false);
 const saving = ref(false);
 const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '' });
-const fmt = (n: number) => Number(n || 0).toFixed(2);
+// 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
+const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
 /// 记账天数：首记日 → 今天（含当天，对齐 App _bookDays）
 function bookDays(c: Client): number {

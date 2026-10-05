@@ -104,6 +104,7 @@ import { computed, ref } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
+import { fmtAmount } from '../../utils/money';
 
 const clientId = ref('');
 const clientName = ref('');
@@ -135,7 +136,8 @@ function viewAcctDetail(a: string) {
   acctDetail.value = acctDetail.value === a ? '' : a;
 }
 
-const fmt = (n: number) => Number(n || 0).toFixed(2);
+// 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
+const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
 function todayLocal(): string {
   const d = new Date();

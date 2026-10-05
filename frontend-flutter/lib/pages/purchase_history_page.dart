@@ -173,6 +173,10 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         catMap['${x['id']}'] = '${x['category'] ?? ''}';
       }
     } catch (_) {}
+    // 附件计数：渲染前先把本地引用表计数算好（零网络、首帧图标即有，杜绝"先无后有"闪烁）——
+    // 传本次加载的 local（冷启动首次 _purchases 未就绪也能按本次列表统计）；
+    // 云端 counts 由渲染后的 withCloud 调用覆盖（Web 上传/其他端新增的附件本地表没同步到）
+    if (!kIsWeb) await _loadAttachCounts(purchases: local);
     // Web 端 LocalDb 恒空：跳过空渲染，避免删除/同步通知时列表"空白→填充"跳动；仅本地有数据才先渲染
     if ((!kIsWeb || local.isNotEmpty) && mounted) {
       setState(() {
@@ -207,7 +211,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         });
       }
     }
-    unawaited(_loadAttachCounts());
+    unawaited(_loadAttachCounts(withCloud: true));
     } catch (e) {
       // 任何加载异常复位 loading，不再转圈
       debugPrint('进货历史加载异常: ${e.toString().split('\n').first}');
@@ -218,10 +222,15 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
 
   /// 附件计数（对齐出货账本 ledger_page）：本地副本目录优先（原生，零网络），云端 counts 覆盖。
   /// 进货按明细行 purchase_item；识别原图只挂首个商品行，其他行行级查空回退单据 purchase。
-  Future<void> _loadAttachCounts() async {
+  /// purchases 缺省用当前 State 数据；渲染前调用需传本次加载结果（冷启动首次 State 为空）。
+  Future<void> _loadAttachCounts({
+    bool withCloud = false,
+    List<Map<String, dynamic>>? purchases,
+  }) async {
+    final src = purchases ?? _purchases;
     final lineIds = <String>[];
     final orderIds = <String>[];
-    for (final p in _purchases) {
+    for (final p in src) {
       final oid = '${p['id'] ?? ''}';
       if (oid.isNotEmpty) orderIds.add(oid);
       for (final it in ((p['items'] as List?) ?? [])) {
@@ -252,11 +261,13 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         }
       } catch (_) {}
     }
-    // ② 云端批量 counts（Web 直连或同步完成时精确覆盖）
+    // ② 云端批量 counts（Web 直连或显式 withCloud 时精确覆盖；紧凑超时防弱网拖慢图标）
     Future<void> fetchCounts(String entity, List<String> ids, Map<String, int> into) async {
-      if (ids.isEmpty) return;
+      if (ids.isEmpty || (!withCloud && !kIsWeb)) return;
       try {
-        final d = await Api.instance.post('/attachments/counts', {'entity': entity, 'ids': ids});
+        final d = await Api.instance
+            .post('/attachments/counts', {'entity': entity, 'ids': ids})
+            .timeout(const Duration(seconds: 3));
         final m = (d['counts'] as Map?) ?? {};
         if (!mounted) return;
         setState(() {

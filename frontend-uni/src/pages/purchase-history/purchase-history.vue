@@ -37,13 +37,10 @@
         </view>
         <view v-if="l.note" class="buy-note">{{ l.note }}</view>
         <view class="ops">
-          <view class="attach-entry" @click.stop="showAttach('purchase_item', l.itemId, 'purchase', l.orderId)">
-            <image class="attach-ic" :src="attachIconSrc" mode="aspectFit" />
+          <!-- 单个附件入口（对齐 App：行级优先、空回退该单；无附件灰态，可点开添加） -->
+          <view class="attach-entry" @click.stop="showAttach(l.itemId ? 'purchase_item' : 'purchase', l.itemId || l.orderId, 'purchase', l.orderId)">
+            <image class="attach-ic" :class="{ 'attach-ic-off': attachOf(l) <= 0 }" :src="attachIconSrc" mode="aspectFit" />
             <text v-if="attachOf(l) > 0" class="attach-cnt">{{ attachOf(l) }}</text>
-          </view>
-          <view class="attach-entry" @click.stop="showAttach('purchase', l.orderId)">
-            <image class="attach-ic" :src="attachIconSrc" mode="aspectFit" />
-            <text v-if="(attachCounts.purchase[l.orderId] || 0) > 0" class="attach-cnt">{{ attachCounts.purchase[l.orderId] }}</text>
           </view>
           <text class="tip-longpress" @click.stop>长按删除该商品</text>
         </view>
@@ -95,6 +92,7 @@ import { ref, computed } from 'vue';
 ;
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 import { attachIconSrc } from '../../attach-icon';
+import { fmtAmount } from '../../utils/money';
 
 const selYear = ref(new Date().getFullYear());
 const selMonth = ref(new Date().getMonth() + 1);
@@ -103,7 +101,8 @@ const mExpense = ref(0);
 const mDays = ref(0);
 const mItems = ref(0);
 const saving = ref(false);
-const fmt = (n: number) => Number(n || 0).toFixed(2);
+// 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney；列表/统计/合计统一）
+const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
 // ── 进货流水：展开为明细行并按日期分组（对齐 App：日期头 + 明细行卡片，非整单嵌套）──
 type BuyLine = {
@@ -514,7 +513,8 @@ async function loadAttachCounts() {
 .op { color: var(--primary); font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
 .attach-entry { display: flex; align-items: center; gap: 2rpx; padding: 2rpx; }
-.attach-ic { width: 28rpx; height: 28rpx; }
+.attach-ic { width: 30rpx; height: 30rpx; }
+.attach-ic-off { filter: grayscale(1); opacity: 0.45; }
 .attach-cnt { font-size: 20rpx; color: var(--primary); font-weight: 600; }
 .tip-longpress { color: var(--text-sub); font-size: 22rpx; margin-left: auto; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
@@ -525,7 +525,7 @@ async function loadAttachCounts() {
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
-.attach-img { width: 120rpx; height: 120rpx; border-radius: 8rpx; flex-shrink: 0; }
+.attach-img { width: 200rpx; height: 200rpx; border-radius: 12rpx; flex-shrink: 0; }
 .attach-del { color: #f56c6c; font-size: 26rpx; margin-left: auto; }
 .attach-actions { display: flex; gap: 16rpx; }
 .attach-actions .btn-sub { flex: 1; }

@@ -114,6 +114,7 @@ import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 import { request, getToken } from '../../api';
+import { fmtAmount } from '../../utils/money';
 
 interface ByClient { id: string; name: string; sales_total: number; paid_total: number; debt: number; gross_profit: number }
 interface Monthly { month: string; sales_total: number; purchase_total: number; balance: number }
@@ -144,7 +145,8 @@ const yearLabels = ref<string[]>([]);
 const year = ref<number>(new Date().getFullYear());
 const firstDate = ref('');
 const canSeeProfit = ref(true);
-const fmt = (n: number | null | undefined) => Number(n || 0).toFixed(2);
+// 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
+const fmt = (n: number | null | undefined) => fmtAmount(Number(n) || 0);
 const monthLabel = (m: string) => (m && m.length >= 7 ? `${Number(m.slice(5, 7))}月` : m);
 
 function dStr(dt: Date) {

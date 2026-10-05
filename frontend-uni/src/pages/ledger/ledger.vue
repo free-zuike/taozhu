@@ -50,17 +50,17 @@
               <view class="line-subrow">
                 <text class="l2-cat">{{ l.category || '未分类' }}</text>
                 <view class="attach-entry" @click.stop="showAttach(l.itemId ? 'sale_item' : 'sale', l.itemId || l.orderId, 'sale', l.orderId)">
-                  <image class="attach-ic" :src="attachIconSrc" mode="aspectFit" />
+                  <image class="attach-ic" :class="{ 'attach-ic-off': attachOf(l) <= 0 }" :src="attachIconSrc" mode="aspectFit" />
                   <text v-if="attachOf(l) > 0" class="attach-cnt">{{ attachOf(l) }}</text>
                 </view>
               </view>
             </view>
-            <text class="amt">¥{{ Number(l.amount || 0).toFixed(2) }}</text>
+            <text class="amt">¥{{ fmtNum(l.amount) }}</text>
           </view>
           <!-- ③ 进价 · 售价 · 数量（老板看进价；盈亏着色） -->
           <view class="line-bottom">
-            <text v-if="isAdmin && l.cost_price > 0" class="l2-tx">进价 ¥{{ Number(l.cost_price).toFixed(2) }} · </text>
-            <text class="l2-tx">售价 ¥{{ Number(l.sale_price || 0).toFixed(2) }}<template v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</template></text>
+            <text v-if="isAdmin && l.cost_price > 0" class="l2-tx">进价 ¥{{ fmtNum(l.cost_price) }} · </text>
+            <text class="l2-tx">售价 ¥{{ fmtNum(l.sale_price || 0) }}<template v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</template></text>
             <text v-if="isAdmin && l.cost_price > 0" class="l2-profit" :class="profitText(l)">{{ profitText(l) }}</text>
           </view>
         </view>
@@ -72,14 +72,15 @@
       <view v-for="p in payments" :key="p.id" class="card" @click="editPayment(p)" @longpress="removePayment(p)">
         <view class="head">
           <text class="name">{{ p.client_name }}</text>
-          <text class="amt" style="color:#67c23a">¥{{ p.amount }}</text>
+          <text class="amt" style="color:#67c23a">¥{{ fmtNum(p.amount) }}</text>
         </view>
         <view class="sub">{{ p.happened_at }}<text v-if="p.method"> · {{ p.method }}</text></view>
         <view class="ops">
-          <text class="op" @click.stop="showAttach('payment', p.id)">
-            <template v-if="(attachCounts.payment[p.id] || 0) > 0">📎{{ attachCounts.payment[p.id] }}</template>
-            <template v-else>凭证</template>
-          </text>
+          <!-- 收款附件入口（对齐 App：有附件才显示图标+数量，点开查看/添加） -->
+          <view v-if="(attachCounts.payment[p.id] || 0) > 0" class="attach-entry" @click.stop="showAttach('payment', p.id)">
+            <image class="attach-ic" :src="attachIconSrc" mode="aspectFit" />
+            <text class="attach-cnt">{{ attachCounts.payment[p.id] }}</text>
+          </view>
           <text class="tip-longpress" @click.stop>长按撤销该收款</text>
         </view>
       </view>
@@ -148,6 +149,7 @@ import { ref, computed } from 'vue';
 ;
 import { request, getToken, getRole, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 import { attachIconSrc } from '../../attach-icon';
+import { fmtAmount } from '../../utils/money';
 
 const tab = ref<'sales' | 'payments'>('sales');
 // 老板才显示行级盈亏（进价=毛利敏感数据，店员隐藏；对齐 App 仅老板可见毛利）
@@ -273,8 +275,9 @@ const mSold = ref(0);
 const mIncome = ref(0);
 const mDebt = ref(0);
 const mBalance = ref(0);
+// 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney；月度卡/行金额/盈亏统一）
 function fmtNum(n: number): string {
-  return (Number(n) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return fmtAmount(Number(n) || 0);
 }
 
 // 行级盈亏 = (售价 − 成本) × 数量（对齐 App 盈亏着色：盈绿/亏红/平无色）
@@ -759,7 +762,8 @@ async function removePayment(p: Record<string, any>) {
 .line-subrow { display: flex; align-items: center; gap: 8rpx; margin-top: 4rpx; }
 .l2-cat { font-size: 20rpx; color: var(--text-sub); background: var(--input-bg); border-radius: 6rpx; padding: 2rpx 10rpx; }
 .attach-entry { display: flex; align-items: center; gap: 2rpx; padding: 2rpx; }
-.attach-ic { width: 28rpx; height: 28rpx; }
+.attach-ic { width: 30rpx; height: 30rpx; }
+.attach-ic-off { filter: grayscale(1); opacity: 0.45; }
 .attach-cnt { font-size: 20rpx; color: var(--primary); font-weight: 600; }
 .line-bottom { display: flex; align-items: baseline; gap: 12rpx; margin-top: 8rpx; }
 .l2-tx { font-size: 23rpx; color: var(--text-sub); }
@@ -772,7 +776,6 @@ async function removePayment(p: Record<string, any>) {
 .line-meta { font-size: 22rpx; color: var(--text-sub); margin-top: 2rpx; display: block; }
 .line-amt { font-size: 27rpx; font-weight: bold; color: #f56c6c; margin-left: 16rpx; }
 .ops { display: flex; justify-content: flex-end; gap: 32rpx; margin-top: 8rpx; }
-.op { color: var(--primary); font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 26rpx; }
 .tip-longpress { color: var(--text-sub); font-size: 22rpx; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
@@ -789,7 +792,7 @@ async function removePayment(p: Record<string, any>) {
 /* 附件弹层 */
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
-.attach-img { width: 120rpx; height: 120rpx; border-radius: 8rpx; flex-shrink: 0; }
+.attach-img { width: 200rpx; height: 200rpx; border-radius: 12rpx; flex-shrink: 0; }
 .attach-del { color: #f56c6c; font-size: 26rpx; margin-left: auto; }
 .attach-actions { display: flex; gap: 16rpx; }
 .attach-actions .btn-sub { flex: 1; }

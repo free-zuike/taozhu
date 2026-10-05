@@ -1472,6 +1472,29 @@ class _SalePageState extends State<SalePage> {
           ),
           // 整单通用附件（当天单据共用的凭证：送货单/发货单等）；行级附件在各商品行单独加
           const SizedBox(height: 4),
+          // 识别原图预览：识别/分享成功后暂存本地，提交后保存为本单凭证——记单时即可确认原图
+          if (_pendingPhoto != null)
+            Card(
+              margin: EdgeInsets.zero,
+              elevation: 0,
+              color: c.primary.withOpacity(0.06),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              child: ListTile(
+                dense: true,
+                visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
+                leading: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(_pendingPhoto!, width: 44, height: 44, fit: BoxFit.cover),
+                ),
+                title: const Text('识别原图（提交后保存为本单凭证）', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                subtitle: const Text('识别用的原始图片，可移除后提交不附带', style: TextStyle(fontSize: 11)),
+                trailing: IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  tooltip: '移除识别原图',
+                  onPressed: () => setState(() => _pendingPhoto = null),
+                ),
+              ),
+            ),
           Card(
             margin: EdgeInsets.zero,
             elevation: 0,

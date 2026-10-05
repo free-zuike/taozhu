@@ -115,6 +115,7 @@ const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '../../api';
+import { fmtAmount } from '../../utils/money';
 
 const user = ref({ name: '', role: '' });
 const isAdmin = ref(true);
@@ -137,7 +138,8 @@ const greetIcon = computed(() => {
 });
 // 对齐 App 我的页统计卡：记账天数 / 本店交易（商品行数） / 店铺结余（当前店铺毛利）
 const stats = ref({ bookDays: 0, clientCount: 0, balance: 0 });
-const fmt = (n: number) => Number(n || 0).toFixed(2);
+// 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
+const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
 const showServer = ref(false);
 const saving = ref(false);

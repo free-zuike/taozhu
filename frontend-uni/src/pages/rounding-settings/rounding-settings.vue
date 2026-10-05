@@ -85,7 +85,7 @@ async function save() {
 </script>
 
 <style scoped>
-.page { padding: 24rpx 24rpx 60rpx; }
+.page { padding: 24rpx 24rpx 60rpx; background: var(--page-bg); min-height: 100vh; }
 .group-title { font-size: 26rpx; color: #8a8f98; margin: 30rpx 8rpx 12rpx; font-weight: 700; }
 .card { background: var(--card-bg, #fff); border: 1px solid var(--card-border, #eee); border-radius: 24rpx; padding: 10rpx 24rpx; }
 .tip { font-size: 25rpx; color: var(--text-sub, #8a8f98); line-height: 1.6; padding: 16rpx 4rpx; }

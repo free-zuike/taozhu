@@ -157,8 +157,12 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       final myFiles = <String>[];
       for (final r in refs) {
         if (_bulk) {
-          if ('${r['entity'] ?? ''}' == _lineEntity &&
-              widget.lineIds.contains('${r['entity_id'] ?? ''}')) {
+          // 批量模式合并展示：单据级引用（历史存量/Web 直传/编辑页凭证入口）+ 各明细行级引用——
+          // 只查行级会漏掉单据级附件（账本图标亮、点开"暂无附件"根因），与 Web 版/删除逻辑一致
+          if (('${r['entity'] ?? ''}' == _lineEntity &&
+                  widget.lineIds.contains('${r['entity_id'] ?? ''}')) ||
+              ('${r['entity'] ?? ''}' == widget.entity &&
+                  '${r['entity_id'] ?? ''}' == widget.id)) {
             myFiles.add('${r['file'] ?? ''}');
           }
         } else if ('${r['entity'] ?? ''}' == widget.entity &&

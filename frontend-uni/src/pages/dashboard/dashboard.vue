@@ -54,13 +54,15 @@ const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '../../api';
+import { fmtAmount } from '../../utils/money';
 
 const today = ref({ sales_total: 0, gross_profit: 0, paid_total: 0, purchase_total: 0, sales_count: 0 });
 const totals = ref({ debt: 0, client_count: 0, all_sales: 0, all_paid: 0, item_count: 0 });
 const topDebt = ref<Array<{ id: string; name: string; debt: number }>>([]);
 const canSeeProfit = ref(true); // 店员看不到毛利（后端 can_see_profit=false 时隐藏）
 const isAdmin = ref(true); // 老板可见全部入口；店员隐藏老板专属（饭店/收款/对账/统计/账号管理，对齐 App）
-const fmt = (n: number) => Number(n || 0).toFixed(2);
+// 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
+const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
 // 服务器设置：切换域名（小程序无本地库，切服务器=清 token 回登录页重新登录）
 const showServer = ref(false);
