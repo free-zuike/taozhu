@@ -345,7 +345,8 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
               onTap: () async {
                 final lid = '${l['row_id'] ?? ''}';
                 if (lid.isEmpty) return;
-                await showAttachmentViewer(context, 'purchase_item', lid, '进货明细行凭证');
+                await showAttachmentViewer(context, 'purchase', '${l['order']['id']}',
+                    '进货明细行凭证', lineIds: [lid]);
                 unawaited(_loadAttachCounts());
               },
               child: Padding(

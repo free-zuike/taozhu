@@ -135,9 +135,10 @@ Future<Map<String, dynamic>?> editSaleLine(
                   ),
                   TextButton(
                     onPressed: () async {
-                      // 凭证=单据级一份（对齐参考实现交易级单记录）：识别原图整单一条记录，
-                      // 全商品行共享可见；此前查行级 sale_item 导致"编辑该条凭证附件为空"
-                      await showAttachmentViewer(context, 'sale', '${order['id']}', '出货凭证附件');
+                      // 凭证=行级+单据级合并展示（对齐账本行卡片）：识别原图挂单据级一份、批量上传挂行级，
+                      // 此前只查单据级导致批量上传的图"编辑该条凭证附件为空"
+                      await showAttachmentViewer(context, 'sale', '${order['id']}',
+                          '出货凭证附件', lineIds: [itemId]);
                       if (ctx.mounted) setDlg(() {});
                     },
                     child: const Text('查看/添加'),
