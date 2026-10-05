@@ -121,6 +121,12 @@
 			}
 		},
 		{
+			"path": "pages/logs/logs",
+			"style": {
+				"navigationBarTitleText": "错误日志"
+			}
+		},
+		{
 			"path": "pages/audit/audit",
 			"style": {
 				"navigationBarTitleText": "操作审计"

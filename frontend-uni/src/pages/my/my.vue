@@ -74,6 +74,9 @@
       <view v-if="isAdmin" class="row" @click="go('/pages/backup/backup')">
         <view class="r-ic ic-orange"><text class="ic-tx">💾</text></view><view class="r-body"><text class="r-tx">数据备份</text><text class="r-sub">导出全库存档 / 从备份合并恢复</text></view><text class="r-arrow">›</text>
       </view>
+      <view class="row" @click="go('/pages/logs/logs')">
+        <view class="r-ic ic-blue"><text class="ic-tx">📋</text></view><view class="r-body"><text class="r-tx">错误日志</text><text class="r-sub">请求失败记录，排障用</text></view><text class="r-arrow">›</text>
+      </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/ai-settings/ai-settings')">
         <view class="r-ic ic-purple"><text class="ic-tx">🤖</text></view><view class="r-body"><text class="r-tx">AI 识别设置</text><text class="r-sub">配置 AI 记账 Key 与模型</text></view><text class="r-arrow">›</text>
       </view>
@@ -104,6 +107,8 @@
         <button class="btn-cancel" @click="showServer = false">取消</button>
       </view>
     </view>
+    <!-- 版本号（对齐 App 我的页底部） -->
+    <text class="ver">陶朱 v{{ APP_VERSION }}</text>
   </view>
 </template>
 
@@ -114,6 +119,7 @@ import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '../../api';
 import { fmtAmount } from '../../utils/money';
+import { APP_VERSION } from '../../version';
 
 const user = ref({ name: '', role: '' });
 const isAdmin = ref(true);
@@ -308,6 +314,7 @@ function switchAccount() {
 .st-label { font-size: 22rpx; color: var(--text-sub); }
 .st-value { font-size: 34rpx; font-weight: 800; color: var(--text-main); }
 .green { color: #67c23a; }
+.ver { display: block; text-align: center; color: var(--text-sub); font-size: 22rpx; padding: 20rpx 0 8rpx; }
 .red { color: #f56c6c; }
 .group-title { font-size: 26rpx; font-weight: 600; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; }
 .grp { background: var(--card-bg); border: var(--card-border); border-radius: 32rpx; margin-bottom: 24rpx; overflow: hidden; }

@@ -71,7 +71,9 @@ class DateField extends StatelessWidget {
   }
 }
 
-/// 自绘月历弹层：周一起始网格 + 年月切换 + 今天/取消/确定，跟随陶朱主题（暗色适配）
+/// 自绘日期选择弹层：年/月/日三段式（对齐交易页顶部年月形态 + 补「日」）——
+/// 年份左右切换可任意跨年（不再只能逐月滚到目标年）、日网格固定 31 格（跨月高度不变，
+/// 当日实际天数不足时置灰禁用），解决月历"不能选年份+每月高度跳动"。
 class _ThemeDateSheet extends StatefulWidget {
   const _ThemeDateSheet({required this.initial, required this.firstDate, required this.lastDate});
 
@@ -88,7 +90,7 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
   late int _month;
   late int _selDay;
 
-  static const _weekTitles = ['一', '二', '三', '四', '五', '六', '日'];
+  static const _months = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
 
   @override
   void initState() {
@@ -101,6 +103,20 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
   bool _outside(DateTime d) =>
       d.isBefore(widget.firstDate) || d.isAfter(widget.lastDate);
 
+  int get _daysInMonth => DateTime(_year, _month + 1, 0).day;
+
+  void _shiftYear(int delta) {
+    final y = _year + delta;
+    final lo = widget.firstDate.year;
+    final hi = widget.lastDate.year;
+    if (y < lo || y > hi) return;
+    setState(() {
+      _year = y;
+      final maxDay = _daysInMonth;
+      if (_selDay > maxDay) _selDay = maxDay;
+    });
+  }
+
   void _shiftMonth(int delta) {
     final dt = DateTime(_year, _month + delta, 1);
     if (dt.isBefore(DateTime(widget.firstDate.year, widget.firstDate.month, 1)) ||
@@ -110,7 +126,7 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
     setState(() {
       _year = dt.year;
       _month = dt.month;
-      final maxDay = DateTime(_year, _month + 1, 0).day;
+      final maxDay = _daysInMonth;
       if (_selDay > maxDay) _selDay = maxDay;
     });
   }
@@ -128,17 +144,13 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
-    final daysInMonth = DateTime(_year, _month + 1, 0).day;
-    // 周一起始：1 号是周几 → 前置空位数（DateTime.weekday: 1=周一 … 7=周日）
-    final leading = DateTime(_year, _month, 1).weekday - 1;
     final today = DateTime.now();
-    final isToday = (int d) =>
-        _year == today.year && _month == today.month && d == today.day;
-    final todayNum = today.day;
+    final daysInMonth = _daysInMonth;
 
-    Widget dayCell(int d, {required bool enabled}) {
+    Widget dayCell(int d) {
+      final enabled = !_outside(DateTime(_year, _month, d));
       final selected = d == _selDay;
-      final isT = isToday(d);
+      final isT = _year == today.year && _month == today.month && d == today.day;
       return Expanded(
         child: AspectRatio(
           aspectRatio: 1,
@@ -166,7 +178,7 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
                       fontWeight: selected || isT ? FontWeight.w700 : FontWeight.normal,
                       color: selected
                           ? Colors.white
-                          : (enabled ? c.textMain : c.textSub.withOpacity(0.4)),
+                          : (enabled ? c.textMain : c.textSub.withOpacity(0.35)),
                     ),
                   ),
                 ),
@@ -183,7 +195,27 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 年月切换
+            // 年份行：左右切换（可任意跨年，解决月历不能选年份）
+            Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: () => _shiftYear(-1),
+                ),
+                Expanded(
+                  child: Text(
+                    '$_year 年',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: () => _shiftYear(1),
+                ),
+              ],
+            ),
+            // 月份行：左右切换
             Row(
               children: [
                 IconButton(
@@ -192,7 +224,7 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
                 ),
                 Expanded(
                   child: Text(
-                    '$_year 年 $_month 月',
+                    '$_month 月',
                     textAlign: TextAlign.center,
                     style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
                   ),
@@ -203,32 +235,17 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
                 ),
               ],
             ),
-            // 周标题
-            Row(
+            const SizedBox(height: 4),
+            // 日期网格：固定 31 格（每月高度一致，不足天数置灰禁用——不再随月跳动）
+            Wrap(
               children: [
-                for (final t in _weekTitles)
-                  Expanded(
-                    child: Center(
-                      child: Text(t,
-                          style: TextStyle(fontSize: 12, color: c.textSub)),
-                    ),
+                for (var d = 1; d <= 31; d++)
+                  SizedBox(
+                    width: (MediaQuery.of(context).size.width - 32 - 16) / 7,
+                    child: dayCell(d <= daysInMonth ? d : 99),
                   ),
               ],
             ),
-            const SizedBox(height: 4),
-            // 日期网格（前置空位补齐）
-            Row(children: [
-              for (var i = 0; i < leading; i++) Expanded(child: const SizedBox()),
-              for (var d = 1; d <= 7 - leading; d++)
-                dayCell(d, enabled: !_outside(DateTime(_year, _month, d))),
-            ]),
-            for (var rowStart = 8 - leading; rowStart <= daysInMonth; rowStart += 7)
-              Row(children: [
-                for (var d = rowStart; d < rowStart + 7; d++)
-                  d <= daysInMonth
-                      ? dayCell(d, enabled: !_outside(DateTime(_year, _month, d)))
-                      : const Expanded(child: SizedBox()),
-              ]),
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,

@@ -25,7 +25,7 @@
       <view v-if="loaded">
         <view class="stat"><text>出货合计</text><text class="red">¥{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
         <view class="stat"><text>收款合计</text><text class="green">¥{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
-        <view class="stat"><text>期末欠款</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ fmtAmount(debt) }}</text></view>
+        <view class="stat"><text>期末欠款（累计）</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ fmtAmount(debt) }}</text></view>
         <button class="btn-copy" @click="copy">复制对账文本</button>
         <button class="btn-copy" @click="copyCsv">复制 CSV（粘到 Excel）</button>
       </view>
@@ -59,7 +59,7 @@ import { ref } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
-import { roundAmount, fmtAmount } from '../../utils/money';
+import { roundAmount, fmtAmount, initRounding } from '../../utils/money';
 
 const clients = ref<Array<{ id: string; name: string }>>([]);
 const clientNames = ref<string[]>(['全部店铺']);
@@ -80,6 +80,7 @@ const payTotal = ref(0);
 
 onShow(async () => {
   onWs('*', load);
+  initRounding(); // 进入先刷新本地舍入配置（防服务器已舍入值被本地旧配置二次进位）
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
