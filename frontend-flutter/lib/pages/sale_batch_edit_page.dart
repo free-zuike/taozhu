@@ -35,6 +35,8 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
   late List<Map<String, dynamic>> _lines;
   /// 行级凭证数：明细行 id（item_id 字段）→ 张数（本地引用表零网络；Web 云端 counts）
   Map<String, int> _attachCount = {};
+  /// 单据级凭证数：单据 id → 张数（识别记账/编辑页凭证挂单据级一份，行级空时回退显示）
+  Map<String, int> _orderAttachCount = {};
 
   @override
   void initState() {
@@ -83,37 +85,57 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
     unawaited(_loadAttachCounts());
   }
 
-  /// 行级凭证计数：本地附件引用表优先（零网络，对齐账本行卡片）；Web 无本地库拉云端 counts
+  /// 行级+单据级凭证计数（对齐账本行卡片：行级有→显示行级；行级空→回退单据级，
+  /// 识别记账/编辑页凭证挂单据级一份，批量编辑也要能看到）；本地零网络，Web 云端 counts
   Future<void> _loadAttachCounts() async {
     final ids = [
       for (final l in _lines)
         if ('${l['item_id'] ?? ''}'.isNotEmpty) '${l['item_id']}',
     ].toSet().toList();
-    if (ids.isEmpty) return;
+    final orderIds = [
+      for (final l in _lines)
+        if ('${(l['order'] as Map?)?.['id'] ?? ''}'.isNotEmpty)
+          '${(l['order'] as Map?)?.['id']}',
+    ].toSet().toList();
+    if (ids.isEmpty && orderIds.isEmpty) return;
     final map = <String, int>{};
+    final orderMap = <String, int>{};
+    Future<void> fetch(String entity, List<String> eids, Map<String, int> into) async {
+      if (eids.isEmpty) return;
+      try {
+        final d = await Api.instance
+            .post('/attachments/counts', {'entity': entity, 'ids': eids})
+            .timeout(const Duration(seconds: 3));
+        for (final e in ((d['counts'] as Map?) ?? {}).entries) {
+          final n = (e.value as num?)?.toInt() ?? 0;
+          if (n > 0) into['${e.key}'] = n;
+        }
+      } catch (_) {}
+    }
     if (!kIsWeb) {
       try {
         final refs = await LocalDb.getAll('attachment_refs');
         for (final r in refs) {
+          final ent = '${r['entity'] ?? ''}';
           final eid = '${r['entity_id'] ?? ''}';
-          if ('${r['entity'] ?? ''}' == 'sale_item' && ids.contains(eid)) {
+          if (ent == 'sale_item' && ids.contains(eid)) {
             map[eid] = (map[eid] ?? 0) + 1;
+          } else if (ent == 'sale' && orderIds.contains(eid)) {
+            orderMap[eid] = (orderMap[eid] ?? 0) + 1;
           }
         }
       } catch (_) {}
     } else {
-      try {
-        final d = await Api.instance
-            .post('/attachments/counts', {'entity': 'sale_item', 'ids': ids})
-            .timeout(const Duration(seconds: 3));
-        for (final e in ((d['counts'] as Map?) ?? {}).entries) {
-          final n = (e.value as num?)?.toInt() ?? 0;
-          if (n > 0) map['${e.key}'] = n;
-        }
-      } catch (_) {}
+      await Future.wait([
+        fetch('sale_item', ids, map),
+        fetch('sale', orderIds, orderMap),
+      ]);
     }
     if (!mounted) return;
-    setState(() => _attachCount = map);
+    setState(() {
+      _attachCount = map;
+      _orderAttachCount = orderMap;
+    });
   }
 
   /// 明细行 → 流水行（与账本页 _buildSaleFlow 同构）
@@ -318,31 +340,36 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
               ),
             ),
             const SizedBox(width: 8),
-            // 行级凭证入口（对齐账本行卡片：有附件亮+数量，无附件灰态，点开查看/添加该行凭证）
-            InkWell(
-              borderRadius: BorderRadius.circular(6),
-              onTap: () async {
-                final lid = '${l['item_id'] ?? ''}';
-                if (lid.isEmpty) return;
-                await showAttachmentViewer(context, 'sale', '${l['order']['id']}',
-                    '出货明细行凭证', lineIds: [lid]);
-                unawaited(_loadAttachCounts());
-              },
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.image_outlined, size: 15,
-                      color: (_attachCount['${l['item_id']}'] ?? 0) > 0
-                          ? c.primary
-                          : c.textSub.withOpacity(0.5)),
-                  if ((_attachCount['${l['item_id']}'] ?? 0) > 0) ...[
-                    const SizedBox(width: 2),
-                    Text('${_attachCount['${l['item_id']}']}',
-                        style: TextStyle(fontSize: 10, color: c.primary, fontWeight: FontWeight.w600)),
-                  ],
-                ]),
-              ),
-            ),
+            // 凭证入口（对齐账本行卡片：行级有→显示行级；行级空→回退单据级；无则灰态，
+            // 点开查看/添加——识别记账挂单据级的图在行卡片也能亮）
+            Builder(builder: (context) {
+              final lineCount = _attachCount['${l['item_id']}'] ?? 0;
+              final attachCount = lineCount > 0
+                  ? lineCount
+                  : (_orderAttachCount['${(l['order'] as Map?)?['id']}'] ?? 0);
+              return InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: () async {
+                  final lid = '${l['item_id'] ?? ''}';
+                  if (lid.isEmpty) return;
+                  await showAttachmentViewer(context, 'sale', '${(l['order'] as Map?)?['id'] ?? ''}',
+                      '出货明细行凭证', lineIds: [lid]);
+                  unawaited(_loadAttachCounts());
+                },
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.image_outlined, size: 15,
+                        color: attachCount > 0 ? c.primary : c.textSub.withOpacity(0.5)),
+                    if (attachCount > 0) ...[
+                      const SizedBox(width: 2),
+                      Text('$attachCount',
+                          style: TextStyle(fontSize: 10, color: c.primary, fontWeight: FontWeight.w600)),
+                    ],
+                  ]),
+                ),
+              );
+            }),
             const SizedBox(width: 4),
             Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
