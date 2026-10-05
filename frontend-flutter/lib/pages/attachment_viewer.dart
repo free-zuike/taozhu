@@ -183,6 +183,25 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         }
       }
     } catch (_) {}
+    // 云端引用合并兜底（在线）：本地引用表缺失/未同步时仍能看到并删除云端已有附件——
+    // 否则查看器空态→无删除入口→残留引用只能删整单才清（"本地/服务器对不上、删不掉"根因）。
+    // 云端 key 插最前（真实 key 优先：删除/网络加载用）；3s 紧凑超时；失败静默保留本地视图。
+    try {
+      final cloudKeys = <String>[];
+      if (_bulk) {
+        cloudKeys.addAll(await _cloudKeys(widget.entity, widget.id));
+        for (final lid in widget.lineIds) {
+          cloudKeys.addAll(await _cloudKeys(_lineEntity, lid));
+        }
+      } else {
+        cloudKeys.addAll(await _cloudKeys(widget.entity, widget.id));
+      }
+      for (final k in cloudKeys) {
+        final name = k.split('/').last;
+        final keys = keysByFile[name] ??= <String>[];
+        if (!keys.contains(k)) keys.insert(0, k);
+      }
+    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _items = [
@@ -579,45 +598,45 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
   Widget _page(_Item it) {
     final local = it.localPath;
     final hasLocal = local != null && File(local).existsSync();
+    // 无本地副本时一律在线加载（App/Web 同路径——本地表缺失/未同步时仍可见可删；
+    // 加载失败/离线才提示去同步，避免"看不到又删不了"的残留死锁）
     final Widget content = hasLocal
         ? Image.file(File(local), fit: BoxFit.contain, errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF), size: 40))
-        : kIsWeb
-            ? Image.network(
-                '$_base/api/v1/attachments/${it.key}',
-                fit: BoxFit.contain,
-                headers: _token.isEmpty ? null : {'Authorization': 'Bearer $_token'},
-                loadingBuilder: (_, child, progress) => progress == null
-                    ? child
-                    : const Center(
-                        child: SizedBox(
-                          width: 28,
-                          height: 28,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                        ),
-                      ),
-                errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF), size: 40),
-              )
-            : Column(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.cloud_download_outlined, size: 44, color: Color(0xFF6B7280)),
-                  const SizedBox(height: 12),
-                  const Text('本地无此附件副本', style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
-                  const SizedBox(height: 6),
-                  const Text('请在「我的 → 同步状态」同步后查看',
-                      style: TextStyle(color: Color(0xFF6B7280), fontSize: 12), textAlign: TextAlign.center),
-                  const SizedBox(height: 10),
-                  OutlinedButton(
-                    style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF409EFF)),
-                    onPressed: () {
-                      SyncService.sync();
-                      toast(context, '已开始同步，完成后自动下载附件副本');
-                    },
-                    child: const Text('立即同步'),
+        : Image.network(
+            '$_base/api/v1/attachments/${it.key}',
+            fit: BoxFit.contain,
+            headers: _token.isEmpty ? null : {'Authorization': 'Bearer $_token'},
+            loadingBuilder: (_, child, progress) => progress == null
+                ? child
+                : const Center(
+                    child: SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    ),
                   ),
-                ],
-              );
+            errorBuilder: (_, __, ___) => Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.cloud_download_outlined, size: 44, color: Color(0xFF6B7280)),
+                const SizedBox(height: 12),
+                const Text('本地无此附件副本', style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
+                const SizedBox(height: 6),
+                const Text('在线加载失败或当前离线，请在「我的 → 同步状态」同步后查看',
+                    style: TextStyle(color: Color(0xFF6B7280), fontSize: 12), textAlign: TextAlign.center),
+                const SizedBox(height: 10),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF409EFF)),
+                  onPressed: () {
+                    SyncService.sync();
+                    toast(context, '已开始同步，完成后自动下载附件副本');
+                  },
+                  child: const Text('立即同步'),
+                ),
+              ],
+            ),
+          );
     return Container(
       color: Colors.black,
       alignment: Alignment.center,
