@@ -1992,7 +1992,7 @@ class _StatementPageState extends State<StatementPage> {
             // 合计口径：默认逐笔舍入（合计与每笔金额对账一致）；可切原始金额（2 位导出口径）
             const SizedBox(height: 12),
             Row(
-              crossAxisAlignment: WrapCrossAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 const Text('合计口径', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
                 const SizedBox(width: 10),

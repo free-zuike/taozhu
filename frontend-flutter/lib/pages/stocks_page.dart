@@ -230,7 +230,7 @@ class _StocksPageState extends State<StocksPage> {
                       SizedBox(
                         width: 84,
                         child: NumberPadField(
-                          controller: ctrls[i]['qty'],
+                          controller: ctrls[i]['qty']!,
                           label: '库存',
                           decoration: const InputDecoration(labelText: '库存', isDense: true),
                         ),
@@ -239,7 +239,7 @@ class _StocksPageState extends State<StocksPage> {
                       SizedBox(
                         width: 84,
                         child: NumberPadField(
-                          controller: ctrls[i]['min'],
+                          controller: ctrls[i]['min']!,
                           label: '阈值',
                           decoration: const InputDecoration(labelText: '阈值', isDense: true),
                         ),

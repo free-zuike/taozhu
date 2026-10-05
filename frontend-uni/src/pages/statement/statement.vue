@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="card">
@@ -59,6 +59,7 @@ import { ref } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
+import { roundAmount } from '../../utils/money';
 
 const clients = ref<Array<{ id: string; name: string }>>([]);
 const clientNames = ref<string[]>(['全部店铺']);
@@ -139,8 +140,8 @@ async function load() {
     sales.value = (saleItems && saleItems.length > 0) ? saleItems : (results[0].sales || []);
     payments.value = results[1].payments;
     debt.value = Number(results[2].debt || 0);
-    saleTotal.value = sales.value.reduce((s, x) => s + Number((x.amount ?? x.total) || 0), 0);
-    payTotal.value = payments.value.reduce((s, x) => s + Number(x.amount || 0), 0);
+    saleTotal.value = sales.value.reduce((s, x) => s + roundAmount(Number((x.amount ?? x.total) || 0)), 0);
+    payTotal.value = payments.value.reduce((s, x) => s + roundAmount(Number(x.amount || 0)), 0);
     loaded.value = true;
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '生成失败', icon: 'none' });

@@ -625,14 +625,14 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: NumberPadField(
-                            controller: _priceRows[i]['buy'],
+                            controller: _priceRows[i]['buy']!,
                             label: '进价',
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: NumberPadField(
-                            controller: _priceRows[i]['sell'],
+                            controller: _priceRows[i]['sell']!,
                             label: '售价',
                           ),
                         ),
@@ -649,7 +649,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                     ),
                     const SizedBox(height: 4),
                     NumberPadField(
-                      controller: _priceRows[i]['per'],
+                      controller: _priceRows[i]['per']!,
                       label: '每单位折合计数单位数（可选）',
                       helperText: '1 箱=40 袋就填 40；记单时会自动带出、也可改；用于库存备货折算与比价',
                     ),
