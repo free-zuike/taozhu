@@ -533,7 +533,10 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
           final re = '${r['entity'] ?? ''}';
           final rid = '${r['entity_id'] ?? ''}';
           final mine = _bulk
-              ? (re == widget.entity && rid == widget.id) ||
+              ? (re == widget.entity &&
+                    (widget.orderIds.isNotEmpty
+                        ? widget.orderIds.contains(rid)
+                        : rid == widget.id)) ||
                     (re == _lineEntity && widget.lineIds.contains(rid))
               : (re == widget.entity && rid == widget.id);
           if (!mine) continue;

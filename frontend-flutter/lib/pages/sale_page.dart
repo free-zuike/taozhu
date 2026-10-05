@@ -88,6 +88,13 @@ class _SalePageState extends State<SalePage> {
   /// 原单号映射（行 id → 原 sale_id；批量直编该日多单时删行按各自原单补位）
   Map<String, String> _rowSaleId = {};
 
+  /// 该日全部真实单据 id（dateRows 批量直编：识别记账/编辑页凭证挂单据级真实单 id，
+  /// 查看器批量模式须一并查——此前只查 _saleId 临时单 id 导致"批量编辑暂无附件"）
+  List<String> get _orderIds => [
+        for (final r in _rows)
+          if (r.origSaleId.isNotEmpty) r.origSaleId,
+      ].toSet().toList();
+
   bool get _editing => widget.editId != null;
 
   /// 新建模式表单默认日期：优先 initDate（如账本日期栏补录当天），否则今天；编辑模式忽略
@@ -1512,7 +1519,8 @@ class _SalePageState extends State<SalePage> {
                   lineIds: [
                     for (final r in _rows)
                       if (r.rowId.isNotEmpty) r.rowId,
-                  ]),
+                  ],
+                  orderIds: _orderIds),
             ),
           ),
         ],
@@ -1568,7 +1576,7 @@ class _SalePageState extends State<SalePage> {
                   tooltip: '该行凭证附件',
                   icon: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF409EFF)),
                   onPressed: () => showAttachmentViewer(context, 'sale', _saleId,
-                      '出货明细行凭证', lineIds: [row.rowId]),
+                      '出货明细行凭证', lineIds: [row.rowId], orderIds: _orderIds),
                 ),
               ],
               const SizedBox(width: 4),
