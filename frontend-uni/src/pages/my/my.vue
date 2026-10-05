@@ -31,9 +31,7 @@
 
     <!-- 账号与同步（对齐 App：成员/设备管理；小程序直连无手动同步，去掉同步状态行） -->
     <view class="grp">
-      <view v-if="isAdmin" class="row" @click="go('/pages/account/account')">
-        <view class="r-ic ic-blue"><text class="ic-tx">👤</text></view><view class="r-body"><text class="r-tx">账号设置</text><text class="r-sub">头像 / 用户名 / 密码 / 两步验证</text></view><text class="r-arrow">›</text>
-      </view>
+      <!-- 成员=账号设置+账号管理（对齐 App「成员」单入口，含我的账号与成员管理） -->
       <view v-if="isAdmin" class="row" @click="go('/pages/users/users')">
         <view class="r-ic ic-blue"><text class="ic-tx">👥</text></view><view class="r-body"><text class="r-tx">成员</text><text class="r-sub">账号设置 · 店员/老板账号</text></view><text class="r-arrow">›</text>
       </view>

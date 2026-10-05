@@ -21,7 +21,6 @@
       <view class="mdivider"></view>
       <view class="mcols">
         <view class="mcol"><text class="ml">售出</text><text class="mv" style="color:var(--primary)">¥{{ fmtNum(mSold) }}</text></view>
-        <view class="mcol"><text class="ml">收入</text><text class="mv" :style="{ color: mIncome > 0 ? '#22c55e' : '#f59e0b' }">¥{{ fmtNum(mIncome) }}</text></view>
         <view class="mcol"><text class="ml">未回款</text><text class="mv" :style="{ color: mDebt > 0 ? '#f59e0b' : '#909399' }">¥{{ fmtNum(mDebt) }}</text></view>
         <view class="mcol"><text class="ml">结余</text><text class="mv" :style="{ color: mBalance >= 0 ? '#22c55e' : '#ef4444' }">¥{{ fmtNum(mBalance) }}</text></view>
       </view>
@@ -149,7 +148,7 @@ import { ref, computed } from 'vue';
 ;
 import { request, getToken, getRole, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 import { attachIconSrc } from '../../attach-icon';
-import { fmtAmount } from '../../utils/money';
+import { fmtAmount, roundAmount } from '../../utils/money';
 
 const tab = ref<'sales' | 'payments'>('sales');
 // 老板才显示行级盈亏（进价=毛利敏感数据，店员隐藏；对齐 App 仅老板可见毛利）
@@ -270,9 +269,8 @@ const clients = ref<Array<{ id: string; name: string }>>([]);
 const clientNames = ref<string[]>([]);
 const filterClientId = ref('');
 const filterClientName = ref('');
-// 月度结余（四列，对齐 App _loadMonthly：售出/收入/未回款/结余=毛利）
+// 月度结余（三列，对齐 App：售出/未回款/结余=毛利；App 已去「收入」列，小程序同步）
 const mSold = ref(0);
-const mIncome = ref(0);
 const mDebt = ref(0);
 const mBalance = ref(0);
 // 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney；月度卡/行金额/盈亏统一）
@@ -311,7 +309,8 @@ const saleGroups = computed<SaleGroup[]>(() => {
     const d = new Date(`${line.date}T00:00:00`);
     g.week = `${line.date.slice(0, 4)}年${line.date.slice(5, 7)}月${line.date.slice(8, 10)}日 周${WEEKS[d.getDay()]}`;
     g.count += 1;
-    g.amount += Number(line.amount || 0);
+    // 日分组合计=每笔先舍入再累加（与单笔显示/余额笔舍入一致，digits=0/1 时原始累加会与单笔对不上）
+    g.amount += roundAmount(Number(line.amount || 0));
     g.lines.push(line);
     map.set(line.date, g);
   };
@@ -461,7 +460,6 @@ async function loadMonthly() {
     const sum = await request<Record<string, any>>(`/stats/summary?start=${from}&end=${to}${cq}`, 'GET').catch(() => null);
     if (sum) {
       mSold.value = Number(sum.sales_total || 0);
-      mIncome.value = Number(sum.paid_total || 0);
       mDebt.value = Number(sum.debt || 0);
       mBalance.value = Number(sum.gross_profit || 0);
     }
@@ -492,7 +490,7 @@ function assembleSalesFromRows(rows: Array<Record<string, any>>): Array<Record<s
   }
   return [...byOrder.entries()].map(([oid, items]) => {
     const m = meta.get(oid)!;
-    const total = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+    const total = items.reduce((s, it) => s + roundAmount(Number(it.amount) || 0), 0);
     return { ...m, total, items };
   });
 }

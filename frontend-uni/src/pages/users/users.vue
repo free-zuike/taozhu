@@ -1,6 +1,13 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
+    <!-- 我的账号（对齐 App 成员页：账号设置+成员管理同页入口） -->
+    <view class="card" @click="goAccount">
+      <view class="head">
+        <text class="name">我的账号</text>
+        <text class="role">头像 / 用户名 / 密码 / 两步验证</text>
+      </view>
+    </view>
     <button class="btn-add" @click="openForm()">+ 新增账号</button>
 
     <view v-for="u in users" :key="u.id" class="card">
@@ -67,6 +74,10 @@ function openForm(u?: User) {
     ? { id: u.id, username: u.username, password: '', role: u.role }
     : { id: undefined, username: '', password: '', role: 'staff' };
   showForm.value = true;
+}
+
+function goAccount() {
+  uni.navigateTo({ url: '/pages/account/account' });
 }
 
 async function save() {
