@@ -11,7 +11,6 @@ import '../widgets/year_month_picker.dart';
 import 'router.dart';
 import 'purchase_page.dart';
 import 'purchase_line_edit.dart';
-import 'purchase_batch_edit_page.dart';
 import 'attachment_viewer.dart';
 
 /// 进货记录：按日期分组的进货流水（不分店），卡片明细直接展开，可编辑/删除/附件
@@ -323,7 +322,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       if (items.isEmpty) {
         if (orderDate.isNotEmpty && orderDate.compareTo(from) >= 0 && orderDate.compareTo(to) <= 0) {
           daySet.add(orderDate);
-          expense += (p['total'] as num?)?.toDouble() ?? 0;
+          // 每笔先舍入再累加（与单笔显示一致）
+          expense += Money.round((p['total'] as num?)?.toDouble() ?? 0);
           itemCount += 1;
         }
         continue;
@@ -333,11 +333,12 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
         if (d.isEmpty || d.compareTo(from) < 0 || d.compareTo(to) > 0) continue;
         daySet.add(d);
-        expense += (it['amount'] as num?)?.toDouble() ?? 0;
+        // 每笔先舍入再累加（与单笔显示一致）
+        expense += Money.round((it['amount'] as num?)?.toDouble() ?? 0);
         itemCount += 1;
       }
     }
-    _monthExpense = Money.round(expense);
+    _monthExpense = expense;
     _monthCount = daySet.length;
     _monthItems = itemCount;
     return rows;
@@ -865,7 +866,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                               color: c.textMain)),
                       const Spacer(),
                       Text(
-                        '${e.value.length} 条 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + ((l['amount'] as num?)?.toDouble() ?? 0)))}',
+                        // 合计按"每笔舍入后累加"（与单笔显示一致）：digits=0/1 时原始浮点累加再舍入会与每笔金额对不上
+                        '${e.value.length} 条 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + Money.round((l['amount'] as num?)?.toDouble() ?? 0)))}',
                         style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,

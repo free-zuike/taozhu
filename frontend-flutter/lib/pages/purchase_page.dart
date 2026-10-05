@@ -76,6 +76,8 @@ class _PurchasePageState extends State<PurchasePage> {
   Set<String> _origItemIds = {};
   /// 原单号映射（行 id → 原 purchase_id；批量直编该日多单时删行按各自原单补位）
   Map<String, String> _rowPurchaseId = {};
+  /// Web 新建保存后服务端返回的真实单据 id（识别原图附件须挂它，否则 Web 端查不到）
+  String _webPurchaseId = '';
 
   /// 该日全部真实单据 id（dateRows 批量直编：识别记账/编辑页凭证挂单据级真实单 id，
   /// 查看器批量模式须一并查——此前只查 _purchaseId 临时单 id 导致"批量编辑暂无附件"）
@@ -147,17 +149,35 @@ class _PurchasePageState extends State<PurchasePage> {
     }
   }
 
-  /// 识别图片字节 → 填行草稿 + 暂存原图（拍照/相册/分享共用）
+  /// 识别图片字节 → 填行草稿 + 原图立即挂为本单凭证（拍照/相册/分享共用）。
+  /// App 本地优先：识别即挂载（副本+引用表+入队上传），打开凭证查看器立即可见——
+  /// 不再用"预览卡片等提交后再挂"的形态；Web 无本地库暂存原图，保存成功后用服务端返回的单据 id 直传。
   Future<void> _parseBytes(Uint8List bytes, String mime) async {
     final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
     toast(context, '识别中…');
     final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
     _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
-    // 识别原图暂存本地：提交交易成功后才上传为本单附件（避免取消/放弃留云端孤儿附件）
-    setState(() {
-      _pendingPhoto = bytes;
-    });
-    toast(context, '识别完成（原图将在提交后一并保存为本单附件）');
+    if (kIsWeb) {
+      setState(() => _pendingPhoto = bytes);
+    } else {
+      await _attachRecognized(bytes);
+    }
+    toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
+  }
+
+  /// 识别原图立即挂为本单凭证（App 本地优先）：写公共目录副本 + 引用表 + 入队上传，
+  /// 打开凭证查看器立即可见——与"整单凭证上传"同链路（单据级一份，全商品行共享）。
+  Future<void> _attachRecognized(Uint8List bytes) async {
+    try {
+      final fileName = '${md5.convert(bytes).toString()}.jpg';
+      final root = await getApplicationDocumentsDirectory();
+      final adir = Directory('${root.path}/attachments');
+      if (!adir.existsSync()) adir.createSync(recursive: true);
+      final af = File('${adir.path}/$fileName');
+      if (!af.existsSync()) await af.writeAsBytes(bytes);
+      await SyncService.enqueueAttachmentUpload(entity: 'purchase', id: _purchaseId, fileName: fileName);
+      SyncService.version.notifyListeners();
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -994,15 +1014,21 @@ class _PurchasePageState extends State<PurchasePage> {
             'happened_at': orderDate, 'note': _noteCtrl.text.trim(), 'items': webItems,
           });
         } else {
-          await Api.instance.post('/purchases', {
+          // 服务端生成单据 id：返回 id 供识别原图附件挂载（此前用本地预生成 _purchaseId 挂附件
+          // 与真实单据 id 不一致 = Web 端附件看不到的根因）
+          final r = await Api.instance.post('/purchases', {
             'happened_at': orderDate, 'note': _noteCtrl.text.trim(),
             'sync_key': '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(0x7fffffff)}',
             'items': webItems,
           });
+          if (r is Map && '${r['id'] ?? ''}'.isNotEmpty) {
+            _webPurchaseId = '${r['id']}';
+          }
         }
         toast(context, '已保存');
-        // 提交成功后才上传识别原图附件
-        unawaited(_uploadPending(purchaseId, valid));
+        // 提交成功后才上传识别原图附件（Web）：新建用服务端返回的真实单据 id，
+        // 编辑/批量直编用现有单 id——挂错 id 会导致 Web 端"附件看不到"
+        if (kIsWeb) unawaited(_uploadPending(_webPurchaseId.isNotEmpty ? _webPurchaseId : purchaseId, valid));
       } catch (e) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       } finally {
@@ -1275,31 +1301,9 @@ class _PurchasePageState extends State<PurchasePage> {
             style: TextStyle(color: c.textMain),
             decoration: _fieldDec(icon: Icons.notes_outlined, label: '备注（可留空）'),
           ),
-          // 整单通用附件（当天单据共用的凭证：送货单/发货单等）；行级附件在各商品行单独加
+          // 整单通用附件（当天单据共用的凭证：送货单/发货单等）；行级附件在各商品行单独加。
+          // 识别/分享原图已"识别即挂载"为本单凭证（App 本地/Web 保存后直传），不再显示预览卡片
           const SizedBox(height: 4),
-          // 识别原图预览：识别/分享成功后暂存本地，提交后保存为本单凭证——记单时即可确认原图
-          if (_pendingPhoto != null)
-            Card(
-              margin: EdgeInsets.zero,
-              elevation: 0,
-              color: c.success.withOpacity(0.06),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              child: ListTile(
-                dense: true,
-                visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.memory(_pendingPhoto!, width: 44, height: 44, fit: BoxFit.cover),
-                ),
-                title: const Text('识别原图（提交后保存为本单凭证）', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                subtitle: const Text('识别用的原始图片，可移除后提交不附带', style: TextStyle(fontSize: 11)),
-                trailing: IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  tooltip: '移除识别原图',
-                  onPressed: () => setState(() => _pendingPhoto = null),
-                ),
-              ),
-            ),
           Card(
             margin: EdgeInsets.zero,
             elevation: 0,

@@ -239,33 +239,37 @@ statsRouter.get('/summary', async (c) => {
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
 
-  // 出货（或进货）区间汇总：kind=purchase 走 purchase_items（无店铺维度、无毛利）
+  // 出货（或进货）区间汇总：kind=purchase 走 purchase_items（无店铺维度、无毛利）。
+  // 金额按"每笔舍入后累加"（与单笔显示/账本页对账一致）：原始浮点 SUM 后舍入在
+  // digits=0/1 时（1.6+1.6=3.2→¥3）会与每笔显示（¥2+¥2）对不上。
   const salesParams: unknown[] = [start, end];
   const salesSql = kind === 'purchase'
-    ? `SELECT COALESCE(SUM(pi.amount), 0) AS sales_total, 0 AS gross_profit, COUNT(*) AS sales_count
+    ? `SELECT pi.amount AS amount, 0 AS sale_price, 0 AS cost_price, 0 AS quantity
        FROM purchase_items pi WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
-    : `SELECT
-        COALESCE(SUM(si.amount), 0) AS sales_total,
-        COALESCE(SUM((si.sale_price - si.cost_price) * si.quantity), 0) AS gross_profit,
-        COUNT(*) AS sales_count
+    : `SELECT si.amount AS amount, si.sale_price AS sale_price, si.cost_price AS cost_price, si.quantity AS quantity
        FROM sale_items si
        WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`;
   if (clientId && kind === 'sale') salesParams.push(clientId);
-  const sales = await db.prepare(salesSql).bind(...salesParams).first<{
-    sales_total: number; gross_profit: number; sales_count: number;
+  const saleRows = await db.prepare(salesSql).bind(...salesParams).all<{
+    amount: number; sale_price: number; cost_price: number; quantity: number;
   }>();
+  const sales_total = saleRows.results.reduce((s, x) => s + roundMoney(Number(x.amount) || 0, money), 0);
+  const gross_profit = kind === 'purchase'
+    ? 0
+    : saleRows.results.reduce((s, x) => s + roundMoney((Number(x.sale_price) - Number(x.cost_price)) * Number(x.quantity), money), 0);
 
   const paidParams: unknown[] = [start, end];
-  const paidSql = `SELECT COALESCE(SUM(amount + waived), 0) AS paid_total
+  const paidSql = `SELECT amount, waived
      FROM payments WHERE happened_at >= ? AND happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`;
   if (clientId) paidParams.push(clientId);
-  const paid = await db.prepare(paidSql).bind(...paidParams).first<{ paid_total: number }>();
+  const paidRows = await db.prepare(paidSql).bind(...paidParams).all<{ amount: number; waived: number }>();
+  const paid_total = paidRows.results.reduce((s, x) => s + roundMoney((Number(x.amount) || 0) + (Number(x.waived) || 0), money), 0);
 
   const buyParams: unknown[] = [start, end];
-  const buySql = `SELECT COALESCE(SUM(pi.amount), 0) AS purchase_total
-     FROM purchase_items pi
-     WHERE pi.happened_at >= ? AND pi.happened_at <= ?`;
-  const buy = await db.prepare(buySql).bind(...buyParams).first<{ purchase_total: number }>();
+  const buySql = `SELECT amount
+     FROM purchase_items pi WHERE pi.happened_at >= ? AND pi.happened_at <= ?`;
+  const buyRows = await db.prepare(buySql).bind(...buyParams).all<{ amount: number }>();
+  const purchase_total = buyRows.results.reduce((s, x) => s + roundMoney(Number(x.amount) || 0, money), 0);
 
   // 截止 end 的总欠款（区间前累计也计入：全部出货 − 全部收款，时间 ≤ end）；进货视图无欠款
   // SQL 占位符顺序：all_sales(<=?, client=?) → all_paid(<=?, client=?)
@@ -280,9 +284,9 @@ statsRouter.get('/summary', async (c) => {
   return c.json({
     start, end, kind,
     can_see_profit: canSeeProfit,
-    sales_total: r(sales?.sales_total), gross_profit: canSeeProfit ? r(sales?.gross_profit) : 0,
-    sales_count: sales?.sales_count ?? 0,
-    paid_total: r(paid?.paid_total), purchase_total: r(buy?.purchase_total),
+    sales_total: r(sales_total), gross_profit: canSeeProfit ? r(gross_profit) : 0,
+    sales_count: saleRows.results.length,
+    paid_total: r(paid_total), purchase_total: r(purchase_total),
     debt: kind === 'purchase' ? 0 : r((debt?.all_sales ?? 0) - (debt?.all_paid ?? 0)),
   });
 });

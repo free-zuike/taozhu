@@ -20,7 +20,6 @@ import 'router.dart';
 import 'attachment_viewer.dart';
 import 'sale_page.dart';
 import 'payments_page.dart';
-import 'sale_batch_edit_page.dart';
 import 'sale_line_edit.dart';
 
 /// 交易（店铺）：出货 / 收款流水，按店铺+时间范围，支持编辑删除与附件（按日期分组列表）
@@ -144,21 +143,22 @@ class _LedgerPageState extends State<LedgerPage> {
           if (!isSel('${r['client_id'] ?? ''}')) continue;
           final amt = (r['amount'] as num?)?.toDouble() ?? 0;
           if (inRange(h)) {
-            sold += amt;
+            // 每笔先舍入再累加（与单笔显示一致）
+            sold += Money.round(amt);
             final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
-            gross += (((r['sale_price'] as num?)?.toDouble() ?? 0) -
+            gross += Money.round((((r['sale_price'] as num?)?.toDouble() ?? 0) -
                     ((r['cost_price'] as num?)?.toDouble() ?? 0)) *
-                qty;
+                qty);
           }
-          if (h.isNotEmpty && h.compareTo(end) <= 0) debt += amt; // 截止 end 累计出货
+          if (h.isNotEmpty && h.compareTo(end) <= 0) debt += Money.round(amt); // 截止 end 累计出货
         }
         for (final p in pays) {
           if (!isSel('${p['client_id'] ?? ''}')) continue;
           final amount = (p['amount'] as num?)?.toDouble() ?? 0;
           final waived = (p['waived'] as num?)?.toDouble() ?? 0;
           final h = '${p['happened_at'] ?? ''}';
-          if (inRange(h)) paid += amount + waived;
-          if (h.isNotEmpty && h.compareTo(end) <= 0) debt -= amount + waived; // 截止 end 累计收款
+          if (inRange(h)) paid += Money.round(amount + waived);
+          if (h.isNotEmpty && h.compareTo(end) <= 0) debt -= Money.round(amount + waived); // 截止 end 累计收款
         }
       }
       if (!mounted) return;
@@ -531,13 +531,15 @@ class _LedgerPageState extends State<LedgerPage> {
     final saleCnt = <String, int>{};
     for (final s in sales) {
       final id = '${s['client_id']}';
-      saleSum[id] = (saleSum[id] ?? 0) + ((s['total'] as num?)?.toDouble() ?? 0);
+      // 每笔先舍入再累加（与单笔显示一致）
+      saleSum[id] = (saleSum[id] ?? 0) + Money.round((s['total'] as num?)?.toDouble() ?? 0);
       saleCnt[id] = (saleCnt[id] ?? 0) + (((s['items'] as List?) ?? []).length);
     }
     final paySum = <String, double>{};
     for (final p in pays) {
       final id = '${p['client_id']}';
-      paySum[id] = (paySum[id] ?? 0) + ((p['amount'] as num?)?.toDouble() ?? 0);
+      // 每笔先舍入再累加（与单笔显示一致）
+      paySum[id] = (paySum[id] ?? 0) + Money.round((p['amount'] as num?)?.toDouble() ?? 0);
     }
     // 商品数量 = 出货明细行数（收款只是出货的一部分，不计入——与「我的」页本店交易口径一致）；
     // 欠款 = Σ出货 − Σ收款
@@ -594,7 +596,8 @@ class _LedgerPageState extends State<LedgerPage> {
         final d = _date('${it['happened_at'] ?? ''}');
         final use = d.isNotEmpty ? d : orderDate;
         if (!inMonth(use)) continue;
-        localSold += ((it['amount'] as num?)?.toDouble() ?? 0);
+        // 每笔先舍入再累加（与单笔显示一致）
+        localSold += Money.round((it['amount'] as num?)?.toDouble() ?? 0);
       }
     }
     double localPaid = 0; // 收入=收款
@@ -602,7 +605,8 @@ class _LedgerPageState extends State<LedgerPage> {
       if (_clientId != null && '${p['client_id']}' != _clientId) continue;
       final d = _date('${p['happened_at'] ?? ''}');
       if (!inMonth(d)) continue;
-      localPaid += ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0);
+      // 每笔先舍入再累加（与单笔显示一致）
+      localPaid += Money.round(((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0));
     }
     // 本地毛利兜底：售出 − 成本（明细行 sale_price/cost_price）
     double localGross = 0;
@@ -614,8 +618,9 @@ class _LedgerPageState extends State<LedgerPage> {
         final d = _date('${it['happened_at'] ?? ''}');
         final use = d.isNotEmpty ? d : orderDate;
         if (!inMonth(use)) continue;
+        // 每笔先舍入再累加（与单笔显示一致）
         final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-        localGross += (((it['sale_price'] as num?)?.toDouble() ?? 0) - ((it['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+        localGross += Money.round((((it['sale_price'] as num?)?.toDouble() ?? 0) - ((it['cost_price'] as num?)?.toDouble() ?? 0)) * qty);
       }
     }
     // 网络值（精确，含其他设备写入）优先；未加载时本地快照兜底
@@ -1395,7 +1400,8 @@ class _LedgerPageState extends State<LedgerPage> {
                       )),
                   const Spacer(),
                   Text(
-                    '${e.value.length} 笔 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, r) => s + amountOf(r)))}',
+                    // 合计按"每笔舍入后累加"（与单笔显示一致）：digits=0/1 时原始浮点累加再舍入会与每笔金额对不上
+                    '${e.value.length} 笔 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, r) => s + Money.round(amountOf(r))))}',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -1532,7 +1538,8 @@ class _LedgerPageState extends State<LedgerPage> {
                           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.textMain)),
                       const Spacer(),
                       Text(
-                        '${e.value.length} 件 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + ((l['amount'] as num?)?.toDouble() ?? 0)))}',
+                        // 合计按"每笔舍入后累加"（与单笔显示一致）：digits=0/1 时原始浮点累加再舍入会与每笔金额对不上
+                        '${e.value.length} 件 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + Money.round((l['amount'] as num?)?.toDouble() ?? 0)))}',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSub),
                       ),
                       const SizedBox(width: 2),
