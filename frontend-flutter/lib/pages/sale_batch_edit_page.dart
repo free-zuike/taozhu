@@ -94,8 +94,8 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
     ].toSet().toList();
     final orderIds = [
       for (final l in _lines)
-        if ('${(l['order'] as Map?)?.['id'] ?? ''}'.isNotEmpty)
-          '${(l['order'] as Map?)?.['id']}',
+        if ('${(l['order'] as Map?)?['id'] ?? ''}'.isNotEmpty)
+          '${(l['order'] as Map?)?['id']}',
     ].toSet().toList();
     if (ids.isEmpty && orderIds.isEmpty) return;
     final map = <String, int>{};

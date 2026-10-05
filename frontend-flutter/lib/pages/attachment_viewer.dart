@@ -220,7 +220,8 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         return <(String, String, String)>[
           for (final k in await _cloudKeys(j.$1, j.$2)) (j.$1, j.$2, k),
         ];
-      })).timeout(const Duration(seconds: 3), onTimeout: () => []);
+      })).timeout(const Duration(seconds: 3),
+          onTimeout: () => <List<(String, String, String)>>[]);
       final refsToWrite = <Map<String, dynamic>>[];
       for (final g in groups) {
         for (final (entity, id, key) in g) {
