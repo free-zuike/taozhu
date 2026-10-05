@@ -92,28 +92,55 @@ function collectCalls(dir: string, pattern: RegExp): Set<string> {
   return set;
 }
 
-const appCalls = collectCalls(join(root, 'frontend-flutter', 'lib'), /Api\.instance\.(?:get|post|patch|delete|put)\(\s*['"]([^'"]+)/g);
-const uniCalls = collectCalls(join(root, 'frontend-uni', 'src'), /request(?:<[^>]*>)?\(\s*['"]([^'"]+)/g);
+const appCalls = collectCalls(join(root, 'frontend-flutter', 'lib'), /Api\.instance\.(?:get|post|patch|delete|put)\(\s*['"`]([^'"`]+)/g);
+const uniCalls = collectCalls(join(root, 'frontend-uni', 'src'), /request\b[^(]*\(\s*['"`]([^'"`]+)/g);
 
 // ── ④ 差异 ──
 const appBackend = [...appCalls].filter((p) => backendPts.has(p));
 const uniBackend = [...uniCalls].filter((p) => backendPts.has(p));
-const gapGroups = new Map<string, string[]>();
-for (const ep of appBackend) {
-  if (uniBackend.includes(ep)) continue;
-  const group = ep.split(':')[0] || ep;
-  if (!gapGroups.has(group)) gapGroups.set(group, []);
-  gapGroups.get(group)!.push(ep);
+const appOnly = [...appBackend].filter((p) => !uniBackend.includes(p));
+
+// 人工核实的差异归类：平台差异（小程序直连无本地库/微信分发，App 特有）vs 待核对（潜在真缺口）
+const knownGap: Record<string, string> = {
+  'sync/full': '平台差异：小程序直连无本地库',
+  'sync/pull': '平台差异：小程序直连无本地库',
+  'sync/push': '平台差异：小程序直连无本地库',
+  'sync/stats': '平台差异：小程序直连无本地库',
+  'auth/latest-version': '平台差异：更新检查由微信分发',
+  'me/download-sources': '平台差异：App 安装更新源探测',
+  'me/probe-source': '平台差异：App 安装更新源探测',
+  'attachments/in-use': '平台差异：App 本地库在用引用扫描',
+  'attachments/orphans': '平台差异：App 本地库孤儿扫描',
+  'attachments/total': '平台差异：App 本地同步管理统计',
+  'stocks/rebuild': '平台差异：App 库存重算管理操作',
+  'backup/auto': '待核对：小程序备份自动备份是否实现',
+  'backup/import': '待核对：小程序备份导入是否实现',
+  'ai/parse-text': '待核对：小程序 AI 识别端点路径',
+  'payment-accounts/stats': '待核对：小程序账户统计是否实现',
+  share: '待核对：小程序对账单分享是否实现',
+};
+
+const expectedGaps: string[] = [];
+const realGaps: Array<{ ep: string; note: string }> = [];
+for (const ep of appOnly) {
+  const note = knownGap[ep];
+  if (note && note.includes('平台差异')) expectedGaps.push(`${ep}（${note}）`);
+  else realGaps.push({ ep, note: note ?? '' });
 }
 
 console.log(`后端端点 ${backendPts.size} 个 | App 调用 ${appBackend.length} | 小程序调用 ${uniBackend.length}`);
-const appOnly = [...appBackend].filter((p) => !uniBackend.includes(p));
-if (appOnly.length === 0) {
+if (realGaps.length === 0 && expectedGaps.length === 0) {
   console.log('✅ 小程序覆盖了 App 的全部后端调用（端点差集为空）');
   process.exit(0);
 }
-console.log(`\n⚠️ 小程序未调用的端点（${appOnly.length}）——功能缺口候选，按资源分组：`);
-for (const [g, eps] of [...gapGroups.entries()].sort()) {
-  console.log(`  ${g} (${eps.length}): ${eps.join(', ')}`);
+if (expectedGaps.length > 0) {
+  console.log(`\nℹ️ 预期平台差异（${expectedGaps.length}，小程序直连无本地库/微信分发，不处理）：`);
+  for (const g of expectedGaps) console.log('  - ' + g);
 }
-process.exit(1);
+if (realGaps.length > 0) {
+  console.log(`\n⚠️ 小程序未调用的端点（${realGaps.length}）——待人工核对：`);
+  for (const g of realGaps) console.log('  - ' + g.ep + (g.note ? '（' + g.note + '）' : ''));
+  process.exit(1);
+}
+console.log('\n✅ 无待核对缺口（仅预期平台差异）');
+process.exit(0);

@@ -288,16 +288,32 @@ class _MyPageState extends State<MyPage> {
         } catch (_) {}
       }
       if (!mounted) return;
-      // 记账天数：取三种单据最早的日期到今天
+      // 记账天数：本地优先——取三种单据行级最早的日期到今天。
+      // 整单日期=行最大日期（0.17.309 整单口径），行级最早可能更早（进货 08-05 vs 整单 08-08），
+      // 本地行级表（sale_items/purchase_items 已随同步落库）与小程序 /stats/years 行级口径一致。
       var first = '';
       String minD(String a, String b) {
         if (a.isEmpty) return b;
         if (b.isEmpty) return a;
         return a.compareTo(b) <= 0 ? a : b;
       }
-      for (final s in sales) first = minD(first, '${s['happened_at'] ?? ''}');
-      for (final p in pays) first = minD(first, '${p['happened_at'] ?? ''}');
-      for (final b in buys) first = minD(first, '${b['happened_at'] ?? ''}');
+      if (kIsWeb) {
+        // Web 无本地库：直连服务器行级最早（/stats/years，直连形态非兜底）
+        try {
+          final y = await Api.instance.get('/stats/years').timeout(const Duration(seconds: 6));
+          first = '${y['first_date'] ?? ''}';
+        } catch (_) {}
+      } else {
+        for (final p in pays) first = minD(first, '${p['happened_at'] ?? ''}');
+        try {
+          final si = await LocalDb.getAll('sale_items');
+          for (final r in si) first = minD(first, '${r['happened_at'] ?? ''}');
+        } catch (_) {}
+        try {
+          final pi = await LocalDb.getAll('purchase_items');
+          for (final r in pi) first = minD(first, '${r['happened_at'] ?? ''}');
+        } catch (_) {}
+      }
       var days = 0;
       final f = DateTime.tryParse(first);
       if (f != null) {

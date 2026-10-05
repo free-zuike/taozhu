@@ -1,5 +1,6 @@
 <template>
   <view class="page" :style="tv">
+  <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="group-title">金额舍入（所有金额计算按此）</view>
     <view class="card">
       <view class="tip">进/出货行金额、合计、毛利、统计、欠款统一按此计算。历史数据存储不变，统计与欠款展示按新规则实时重算。</view>
@@ -36,7 +37,7 @@ import { request, getToken } from '../../api';
 import { useThemeVars } from '../../theme';
 import { initRounding, applyRounding, roundingCfg } from '../../utils/money';
 
-const tv = useThemeVars();
+const { tv, patternSrc } = useThemeVars();
 const presets = [
   { label: '四舍五入（尾数≥5 进，<5 舍）', v: 0.5 },
   { label: '5舍6入（尾数 5 舍、≥6 进）', v: 0.6 },
@@ -86,6 +87,7 @@ async function save() {
 
 <style scoped>
 .page { padding: 24rpx 24rpx 60rpx; background: var(--page-bg); min-height: 100vh; }
+.bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .group-title { font-size: 26rpx; color: #8a8f98; margin: 30rpx 8rpx 12rpx; font-weight: 700; }
 .card { background: var(--card-bg, #fff); border: 1px solid var(--card-border, #eee); border-radius: 24rpx; padding: 10rpx 24rpx; }
 .tip { font-size: 25rpx; color: var(--text-sub, #8a8f98); line-height: 1.6; padding: 16rpx 4rpx; }

@@ -23,9 +23,9 @@
       <button class="btn-save" :disabled="loading" @click="load">{{ loading ? '生成中…' : '生成对账单' }}</button>
 
       <view v-if="loaded">
-        <view class="stat"><text>出货合计</text><text class="red">¥{{ saleTotal.toFixed(2) }}（{{ sales.length }} 笔）</text></view>
-        <view class="stat"><text>收款合计</text><text class="green">¥{{ payTotal.toFixed(2) }}（{{ payments.length }} 笔）</text></view>
-        <view class="stat"><text>期末欠款</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ debt.toFixed(2) }}</text></view>
+        <view class="stat"><text>出货合计</text><text class="red">¥{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
+        <view class="stat"><text>收款合计</text><text class="green">¥{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
+        <view class="stat"><text>期末欠款</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ fmtAmount(debt) }}</text></view>
         <button class="btn-copy" @click="copy">复制对账文本</button>
         <button class="btn-copy" @click="copyCsv">复制 CSV（粘到 Excel）</button>
       </view>
@@ -35,14 +35,14 @@
       <view class="list-title">出货明细</view>
       <view v-for="s in sales" :key="s.id" class="list-row">
         <text class="lr-l">{{ s.client_name }} {{ s.happened_at }}</text>
-        <text class="lr-r red">¥{{ Number(s.total).toFixed(2) }}</text>
+        <text class="lr-r red">¥{{ fmtAmount(Number(s.total)) }}</text>
       </view>
       <view v-if="sales.length === 0" class="empty">周期内无出货</view>
 
       <view class="list-title">收款明细</view>
       <view v-for="p in payments" :key="p.id" class="list-row">
         <text class="lr-l">{{ p.client_name }} {{ p.happened_at }}<text v-if="p.method"> {{ p.method }}</text></text>
-        <text class="lr-r green">¥{{ Number(p.amount).toFixed(2) }}</text>
+        <text class="lr-r green">¥{{ fmtAmount(Number(p.amount)) }}</text>
       </view>
       <view v-if="payments.length === 0" class="empty">周期内无收款</view>
     </view>
@@ -59,7 +59,7 @@ import { ref } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
-import { roundAmount } from '../../utils/money';
+import { roundAmount, fmtAmount } from '../../utils/money';
 
 const clients = ref<Array<{ id: string; name: string }>>([]);
 const clientNames = ref<string[]>(['全部店铺']);
@@ -159,15 +159,15 @@ function copy() {
     '【陶朱对账单】',
     `客户：${clientName.value}`,
     `周期：${from.value} 至 ${to.value}`,
-    `出货合计：¥${saleTotal.value.toFixed(2)}（${sales.value.length} 笔）`,
-    `收款合计：¥${payTotal.value.toFixed(2)}（${payments.value.length} 笔）`,
-    `期末欠款：¥${debt.value.toFixed(2)}`,
+    `出货合计：¥${fmtAmount(saleTotal.value)}（${sales.value.length} 笔）`,
+    `收款合计：¥${fmtAmount(payTotal.value)}（${payments.value.length} 笔）`,
+    `期末欠款：¥${fmtAmount(debt.value)}`,
     '—— 出货明细 ——',
   ];
-  for (const s of sales.value) lines.push(`${s.happened_at} ${s.item_name || '出货'} ¥${Number((s.amount ?? s.total) || 0).toFixed(2)}`);
+  for (const s of sales.value) lines.push(`${s.happened_at} ${s.item_name || '出货'} ¥${fmtAmount(Number((s.amount ?? s.total) || 0))}`);
   lines.push('—— 收款明细 ——');
   for (const p of payments.value) {
-    lines.push(`${p.happened_at}${p.method ? ' ' + p.method : ''} ¥${Number(p.amount || 0).toFixed(2)}`);
+    lines.push(`${p.happened_at}${p.method ? ' ' + p.method : ''} ¥${fmtAmount(Number(p.amount || 0))}`);
   }
   uni.setClipboardData({ data: lines.join('\n') });
   uni.showToast({ title: '对账文本已复制', icon: 'success' });

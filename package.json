@@ -8,7 +8,8 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "hash": "tsx scripts/create-admin.ts"
+    "hash": "tsx scripts/create-admin.ts",
+    "audit:mp": "tsx scripts/audit-pages.ts && tsx scripts/audit-endpoints.ts && tsx scripts/audit-features.ts"
   },
   "dependencies": {
     "hono": "^4.6.0"

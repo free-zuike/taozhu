@@ -1,10 +1,10 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <!-- 我的账号（对齐 App 成员页：账号设置+成员管理同页入口） -->
+    <!-- 账号设置（对齐 App 成员页：账号设置+成员管理同页入口，点击进账号设置） -->
     <view class="card" @click="goAccount">
       <view class="head">
-        <text class="name">我的账号</text>
+        <text class="name">账号设置</text>
         <text class="role">头像 / 用户名 / 密码 / 两步验证</text>
       </view>
     </view>
