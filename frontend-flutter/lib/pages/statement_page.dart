@@ -11,6 +11,7 @@ import '../log.dart';
 import '../utils/download.dart';
 import '../utils/money.dart';
 import '../utils/open_print.dart';
+import '../utils/statement_totals.dart';
 import '../theme.dart';
 import '../widgets/date_field.dart';
 import '../statement_tmpl.dart';
@@ -63,6 +64,8 @@ class _StatementPageState extends State<StatementPage> {
   bool _loaded = false;
   /// 当前排版模板（导出/打印用）
   _XlsCfg _xls = _XlsCfg();
+  /// 对账单合计口径：true（默认）=每笔先舍入再累加（与单笔金额对账一致）；false=原始浮点累加（2 位导出口径）
+  bool _roundTotals = true;
   /// 全部模板（本机持久化：可添加/修改/删除；内置「标准」「旬段汇总」不可删）
   List<_XlsCfg> _templates = [];
   /// 公共库模板（renderTemplateRows 渲染成品唯一数据源；开箱即用预设 + 用户模板）
@@ -81,7 +84,25 @@ class _StatementPageState extends State<StatementPage> {
     super.initState();
     _loadClients();
     _loadTemplates();
+    _loadRoundPref(); // 恢复合计口径偏好（默认逐笔舍入）
     _initLoad(); // 先恢复记忆店铺，再生成对账单（避免首载默认全店数据串店）
+  }
+
+  /// 合计口径偏好（本机持久化，默认 true=逐笔舍入）
+  Future<void> _loadRoundPref() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final v = p.getBool('taozhu_stmt_round_totals');
+      if (v != null && mounted) setState(() => _roundTotals = v);
+    } catch (_) {}
+  }
+
+  Future<void> _setRoundTotals(bool v) async {
+    setState(() => _roundTotals = v);
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('taozhu_stmt_round_totals', v);
+    } catch (_) {}
   }
 
   /// 恢复全局记忆的当前店铺后生成对账单（本地 prefs 读取，秒回；无记忆则全部店铺）
@@ -181,26 +202,16 @@ class _StatementPageState extends State<StatementPage> {
     }
   }
 
-  double get _saleTotal {
-    // 按明细行独立日期统计（行日期缺省回退单据日期）
-    final from = _fromCtrl.text.trim();
-    final to = _toCtrl.text.trim();
-    var t = 0.0;
-    for (final s in _sales) {
-      final orderDate = _date(s['happened_at']);
-      for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
-        final id = '${it['happened_at'] ?? ''}';
-        final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
-        if (d.compareTo(from) >= 0 && d.compareTo(to) <= 0) {
-          t += ((it['amount'] as num?)?.toDouble() ?? 0);
-        }
-      }
-    }
-    return t;
-  }
+  double get _saleTotal => saleTotalOf(
+        _sales,
+        _fromCtrl.text.trim(),
+        _toCtrl.text.trim(),
+        perRound: _roundTotals,
+        round: Money.round,
+      );
 
-  double get _payTotal => _payments.fold(0, (s, x) => s + ((x['amount'] as num?)?.toDouble() ?? 0));
-  double get _waivedTotal => _payments.fold(0, (s, x) => s + (((x['waived'] as num?)?.toDouble()) ?? 0));
+  double get _payTotal => payTotalOf(_payments, 'amount', perRound: _roundTotals, round: Money.round);
+  double get _waivedTotal => payTotalOf(_payments, 'waived', perRound: _roundTotals, round: Money.round);
 
   String _date(Object? v) {
     final s = '$v';
@@ -903,7 +914,7 @@ class _StatementPageState extends State<StatementPage> {
     sheet.appendRow([TextCellValue('销售总额'), TextCellValue('¥${total.toStringAsFixed(2)}')]);
   }
 
-  /// 按商品汇总：每种商品的总数量与总金额
+  /// 按商品汇总：每种商品的总数量与总金额（金额口径跟随 _roundTotals）
   void _sheetItems(Sheet sheet, _XlsCfg cfg) {
     sheet.appendRow([
       if (cfg.colItem) TextCellValue('商品'),
@@ -915,9 +926,10 @@ class _StatementPageState extends State<StatementPage> {
       for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
         final name = '${it['item_name'] ?? ''}';
         final prev = agg[name] ?? (qty: 0, amount: 0);
+        final v = (it['amount'] as num?)?.toDouble() ?? 0;
         agg[name] = (
           qty: prev.qty + ((it['quantity'] as num?)?.toDouble() ?? 0),
-          amount: prev.amount + ((it['amount'] as num?)?.toDouble() ?? 0),
+          amount: prev.amount + (_roundTotals ? Money.round(v) : v),
         );
       }
     }
@@ -1002,7 +1014,7 @@ class _StatementPageState extends State<StatementPage> {
     } catch (_) {}
   }
 
-  /// 出货按日聚合（按明细行日期；行日期缺省回退单据日期）
+  /// 出货按日聚合（按明细行日期；行日期缺省回退单据日期）——金额口径跟随 _roundTotals
   Map<String, double> _salesByDay() {
     final byDay = <String, double>{};
     for (final s in _sales) {
@@ -1010,7 +1022,8 @@ class _StatementPageState extends State<StatementPage> {
       for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
         final id = '${it['happened_at'] ?? ''}';
         final d = id.length >= 10 ? id.substring(0, 10) : orderDate;
-        byDay[d] = (byDay[d] ?? 0) + ((it['amount'] as num?)?.toDouble() ?? 0);
+        final v = (it['amount'] as num?)?.toDouble() ?? 0;
+        byDay[d] = (byDay[d] ?? 0) + (_roundTotals ? Money.round(v) : v);
       }
     }
     return byDay;
@@ -1035,7 +1048,8 @@ class _StatementPageState extends State<StatementPage> {
         if (dy != y || dm != m) continue;
         final day = int.tryParse(d.substring(8, 10)) ?? 1;
         if (day < 1 || day > daysInMonth) continue;
-        arr[day - 1] += (it['amount'] as num?)?.toDouble() ?? 0;
+        final v = (it['amount'] as num?)?.toDouble() ?? 0;
+        arr[day - 1] += _roundTotals ? Money.round(v) : v;
       }
     }
     return arr;
@@ -1489,9 +1503,10 @@ class _StatementPageState extends State<StatementPage> {
         for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>()) {
           final name = '${it['item_name'] ?? ''}';
           final prev = agg[name] ?? (qty: 0, amount: 0);
+          final v = (it['amount'] as num?)?.toDouble() ?? 0;
           agg[name] = (
             qty: prev.qty + ((it['quantity'] as num?)?.toDouble() ?? 0),
-            amount: prev.amount + ((it['amount'] as num?)?.toDouble() ?? 0),
+            amount: prev.amount + (_roundTotals ? Money.round(v) : v),
           );
         }
       }
@@ -1974,6 +1989,32 @@ class _StatementPageState extends State<StatementPage> {
             ),
           ),
           if (_loaded) ...[
+            // 合计口径：默认逐笔舍入（合计与每笔金额对账一致）；可切原始金额（2 位导出口径）
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Text('合计口径', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                const SizedBox(width: 10),
+                SegmentedButton<bool>(
+                  style: ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    textStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12)),
+                  ),
+                  segments: const [
+                    ButtonSegment(value: true, label: Text('逐笔舍入')),
+                    ButtonSegment(value: false, label: Text('原始金额')),
+                  ],
+                  selected: {_roundTotals},
+                  onSelectionChanged: (s) => _setRoundTotals(s.first),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('逐笔舍入=合计与每笔金额对账一致（推荐）',
+                      style: TextStyle(fontSize: 11, color: c.textSub)),
+                ),
+              ],
+            ),
             // 成品对账单（开箱即用）：样式 chips 切换 → 下方直接渲染模板成品，导出/打印同源
             const SizedBox(height: 12),
             const Text('对账单样式', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),

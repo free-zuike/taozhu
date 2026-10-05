@@ -15,6 +15,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/center_sheet.dart';
+import '../widgets/number_pad_field.dart';
 import '../widgets/year_month_picker.dart';
 import 'router.dart';
 import 'attachment_viewer.dart';
@@ -1056,10 +1057,9 @@ class _LedgerPageState extends State<LedgerPage> {
                 onChanged: (v) => setDlg(() => clientId = v),
               ),
               const SizedBox(height: 8),
-              TextField(
+              NumberPadField(
                 controller: amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: '金额（元）'),
+                label: '金额（元）',
               ),
               const SizedBox(height: 8),
               TextField(controller: dateCtrl, decoration: const InputDecoration(labelText: '日期（YYYY-MM-DD）')),

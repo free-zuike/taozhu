@@ -18,6 +18,7 @@ import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/date_field.dart';
 import '../widgets/center_sheet.dart';
+import '../widgets/number_pad_field.dart';
 import 'attachment_viewer.dart';
 import 'router.dart';
 
@@ -1657,20 +1658,18 @@ class _SalePageState extends State<SalePage> {
           Row(
             children: [
               Expanded(
-                child: TextField(
+                child: NumberPadField(
                   controller: row.qtyCtrl,
                   style: txtStyle,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   decoration: _fieldDec(label: '数量'),
                   onChanged: (v) => row.quantity = double.tryParse(v) ?? 0,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: TextField(
+                child: NumberPadField(
                   controller: row.saleCtrl,
                   style: txtStyle,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   decoration: _fieldDec(label: '售价（可直接改）'),
                   onChanged: (v) => row.salePrice = double.tryParse(v) ?? 0,
                 ),
@@ -1682,10 +1681,9 @@ class _SalePageState extends State<SalePage> {
           if (item != null && item.countUnit.isNotEmpty && item.countUnit != row.unitCtrl.text.trim())
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: TextField(
+              child: NumberPadField(
                 controller: row.countCtrl,
                 style: txtStyle,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: _fieldDec(
                     label: '折合 ${item.countUnit} 数（本单相当于 ${row.countCtrl.text.trim().isEmpty ? _autoCount(row) : row.countCtrl.text.trim()} ${item.countUnit}；可改）'),
                 onChanged: (v) {

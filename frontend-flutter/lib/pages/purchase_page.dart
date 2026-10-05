@@ -18,6 +18,7 @@ import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/date_field.dart';
 import '../widgets/center_sheet.dart';
+import '../widgets/number_pad_field.dart';
 import 'attachment_viewer.dart';
 import 'router.dart';
 
@@ -1436,20 +1437,18 @@ class _PurchasePageState extends State<PurchasePage> {
           Row(
             children: [
               Expanded(
-                child: TextField(
+                child: NumberPadField(
                   controller: row.qtyCtrl,
                   style: txtStyle,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   decoration: _fieldDec(label: '数量'),
                   onChanged: (v) => row.quantity = double.tryParse(v) ?? 0,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: TextField(
+                child: NumberPadField(
                   controller: row.priceCtrl,
                   style: txtStyle,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   decoration: _fieldDec(label: _isStaff ? '进价（手工填写）' : '进价（可直接改）'),
                   onChanged: (v) => row.purchasePrice = double.tryParse(v) ?? 0,
                 ),
@@ -1461,10 +1460,9 @@ class _PurchasePageState extends State<PurchasePage> {
           if (item != null && '${item['count_unit'] ?? ''}'.isNotEmpty && '${item['count_unit'] ?? ''}' != row.unitCtrl.text.trim())
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: TextField(
+              child: NumberPadField(
                 controller: row.countCtrl,
                 style: txtStyle,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: _fieldDec(
                     label: '折合 ${item!['count_unit']} 数（本单相当于 ${row.countCtrl.text.trim().isEmpty ? _autoPCount(row) : row.countCtrl.text.trim()} ${item!['count_unit']}；可改）'),
                 onChanged: (v) {

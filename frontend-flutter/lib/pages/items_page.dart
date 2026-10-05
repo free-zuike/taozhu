@@ -9,6 +9,7 @@ import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../widgets/number_pad_field.dart';
 import 'router.dart';
 
 class ItemsPage extends StatefulWidget {
@@ -623,18 +624,16 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: TextField(
+                          child: NumberPadField(
                             controller: _priceRows[i]['buy'],
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: '进价'),
+                            label: '进价',
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: TextField(
+                          child: NumberPadField(
                             controller: _priceRows[i]['sell'],
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: '售价'),
+                            label: '售价',
                           ),
                         ),
                         IconButton(
@@ -649,13 +648,10 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    TextField(
+                    NumberPadField(
                       controller: _priceRows[i]['per'],
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(
-                        labelText: '每单位折合计数单位数（可选）',
-                        helperText: '1 箱=40 袋就填 40；记单时会自动带出、也可改；用于库存备货折算与比价',
-                      ),
+                      label: '每单位折合计数单位数（可选）',
+                      helperText: '1 箱=40 袋就填 40；记单时会自动带出、也可改；用于库存备货折算与比价',
                     ),
                   ],
                 ),

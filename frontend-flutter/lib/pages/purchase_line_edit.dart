@@ -4,6 +4,7 @@ import '../api.dart';
 import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../widgets/number_pad_field.dart';
 import 'attachment_viewer.dart';
 import 'change_category.dart';
 import 'router.dart';
@@ -40,27 +41,22 @@ Future<Map<String, dynamic>?> editPurchaseLine(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
+              NumberPadField(
                 controller: qtyCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: '数量'),
+                label: '数量',
               ),
               const SizedBox(height: 8),
               TextField(controller: unitCtrl, decoration: const InputDecoration(labelText: '单位（斤/件/箱…）')),
               const SizedBox(height: 8),
-              TextField(
+              NumberPadField(
                 controller: countCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: '折合计数（可选）',
-                  helperText: '本单相当于多少个计数单位（如进 1 箱 → 填 40 袋），库存/备货按它统计；留空=按原单位',
-                ),
+                label: '折合计数（可选）',
+                helperText: '本单相当于多少个计数单位（如进 1 箱 → 填 40 袋），库存/备货按它统计；留空=按原单位',
               ),
               const SizedBox(height: 8),
-              TextField(
+              NumberPadField(
                 controller: priceCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: '进价（元）'),
+                label: '进价（元）',
               ),
               const SizedBox(height: 8),
               Row(

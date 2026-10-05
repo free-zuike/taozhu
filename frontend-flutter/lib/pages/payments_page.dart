@@ -10,6 +10,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/date_field.dart';
+import '../widgets/number_pad_field.dart';
 import 'router.dart';
 
 class PaymentsPage extends StatefulWidget {
@@ -220,16 +221,14 @@ class _PaymentsPageState extends State<PaymentsPage> {
           builder: (ctx, setDlg) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
+              NumberPadField(
                 controller: amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: '金额（元）'),
+                label: '金额（元）',
               ),
               const SizedBox(height: 8),
-              TextField(
+              NumberPadField(
                 controller: waivedCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: '平账减免（元，可改）'),
+                label: '平账减免（元，可改）',
               ),
               const SizedBox(height: 8),
               TextField(
@@ -390,9 +389,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
                                   style: TextStyle(color: _c.danger, fontSize: 13)),
                             ),
                           const SizedBox(height: 8),
-                          TextField(
+                          NumberPadField(
                             controller: _amountCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
                             decoration: const InputDecoration(labelText: '实收金额（元）', prefixText: '¥ '),
                             onChanged: (_) => setState(() {}),
                           ),
@@ -414,9 +412,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             Text('实收 + 减免 = 账面已收，减免后欠款自动结清',
                                 style: TextStyle(fontSize: 12, color: _c.textSub)),
                           ] else ...[
-                            TextField(
+                            NumberPadField(
                               controller: _waivedCtrl,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
                               decoration: const InputDecoration(
                                   labelText: '平账减免（元）',
                                   helperText: '实收 + 减免 = 账面已收；减免后欠款自动结清'),

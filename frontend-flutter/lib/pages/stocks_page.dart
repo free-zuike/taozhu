@@ -7,6 +7,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/center_sheet.dart';
+import '../widgets/number_pad_field.dart';
 import 'router.dart';
 
 /// 库存：按 商品+单位 查看/预警/调整（进货自动入库、出货自动扣减，见单据页）
@@ -135,16 +136,14 @@ class _StocksPageState extends State<StocksPage> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
+            NumberPadField(
               controller: qtyCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: '库存数量'),
+              label: '库存数量',
             ),
             const SizedBox(height: 8),
-            TextField(
+            NumberPadField(
               controller: minCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: '低库存预警阈值'),
+              label: '低库存预警阈值',
             ),
           ],
         ),
@@ -230,18 +229,18 @@ class _StocksPageState extends State<StocksPage> {
                       ),
                       SizedBox(
                         width: 84,
-                        child: TextField(
+                        child: NumberPadField(
                           controller: ctrls[i]['qty'],
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          label: '库存',
                           decoration: const InputDecoration(labelText: '库存', isDense: true),
                         ),
                       ),
                       const SizedBox(width: 8),
                       SizedBox(
                         width: 84,
-                        child: TextField(
+                        child: NumberPadField(
                           controller: ctrls[i]['min'],
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          label: '阈值',
                           decoration: const InputDecoration(labelText: '阈值', isDense: true),
                         ),
                       ),

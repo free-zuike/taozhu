@@ -174,7 +174,7 @@ jobs:
           ANDROID_KEYSTORE_KEY_PASS: ${{ secrets.ANDROID_KEYSTORE_KEY_PASS }}
           ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
         run: |
-          flutter test test/version_test.dart || exit 1
+          flutter test test/ || exit 1
           # ① Android 版本与应用版本号同步：versionName=三位版本号；versionCode=三位加权拼成正整数（单调递增，覆盖升级稳定）。
           #    不用改写 pubspec version：pub 的 version 格式只支持 x.y.z[+build]，四段 0.8.1.0 会判非法导致构建失败。
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" lib/version.dart || exit 1)
