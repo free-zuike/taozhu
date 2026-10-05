@@ -198,7 +198,49 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       _resetIndex();
       _loading = false;
     });
-    unawaited(_downloadMissingCopies());
+    unawaited(_pullCloudWhenLocalEmpty());
+  }
+
+  /// 本地引用缺失时后台按同步语义补齐（解决"有附件但显示暂无附件"）：
+  /// 拉该实体(批量=单据+各明细行)云端引用 → 落本地引用表 → 重载(本地渲染+缺副本下载)。
+  /// 纯后台、非阻塞、不直连展示；失败/超时静默保留本地视图；本地已有引用则只补缺副本。
+  Future<void> _pullCloudWhenLocalEmpty() async {
+    if (kIsWeb) return;
+    if (_items.isNotEmpty) {
+      await _downloadMissingCopies();
+      return;
+    }
+    try {
+      final jobs = <(String, String)>[
+        (widget.entity, widget.id),
+        if (_bulk)
+          for (final lid in widget.lineIds) (_lineEntity, lid),
+      ];
+      final groups = await Future.wait(jobs.map((j) async {
+        return <(String, String, String)>[
+          for (final k in await _cloudKeys(j.$1, j.$2)) (j.$1, j.$2, k),
+        ];
+      })).timeout(const Duration(seconds: 3), onTimeout: () => []);
+      final refsToWrite = <Map<String, dynamic>>[];
+      for (final g in groups) {
+        for (final (entity, id, key) in g) {
+          final name = key.split('/').last;
+          refsToWrite.add({
+            'id': '$entity/$id/$name',
+            'entity': entity,
+            'entity_id': id,
+            'file': name,
+            'key': key,
+          });
+        }
+      }
+      if (refsToWrite.isEmpty) return;
+      for (final r in refsToWrite) {
+        await LocalDb.upsertOne('attachment_refs', r);
+      }
+      if (!mounted) return;
+      await _load();
+    } catch (_) {}
   }
 
   /// 云端副本下载落盘（同步语义，非查看器直连展示）：本地引用有而副本缺的附件，

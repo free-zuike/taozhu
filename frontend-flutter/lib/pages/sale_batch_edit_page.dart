@@ -290,6 +290,10 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
     final sp = (l['sale_price'] as num?)?.toDouble() ?? 0;
     final date = '${l['date'] ?? ''}';
     final clientName = '${l['client_name'] ?? ''}';
+    final lineCount = _attachCount['${l['item_id']}'] ?? 0;
+    final attachCount = lineCount > 0
+        ? lineCount
+        : (_orderAttachCount['${(l['order'] as Map?)?['id']}'] ?? 0);
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       // 点行 = 只编辑当前商品（数量/售价/单位/日期）；长按 = 删除该商品行
@@ -340,36 +344,29 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
               ),
             ),
             const SizedBox(width: 8),
-            // 凭证入口（对齐账本行卡片：行级有→显示行级；行级空→回退单据级；无则灰态，
-            // 点开查看/添加——识别记账挂单据级的图在行卡片也能亮）
-            Builder(builder: (context) {
-              final lineCount = _attachCount['${l['item_id']}'] ?? 0;
-              final attachCount = lineCount > 0
-                  ? lineCount
-                  : (_orderAttachCount['${(l['order'] as Map?)?['id']}'] ?? 0);
-              return InkWell(
-                borderRadius: BorderRadius.circular(6),
-                onTap: () async {
-                  final lid = '${l['item_id'] ?? ''}';
-                  if (lid.isEmpty) return;
-                  await showAttachmentViewer(context, 'sale', '${(l['order'] as Map?)?['id'] ?? ''}',
-                      '出货明细行凭证', lineIds: [lid]);
-                  unawaited(_loadAttachCounts());
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.image_outlined, size: 15,
-                        color: attachCount > 0 ? c.primary : c.textSub.withOpacity(0.5)),
-                    if (attachCount > 0) ...[
-                      const SizedBox(width: 2),
-                      Text('$attachCount',
-                          style: TextStyle(fontSize: 10, color: c.primary, fontWeight: FontWeight.w600)),
-                    ],
-                  ]),
-                ),
-              );
-            }),
+            // 凭证入口（常驻图标；有凭证亮+张数，无凭证灰）：点击打开该行凭证查看器
+            InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () async {
+                final lid = '${l['item_id'] ?? ''}';
+                if (lid.isEmpty) return;
+                await showAttachmentViewer(context, 'sale', '${(l['order'] as Map?)?['id'] ?? ''}',
+                    '出货明细行凭证', lineIds: [lid]);
+                unawaited(_loadAttachCounts());
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.image_outlined, size: 15,
+                      color: attachCount > 0 ? const Color(0xFF409EFF) : c.textSub.withOpacity(0.5)),
+                  if (attachCount > 0) ...[
+                    const SizedBox(width: 2),
+                    Text('$attachCount',
+                        style: const TextStyle(fontSize: 10, color: Color(0xFF409EFF), fontWeight: FontWeight.w600)),
+                  ],
+                ]),
+              ),
+            ),
             const SizedBox(width: 4),
             Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
