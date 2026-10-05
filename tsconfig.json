@@ -12,5 +12,6 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts"]
+  // scripts/ 为本地运维工具（Node API：child_process/fs），与 Worker 类型环境冲突，由 tsx 直接运行
+  "include": ["src/**/*.ts"]
 }

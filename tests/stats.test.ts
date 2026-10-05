@@ -141,6 +141,21 @@ describe('统计区间', () => {
     expect(a.sales_total).toBe(150); // 100 + 50
   });
 
+  it('金额合计=每笔舍入后累加（digits=0 时 1.6+1.6=4，SUM 舍入会是 3）', async () => {
+    // 设元整数位数（digits=0），再造两笔 1.6 元出货：单笔显示各 ¥2，合计必须 ¥4（与单笔对账一致）
+    await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('round_digits', '0')").run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-r1', 's-r', 'c-a', 'i-1', '斤', 0.8, 2, 1, 1.6, '2026-09-05').run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-r2', 's-r', 'c-a', 'i-1', '斤', 0.8, 2, 1, 1.6, '2026-09-05').run();
+    const daily = (await (await call(env, 'GET', '/api/v1/stats/daily?start=2026-09-05&end=2026-09-05', token)).json()) as { days: Array<{ day: string; sales_total: number }> };
+    expect(daily.days[0].sales_total).toBe(4); // 2+2；旧 SUM 舍入 = 3
+    const sum = (await (await call(env, 'GET', '/api/v1/stats/summary?start=2026-09-05&end=2026-09-05', token)).json()) as { sales_total: number };
+    expect(sum.sales_total).toBe(4);
+    const clients = (await (await call(env, 'GET', '/api/v1/stats/clients?start=2026-09-05&end=2026-09-05', token)).json()) as { clients: Array<{ name: string; sales_total: number }> };
+    expect(clients.clients.find((x) => x.name === 'A店')!.sales_total).toBe(4);
+  });
+
   it('summary 缺 start/end 返回 400', async () => {
     const res = await call(env, 'GET', '/api/v1/stats/summary', token);
     expect(res.status).toBe(400);

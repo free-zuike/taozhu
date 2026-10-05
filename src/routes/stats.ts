@@ -1,4 +1,7 @@
-/** 统计：工作台概览 / 按店 / 按月 —— 毛利 = Σ(售价-进价快照)*数量 */
+/** 统计：工作台概览 / 按店 / 按月 —— 毛利 = Σ(售价-进价快照)*数量
+ *  金额口径统一"每笔舍入后累加"（与单笔显示/账本对账一致）：原始浮点 SUM 后舍入
+ *  在 digits=0/1 时（1.6+1.6=3.2→¥3）会与每笔显示（¥2+¥2）对不上。
+ *  故各接口不再用 SQL SUM 聚合金额，改为取明细行 JS reduce roundMoney 逐笔累加。 */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { getRoundingConfig, roundMoney } from '../lib/money';
@@ -19,51 +22,71 @@ statsRouter.get('/overview', async (c) => {
   const date = c.req.query('date')?.trim() || nowIso().slice(0, 10);
   const db = c.env.DB;
   const canSeeProfit = c.get('user').role === 'admin';
-
-  const today = await db.prepare(
-    `SELECT
-      COALESCE((SELECT SUM(si.amount) FROM sale_items si WHERE si.happened_at = ?), 0) AS sales_total,
-      COALESCE((SELECT COUNT(*) FROM sale_items si WHERE si.happened_at = ?), 0) AS sales_count,
-      COALESCE((SELECT SUM((si.sale_price - si.cost_price) * si.quantity) FROM sale_items si WHERE si.happened_at = ?), 0) AS gross_profit,
-      COALESCE((SELECT SUM(amount + waived) FROM payments WHERE happened_at = ?), 0) AS paid_total,
-      COALESCE((SELECT SUM(pi.amount) FROM purchase_items pi WHERE pi.happened_at = ?), 0) AS purchase_total`,
-  ).bind(date, date, date, date, date).first<{
-    sales_total: number; sales_count: number; gross_profit: number; paid_total: number; purchase_total: number;
-  }>();
-
-  const totals = await db.prepare(
-    `SELECT
-      COALESCE((SELECT SUM(amount) FROM sale_items), 0) AS all_sales,
-      COALESCE((SELECT SUM(amount + waived) FROM payments), 0) AS all_paid,
-      COALESCE((SELECT COUNT(*) FROM clients WHERE deleted_at IS NULL), 0) AS client_count,
-      COALESCE((SELECT COUNT(*) FROM items WHERE deleted_at IS NULL), 0) AS item_count`,
-  ).first<{ all_sales: number; all_paid: number; client_count: number; item_count: number }>();
-
-  const topDebt = await db.prepare(
-    `SELECT c.id, c.name,
-      COALESCE((SELECT SUM(si.amount) FROM sale_items si WHERE si.client_id = c.id), 0) AS sales_total,
-      COALESCE((SELECT SUM(amount + waived) FROM payments WHERE client_id = c.id), 0) AS paid_total
-     FROM clients c WHERE c.deleted_at IS NULL
-     ORDER BY (sales_total - paid_total) DESC LIMIT 5`,
-  ).all<{ id: string; name: string; sales_total: number; paid_total: number }>();
-
-  const money = await getRoundingConfig(c.env.DB);
+  const money = await getRoundingConfig(db);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
+
+  const [todaySales, todayPays, todayBuys, allSales, allPays, counts] = await Promise.all([
+    db.prepare(
+      `SELECT si.amount AS amount, (si.sale_price - si.cost_price) * si.quantity AS gross
+       FROM sale_items si WHERE si.happened_at = ?`,
+    ).bind(date).all<{ amount: number; gross: number }>(),
+    db.prepare(`SELECT amount, waived FROM payments WHERE happened_at = ?`).bind(date)
+      .all<{ amount: number; waived: number }>(),
+    db.prepare(`SELECT amount FROM purchase_items pi WHERE pi.happened_at = ?`).bind(date)
+      .all<{ amount: number }>(),
+    db.prepare(`SELECT amount FROM sale_items`).all<{ amount: number }>(),
+    db.prepare(`SELECT amount, waived FROM payments`).all<{ amount: number; waived: number }>(),
+    db.prepare(
+      `SELECT
+        (SELECT COUNT(*) FROM clients WHERE deleted_at IS NULL) AS client_count,
+        (SELECT COUNT(*) FROM items WHERE deleted_at IS NULL) AS item_count`,
+    ).first<{ client_count: number; item_count: number }>(),
+  ]);
+  const sales_total = todaySales.results.reduce((s, x) => s + r(x.amount), 0);
+  const gross_profit = todaySales.results.reduce((s, x) => s + r(x.gross), 0);
+  const paid_total = todayPays.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
+  const purchase_total = todayBuys.results.reduce((s, x) => s + r(x.amount), 0);
+  const all_sales = allSales.results.reduce((s, x) => s + r(x.amount), 0);
+  const all_paid = allPays.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
+
+  // 店铺欠款排行：全部历史逐笔舍入累加后求差（与账本店铺欠款口径一致）
+  const [cSales, cPays, clientRows] = await Promise.all([
+    db.prepare(`SELECT client_id, amount FROM sale_items`).all<{ client_id: string; amount: number }>(),
+    db.prepare(`SELECT client_id, amount, waived FROM payments`).all<{ client_id: string; amount: number; waived: number }>(),
+    db.prepare(`SELECT id, name FROM clients WHERE deleted_at IS NULL`).all<{ id: string; name: string }>(),
+  ]);
+  const salesMap = new Map<string, number>();
+  const paidMap = new Map<string, number>();
+  for (const x of cSales.results) {
+    salesMap.set(x.client_id, (salesMap.get(x.client_id) ?? 0) + r(x.amount));
+  }
+  for (const x of cPays.results) {
+    paidMap.set(x.client_id, (paidMap.get(x.client_id) ?? 0) + r((Number(x.amount) || 0) + (Number(x.waived) || 0)));
+  }
+  const topDebt = clientRows.results
+    .map((c2) => ({
+      id: c2.id, name: c2.name,
+      sales_total: salesMap.get(c2.id) ?? 0, paid_total: paidMap.get(c2.id) ?? 0,
+    }))
+    .sort((a, b) => (b.sales_total - b.paid_total) - (a.sales_total - a.paid_total))
+    .slice(0, 5);
+
   return c.json({
     date,
     can_see_profit: canSeeProfit,
     today: {
-      sales_total: r(today?.sales_total), sales_count: today?.sales_count ?? 0,
-      gross_profit: canSeeProfit ? r(today?.gross_profit) : 0, paid_total: r(today?.paid_total),
-      purchase_total: r(today?.purchase_total),
+      sales_total: r(sales_total), sales_count: todaySales.results.length,
+      gross_profit: canSeeProfit ? r(gross_profit) : 0, paid_total: r(paid_total),
+      purchase_total: r(purchase_total),
     },
     totals: {
-      all_sales: r(totals?.all_sales), all_paid: r(totals?.all_paid),
-      debt: r((totals?.all_sales ?? 0) - (totals?.all_paid ?? 0)),
-      client_count: totals?.client_count ?? 0, item_count: totals?.item_count ?? 0,
+      all_sales: r(all_sales), all_paid: r(all_paid),
+      debt: r(all_sales - all_paid),
+      client_count: counts?.client_count ?? 0, item_count: counts?.item_count ?? 0,
     },
-    top_debt_clients: topDebt.results.map((c2) => ({
-      id: c2.id, name: c2.name, sales_total: r(c2.sales_total), paid_total: r(c2.paid_total),
+    top_debt_clients: topDebt.map((c2) => ({
+      id: c2.id, name: c2.name,
+      sales_total: r(c2.sales_total), paid_total: r(c2.paid_total),
       debt: r(c2.sales_total - c2.paid_total),
     })),
   });
@@ -75,22 +98,43 @@ statsRouter.get('/clients', async (c) => {
   const start = c.req.query('start')?.trim();
   const end = c.req.query('end')?.trim();
   const hasRange = !!(start && end);
-  const saleCond = hasRange ? 'AND si.happened_at >= ? AND si.happened_at <= ?' : '';
-  const payCond = hasRange ? 'AND happened_at >= ? AND happened_at <= ?' : '';
-  const params: unknown[] = [];
-  if (hasRange) params.push(start, end, start, end, start, end);
-  const rows = await c.env.DB.prepare(
-    `SELECT c.id, c.name,
-      COALESCE((SELECT SUM(si.amount) FROM sale_items si WHERE si.client_id = c.id ${saleCond}), 0) AS sales_total,
-      COALESCE((SELECT SUM(amount + waived) FROM payments WHERE client_id = c.id ${payCond}), 0) AS paid_total,
-      COALESCE((SELECT SUM((si.sale_price - si.cost_price) * si.quantity) FROM sale_items si WHERE si.client_id = c.id ${saleCond}), 0) AS gross_profit
-     FROM clients c WHERE c.deleted_at IS NULL ORDER BY sales_total DESC`,
-  ).bind(...params).all<{ id: string; name: string; sales_total: number; paid_total: number; gross_profit: number }>();
+  const cond = hasRange ? 'AND happened_at >= ? AND happened_at <= ?' : '';
+  const params: unknown[] = hasRange ? [start, end] : [];
+  const [saleRows, payRows, clientRows] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT si.client_id AS cid, si.amount AS amount,
+        (si.sale_price - si.cost_price) * si.quantity AS gross
+       FROM sale_items si WHERE 1=1 ${cond}`,
+    ).bind(...params).all<{ cid: string; amount: number; gross: number }>(),
+    c.env.DB.prepare(
+      `SELECT client_id AS cid, amount, waived FROM payments WHERE 1=1 ${cond}`,
+    ).bind(...params).all<{ cid: string; amount: number; waived: number }>(),
+    c.env.DB.prepare(`SELECT id, name FROM clients WHERE deleted_at IS NULL`).all<{ id: string; name: string }>(),
+  ]);
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
+  const salesMap = new Map<string, number>();
+  const grossMap = new Map<string, number>();
+  const paidMap = new Map<string, number>();
+  for (const x of saleRows.results) {
+    const id = x.cid;
+    salesMap.set(id, (salesMap.get(id) ?? 0) + r(x.amount));
+    grossMap.set(id, (grossMap.get(id) ?? 0) + r(x.gross));
+  }
+  for (const x of payRows.results) {
+    const id = x.cid;
+    paidMap.set(id, (paidMap.get(id) ?? 0) + r((Number(x.amount) || 0) + (Number(x.waived) || 0)));
+  }
+  const clients = clientRows.results
+    .map((c2) => ({
+      id: c2.id, name: c2.name,
+      sales_total: salesMap.get(c2.id) ?? 0, paid_total: paidMap.get(c2.id) ?? 0,
+      gross_profit: grossMap.get(c2.id) ?? 0,
+    }))
+    .sort((a, b) => b.sales_total - a.sales_total);
   return c.json({
     can_see_profit: canSeeProfit,
-    clients: rows.results.map((c2) => ({
+    clients: clients.map((c2) => ({
       id: c2.id, name: c2.name, sales_total: r(c2.sales_total), paid_total: r(c2.paid_total),
       gross_profit: canSeeProfit ? r(c2.gross_profit) : 0, debt: r(c2.sales_total - c2.paid_total),
     })),
@@ -102,37 +146,41 @@ statsRouter.get('/monthly', async (c) => {
   const canSeeProfit = c.get('user').role === 'admin';
   const year = c.req.query('year')?.trim() || String(new Date().getUTCFullYear());
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
-  const salesRows = await c.env.DB.prepare(
-    kind === 'purchase'
-      ? `SELECT substr(pi.happened_at, 1, 7) AS month,
-        SUM(pi.amount) AS sales_total, 0 AS gross_profit
-       FROM purchase_items pi
-       WHERE pi.happened_at >= ? AND pi.happened_at <= ?
-       GROUP BY month ORDER BY month`
-      : `SELECT substr(si.happened_at, 1, 7) AS month,
-        SUM(si.amount) AS sales_total,
-        SUM((si.sale_price - si.cost_price) * si.quantity) AS gross_profit
-       FROM sale_items si
-       WHERE si.happened_at >= ? AND si.happened_at <= ?
-       GROUP BY month ORDER BY month`,
-  ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; sales_total: number; gross_profit: number }>();
-  const paidRows = kind === 'purchase'
-    ? { results: [] as Array<{ month: string; paid_total: number }> }
-    : await c.env.DB.prepare(
-        `SELECT substr(happened_at, 1, 7) AS month, SUM(amount + waived) AS paid_total
-         FROM payments WHERE happened_at >= ? AND happened_at <= ? GROUP BY month ORDER BY month`,
-      ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; paid_total: number }>();
-  const paidMap = new Map(paidRows.results.map((p) => [p.month, p.paid_total]));
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  return c.json({
-    year, kind,
-    can_see_profit: canSeeProfit,
-    months: salesRows.results.map((s) => ({
-      month: s.month, sales_total: r(s.sales_total), gross_profit: canSeeProfit ? r(s.gross_profit) : 0,
-      paid_total: r(paidMap.get(s.month) ?? 0),
-    })),
-  });
+  const [saleRows, payRows] = await Promise.all([
+    c.env.DB.prepare(
+      kind === 'purchase'
+        ? `SELECT substr(pi.happened_at, 1, 7) AS month, pi.amount AS amount, 0 AS gross
+           FROM purchase_items pi WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
+        : `SELECT substr(si.happened_at, 1, 7) AS month, si.amount AS amount,
+            (si.sale_price - si.cost_price) * si.quantity AS gross
+           FROM sale_items si WHERE si.happened_at >= ? AND si.happened_at <= ?`,
+    ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; amount: number; gross: number }>(),
+    kind === 'purchase'
+      ? Promise.resolve({ results: [] as Array<{ month: string; amount: number; waived: number }> })
+      : c.env.DB.prepare(
+          `SELECT substr(happened_at, 1, 7) AS month, amount, waived
+           FROM payments WHERE happened_at >= ? AND happened_at <= ?`,
+        ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; amount: number; waived: number }>(),
+  ]);
+  const salesMap = new Map<string, number>();
+  const grossMap = new Map<string, number>();
+  const paidMap = new Map<string, number>();
+  for (const x of saleRows.results) {
+    salesMap.set(x.month, (salesMap.get(x.month) ?? 0) + r(x.amount));
+    grossMap.set(x.month, (grossMap.get(x.month) ?? 0) + r(x.gross));
+  }
+  for (const x of payRows.results) {
+    paidMap.set(x.month, (paidMap.get(x.month) ?? 0) + r((Number(x.amount) || 0) + (Number(x.waived) || 0)));
+  }
+  const months = [...salesMap.keys()].sort().map((m) => ({
+    month: m,
+    sales_total: r(salesMap.get(m) ?? 0),
+    gross_profit: canSeeProfit ? r(grossMap.get(m) ?? 0) : 0,
+    paid_total: r(paidMap.get(m) ?? 0),
+  }));
+  return c.json({ year, kind, can_see_profit: canSeeProfit, months });
 });
 
 // GET /stats/monthly-flow?year=2026 — 按月流式结余（类似参考首页卡片）：
@@ -141,35 +189,36 @@ statsRouter.get('/monthly', async (c) => {
 statsRouter.get('/monthly-flow', async (c) => {
   const canSeeProfit = c.get('user').role === 'admin';
   const year = c.req.query('year')?.trim() || String(new Date().getUTCFullYear());
-  const salesRows = await c.env.DB.prepare(
-    `SELECT substr(si.happened_at, 1, 7) AS month, SUM(si.amount) AS sales_total
-     FROM sale_items si
-     WHERE si.happened_at >= ? AND si.happened_at <= ?
-     GROUP BY month ORDER BY month`,
-  ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; sales_total: number }>();
-  const buyRows = await c.env.DB.prepare(
-    `SELECT substr(pi.happened_at, 1, 7) AS month, SUM(pi.amount) AS purchase_total
-     FROM purchase_items pi
-     WHERE pi.happened_at >= ? AND pi.happened_at <= ?
-     GROUP BY month ORDER BY month`,
-  ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; purchase_total: number }>();
-  const buyMap = new Map(buyRows.results.map((r) => [r.month, r.purchase_total]));
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const months = salesRows.results.map((s) => {
-    const sales = r(s.sales_total);
-    const buys = r(buyMap.get(s.month) ?? 0);
-    return { month: s.month, sales_total: sales, purchase_total: buys, balance: r(sales - buys) };
-  });
-  // 无出货但有进货的月份也要展示（支出列非空）
-  for (const b of buyRows.results) {
-    if (!months.some((m) => m.month === b.month)) {
-      const buys = r(b.purchase_total);
-      months.push({ month: b.month, sales_total: 0, purchase_total: buys, balance: r(-buys) });
-    }
+  const [saleRows, buyRows] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT substr(si.happened_at, 1, 7) AS month, si.amount AS amount
+       FROM sale_items si WHERE si.happened_at >= ? AND si.happened_at <= ?`,
+    ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; amount: number }>(),
+    c.env.DB.prepare(
+      `SELECT substr(pi.happened_at, 1, 7) AS month, pi.amount AS amount
+       FROM purchase_items pi WHERE pi.happened_at >= ? AND pi.happened_at <= ?`,
+    ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; amount: number }>(),
+  ]);
+  const salesMap = new Map<string, number>();
+  const buyMap = new Map<string, number>();
+  for (const x of saleRows.results) salesMap.set(x.month, (salesMap.get(x.month) ?? 0) + r(x.amount));
+  for (const x of buyRows.results) buyMap.set(x.month, (buyMap.get(x.month) ?? 0) + r(x.amount));
+  const months = new Map<string, { month: string; sales_total: number; purchase_total: number; balance: number }>();
+  for (const m of salesMap.keys()) {
+    const sales = salesMap.get(m) ?? 0;
+    const buys = buyMap.get(m) ?? 0;
+    months.set(m, { month: m, sales_total: sales, purchase_total: buys, balance: r(sales - buys) });
   }
-  months.sort((a, b) => a.month.localeCompare(b.month));
-  return c.json({ year, can_see_profit: canSeeProfit, months });
+  // 无出货但有进货的月份也要展示（支出列非空）
+  for (const [m, buys] of buyMap) {
+    if (!months.has(m)) months.set(m, { month: m, sales_total: 0, purchase_total: buys, balance: r(-buys) });
+  }
+  return c.json({
+    year, can_see_profit: canSeeProfit,
+    months: [...months.values()].sort((a, b) => a.month.localeCompare(b.month)),
+  });
 });
 
 // GET /stats/categories?start=&end=&client_id=&kind=sale|purchase — 区间内按商品分类聚合（出货额/进货额降序）
@@ -180,29 +229,35 @@ statsRouter.get('/categories', async (c) => {
   const clientId = c.req.query('client_id')?.trim();
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
   const params: unknown[] = [start, end];
-  if (clientId && kind === 'sale') { params.push(clientId); }
+  if (clientId && kind === 'sale') params.push(clientId);
   const rows = await c.env.DB.prepare(
     kind === 'purchase'
-      ? `SELECT COALESCE(cat.name, '未分类') AS category,
-         SUM(pi.quantity) AS quantity, SUM(pi.amount) AS amount
-       FROM purchase_items pi
-       JOIN items i ON i.id = pi.item_id
-       LEFT JOIN categories cat ON cat.id = i.category_id
-       WHERE pi.happened_at >= ? AND pi.happened_at <= ?
-       GROUP BY COALESCE(cat.name, '未分类') ORDER BY amount DESC`
-      : `SELECT COALESCE(cat.name, '未分类') AS category,
-         SUM(si.quantity) AS quantity, SUM(si.amount) AS amount
-       FROM sale_items si
-       JOIN items i ON i.id = si.item_id
-       LEFT JOIN categories cat ON cat.id = i.category_id
-       WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}
-       GROUP BY COALESCE(cat.name, '未分类') ORDER BY amount DESC`,
+      ? `SELECT COALESCE(cat.name, '未分类') AS category, pi.quantity AS quantity, pi.amount AS amount
+         FROM purchase_items pi
+         JOIN items i ON i.id = pi.item_id
+         LEFT JOIN categories cat ON cat.id = i.category_id
+         WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
+      : `SELECT COALESCE(cat.name, '未分类') AS category, si.quantity AS quantity, si.amount AS amount
+         FROM sale_items si
+         JOIN items i ON i.id = si.item_id
+         LEFT JOIN categories cat ON cat.id = i.category_id
+         WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`,
   ).bind(...params).all<{ category: string; quantity: number; amount: number }>();
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
+  const map = new Map<string, { quantity: number; amount: number }>();
+  for (const x of rows.results) {
+    const cur = map.get(x.category) ?? { quantity: 0, amount: 0 };
+    cur.quantity += Number(x.quantity) || 0;
+    cur.amount += r(x.amount);
+    map.set(x.category, cur);
+  }
+  const categories = [...map.entries()]
+    .map(([category, v]) => ({ category, quantity: v.quantity, amount: v.amount }))
+    .sort((a, b) => b.amount - a.amount);
   return c.json({
     kind,
-    categories: rows.results.map((x) => ({ category: x.category, quantity: r(x.quantity), amount: r(x.amount) })),
+    categories: categories.map((x) => ({ category: x.category, quantity: r(x.quantity), amount: r(x.amount) })),
   });
 });
 
@@ -299,49 +354,56 @@ statsRouter.get('/daily', async (c) => {
   if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
   const clientId = c.req.query('client_id')?.trim();
   const db = c.env.DB;
-  const money = await getRoundingConfig(c.env.DB);
+  const money = await getRoundingConfig(db);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
 
   const sParams: unknown[] = [start, end];
   const sSql = kind === 'purchase'
-    ? `SELECT substr(pi.happened_at, 1, 10) AS day, SUM(pi.amount) AS sales_total, 0 AS gross_profit
+    ? `SELECT substr(pi.happened_at, 1, 10) AS day, pi.amount AS amount, 0 AS gross
        FROM purchase_items pi
-       WHERE pi.happened_at >= ? AND pi.happened_at <= ?
-       GROUP BY day ORDER BY day`
-    : `SELECT substr(si.happened_at, 1, 10) AS day,
-        SUM(si.amount) AS sales_total,
-        SUM((si.sale_price - si.cost_price) * si.quantity) AS gross_profit
+       WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
+    : `SELECT substr(si.happened_at, 1, 10) AS day, si.amount AS amount,
+        (si.sale_price - si.cost_price) * si.quantity AS gross
        FROM sale_items si
-       WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}
-       GROUP BY day ORDER BY day`;
+       WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`;
   if (clientId && kind === 'sale') sParams.push(clientId);
-  const salesRows = await db.prepare(sSql).bind(...sParams).all<{ day: string; sales_total: number; gross_profit: number }>();
+  const saleRows = await db.prepare(sSql).bind(...sParams).all<{ day: string; amount: number; gross: number }>();
 
   const pParams: unknown[] = [start, end];
-  const pSql = `SELECT substr(happened_at, 1, 10) AS day, SUM(amount + waived) AS paid_total
-     FROM payments WHERE happened_at >= ? AND happened_at <= ?${clientId ? ' AND client_id = ?' : ''}
-     GROUP BY day ORDER BY day`;
+  const pSql = `SELECT substr(happened_at, 1, 10) AS day, amount, waived
+     FROM payments WHERE happened_at >= ? AND happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`;
   if (clientId) pParams.push(clientId);
-  const paidRows = await db.prepare(pSql).bind(...pParams).all<{ day: string; paid_total: number }>();
+  const paidRows = await db.prepare(pSql).bind(...pParams).all<{ day: string; amount: number; waived: number }>();
 
   const bParams: unknown[] = [start, end];
-  const bSql = `SELECT substr(pi.happened_at, 1, 10) AS day, SUM(pi.amount) AS purchase_total
+  const bSql = `SELECT substr(pi.happened_at, 1, 10) AS day, pi.amount AS amount
      FROM purchase_items pi
-     WHERE pi.happened_at >= ? AND pi.happened_at <= ?
-     GROUP BY day ORDER BY day`;
-  const buyRows = await db.prepare(bSql).bind(...bParams).all<{ day: string; purchase_total: number }>();
+     WHERE pi.happened_at >= ? AND pi.happened_at <= ?`;
+  const buyRows = await db.prepare(bSql).bind(...bParams).all<{ day: string; amount: number }>();
 
-  const paidMap = new Map(paidRows.results.map((p) => [p.day, p.paid_total]));
-  const buyMap = new Map(buyRows.results.map((p) => [p.day, p.purchase_total]));
-  return c.json({
-    start, end,
-    can_see_profit: canSeeProfit,
-    days: salesRows.results.map((s) => ({
-      day: s.day, sales_total: r(s.sales_total), gross_profit: canSeeProfit ? r(s.gross_profit) : 0,
-      paid_total: r(paidMap.get(s.day) ?? 0), purchase_total: r(buyMap.get(s.day) ?? 0),
-    })),
-  });
+  const salesMap = new Map<string, number>();
+  const grossMap = new Map<string, number>();
+  for (const x of saleRows.results) {
+    salesMap.set(x.day, (salesMap.get(x.day) ?? 0) + r(x.amount));
+    grossMap.set(x.day, (grossMap.get(x.day) ?? 0) + r(x.gross));
+  }
+  const paidMap = new Map<string, number>();
+  for (const x of paidRows.results) {
+    paidMap.set(x.day, (paidMap.get(x.day) ?? 0) + r((Number(x.amount) || 0) + (Number(x.waived) || 0)));
+  }
+  const buyMap = new Map<string, number>();
+  for (const x of buyRows.results) {
+    buyMap.set(x.day, (buyMap.get(x.day) ?? 0) + r(x.amount));
+  }
+  const days = [...salesMap.keys()].sort().map((day) => ({
+    day,
+    sales_total: r(salesMap.get(day) ?? 0),
+    gross_profit: canSeeProfit ? r(grossMap.get(day) ?? 0) : 0,
+    paid_total: r(paidMap.get(day) ?? 0),
+    purchase_total: r(buyMap.get(day) ?? 0),
+  }));
+  return c.json({ start, end, can_see_profit: canSeeProfit, days });
 });
 
 // GET /stats/items?start=&end=&client_id=&kind=sale|purchase — 区间内商品排行（出货额/进货额降序，Top 15）
@@ -355,27 +417,29 @@ statsRouter.get('/items', async (c) => {
   if (clientId && kind === 'sale') params.push(clientId);
   const rows = await c.env.DB.prepare(
     kind === 'purchase'
-      ? `SELECT i.name, pi.unit, SUM(pi.quantity) AS quantity, SUM(pi.amount) AS amount
+      ? `SELECT i.name, pi.unit, pi.quantity AS quantity, pi.amount AS amount
          FROM purchase_items pi
          JOIN items i ON i.id = pi.item_id
-         WHERE pi.happened_at >= ? AND pi.happened_at <= ?
-         GROUP BY pi.item_id, pi.unit
-         ORDER BY amount DESC LIMIT 15`
-      : `SELECT i.name, si.unit, SUM(si.quantity) AS quantity, SUM(si.amount) AS amount
+         WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
+      : `SELECT i.name, si.unit, si.quantity AS quantity, si.amount AS amount
          FROM sale_items si
          JOIN items i ON i.id = si.item_id
-         WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}
-         GROUP BY si.item_id, si.unit
-         ORDER BY amount DESC LIMIT 15`,
+         WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`,
   ).bind(...params).all<{ name: string; unit: string; quantity: number; amount: number }>();
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
+  const map = new Map<string, { name: string; unit: string; quantity: number; amount: number }>();
+  for (const x of rows.results) {
+    const key = `${x.name}|${x.unit}`;
+    const cur = map.get(key) ?? { name: x.name, unit: x.unit, quantity: 0, amount: 0 };
+    cur.quantity += Number(x.quantity) || 0;
+    cur.amount += r(x.amount);
+    map.set(key, cur);
+  }
+  const items = [...map.values()].sort((a, b) => b.amount - a.amount).slice(0, 15);
   return c.json({
     kind,
-    items: rows.results.map((x) => ({
-      name: x.name, unit: x.unit,
-      quantity: r(x.quantity), amount: r(x.amount),
-    })),
+    items: items.map((x) => ({ name: x.name, unit: x.unit, quantity: r(x.quantity), amount: r(x.amount) })),
   });
 });
 
@@ -390,35 +454,56 @@ statsRouter.get('/category-statement', async (c) => {
     "SELECT name FROM categories WHERE id = ? AND type = 'client'",
   ).bind(categoryId).first<{ name: string }>();
   if (!cat) return c.json({ error: '店铺分类不存在' }, 404);
-  const rows = await c.env.DB.prepare(
-    `SELECT c.id, c.name,
-       COALESCE((SELECT SUM(si.amount) FROM sale_items si
-                  WHERE si.client_id = c.id AND si.happened_at >= ? AND si.happened_at <= ?), 0) AS sales_total,
-       COALESCE((SELECT SUM(p.amount) FROM payments p
-                  WHERE p.client_id = c.id AND p.happened_at >= ? AND p.happened_at <= ?), 0) AS paid_total,
-       COALESCE((SELECT SUM(p.waived) FROM payments p
-                  WHERE p.client_id = c.id AND p.happened_at >= ? AND p.happened_at <= ?), 0) AS waived_total,
-       (COALESCE((SELECT SUM(si.amount) FROM sale_items si
-                   WHERE si.client_id = c.id AND si.happened_at <= ?), 0)
-        - COALESCE((SELECT SUM(p.amount + p.waived) FROM payments p
-                     WHERE p.client_id = c.id AND p.happened_at <= ?), 0)) AS debt
-     FROM clients c
-     WHERE c.category_id = ? AND c.deleted_at IS NULL
-     ORDER BY c.name`,
-  ).bind(start, end, start, end, start, end, end, end, categoryId).all<{
-    id: string; name: string; sales_total: number; paid_total: number; waived_total: number; debt: number;
-  }>();
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const clients = rows.results.map((x) => ({
-    id: x.id, name: x.name,
-    sales_total: r(x.sales_total), paid_total: r(x.paid_total),
-    waived_total: r(x.waived_total), debt: r(x.debt),
+  const [saleRows, payRows, debtRows, clientRows] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT client_id, amount FROM sale_items
+       WHERE client_id IN (SELECT id FROM clients WHERE category_id = ?)
+         AND happened_at >= ? AND happened_at <= ?`,
+    ).bind(categoryId, start, end).all<{ client_id: string; amount: number }>(),
+    c.env.DB.prepare(
+      `SELECT client_id, amount, waived FROM payments
+       WHERE client_id IN (SELECT id FROM clients WHERE category_id = ?)
+         AND happened_at >= ? AND happened_at <= ?`,
+    ).bind(categoryId, start, end).all<{ client_id: string; amount: number; waived: number }>(),
+    c.env.DB.prepare(
+      `SELECT c.id,
+        COALESCE((SELECT SUM(si.amount) FROM sale_items si
+                  WHERE si.client_id = c.id AND si.happened_at <= ?), 0) AS all_sales,
+        COALESCE((SELECT SUM(p.amount + p.waived) FROM payments p
+                  WHERE p.client_id = c.id AND p.happened_at <= ?), 0) AS all_paid
+       FROM clients c WHERE c.category_id = ? AND c.deleted_at IS NULL`,
+    ).bind(end, end, categoryId).all<{ id: string; all_sales: number; all_paid: number }>(),
+    c.env.DB.prepare(
+      `SELECT id, name FROM clients WHERE category_id = ? AND deleted_at IS NULL ORDER BY name`,
+    ).bind(categoryId).all<{ id: string; name: string }>(),
+  ]);
+  const salesMap = new Map<string, number>();
+  const paidMap = new Map<string, number>();
+  const waivedMap = new Map<string, number>();
+  for (const x of saleRows.results) salesMap.set(x.client_id, (salesMap.get(x.client_id) ?? 0) + r(x.amount));
+  for (const x of payRows.results) {
+    const id = x.client_id;
+    paidMap.set(id, (paidMap.get(id) ?? 0) + r(Number(x.amount) || 0));
+    waivedMap.set(id, (waivedMap.get(id) ?? 0) + r(Number(x.waived) || 0));
+  }
+  const debtMap = new Map(debtRows.results.map((x) => [x.id, r((x.all_sales ?? 0) - (x.all_paid ?? 0))]));
+  const clients = clientRows.results.map((c2) => ({
+    id: c2.id, name: c2.name,
+    sales_total: salesMap.get(c2.id) ?? 0,
+    paid_total: paidMap.get(c2.id) ?? 0,
+    waived_total: waivedMap.get(c2.id) ?? 0,
+    debt: debtMap.get(c2.id) ?? 0,
   }));
   const sum = (k: 'sales_total' | 'paid_total' | 'debt') => clients.reduce((s, x) => s + x[k], 0);
   return c.json({
     category_name: cat.name, from: start, to: end,
-    clients,
+    clients: clients.map((x) => ({
+      id: x.id, name: x.name,
+      sales_total: r(x.sales_total), paid_total: r(x.paid_total),
+      waived_total: r(x.waived_total), debt: r(x.debt),
+    })),
     total: { sales_total: r(sum('sales_total')), paid_total: r(sum('paid_total')), debt: r(sum('debt')) },
   });
 });
