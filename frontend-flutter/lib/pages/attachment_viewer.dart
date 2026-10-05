@@ -16,21 +16,23 @@ import 'router.dart';
 
 /// 附件全屏查看器：点图标直接全屏显示该单据的全部附件，左/右滑切换；
 /// 顶部显示"第 x/N 张"，可添加附件、删除当前；空态显示"暂无附件 + 添加"。
-/// 批量模式（lineIds 非空，仅单据级入口 sale/purchase 使用）：上传一张凭证图实际
-/// 是批量按单条存入该单每个明细行（每行各自行级引用），展示合并各行并按同内容去重；
-/// 不产生独立的单据级份（历史存量单据级图仍合并展示）。
+/// 批量模式（lineIds 非空，单据级入口 sale/purchase 使用）：上传一张凭证图实际
+/// 是批量按单条存入每个明细行（每行各自行级引用），展示合并各行并按同内容去重；
+/// orderIds（批量模式可空）：批量场景要一并展示的**单据级引用集合**（识别记账/编辑页
+/// 凭证挂单据级一份；日期批量编辑跨多单据 → 传该日全部单据 id，行级+单据级一次查全）。
 Future<void> showAttachmentViewer(
   BuildContext context,
   String entity,
   String id,
   String title, {
   List<String> lineIds = const [],
+  List<String> orderIds = const [],
 }) {
   return Navigator.of(context).push(
     MaterialPageRoute(
       fullscreenDialog: true,
       builder: (_) => AttachmentViewer(
-          entity: entity, id: id, title: title, lineIds: lineIds),
+          entity: entity, id: id, title: title, lineIds: lineIds, orderIds: orderIds),
     ),
   );
 }
@@ -42,13 +44,17 @@ class AttachmentViewer extends StatefulWidget {
     required this.id,
     required this.title,
     this.lineIds = const [],
+    this.orderIds = const [],
   });
   final String entity; // sale | purchase | payment
   final String id;
   final String title;
-  /// 批量模式：该单据全部明细行 id（记单页/整单凭证入口传入）。
+  /// 批量模式：明细行 id 集合（记单页/整单凭证/日期批量编辑传入）。
   /// 非空时上传批量存入每行、展示合并各行、删除一并清理全部份。
   final List<String> lineIds;
+  /// 批量模式要合并展示的单据级 id 集合（识别记账/编辑页凭证挂单据级一份）。
+  /// 为空时回退 widget.id（现有入口兼容）。
+  final List<String> orderIds;
   @override
   State<AttachmentViewer> createState() => _AttachmentViewerState();
 }
@@ -113,8 +119,11 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       try {
         final keys = <String>[];
         if (_bulk) {
-          // 批量模式：合并单据（历史存量）+ 各行前缀，同名（同 md5 内容）去重合并
-          keys.addAll(await _cloudKeys(widget.entity, widget.id));
+          // 批量模式：合并单据级引用（orderIds 集合或单据 id；历史存量/识别图）+ 各行前缀
+          for (final oid
+              in widget.orderIds.isNotEmpty ? widget.orderIds : [widget.id]) {
+            keys.addAll(await _cloudKeys(widget.entity, oid));
+          }
           for (final lid in widget.lineIds) {
             keys.addAll(await _cloudKeys(_lineEntity, lid));
           }
@@ -160,12 +169,14 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       final myFiles = <String>[];
       for (final r in refs) {
         if (_bulk) {
-          // 批量模式合并展示：单据级引用（历史存量/Web 直传/编辑页凭证入口）+ 各明细行级引用——
-          // 只查行级会漏掉单据级附件（账本图标亮、点开"暂无附件"根因），与 Web 版/删除逻辑一致
+          // 批量模式合并展示：单据级引用（orderIds 集合或 widget.id；识别记账/编辑页凭证
+          // 挂单据级一份）+ 各明细行级引用——只查行级会漏掉单据级附件（"批量编辑暂无附件"根因）
           if (('${r['entity'] ?? ''}' == _lineEntity &&
                   widget.lineIds.contains('${r['entity_id'] ?? ''}')) ||
               ('${r['entity'] ?? ''}' == widget.entity &&
-                  '${r['entity_id'] ?? ''}' == widget.id)) {
+                  (widget.orderIds.isNotEmpty
+                      ? widget.orderIds.contains('${r['entity_id'] ?? ''}')
+                      : '${r['entity_id'] ?? ''}' == widget.id))) {
             myFiles.add('${r['file'] ?? ''}');
           }
         } else if ('${r['entity'] ?? ''}' == widget.entity &&
@@ -212,7 +223,11 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     }
     try {
       final jobs = <(String, String)>[
-        (widget.entity, widget.id),
+        if (_bulk)
+          for (final oid in widget.orderIds.isNotEmpty ? widget.orderIds : [widget.id])
+            (widget.entity, oid)
+        else
+          (widget.entity, widget.id),
         if (_bulk)
           for (final lid in widget.lineIds) (_lineEntity, lid),
       ];
@@ -542,7 +557,9 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
               : _bulk
                   ? [
                       for (final lid in widget.lineIds) (_lineEntity, lid),
-                      (widget.entity, widget.id),
+                      for (final oid
+                          in widget.orderIds.isNotEmpty ? widget.orderIds : [widget.id])
+                        (widget.entity, oid),
                     ]
                   : <(String, String)>[(widget.entity, widget.id)];
           for (final t in targets) {
@@ -564,7 +581,9 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
             : _bulk
                 ? [
                     for (final lid in widget.lineIds) (_lineEntity, lid),
-                    (widget.entity, widget.id),
+                    for (final oid
+                        in widget.orderIds.isNotEmpty ? widget.orderIds : [widget.id])
+                      (widget.entity, oid),
                   ]
                 : <(String, String)>[(widget.entity, widget.id)];
         for (final t in targets) {

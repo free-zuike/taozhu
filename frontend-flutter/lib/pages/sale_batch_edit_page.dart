@@ -37,6 +37,17 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
   Map<String, int> _attachCount = {};
   /// 单据级凭证数：单据 id → 张数（识别记账/编辑页凭证挂单据级一份，行级空时回退显示）
   Map<String, int> _orderAttachCount = {};
+  /// 该日全部明细行 id（批量查看器 lineIds）
+  List<String> get _lineIds => [
+        for (final x in _lines)
+          if ('${x['item_id'] ?? ''}'.isNotEmpty) '${x['item_id']}',
+      ];
+  /// 该日全部单据 id（批量查看器 orderIds：识别记账/编辑页凭证挂单据级一份，必须一并查）
+  List<String> get _orderIds => [
+        for (final x in _lines)
+          if ('${(x['order'] as Map?)?['id'] ?? ''}'.isNotEmpty)
+            '${(x['order'] as Map?)?['id']}',
+      ].toSet().toList();
 
   @override
   void initState() {
@@ -348,10 +359,12 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
             InkWell(
               borderRadius: BorderRadius.circular(6),
               onTap: () async {
-                final lid = '${l['item_id'] ?? ''}';
-                if (lid.isEmpty) return;
-                await showAttachmentViewer(context, 'sale', '${(l['order'] as Map?)?['id'] ?? ''}',
-                    '出货明细行凭证', lineIds: [lid]);
+                if ('${l['item_id'] ?? ''}'.isEmpty) return;
+                // 打开该日全部凭证（行级+全部单据级合并；识别记账挂单据级的图也看得到）
+                await showAttachmentViewer(context, 'sale',
+                    _orderIds.isNotEmpty ? _orderIds.first : '',
+                    '出货凭证（当日）',
+                    lineIds: _lineIds, orderIds: _orderIds);
                 unawaited(_loadAttachCounts());
               },
               child: Padding(

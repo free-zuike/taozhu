@@ -34,6 +34,17 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
   Map<String, int> _attachCount = {};
   /// 单据级凭证数：单据 id → 张数（识别记账/编辑页凭证挂单据级一份，行级空时回退显示）
   Map<String, int> _orderAttachCount = {};
+  /// 该日全部明细行 id（批量查看器 lineIds）
+  List<String> get _lineIds => [
+        for (final x in _lines)
+          if ('${x['row_id'] ?? ''}'.isNotEmpty) '${x['row_id']}',
+      ];
+  /// 该日全部单据 id（批量查看器 orderIds：识别记账/编辑页凭证挂单据级一份，必须一并查）
+  List<String> get _orderIds => [
+        for (final x in _lines)
+          if ('${(x['order'] as Map?)?['id'] ?? ''}'.isNotEmpty)
+            '${(x['order'] as Map?)?['id']}',
+      ].toSet().toList();
 
   @override
   void initState() {
@@ -158,18 +169,17 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
     super.dispose();
   }
 
-  /// 批量添加附件：凭证一次挂到该日每行商品（各自独立一份），不经单改
+  /// 批量添加附件：凭证一次挂到该日每行商品（各自独立一份），不经单改；
+  /// 查看器合并展示该日全部凭证（行级+全部单据级——识别记账/编辑页挂单据级的图也看得到）
   Future<void> _addBatchAttachments() async {
-    final lineIds = [
-      for (final l in _lines)
-        if ('${l['row_id'] ?? ''}'.isNotEmpty) '${l['row_id']}',
-    ];
-    if (lineIds.isEmpty) {
+    if (_lineIds.isEmpty) {
       toast(context, '当天无商品明细，无法批量挂图');
       return;
     }
-    await showAttachmentViewer(context, 'purchase_item', widget.date,
-        '批量添加附件（该日每行商品各一份）', lineIds: lineIds);
+    await showAttachmentViewer(context, 'purchase',
+        _orderIds.isNotEmpty ? _orderIds.first : '',
+        '批量添加附件（该日每行商品各一份）',
+        lineIds: _lineIds, orderIds: _orderIds);
     _refresh();
   }
 
@@ -373,10 +383,12 @@ class _PurchaseBatchEditPageState extends State<PurchaseBatchEditPage> {
               return InkWell(
                 borderRadius: BorderRadius.circular(6),
                 onTap: () async {
-                  final lid = '${l['row_id'] ?? ''}';
-                  if (lid.isEmpty) return;
-                  await showAttachmentViewer(context, 'purchase', '${(l['order'] as Map?)?['id'] ?? ''}',
-                      '进货明细行凭证', lineIds: [lid]);
+                  if ('${l['row_id'] ?? ''}'.isEmpty) return;
+                  // 打开该日全部凭证（行级+全部单据级合并；识别记账挂单据级的图也看得到）
+                  await showAttachmentViewer(context, 'purchase',
+                      _orderIds.isNotEmpty ? _orderIds.first : '',
+                      '进货凭证（当日）',
+                      lineIds: _lineIds, orderIds: _orderIds);
                   unawaited(_loadAttachCounts());
                 },
                 child: Padding(
