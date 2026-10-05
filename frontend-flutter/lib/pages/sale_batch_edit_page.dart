@@ -40,6 +40,8 @@ class _SaleBatchEditPageState extends State<SaleBatchEditPage> {
   void initState() {
     super.initState();
     _lines = List.of(widget.lines);
+    // 首次进入即加载附件计数（此前只在 _refresh 时加载 → 行卡片图标首屏永远是空的）
+    _loadAttachCounts();
   }
 
   /// 本页打开期间数据可能被改过 → 返回时重新拉取该日明细行（按行日期匹配）
