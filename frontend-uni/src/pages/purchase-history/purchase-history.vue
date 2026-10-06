@@ -22,7 +22,7 @@
     <scroll-view scroll-y class="flow" @scroll="onFlowScroll">
     <!-- 进货流水：按日期分组 + 行级卡片平铺（对齐 App 出货/进货流式列表） -->
     <view v-for="g in buyGroups" :key="g.date">
-      <view class="day-bar">
+      <view class="day-bar" @click="openBuyBatch(g.date)">
         <text class="day-name">{{ g.week }}</text>
         <text class="day-total">{{ g.count }} 件 · 合计 ¥{{ fmt(g.amount) }}</text>
       </view>
@@ -314,6 +314,11 @@ function editPurchase(p: Record<string, any>) {
   uni.navigateTo({ url: `/pages/purchase/purchase?id=${p.id}` });
 }
 
+// 日期栏点击 → 批量直编该日全部行（对齐 App dateRows：purchase.vue dateRows=1&date=xxx）
+function openBuyBatch(date: string) {
+  uni.navigateTo({ url: `/pages/purchase/purchase?dateRows=1&date=${date}` });
+}
+
 async function removePurchase(p: Record<string, any>) {
   if (!(await confirm('删除进货单', `确定删除 ${p.happened_at} 的进货单（¥${p.total}）吗？`))) return;
   try {
@@ -409,6 +414,10 @@ async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') 
     } catch (_) {}
   }
   attach.value.list = list;
+  // 点击凭证直接全屏看图（对齐 App：不再先看小图弹层再点一次；多张左右滑动，关闭后弹层可管理/删除）
+  if (list.length > 0) {
+    uni.previewImage({ urls: list.map((a) => attachmentUrl(a.key)), current: 0 });
+  }
 }
 
 function previewAttach(i: number) {

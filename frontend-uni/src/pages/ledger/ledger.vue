@@ -35,7 +35,7 @@
     <view v-if="tab === 'sales'">
       <!-- 按日期分组 + 商品明细行平铺（对齐 App：日期头 + 流水行卡片） -->
       <view v-for="g in saleGroups" :key="g.date">
-        <view class="day-bar" :data-date="g.date">
+        <view class="day-bar" :data-date="g.date" @click="openSaleBatch(g.date)">
           <text class="day-name">{{ g.week }}</text>
           <text class="day-total">{{ g.count }} 件 · 合计 ¥{{ fmtNum(g.amount) }}</text>
         </view>
@@ -122,16 +122,24 @@
       </view>
     </view>
 
-    <!-- 单商品编辑弹层：点击明细行 = 只编辑该商品（数量/售价/单位/日期/备注，对齐 App 单行编辑） -->
+    <!-- 单商品编辑弹层：点击明细行 = 只编辑该商品（数量/单位/折合计数/价格/日期/备注 + 删除，对齐 App 单行编辑） -->
     <view v-if="itemForm.show" class="mask" @click="itemForm.show = false">
       <view class="sheet" @click.stop>
         <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
-        <input class="ipt" v-model="itemForm.quantity" type="digit" placeholder="数量" />
-        <input class="ipt" v-model="itemForm.unit" placeholder="单位（斤/件/箱…）" />
-        <input class="ipt" v-model="itemForm.salePrice" type="digit" :placeholder="itemForm.isPurchase ? '进价（元）' : '售价（元）'" />
+        <view class="form-row">
+          <input class="ipt flex1" v-model="itemForm.quantity" type="digit" placeholder="数量" />
+          <input class="ipt flex1" v-model="itemForm.unit" placeholder="单位" />
+        </view>
+        <view class="form-row">
+          <input class="ipt flex1" v-model="itemForm.salePrice" type="digit" :placeholder="itemForm.isPurchase ? '进价（元）' : '售价（元）'" />
+          <input v-if="itemForm.countUnit" class="ipt flex1" v-model="itemForm.countQty" type="digit" :placeholder="'折' + itemForm.countUnit" />
+        </view>
         <input class="ipt" v-model="itemForm.date" placeholder="日期 YYYY-MM-DD" />
         <input class="ipt" v-model="itemForm.note" placeholder="备注（选填）" />
-        <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
+        <view class="dlg-ops">
+          <button class="btn-del" :disabled="saving" @click="deleteItem">删除该行</button>
+          <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
+        </view>
       </view>
     </view>
   </view>
@@ -165,11 +173,11 @@ const payForm = ref<{
   show: boolean; id: string; amount: string; date: string; method: string; methodIdx: number; note: string;
 }>({ show: false, id: '', amount: '', date: '', method: '', methodIdx: 0, note: '' });
 
-// 单商品编辑（明细行级）：只改该商品数量/售价/单位/日期/备注——数据本就是按明细行独立存储
+// 单商品编辑（明细行级）：只改该商品数量/单位/折合计数/售价/日期/备注（对齐 App 单行编辑）
 const itemForm = ref<{
   show: boolean; isPurchase: boolean; saleId: string; itemId: string; itemName: string;
-  quantity: string; unit: string; salePrice: string; date: string; note: string;
-}>({ show: false, isPurchase: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', date: '', note: '' });
+  quantity: string; unit: string; salePrice: string; countQty: string; countUnit: string; date: string; note: string;
+}>({ show: false, isPurchase: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', countQty: '', countUnit: '', date: '', note: '' });
 
 // ── 附件凭证 ──
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({
@@ -224,6 +232,10 @@ async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') 
     } catch (_) {}
   }
   attach.value.list = list;
+  // 点击凭证直接全屏看图（对齐 App：不再先看小图弹层再点一次；多张左右滑动，关闭后弹层可管理/删除）
+  if (list.length > 0) {
+    uni.previewImage({ urls: list.map((a) => attachmentUrl(a.key)), current: 0 });
+  }
 }
 
 function previewAttach(i: number) {
@@ -298,6 +310,7 @@ type SaleLine = {
   key: string; date: string; week: string; client_name: string; item_name: string;
   note: string; sale_price: number; quantity: string | number; unit: string; amount: number;
   cost_price: number; category: string;
+  count_qty?: number | null; count_unit?: string; // 折合计数（对齐 App 行编辑）
   itemId: string; orderId: string; order: Record<string, any>;
 };
 type SaleGroup = { date: string; week: string; count: number; amount: number; lines: SaleLine[] };
@@ -512,6 +525,12 @@ function editSale(s: Record<string, any>) {
   uni.navigateTo({ url: `/pages/sale/sale?id=${s.id}` });
 }
 
+// 日期栏点击 → 批量直编该日全部行（对齐 App dateRows：sale.vue dateRows=1&date=xxx 平铺按原单分组保存）
+function openSaleBatch(date: string) {
+  const cq = filterClientId.value ? `&client_id=${filterClientId.value}` : '';
+  uni.navigateTo({ url: `/pages/sale/sale?dateRows=1&date=${date}${cq}` });
+}
+
 // 明细行点击 → 只编辑该商品（对齐 App 单行编辑语义：数据按明细行独立存储）
 function editSaleLine(l: SaleLine) {
   itemForm.value = {
@@ -523,6 +542,8 @@ function editSaleLine(l: SaleLine) {
     quantity: String(l.quantity ?? ''),
     unit: String(l.unit || ''),
     salePrice: String(l.sale_price ?? ''),
+    countQty: l.count_qty ? String(l.count_qty) : '',
+    countUnit: String(l.count_unit || ''),
     date: l.date.slice(0, 10),
     note: String(l.note ?? ''),
   };
@@ -560,12 +581,14 @@ function editSaleItem(s: Record<string, any>, it: Record<string, any>) {
     quantity: String(it.quantity ?? ''),
     unit: String(it.unit || ''),
     salePrice: String(it.sale_price ?? ''),
+    countQty: it.count_qty ? String(it.count_qty) : '',
+    countUnit: String(it.count_unit || ''),
     date: String(it.happened_at || s.happened_at || '').slice(0, 10),
     note: String(it.note ?? ''),
   };
 }
 
-// 点进货明细行 → 只编辑该商品（进价/数量/单位/日期/备注）
+// 点进货明细行 → 只编辑该商品（进价/数量/单位/折合计数/日期/备注）
 function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
   itemForm.value = {
     show: true,
@@ -576,6 +599,8 @@ function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
     quantity: String(it.quantity ?? ''),
     unit: String(it.unit || ''),
     salePrice: String(it.purchase_price ?? it.price ?? ''),
+    countQty: it.count_qty ? String(it.count_qty) : '',
+    countUnit: String(it.count_unit || ''),
     date: String(it.happened_at || p.happened_at || '').slice(0, 10),
     note: String(it.note ?? ''),
   };
@@ -593,11 +618,14 @@ async function saveItem() {
   }
   saving.value = true;
   try {
+    // 折合计数：空/<=0 时不传（后端按原单位/价格行规格推算，与记单页一致）
+    const countQty = Number(itemForm.value.countQty) > 0 ? Number(itemForm.value.countQty) : null;
     if (itemForm.value.isPurchase) {
       await request(`/purchases/items/${itemForm.value.itemId}`, 'PATCH', {
         quantity: qty,
         unit: itemForm.value.unit,
         purchase_price: Number(itemForm.value.salePrice) || 0,
+        count_qty: countQty,
         happened_at: itemForm.value.date,
         note: itemForm.value.note,
       });
@@ -606,6 +634,7 @@ async function saveItem() {
         quantity: qty,
         unit: itemForm.value.unit,
         sale_price: Number(itemForm.value.salePrice) || 0,
+        count_qty: countQty,
         happened_at: itemForm.value.date,
         note: itemForm.value.note,
       });
@@ -615,6 +644,31 @@ async function saveItem() {
     load();
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '保存失败', icon: 'none' });
+  } finally {
+    saving.value = false;
+  }
+}
+
+// 弹窗内删除该行（对齐 App 单行编辑「删除」按钮：DELETE 行级接口，自动清空无行单据）
+async function deleteItem() {
+  if (!itemForm.value.itemId) {
+    uni.showToast({ title: '该行无独立明细，无法单独删除', icon: 'none' });
+    return;
+  }
+  if (!(await confirm('删除商品', `确定删除「${itemForm.value.itemName}」这一行吗？仅删除该商品，库存自动回滚。`))) return;
+  saving.value = true;
+  try {
+    const id = itemForm.value.itemId;
+    if (itemForm.value.isPurchase) {
+      await request(`/purchases/items/${id}`, 'DELETE');
+    } else {
+      await request(`/sales/items/${id}`, 'DELETE');
+    }
+    uni.showToast({ title: '已删除该商品', icon: 'success' });
+    itemForm.value.show = false;
+    load();
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
   } finally {
     saving.value = false;
   }
@@ -768,6 +822,12 @@ async function removePayment(p: Record<string, any>) {
 .value { color: var(--text-main); font-size: 28rpx; }
 .placeholder { color: var(--text-sub); }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
+.form-row { display: flex; gap: 16rpx; }
+.form-row .ipt { flex: 1; }
+.flex1 { flex: 1; }
+.btn-del { background: var(--card-bg); color: #f56c6c; border: 1rpx solid #f56c6c; border-radius: 12rpx; font-size: 30rpx; }
+.dlg-ops { display: flex; gap: 20rpx; margin-top: 8rpx; }
+.dlg-ops .btn-save, .dlg-ops .btn-del { flex: 1; }
 /* 附件弹层 */
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }

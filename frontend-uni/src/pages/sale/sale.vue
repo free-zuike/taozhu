@@ -1,8 +1,8 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <!-- 头部：饭店 / 日期 / 复制上一笔 -->
-    <view class="head-row">
+    <!-- 头部：饭店 / 日期 / 复制上一笔（dateRows 批量直编：只改日期，店铺=该日固定） -->
+    <view v-if="!isDateRows" class="head-row">
       <picker class="field" mode="selector" :range="clientNames" @change="onClient">
         <view class="field-inner">
           <text class="label">饭店</text>
@@ -17,6 +17,16 @@
       </picker>
       <button class="copy-btn" :disabled="loading" @click="copyLast">复制上一笔</button>
       <button class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
+    </view>
+    <!-- 批量直编头：该日全部行统一改日期（批量改期），店铺为该日记录不变 -->
+    <view v-if="isDateRows" class="head-row">
+      <picker class="field" mode="date" :value="date" @change="onDate">
+        <view class="field-inner">
+          <text class="label">批量日期（全部行改期）</text>
+          <text class="value">{{ date }}</text>
+        </view>
+      </picker>
+      <text class="batch-hint">该日 {{ rows.length }} 行 · 保存按原单分组提交</text>
     </view>
 
     <!-- AI 识别状态（识别中 / 语音原文） -->
@@ -51,7 +61,7 @@
         <button class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
         <text class="total">合计 <text class="total-num">¥{{ fmtAmount(total) }}</text></text>
       </view>
-      <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (editId ? '保存修改' : '提交出货单') }}</button>
+      <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (isDateRows ? '保存该日修改' : (editId ? '保存修改' : '提交出货单')) }}</button>
     </view>
 
     <!-- 新商品入库弹窗（分类两级联动：先一级后二级，对齐 App；未匹配商品不静默丢弃） -->
@@ -98,6 +108,8 @@ interface Row {
   countUnit: string; // 商品计数单位（袋/个…，有才显示折合计数输入框）
   happenedAt: string; // 行独立日期（缺省用单据日期；对齐 App 行级日期）
   note: string; // 行级备注（缺省空；对齐 App 行备注）
+  rowId: string; // 原明细行 id（dateRows 批量编辑保留，保存时不换 id=附件不孤儿）
+  orderId: string; // 原出货单 id（dateRows 按原单分组 PATCH）
 }
 
 const clientId = ref('');
@@ -112,6 +124,7 @@ const rows = ref<Row[]>([]);
 const saving = ref(false);
 const loading = ref(false);
 const editId = ref(''); // 非空 = 编辑已有出货单（账本进入，提交走 PATCH）
+const isDateRows = ref(false); // 批量直编模式=账本某日进入（该日全部行平铺，按原单分组 PATCH，对齐 App dateRows）
 const aiBusy = ref(false);
 const aiTip = ref('');
 // 识别原图/手动凭证：暂存待提交后上传为本单凭证（服务器单据级 sale/{id}，账本行级入口查空回退单据级可见）
@@ -137,6 +150,12 @@ function onNewSub(e: any) { newSubIdx.value = Number(e.detail.value); }
 onLoad((options) => {
   editId.value = options?.id || '';
   if (editId.value) uni.setNavigationBarTitle({ title: '编辑出货单' });
+  // 批量直编（对齐 App dateRows）：账本日期栏进入，该日全部行平铺、按原单分组 PATCH
+  if (options?.dateRows === '1' && options?.date) {
+    isDateRows.value = true;
+    date.value = options.date;
+    uni.setNavigationBarTitle({ title: `批量编辑 ${options.date.slice(5)}` });
+  }
 });
 
 // 金额舍入配置变更（其他端改设置）→ 先刷新本地口径再触发页面重渲（合计/行金额按新位数显示）
@@ -157,7 +176,7 @@ onShow(async () => {
     return;
   }
   initRounding(); // 金额舍入口径（展示/本地预览按配置，服务器为最终权威）
-  date.value = todayLocal();
+  if (!isDateRows.value) date.value = todayLocal(); // dateRows 模式保持传入的批量日期
   // 加载饭店与商品（懒加载，进入页面即拉取）
   try {
     const [c, i] = await Promise.all([
@@ -168,8 +187,16 @@ onShow(async () => {
     clientNames.value = c.clients.map((x) => x.name);
     items.value = i.items;
     itemNames.value = i.items.map((x) => x.name);
-    if (rows.value.length === 0) addRow();
-    if (editId.value) await loadEdit();
+    if (rows.value.length === 0 && !isDateRows.value) addRow();
+    if (clientId.value) {
+      const c = clients.value.find((x) => x.id === clientId.value);
+      if (c) clientName.value = c.name;
+    }
+    if (isDateRows.value) {
+      await loadDateRows();
+    } else if (editId.value) {
+      await loadEdit();
+    }
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
@@ -193,6 +220,7 @@ async function loadEdit() {
         quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
+        rowId: '', orderId: '',
       });
     }
     if (rows.value.length === 0) {
@@ -238,6 +266,7 @@ async function copyLast() {
         quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
+        rowId: '', orderId: '',
       });
     }
     if (rows.value.length === 0) addRow();
@@ -382,7 +411,7 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', date = ''
     const match = items.value.find((it) => it.name === name || it.name.includes(name) || name.includes(it.name));
     let row = rows.value.find((r) => !r.itemId && !r.itemName);
     if (!row) {
-      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '' });
+      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
       row = rows.value[rows.value.length - 1];
     }
     if (match) {
@@ -416,8 +445,57 @@ function onDate(e: { detail: { value: string } }) {
 }
 
 function addRow() {
-  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '' });
+  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
 }
+
+/// 批量直编加载（对齐 App dateRows）：该日全部行平铺。行保留原行 id/原单 id：
+/// 保存按原单分组 PATCH（items 带原 id 不换 id=行级附件不孤儿）；被删行=不提交即整体替换移除
+async function loadDateRows() {
+  try {
+    const cq = clientId.value ? `&client_id=${clientId.value}` : '';
+    const d = await request<{ sale_items?: Array<Record<string, any>>; sales?: Array<Record<string, any>> }>(
+      `/sales?date_from=${date.value}&date_to=${date.value}&limit=1000${cq}`, 'GET');
+    const itemRows = d.sale_items && d.sale_items.length > 0 ? d.sale_items : [];
+    const salesNested = d.sales || [];
+    // 无行级主结构 → 用整单嵌套 items 兜底（同 deley app：行级优先）
+    let lines: Array<Record<string, any>> = itemRows;
+    if (lines.length === 0) {
+      lines = [];
+      for (const s of salesNested) {
+        for (const it of ((s.items as Array<Record<string, any>>) || [])) {
+          lines.push({ ...it, sale_id: s.id, client_id: s.client_id, client_name: s.client_name, happened_at: it.happened_at || s.happened_at });
+        }
+      }
+    }
+    rows.value = [];
+    for (const l of lines) {
+      const rowId = String(l.id || '');
+      const orderId = String(l.sale_id || '');
+      const item = items.value.find((x) => x.id === String(l.item_id || ''));
+      const unit = String(l.unit || '');
+      const price = item?.prices.find((p) => p.unit === unit) || item?.prices[0];
+      // 商品已删/停用 → 跳过（老板保存后该行消失，与 App 一致），并提示
+      if (!item || !price) { skippedRef.value++; continue; }
+      rows.value.push({
+        itemId: item.id, itemName: item.name, prices: item.prices,
+        priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`, unit: price.unit,
+        quantity: String(l.quantity ?? ''), salePrice: String(l.sale_price ?? price.sale_price),
+        countQty: l.count_qty ? String(l.count_qty) : '', countUnit: String(item.count_unit || ''),
+        happenedAt: String(l.happened_at || '').slice(0, 10), note: String(l.note || ''),
+        rowId, orderId,
+      });
+    }
+    if (rows.value.length === 0) addRow();
+    if (clientId.value) {
+      const c = clients.value.find((x) => x.id === clientId.value);
+      if (c) clientName.value = c.name;
+    }
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '加载当日记录失败', icon: 'none' });
+  }
+}
+
+const skippedRef = ref(0); // dateRows 加载被跳过的商品行数（商品已删/停用）
 
 function onItem(i: number, idx: number) {
   const it = items.value[idx];
@@ -531,6 +609,63 @@ async function submit() {
   if (low.length > 0) uni.showToast({ title: `库存不足提醒：${low.slice(0, 2).join('；')}`, icon: 'none', duration: 2500 });
   saving.value = true;
   try {
+    if (isDateRows.value) {
+      // 批量直编（对齐 App dateRows）：按原单分组 PATCH（各组保留原单号，只提交组内行；
+      // items 带原行 id 不换 id=行级附件不孤儿）；不传 client_id（防串改店铺）与整单 note（防清空）
+      const byOrder = new Map<string, Array<Row>>();
+      for (const r of valid) {
+        const oid = r.orderId || '';
+        if (!oid) continue;
+        const list = byOrder.get(oid);
+        if (list) list.push(r);
+        else byOrder.set(oid, [r]);
+      }
+      // 原行 id 集合：被删除的行（不在提交列表）→ 行级 DELETE
+      const submittedIds = new Set(valid.map((r) => r.rowId).filter(Boolean));
+      const origIds = new Set<string>();
+      for (const oid of byOrder.keys()) {
+        const d = await request<{ sale_items?: Array<Record<string, any>>; sales?: Array<Record<string, any>> }>(`/sales/${oid}`, 'GET');
+        const lines = ((d.sale_items?.length ?? 0) > 0 ? d.sale_items : (d.sales?.[0]?.items || [])) as Array<Record<string, any>>;
+        for (const l of lines) {
+          const lid = String(l.id || '');
+          if (lid) origIds.add(lid);
+        }
+      }
+      for (const [oid, rowList] of byOrder.entries()) {
+        await request(`/sales/${oid}`, 'PATCH', {
+          happened_at: date.value,
+          items: rowList.map((r) => ({
+            id: r.rowId || undefined, // 保留原行 id（服务端重建不换 id，行级附件不孤儿化）
+            price_id: r.priceId,
+            quantity: Number(r.quantity),
+            count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null,
+            sale_price: Number(r.salePrice) || 0,
+            happened_at: r.happenedAt || date.value,
+            note: r.note || '',
+          })),
+        });
+      }
+      // 新行（无原单）：独立成一单 POST（库存/统计随行落库，与 App 新建语义一致）
+      const newRows = valid.filter((r) => !r.orderId);
+      if (newRows.length > 0) {
+        await request('/sales', 'POST', {
+          client_id: clientId.value,
+          happened_at: date.value,
+          note: note.value.trim(),
+          items: newRows.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '' })),
+        });
+      }
+      // 被删行（原行在库但本次未提交）→ 行级 DELETE（DELETE /sales/items/:id 自动清空无行单据）
+      for (const lid of origIds) {
+        if (!submittedIds.has(lid)) {
+          try { await request(`/sales/items/${lid}`, 'DELETE'); } catch (_) {}
+        }
+      }
+      uni.showToast({ title: '已保存该日全部修改', icon: 'success' });
+      await new Promise((r) => setTimeout(r, 300));
+      uni.navigateBack();
+      return;
+    }
     const body = {
       client_id: clientId.value,
       happened_at: date.value,
@@ -570,6 +705,7 @@ async function submit() {
 .head-row .field { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }
 .copy-btn { flex-shrink: 0; background: var(--card-bg); color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
+.batch-hint { flex-shrink: 0; align-self: center; background: var(--violet-bg); color: #7c4dff; border-radius: 12rpx; font-size: 24rpx; padding: 12rpx 20rpx; }
 .ai-btn { flex-shrink: 0; background: var(--card-bg); color: #7c4dff; border: 1rpx solid #7c4dff; border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
 .ai-tip { background: var(--violet-bg); color: #7c4dff; border-radius: 12rpx; padding: 16rpx 24rpx; margin-bottom: 16rpx; font-size: 26rpx; }
 .field { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }

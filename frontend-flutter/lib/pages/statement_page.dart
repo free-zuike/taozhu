@@ -2079,17 +2079,17 @@ class _StatementPageState extends State<StatementPage> {
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: _statCard('出货合计', '¥${_saleTotal.toStringAsFixed(2)}', c.danger)),
+                Expanded(child: _statCard('出货合计', '¥${fmtMoney(_saleTotal)}', c.danger)),
                 const SizedBox(width: 12),
-                Expanded(child: _statCard('收款合计（实收）', '¥${_payTotal.toStringAsFixed(2)}', c.success)),
+                Expanded(child: _statCard('收款合计（实收）', '¥${fmtMoney(_payTotal)}', c.success)),
               ],
             ),
             if (_waivedTotal > 0) ...[
               const SizedBox(height: 12),
-              _statCard('减免合计（平账）', '¥${_waivedTotal.toStringAsFixed(2)}', c.warning),
+              _statCard('减免合计（平账）', '¥${fmtMoney(_waivedTotal)}', c.warning),
             ],
             const SizedBox(height: 12),
-            _statCard('期末欠款（累计）', '¥${_debtEnd.toStringAsFixed(2)}',
+            _statCard('期末欠款（累计）', '¥${fmtMoney(_debtEnd)}',
                 _debtEnd > 0 ? c.danger : c.success),
             const SizedBox(height: 12),
             // 出货明细（折叠，默认收起——页面聚焦成品预览，明细点开查看）
