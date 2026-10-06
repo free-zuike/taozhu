@@ -672,6 +672,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: /tmp/dist
+          pattern: dist-*
           merge-multiple: true
 
       - name: Create release & upload all assets (一次性)
