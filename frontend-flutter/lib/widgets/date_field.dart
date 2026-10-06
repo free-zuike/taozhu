@@ -15,6 +15,9 @@ class DateField extends StatelessWidget {
   final bool compact;
   /// 是否显示后缀日历小图标（窄弹窗（单商品编辑）里 16px 图标会显得像多余的小点，传 false 只留日期一行）
   final bool showSuffixIcon;
+  /// 是否填充底色（弹窗/卡片内与其他无填充输入框并排时传 false 对齐视觉；
+  /// 表单页传默认 true 与主题填充式输入框一致）
+  final bool filled;
 
   const DateField({
     super.key,
@@ -27,6 +30,7 @@ class DateField extends StatelessWidget {
     this.focusColor,
     this.compact = false,
     this.showSuffixIcon = true,
+    this.filled = true,
   });
 
   Future<void> _pick(BuildContext context) async {
@@ -62,14 +66,20 @@ class DateField extends StatelessWidget {
         suffixIcon: showSuffixIcon
             ? const Icon(Icons.calendar_today_outlined, size: 16, color: Color(0xFF909399))
             : null,
-        filled: true,
-        fillColor: c.field,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: accent, width: 1.4),
-        ),
+        filled: filled,
+        fillColor: filled ? c.field : null,
+        border: filled
+            ? OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none)
+            : null, // 弹窗内与周围无填充输入框一致（null → 主题默认 OutlineInputBorder）
+        enabledBorder: filled
+            ? OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none)
+            : null,
+        focusedBorder: filled
+            ? OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: accent, width: 1.4),
+              )
+            : null,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       ),
     );

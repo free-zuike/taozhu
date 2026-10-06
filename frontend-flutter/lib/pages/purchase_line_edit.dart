@@ -61,10 +61,12 @@ Future<Map<String, dynamic>?> editPurchaseLine(
               ),
               const SizedBox(height: 8),
               // 日期：compact 滚轮（与小程序 picker 一致）+ 隐藏后缀小图标（窄弹窗里 16px 图标像小点），只显示日期一行
+              // filled:false 对齐弹窗内其他无填充输入框（否则日期字段一块浅灰底突出刺眼）
               DateField(
                 controller: dateCtrl,
                 compact: true,
                 showSuffixIcon: false,
+                filled: false,
                 hint: 'YYYY-MM-DD',
               ),
               const SizedBox(height: 4),

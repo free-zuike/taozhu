@@ -336,6 +336,9 @@ class _MyPageState extends State<MyPage> {
               .fold<int>(0, (sum, s) => sum + (((s['items'] as List?) ?? []).length));
       // 毛利 = Σ(售出单价 − 成本单价) × 数量（行级 sale_items，与交易页本地聚合同源）；
       // Web 无本地库 → 服务器 /sales 行级 sale_items 分支兜底
+      // 毛利 = Σ(售出单价 − 成本单价) × 数量（行级 sale_items，与交易页本地聚合同源）；
+      // 每笔先按舍入口径 round 再累加（与交易页 ledger_page 逐行 round 完全一致——
+      // 先累加再一次性 round 会因逐笔舍入差 0.1：如 carry=0.6/digits=1 时 290.9 vs 291.0）
       var grossProfit = 0.0;
       if (kIsWeb) {
         for (final s in sales) {
@@ -343,7 +346,7 @@ class _MyPageState extends State<MyPage> {
           final items = ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>();
           for (final it in items) {
             final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-            grossProfit += (((it['sale_price'] as num?)?.toDouble() ?? 0) - ((it['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+            grossProfit += Money.round((((it['sale_price'] as num?)?.toDouble() ?? 0) - ((it['cost_price'] as num?)?.toDouble() ?? 0)) * qty);
           }
         }
       } else {
@@ -352,7 +355,7 @@ class _MyPageState extends State<MyPage> {
           for (final r in si) {
             if (selId != null && '${r['client_id']}' != '$selId') continue;
             final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
-            grossProfit += (((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+            grossProfit += Money.round((((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * qty);
           }
         } catch (_) {}
       }

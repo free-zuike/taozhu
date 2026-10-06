@@ -1017,7 +1017,7 @@ class _LedgerPageState extends State<LedgerPage> {
                 label: '金额（元）',
               ),
               const SizedBox(height: 8),
-              DateField(controller: dateCtrl, label: '日期（YYYY-MM-DD）'),
+              DateField(controller: dateCtrl, label: '日期（YYYY-MM-DD）', filled: false),
               const SizedBox(height: 8),
               InkWell(
                 borderRadius: BorderRadius.circular(8),

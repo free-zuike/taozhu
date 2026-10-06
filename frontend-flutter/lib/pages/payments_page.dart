@@ -431,6 +431,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             controller: _dateCtrl,
                             label: '日期',
                             hint: '默认今天，可补录历史',
+                            filled: false, // 对齐卡片内其他无填充输入框（全卡无底色，日期不再单独一块灰）
                           ),
                           const SizedBox(height: 8),
                           InkWell(

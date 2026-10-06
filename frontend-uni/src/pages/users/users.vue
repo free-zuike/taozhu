@@ -1,35 +1,50 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <!-- 账号设置（对齐 App 成员页：账号设置+成员管理同页入口，点击进账号设置） -->
-    <view class="card" @click="goAccount">
-      <view class="head">
-        <text class="name">账号设置</text>
-        <text class="role">头像 / 用户名 / 密码 / 两步验证</text>
-      </view>
+    <!-- 分段：账号设置 / 账号管理（对齐 App 成员页 TabBar 双 tab） -->
+    <view class="seg-tab">
+      <view :class="['seg-tab-item', { active: tab === 'account' }]" @click="tab = 'account'">账号设置</view>
+      <view :class="['seg-tab-item', { active: tab === 'users' }]" @click="tab = 'users'">账号管理</view>
     </view>
-    <button class="btn-add" @click="openForm()">+ 新增账号</button>
 
-    <view v-for="u in users" :key="u.id" class="card">
-      <view class="row">
-        <!-- 头像圆（首字母，对齐 App UserAvatar） -->
-        <view class="u-avatar" :style="{ background: avatarBg(u) }">
-          <text class="u-avatar-tx">{{ (u.display_name || u.username || '陶').slice(0, 1) }}</text>
-        </view>
+    <!-- 账号设置（对齐 App 成员页「账号设置」tab）：点击进账号设置页 -->
+    <view v-if="tab === 'account'">
+      <view class="card" @click="goAccount">
         <view class="head">
-          <view class="head-top">
-            <text class="name">{{ u.display_name || u.username }}</text>
-            <text :class="['role', { admin: u.role === 'admin' }]">{{ u.role === 'admin' ? '老板' : '店员' }}</text>
-          </view>
-          <text class="sub">登录 {{ u.username }}</text>
-        </view>
-        <view class="head-ops">
-          <text class="op" @click="openForm(u)">编辑</text>
-          <text class="del" @click="remove(u)">删除</text>
+          <text class="name">账号设置</text>
+          <text class="role">头像 / 用户名 / 密码 / 两步验证</text>
         </view>
       </view>
     </view>
-    <view v-if="users.length === 0" class="empty">暂无账号</view>
+
+    <!-- 账号管理（对齐 App UsersPage embed：顶部管理头行 + 用户列表） -->
+    <template v-else>
+      <view class="manage-head">
+        <text class="mh-tx">成员管理（仅老板可操作）</text>
+        <text class="mh-add" @click="openForm()">+ 新增账号</text>
+      </view>
+
+      <view v-for="u in users" :key="u.id" class="card">
+        <view class="row">
+          <!-- 头像圆（首字母，对齐 App UserAvatar） -->
+          <view class="u-avatar" :style="{ background: avatarBg(u) }">
+            <text class="u-avatar-tx">{{ (u.display_name || u.username || '陶').slice(0, 1) }}</text>
+          </view>
+          <view class="head">
+            <view class="head-top">
+              <text class="name">{{ u.display_name || u.username }}</text>
+              <text :class="['role', { admin: u.role === 'admin' }]">{{ u.role === 'admin' ? '老板' : '店员' }}</text>
+            </view>
+            <text class="sub">登录 {{ u.username }}</text>
+          </view>
+          <view class="head-ops">
+            <text class="op" @click="openForm(u)">编辑</text>
+            <text class="del" @click="remove(u)">删除</text>
+          </view>
+        </view>
+      </view>
+      <view v-if="users.length === 0" class="empty">暂无账号</view>
+    </template>
 
     <!-- 新增/编辑弹层 -->
     <view v-if="showForm" class="mask" @click="showForm = false">
@@ -59,6 +74,8 @@ interface User { id: string; username: string; role: string; display_name?: stri
 const users = ref<User[]>([]);
 const showForm = ref(false);
 const saving = ref(false);
+// 页面分段：账号设置 / 账号管理（对齐 App 成员页双 Tab；默认账号管理=用户常看的列表）
+const tab = ref<'account' | 'users'>('users');
 const form = ref<{ id?: string; username: string; password: string; role: string }>({
   id: undefined, username: '', password: '', role: 'staff',
 });
@@ -155,7 +172,13 @@ function remove(u: User) {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
-.btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
+.page { min-height: 100vh;  background: var(--page-bg); padding-top: 24rpx; box-sizing: border-box; }
+.seg-tab { display: flex; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden; }
+.seg-tab-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }
+.seg-tab-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
+.manage-head { display: flex; align-items: center; justify-content: space-between; margin: 4rpx 8rpx 16rpx; }
+.mh-tx { font-size: 24rpx; color: var(--text-sub); }
+.mh-add { font-size: 28rpx; color: var(--primary); font-weight: 600; }
 .card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .row { display: flex; align-items: center; }
 .u-avatar { width: 72rpx; height: 72rpx; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
