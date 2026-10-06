@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  actions: write    # 失败时取消整个 run（gh run cancel），省掉后续平台的无效构建时间
 
 jobs:
   # ── 总开关：主仓库正常执行；fork 用户若未配置任何 secrets（无微信上传、无 Cloudflare token）→
@@ -77,34 +78,6 @@ jobs:
 
       - name: Run tests
         run: npm test
-
-      - uses: actions/checkout@v4
-      - name: Create release (统一创建，保证列表顺序)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || exit 1)
-          REL="taozhu-v${VERSION}"
-          git fetch --tags --quiet || true
-          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
-          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
-          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
-          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
-          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" || true
-          fi
-          echo "release $REL 就绪（资产由各构建 job 上传）"
-      - name: 失败即清理（创建失败=空壳，无资产才删）
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts || true)
-          [ -n "$VERSION" ] || exit 0
-          ASSETS=$(gh release view "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets | length' 2>/dev/null || echo 0)
-          if [ "$ASSETS" -eq 0 ]; then
-            gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
-          fi
   # ── 前端单测（Flutter）：纯逻辑测试（版本函数等），不依赖网络/后端 mock ──
 
   # ── 统一创建 Release（test 后第一件事）：各平台上传资产前 release 必须已存在——
@@ -233,65 +206,34 @@ jobs:
           # ⑤b 同时保留 universal 包（taozhu-app-{v}.apk）：ABI 查询失败的兜底与桌面/模拟器兼容
           flutter build apk --release --build-name="$VERSION" --build-number="$BUILD_NUM"
 
-      - name: Package & upload to single Release (taozhu-app)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package APK (universal + split ABIs)
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
           # 统一产物命名：taozhu-app-{v}.apk（universal）+ taozhu-app-{v}-{abi}.apk（拆包）
           cp frontend-flutter/build/app/outputs/flutter-apk/app-release.apk "/tmp/taozhu-app-${VERSION}.apk"
-          # 按 ABI 重命名并上传（app-arm64-v8a-release.apk / app-armeabi-v7a-release.apk / app-x86_64-release.apk）
+          # 按 ABI 重命名（app-arm64-v8a-release.apk / app-armeabi-v7a-release.apk / app-x86_64-release.apk）
           for APK in frontend-flutter/build/app/outputs/flutter-apk/app-*-release.apk; do
             ABI=$(basename "$APK" | sed 's/^app-//; s/-release\.apk$//')
             cp "$APK" "/tmp/taozhu-app-${VERSION}-${ABI}.apk"
           done
-          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
-          git fetch --tags --quiet || true
-          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
-          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
-          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK（按 ABI 拆包）/ Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
-          REL="taozhu-v${VERSION}"
-          # 等待 release 创建（deploy 创建，最多 5 分钟）
-          for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
-          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # 兜底：deploy 未建（如后端未改动仅前端 push）时本 job 自行创建
-            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
-              --title "陶朱 v${VERSION}" --notes "$NOTES" || true
-          fi
-          for APK in /tmp/taozhu-app-${VERSION}*.apk; do
-            # upload 重试（GitHub 端瞬时 500/竞态；重试 5 次后再进入完整性校验）
-            for _c in 1 2 3 4 5; do
-              gh release upload "$REL" "$APK" --repo "$GITHUB_REPOSITORY" --clobber && break
-              echo "upload 重试 $_c/5 ($(basename "$APK"))"
-              sleep 5
-            done
-          done
-          # 完整性校验：本发布产物必须全部上传成功；缺失 → 删除整个 release 并失败（不留不全的 release，
-          # 与版本守卫一致：开发者看到失败后递增版本号重新构建）
-          MISSING=""
-          for APK in /tmp/taozhu-app-${VERSION}*.apk; do
-            FN=$(basename "$APK")
-            if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "$FN"; then
-              MISSING="$MISSING $FN"
-            fi
-          done
-          if [ -n "$MISSING" ]; then
-            echo "::error::release $REL 资产不完整（缺:$MISSING），按发版规则删除整个 release。请递增版本号重新构建（不得保留不全产物）"
-            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes || true
-            exit 1
-          fi
-          echo "uploaded taozhu-app (universal+split ABIs) ${VERSION}"
+          ls -lh /tmp/taozhu-app-${VERSION}*.apk
 
-      - name: 失败即清理不完整 release
-        # 仅版本守卫通过后的失败才清理（版本守卫失败=版本未 bump，已发布的完整 release 应保留）
+      # 产物先落 GitHub Actions artifact（不发 release）：全部平台成功后由 publish job 统一创建 release 并上传——
+      # 任一平台失败则不创建 release=零残留（修复"失败留半成品 release/draft"根因）
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-apk
+          path: /tmp/taozhu-app-*.apk
+          retention-days: 1
+
+      - name: 失败即取消整个 run（省掉其它平台的无效构建时间）
         if: failure() && steps.guard.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
-          if [ -n "$VERSION" ]; then
-            gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
-          fi
+          gh run cancel "${{ github.run_id }}" --repo "$GITHUB_REPOSITORY" || true
+          echo "已取消整个 workflow（本版本未创建 release，无残留）"
 
   # ── Linux 桌面 ─────────────────────────────────────────────────────────────────────
   linux:
@@ -343,45 +285,28 @@ jobs:
           flutter create --org com.taozhu --project-name taozhu_app .
           flutter build linux --release
 
-      - name: Package & upload Linux
+      - name: Package Linux zip
         if: github.repository == 'free-zuike/taozhu'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
           cd frontend-flutter/build/linux/x64/release/bundle && zip -qr "/tmp/taozhu-linux-${VERSION}.zip" . && cd -
-          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
-          git fetch --tags --quiet || true
-          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
-          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
-          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
-          REL="taozhu-v${VERSION}"
-          # 等待 release 创建（apk job 或并发先到者创建，最多 5 分钟）
-          for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
-          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" || true
-          fi
-          for _c in 1 2 3 4 5; do
-            gh release upload "$REL" "/tmp/taozhu-linux-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
-            echo "upload 重试 $_c/5 (taozhu-linux-${VERSION}.zip)"
-            sleep 5
-          done
-          # 完整性校验：产物必须上传成功，缺失 → 删除整个 release 并失败（不留不全的 release，请递增版本号重建）
-          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "taozhu-linux-${VERSION}.zip"; then
-            echo "::error::release $REL 资产不完整，按发版规则删除整个 release，请递增版本号重新构建"
-            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes || true
-            exit 1
-          fi
-          echo "uploaded taozhu-linux-${VERSION}.zip"
+          ls -lh "/tmp/taozhu-linux-${VERSION}.zip"
 
-      - name: 失败即清理不完整 release
-        # 仅版本守卫通过后的失败才清理（版本守卫失败=版本未 bump，已发布的完整 release 应保留）
+      - name: Upload linux artifact
+        if: github.repository == 'free-zuike/taozhu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux
+          path: /tmp/taozhu-linux-*.zip
+          retention-days: 1
+
+      - name: 失败即取消整个 run（省掉其它平台的无效构建时间）
         if: failure() && steps.guard.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
-          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+          gh run cancel "${{ github.run_id }}" --repo "$GITHUB_REPOSITORY" || true
+          echo "已取消整个 workflow（本版本未创建 release，无残留）"
 
       - name: Setup Flutter
         if: needs.check.outputs.has_cf == 'true'
@@ -406,19 +331,19 @@ jobs:
           curl -fsSL -o web/canvaskit/canvaskit.wasm "https://www.gstatic.com/flutter-canvaskit/a804b261645ef8c13eb3d5c44a5c2fb0340c5539/chromium/canvaskit.wasm"
           flutter build web --dart-define=API_BASE=https://taozhu.freezuike-3f7.workers.dev --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ --pwa-strategy=none
           flutter build web --dart-define=FLUTTER_WEB_CANVASKIT_URL=/canvaskit/ -o build/web-standalone --pwa-strategy=none
-      - name: Package & upload web zip (个人自托管分发，同版本固定名)
+      - name: Package web zip (个人自托管分发，同版本固定名)
         if: github.repository == 'free-zuike/taozhu'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\\K[^']+" src/version.ts || exit 1)
           cd frontend-flutter/build/web-standalone && zip -qr "/tmp/web-${VERSION}.zip" . && cd -
-          for _c in 1 2 3 4 5; do
-            gh release upload "taozhu-v${VERSION}" "/tmp/web-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
-            echo "upload 重试 $_c/5 (web-${VERSION}.zip)"
-            sleep 5
-          done
-          echo "uploaded: web-${VERSION}.zip"
+          ls -lh "/tmp/web-${VERSION}.zip"
+      - name: Upload web zip artifact (统一 publish 上传 release)
+        if: github.repository == 'free-zuike/taozhu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-web
+          path: /tmp/web-*.zip
+          retention-days: 1
       - name: Upload web build artifact (供最后 Deploy 使用)
         uses: actions/upload-artifact@v4
         with:
@@ -477,34 +402,28 @@ jobs:
           sed -i '/^include(flutter\/generated_plugins.cmake)$/i\add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' windows/CMakeLists.txt
           flutter build windows --release
 
-      - name: Package & upload Windows
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package Windows zip
         run: |
           $VERSION = (Select-String -Path "frontend-flutter/lib/version.dart" -Pattern "APP_VERSION = '([^']+)'").Matches[0].Groups[1].Value
           if (-not $VERSION) { Write-Error "版本提取失败"; exit 1 }
           Compress-Archive -Path "frontend-flutter/build/windows/x64/runner/Release/*" -DestinationPath "$env:TEMP/taozhu-windows-${VERSION}.zip"
-          git fetch --tags --quiet 2>$null
-          $log = bash .github/release-notes.sh $VERSION 2>$null
-          if (-not $log) { $log = "- 同步版本 $VERSION" }
-          $notes = "陶朱 v$VERSION 更新内容：`n$log`n`n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。"
-          $REL = "taozhu-v$VERSION"
-          for ($_i = 0; $_i -lt 60; $_i++) { gh release view $REL 2>$null; if ($?) { break }; Start-Sleep -Seconds 5 }
-          gh release view $REL 2>$null; if (-not $?) {
-            gh release create $REL --target "$GITHUB_SHA" --title "陶朱 v$VERSION" --notes $notes 2>$null
-          }
-          for ($_c = 1; $_c -le 5; $_c++) { gh release upload $REL "$env:TEMP/taozhu-windows-${VERSION}.zip" --clobber; if ($?) { break }; Write-Output "upload 重试 $_c/5 (taozhu-windows-${VERSION}.zip)"; Start-Sleep -Seconds 5 }
-          echo "uploaded taozhu-windows-${VERSION}.zip"
+          Get-Item "$env:TEMP/taozhu-windows-${VERSION}.zip" | Select-Object Name, Length
 
-      - name: 失败即清理不完整 release
-        # 仅版本守卫通过后的失败才清理（版本守卫失败=版本未 bump，已发布的完整 release 应保留）
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: ${{ runner.temp }}/taozhu-windows-*.zip
+          retention-days: 1
+
+      - name: 失败即取消整个 run（省掉其它平台的无效构建时间）
         if: failure() && steps.guard.outcome == 'success'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
-          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+          gh run cancel "${{ github.run_id }}" --repo "$GITHUB_REPOSITORY" || true
+          echo "已取消整个 workflow（本版本未创建 release，无残留）"
 
   # ── macOS ──────────────────────────────────────────────────────────────────────────
   macos:
@@ -554,37 +473,26 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :com.apple.security.device.audio-input bool true" macos/Runner/Release.entitlements
           flutter build macos --release
 
-      - name: Package & upload macOS
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package macOS zip
         run: |
           VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1 || exit 1)
           cd frontend-flutter/build/macos/Build/Products/Release && zip -qr "/tmp/taozhu-macos-${VERSION}.zip" taozhu_app.app && cd -
-          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
-          git fetch --tags --quiet || true
-          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
-          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
-          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
-          REL="taozhu-v${VERSION}"
-          for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
-          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "陶朱 v${VERSION}" --notes "$NOTES" || true
-          fi
-          for _c in 1 2 3 4 5; do
-            gh release upload "$REL" "/tmp/taozhu-macos-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
-            echo "upload 重试 $_c/5 (taozhu-macos-${VERSION}.zip)"
-            sleep 5
-          done
-          echo "uploaded taozhu-macos-${VERSION}.zip"
+          ls -lh "/tmp/taozhu-macos-${VERSION}.zip"
 
-      - name: 失败即清理不完整 release
-        # 仅版本守卫通过后的失败才清理（版本守卫失败=版本未 bump，已发布的完整 release 应保留）
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: /tmp/taozhu-macos-*.zip
+          retention-days: 1
+
+      - name: 失败即取消整个 run（省掉其它平台的无效构建时间）
         if: failure() && steps.guard.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
-          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+          gh run cancel "${{ github.run_id }}" --repo "$GITHUB_REPOSITORY" || true
+          echo "已取消整个 workflow（本版本未创建 release，无残留）"
 
 
       - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
@@ -634,37 +542,26 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'AI 语音记账：录一句话描述刚才的出货/进货'" ios/Runner/Info.plist
           flutter build ios --no-codesign
 
-      - name: Package & upload iOS (unsigned)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package iOS zip (unsigned)
         run: |
           VERSION=$(sed -n "s/.*APP_VERSION = '\([^']*\)'.*/\1/p" frontend-flutter/lib/version.dart | head -1 || exit 1)
           cd frontend-flutter/build/ios/iphoneos && zip -qr "/tmp/taozhu-ios-${VERSION}-unsigned.zip" Runner.app && cd -
-          # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
-          git fetch --tags --quiet || true
-          LOG=$(bash .github/release-notes.sh "$VERSION" || true)
-          if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
-          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
-          REL="taozhu-v${VERSION}"
-          for _i in $(seq 1 60); do gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 5; done
-          if ! gh release view "$REL" >/dev/null 2>&1; then
-            gh release create "$REL" --target "$GITHUB_SHA" --title "陶朱 v${VERSION}" --notes "$NOTES" || true
-          fi
-          for _c in 1 2 3 4 5; do
-            gh release upload "$REL" "/tmp/taozhu-ios-${VERSION}-unsigned.zip" --clobber && break
-            echo "upload 重试 $_c/5 (taozhu-ios-${VERSION}-unsigned.zip)"
-            sleep 5
-          done
-          echo "uploaded taozhu-ios-${VERSION}-unsigned.zip（未签名，安装需 Apple 开发者证书）"
+          ls -lh "/tmp/taozhu-ios-${VERSION}-unsigned.zip"
 
-      - name: 失败即清理不完整 release
-        # 仅版本守卫通过后的失败才清理（版本守卫失败=版本未 bump，已发布的完整 release 应保留）
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-ios
+          path: /tmp/taozhu-ios-*.zip
+          retention-days: 1
+
+      - name: 失败即取消整个 run（省掉其它平台的无效构建时间）
         if: failure() && steps.guard-ios.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
-          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+          gh run cancel "${{ github.run_id }}" --repo "$GITHUB_REPOSITORY" || true
+          echo "已取消整个 workflow（本版本未创建 release，无残留）"
   # ── iOS（未签名）──────────────────────────────────────────────────────────────────
 
   # ── 微信小程序（uni-app）──────────────────────────────────────────────────────────
@@ -737,52 +634,101 @@ jobs:
             || echo "::warning::微信上传失败（密钥/网络/白名单），详见日志；zip 产物已留底"
           rm -f /tmp/private.key
 
-      - name: Package & upload to version Release
-        # 有微信上传密钥才打包/上传（fork 用户未配 secrets 则跳过打 zip）
+      - name: Package miniprogram zip
+        # 有微信上传密钥才打包留底（fork 用户未配 secrets 则跳过；release 上传统一由 publish job 处理）
         if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' }}
+        run: |
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || exit 0)
+          cd frontend-uni/dist/build/mp-weixin && zip -qr "/tmp/taozhu-miniprogram-${VERSION}.zip" . && cd -
+          ls -lh "/tmp/taozhu-miniprogram-${VERSION}.zip"
+
+      - name: Upload miniprogram artifact
+        if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-miniprogram
+          path: /tmp/taozhu-miniprogram-*.zip
+          retention-days: 1
+
+      - name: 失败即取消整个 run（省掉后续 job 的无效构建时间）
+        if: failure() && steps.guard.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WX_APPID: ${{ secrets.WX_APPID }}
-          WX_PRIVATE_KEY: ${{ secrets.WX_PRIVATE_KEY }}
         run: |
-          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || exit 1)
-          cd frontend-uni/dist/build/mp-weixin && zip -qr "/tmp/taozhu-miniprogram-${VERSION}.zip" . && cd -
+          gh run cancel "${{ github.run_id }}" --repo "$GITHUB_REPOSITORY" || true
+          echo "已取消整个 workflow（本版本未创建 release，无残留）"
+
+  # ── 统一发布：全部平台成功后才创建 release + 一次上传所有产物 ──
+  # 任一平台失败 → 本 job 不运行 → release 根本不创建（修复"失败残留半成品 release/draft"根因）
+  publish:
+    needs: [apk, linux, windows, macos, miniprogram]
+    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.miniprogram.result == 'success')) }}
+    runs-on: ubuntu-latest
+    name: 统一发布（release+全部资产）
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/dist
+          merge-multiple: true
+
+      - name: Create release & upload all assets (一次性)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
+          REL="taozhu-v${VERSION}"
+          ls -lh /tmp/dist
           # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
           git fetch --tags --quiet || true
           LOG=$(bash .github/release-notes.sh "$VERSION" || true)
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
           NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
-          REL="taozhu-v${VERSION}"
-          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
-              --title "陶朱 v${VERSION}" --notes "$NOTES"
-          fi
-          for _c in 1 2 3 4 5; do
-            gh release upload "$REL" "/tmp/taozhu-miniprogram-${VERSION}.zip" --repo "$GITHUB_REPOSITORY" --clobber && break
-            echo "upload 重试 $_c/5 (taozhu-miniprogram-${VERSION}.zip)"
-            sleep 5
+          # 平台 job 已全部成功 → 此时本版本无 release，直接创建
+          [ -n "$(gh release view "$REL" --repo "$GITHUB_REPOSITORY" 2>/dev/null)" ] && \
+            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
+            --title "陶朱 v${VERSION}" --notes "$NOTES"
+          echo "release $REL 已创建，开始上传全部产物"
+          for F in /tmp/dist/*; do
+            [ -f "$F" ] || continue
+            for _c in 1 2 3 4 5; do
+              gh release upload "$REL" "$F" --repo "$GITHUB_REPOSITORY" --clobber && break
+              echo "upload 重试 $_c/5 ($(basename "$F"))"
+              sleep 5
+            done
           done
-          # 完整性校验：产物必须上传成功，缺失 → 删除整个 release 并失败（不留不全的 release）
-          if ! gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "taozhu-miniprogram-${VERSION}.zip"; then
-            echo "::error::release $REL 资产不完整，按发版规则删除整个 release，请递增版本号重新构建"
-            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes || true
+          # 完整性校验：dist 目录里的每个文件都必须出现在 release 资产中
+          MISSING=""
+          UPLOADED=$(gh release view "$REL" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null)
+          for F in /tmp/dist/*; do
+            [ -f "$F" ] || continue
+            FN=$(basename "$F")
+            if ! echo "$UPLOADED" | grep -qx "$FN"; then MISSING="$MISSING $FN"; fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::release $REL 资产不完整（缺:$MISSING），删除整个 release。请递增版本号重新构建"
+            gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
             exit 1
           fi
-          echo "uploaded taozhu-miniprogram-${VERSION}.zip"
+          echo "全部资产已上传（$REL）："
+          echo "$UPLOADED"
 
-      - name: 失败即清理不完整 release
-        # 仅版本守卫通过后的失败才清理（版本守卫失败=版本未 bump，已发布的完整 release 应保留）
-        if: failure() && steps.guard.outcome == 'success'
+      - name: 失败即删除 release+tag（发布不完整=版本作废，可复用版本号重建）
+        if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || true)
-          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || true
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
+          [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          echo "已删除不完整 release+tag（本版本未发布，零残留）"
 
   # ── Web（Flutter）构建：与各平台并行，最后 Deploy 直接用其产物（避免 Web 构建串行在链尾）──
 
   deploy:
-    needs: [miniprogram, linux]
+    needs: [miniprogram, linux, publish]
     runs-on: ubuntu-latest
     name: Deploy
     env:
@@ -902,9 +848,11 @@ jobs:
           # --cleanup-tag：release 关联的 git tag 一并删除——否则 tag 残留导致版本守卫判占用，同版本无法复用
           [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
 
-  # ── 失败兜底清理：任一平台/部署失败 → 删除本次空壳 release（assets==0 才删，防误删已传资产）──
+  # ── 失败兜底清理：任一平台/发布/部署失败 → 无条件删除本次 release+tag（存在即删，零残留）──
+  # 注：新架构 release 只在 publish job（全部平台成功后）创建，发布/部署失败由各自失败步骤已删；
+  # 本 job 兜底覆盖发布后 deploy 失败等场景
   cleanup-failed-release:
-    needs: [apk, linux, windows, macos, miniprogram, deploy]
+    needs: [apk, linux, windows, macos, miniprogram, publish, deploy]
     if: ${{ always() && failure() }}
     runs-on: ubuntu-latest
     steps:
@@ -912,14 +860,12 @@ jobs:
       - run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
           [ -n "$VERSION" ] || exit 0
-          ASSETS=$(gh release view "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets | length' 2>/dev/null || echo 0)
-          echo "release assets: $ASSETS"
-          if [ "$ASSETS" -eq 0 ]; then
+          if gh release view "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # --cleanup-tag：关联 git tag 一并删除，版本守卫不再判占用，失败后可复用本版本号重推
             gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
-            echo "已删除空壳 release+tag（失败版本已清理，可复用本版本号重建）"
+            echo "已删除失败版本 release+tag（零残留，可复用本版本号重建）"
           else
-            echo "release 已有资产（$ASSETS 个），保留（完整性由各构建 job 校验）"
+            echo "本版本无 release（平台/发布失败时本来就不创建），无需清理"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -62,18 +62,15 @@ class _LedgerPageState extends State<LedgerPage> {
   bool _mLoaded = false; // 月度结余是否已加载（未加载显示占位符，不闪 0）
   int _selYear = DateTime.now().year; // 月度结余所选年份（头部月份切换）
   int _selMonth = DateTime.now().month; // 所选月份
-  /// 列表滚动联动：顶部月份跟随当前可见日期（对齐参考实现的日期头可见性 → 月份标签切换）。
-  /// 每个日期分组头一个 GlobalKey，滚动时取视口内最顶部可见的日期头 → 解析年月 → 更新 _selYear/_selMonth。
+  /// 日期头 GlobalKey：仅月份选择器跳转定位用（_scrollToMonth），不再滚动联动
   final Map<String, GlobalKey> _dateHeaderKeys = {};
   ScrollController? _flowCtrl;
-  Timer? _scrollMonthDebounce;
-  bool _scrollPicking = false; // 编程滚动中选择月份（别让滚动回调又改回）
 
   @override
   void initState() {
     super.initState();
-    // 列表滚动联动月份：对齐参考实现的"日期头可见性 → 顶部月份标签跟随切换"
-    _flowCtrl = ScrollController()..addListener(_onFlowScroll);
+    // 月份只由顶部月度卡选择器控制（pickMonth），滚动不再联动切月（对齐 0.17.317 用户否决"整体移动"）
+    _flowCtrl = ScrollController();
     // 店员账号：仅当天出货视角（后端强制当天）
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _isStaff = r == 'staff');
@@ -88,9 +85,7 @@ class _LedgerPageState extends State<LedgerPage> {
   @override
   void dispose() {
     _syncDebounce?.cancel();
-    _flowCtrl?.removeListener(_onFlowScroll);
     _flowCtrl?.dispose();
-    _scrollMonthDebounce?.cancel();
     SyncService.version.removeListener(_onSync);
     super.dispose();
   }
@@ -135,6 +130,9 @@ class _LedgerPageState extends State<LedgerPage> {
         gross = (d['gross_profit'] as num?)?.toDouble() ?? 0;
         debt = (d['debt'] as num?)?.toDouble() ?? 0;
       } else {
+        // 本地聚合前先与服务器核对舍入配置（服务器改过 digits 时本地旧缓存会算错：
+        // 三间 10 月=逐笔 1 位累加 290.9 vs 2 位 291.0 实证）；失败静默保留本地值（离线兜底）
+        await Money.refresh();
         // 本地聚合（去单据化行级主记录）：出货额/毛利/收款按区间+店铺；欠款=截止 end 累计出货−收款
         final rows = await LocalDb.getAll('sale_items');
         final pays = await LocalDb.getAll('payments');
@@ -187,15 +185,12 @@ class _LedgerPageState extends State<LedgerPage> {
       month: _selMonth,
     );
     if (picked == null) return;
-    // 编程切换到选中月份后，滚动列表定位到该月首日（滚动联动月份随选中同步）
-    _scrollPicking = true;
     setState(() {
       _selYear = picked.year;
       _selMonth = picked.month;
     });
     _loadMonthly(); // 月度结余卡数据跟随选中月份
     _scrollToMonth(picked.year, picked.month);
-    Future.delayed(const Duration(milliseconds: 600), () => _scrollPicking = false);
   }
 
   /// 选中月份后：滚动列表到该月第一条（精确滚动到日期头）
@@ -209,47 +204,6 @@ class _LedgerPageState extends State<LedgerPage> {
     if (ctx != null) {
       Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 400), alignment: 0.0);
     }
-  }
-
-  /// 列表滚动 → 顶部月份跟随当前可见日期（对齐参考实现的日期头可见性联动）：
-  /// 遍历日期头 keys，取最顶部可见（视口内 dy 最小且已滚过顶）的日期头 → 更新月份标签。
-  void _onFlowScroll() {
-    if (_scrollPicking) return; // 编程滚动选择月份时不联动（防回跳）
-    _scrollMonthDebounce?.cancel();
-    _scrollMonthDebounce = Timer(const Duration(milliseconds: 100), _syncMonthFromScroll);
-  }
-
-  void _syncMonthFromScroll() {
-    if (!mounted || _scrollPicking) return;
-    // 联动锚点 = 顶部"月度结余卡"栏位线（非视口最顶部）：取 dy 最接近该栏位的日期头——
-    // 跨月边界轻微滑动（8/9 月相邻）时日期头只在视口顶部露头不算，滚到结余卡栏位附近才切
-    const lineY = 200.0; // 月度结余卡栏位线（视口顶部往下）
-    final viewportH = MediaQuery.of(context).size.height;
-    double? best;
-    String? bestKey;
-    for (final e in _dateHeaderKeys.entries) {
-      final ctx = e.value.currentContext;
-      final ro = ctx?.findRenderObject();
-      if (ro is! RenderBox || !ro.attached) continue;
-      final dy = ro.localToGlobal(Offset.zero).dy;
-      if (dy < -80 || dy > viewportH + 80) continue; // 视口附近（含刚滚出上一头）
-      final diff = (dy - lineY).abs();
-      if (best == null || diff < best) {
-        best = diff;
-        bestKey = e.key;
-      }
-    }
-    if (bestKey == null || bestKey.length < 7) return;
-    final y = int.tryParse(bestKey.substring(0, 4));
-    final m = int.tryParse(bestKey.substring(5, 7));
-    if (y == null || m == null) return;
-    if (y == _selYear && m == _selMonth) return;
-    setState(() {
-      _selYear = y;
-      _selMonth = m;
-    });
-    // 月份变化 → 月度结余卡数据跟随所选月份（静默刷新，失败保留占位）
-    _loadMonthly();
   }
 
   static String _fmtDate(DateTime d) =>
@@ -1216,21 +1170,7 @@ class _LedgerPageState extends State<LedgerPage> {
       child: Scaffold(
         appBar: AppBar(
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
-          // 标题并入下方统计头（店铺+月度结余透明块，背景透出）
-          bottom: TabBar(
-            tabs: _isStaff
-                ? const [Tab(text: '出货')]
-                : const [Tab(text: '出货'), Tab(text: '收款')],
-            labelColor: c.primary,
-            unselectedLabelColor: c.textSub,
-            labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            unselectedLabelStyle: const TextStyle(fontSize: 14),
-            indicator: BoxDecoration(
-              color: c.primary.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            indicatorSize: TabBarIndicatorSize.label,
-          ),
+          // 出货/收款 TabBar 已移入 body（统计栏下边，对齐小程序 seg），AppBar 不再挂 bottom
         ),
         body: Stack(
           children: [
@@ -1299,6 +1239,21 @@ class _LedgerPageState extends State<LedgerPage> {
                     const SizedBox(height: 8),
                     _monthlyCard(c),
                   ],
+                  // 出货/收款 TabBar（对齐小程序 seg：店铺+月度结余卡 → 出货/收款 → 列表）
+                  TabBar(
+                    tabs: _isStaff
+                        ? const [Tab(text: '出货')]
+                        : const [Tab(text: '出货'), Tab(text: '收款')],
+                    labelColor: c.primary,
+                    unselectedLabelColor: c.textSub,
+                    labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    unselectedLabelStyle: const TextStyle(fontSize: 14),
+                    indicator: BoxDecoration(
+                      color: c.primary.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    indicatorSize: TabBarIndicatorSize.label,
+                  ),
                   const SizedBox(height: 8),
                   // 列表跟随顶部月份选择器（选几月显示几月），无独立时间筛选
                   if (_isStaff)

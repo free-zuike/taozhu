@@ -31,7 +31,7 @@
       <view :class="['seg-item', { active: tab === 'payments' }]" @click="switchTab('payments')">收款</view>
     </view>
 
-    <scroll-view scroll-y class="flow" :scroll-top="scrollTop">
+    <scroll-view scroll-y class="flow">
     <view v-if="tab === 'sales'">
       <!-- 按日期分组 + 商品明细行平铺（对齐 App：日期头 + 流水行卡片） -->
       <view v-for="g in saleGroups" :key="g.date">
@@ -87,17 +87,29 @@
     </view>
     </scroll-view>
 
-    <!-- 附件弹层：查看/上传/删除凭证图片 -->
-    <view v-if="attach.show" class="mask" @click="attach.show = false">
-      <view class="sheet" @click.stop>
-        <view class="sheet-title">凭证附件</view>
-        <scroll-view scroll-y class="attach-scroll">
-          <view v-for="(a, i) in attach.list" :key="a.key" class="attach-item">
-            <image class="attach-img" :src="attachmentUrl(a.key)" mode="aspectFill" @click="previewAttach(i)" />
-            <text class="attach-del" @click="removeAttach(a.key)">删除</text>
+    <!-- 附件查看/上传/删除：全屏大图查看器（对齐 App：点击直接全屏大图 + 上边操作按钮） -->
+    <view v-if="attach.show" class="mask" @click="closeAttach">
+      <!-- 有图：全屏查看器 -->
+      <view v-if="attach.list.length > 0" class="viewer" @click.stop>
+        <swiper class="viewer-swiper" :current="attach.index" @change="onViewerChange">
+          <swiper-item v-for="a in attach.list" :key="a.key">
+            <image class="viewer-img" :src="attachmentUrl(a.key)" mode="aspectFit" @click.stop />
+          </swiper-item>
+        </swiper>
+        <view class="viewer-top">
+          <text class="viewer-close" @click="closeAttach">✕</text>
+          <text class="viewer-count">{{ attach.index + 1 }}/{{ attach.list.length }}</text>
+          <view class="viewer-ops">
+            <text class="viewer-op" @click="uploadAttach">添加</text>
+            <text class="viewer-op" @click="downloadAttach">下载</text>
+            <text class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
           </view>
-          <view v-if="attach.list.length === 0" class="empty">暂无凭证，点下方添加</view>
-        </scroll-view>
+        </view>
+      </view>
+      <!-- 无图：空态提示可添加 -->
+      <view v-else class="sheet" @click.stop>
+        <view class="sheet-title">凭证附件</view>
+        <view class="empty">暂无凭证，点下方添加</view>
         <view class="attach-actions">
           <button class="btn-sub" @click="uploadAttach">+ 添加凭证（拍照/相册）</button>
           <button class="btn-save" @click="attach.show = false">完成</button>
@@ -164,9 +176,7 @@ const isAdmin = ref(getRole() !== 'staff');
 const sales = ref<Array<Record<string, any>>>([]);
 const payments = ref<Array<Record<string, any>>>([]);
 const saving = ref(false);
-// 滚动联动月份：滚动列表时顶部月份跟随当前可见日期（对齐 App）
-const scrollTop = ref(0);
-let isProgramScroll = false;
+// 月份只由顶部月度卡选择器控制（pickMonth），滚动不再联动改月份（0.17.317 已移除联动）
 // 收款账户：服务器同步实体（云端直连读取）
 const accounts = ref<string[]>(['现金', '微信', '支付宝', '银行卡', '转账']);
 const payForm = ref<{
@@ -180,8 +190,8 @@ const itemForm = ref<{
 }>({ show: false, isPurchase: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', countQty: '', countUnit: '', date: '', note: '' });
 
 // ── 附件凭证 ──
-const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({
-  show: false, entity: '', id: '', list: [],
+const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number }>({
+  show: false, entity: '', id: '', list: [], index: 0,
 });
 // 附件计数：sale_item（行级）/ sale（无明细备注行的单据级）/ payment（收款单据级）→ id → 张数
 const attachCounts = ref<Record<string, Record<string, number>>>({ sale_item: {}, sale: {}, payment: {} });
@@ -214,9 +224,11 @@ async function loadAttachCounts() {
   if (payIds.length > 0) await fetch('payment', payIds);
 }
 
-/** 打开凭证弹层：行级（sale_item/账单行）优先；查空时回退单据级（sale/purchase），兼容早期单据级上传 */
+/** 打开凭证：加载列表后直接进全屏查看器（对齐 App attachment_viewer：
+ *  点击即全屏大图 + 上边添加/下载/删除按钮；不再先弹小图弹层再点一次）
+ */
 async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') {
-  attach.value = { show: true, entity, id, list: [] };
+  attach.value = { show: true, entity, id, list: [], index: 0 };
   let list: Array<{ key: string }> = [];
   try {
     const d = await getAttachments(entity, id);
@@ -232,15 +244,15 @@ async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') 
     } catch (_) {}
   }
   attach.value.list = list;
-  // 点击凭证直接全屏看图（对齐 App：不再先看小图弹层再点一次；多张左右滑动，关闭后弹层可管理/删除）
-  if (list.length > 0) {
-    uni.previewImage({ urls: list.map((a) => attachmentUrl(a.key)), current: 0 });
-  }
+  // 全屏查看器直接打开（有图看大图；无图显示空态可添加）
 }
 
-function previewAttach(i: number) {
-  const urls = attach.value.list.map((a) => attachmentUrl(a.key));
-  uni.previewImage({ urls, current: urls[i] });
+function closeAttach() {
+  attach.value.show = false;
+}
+
+function onViewerChange(e: { detail: { current: number } }) {
+  attach.value.index = e.detail.current;
 }
 
 function uploadAttach() {
@@ -262,11 +274,45 @@ function uploadAttach() {
   });
 }
 
+/** 下载当前凭证到系统相册（小程序无本地库：直连服务器取图存相册，对齐 App attachment_viewer 保存按钮） */
+function downloadAttach() {
+  const it = attach.value.list[attach.value.index];
+  if (!it) return;
+  uni.showLoading({ title: '下载中…' });
+  uni.downloadFile({
+    url: attachmentUrl(it.key),
+    success(res) {
+      if (res.statusCode !== 200) {
+        uni.hideLoading();
+        uni.showToast({ title: '下载失败', icon: 'none' });
+        return;
+      }
+      uni.saveImageToPhotosAlbum({
+        filePath: res.tempFilePath,
+        success() {
+          uni.hideLoading();
+          uni.showToast({ title: '已保存到相册', icon: 'success' });
+        },
+        fail(e) {
+          uni.hideLoading();
+          uni.showToast({ title: e.errMsg?.includes('auth') ? '需要相册权限' : '保存失败', icon: 'none' });
+        },
+      });
+    },
+    fail() {
+      uni.hideLoading();
+      uni.showToast({ title: '下载失败', icon: 'none' });
+    },
+  });
+}
+
 async function removeAttach(key: string) {
   if (!(await confirm('删除凭证', '确定删除这张凭证图片吗？'))) return;
   try {
     await deleteAttachment(key);
+    const idx = attach.value.list.findIndex((a) => a.key === key);
     attach.value.list = attach.value.list.filter((a) => a.key !== key);
+    if (idx >= 0 && attach.value.index >= idx && attach.value.index > 0) attach.value.index -= 1;
     uni.showToast({ title: '已删除', icon: 'success' });
     loadAttachCounts();
   } catch (e) {
@@ -836,4 +882,14 @@ async function removePayment(p: Record<string, any>) {
 .attach-actions { display: flex; gap: 16rpx; }
 .attach-actions .btn-sub { flex: 1; }
 .attach-actions .btn-save { flex: 1; }
+/* 全屏凭证查看器（对齐 App attachment_viewer：大图 + 上边操作按钮） */
+.viewer { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: #000; display: flex; flex-direction: column; }
+.viewer-swiper { flex: 1; width: 100%; }
+.viewer-img { width: 100%; height: 100%; }
+.viewer-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 24rpx 28rpx; background: linear-gradient(rgba(0,0,0,0.5), transparent); box-sizing: border-box; }
+.viewer-close { color: #fff; font-size: 40rpx; line-height: 1; padding: 8rpx; }
+.viewer-count { color: rgba(255,255,255,0.85); font-size: 26rpx; }
+.viewer-ops { display: flex; gap: 28rpx; }
+.viewer-op { color: #fff; font-size: 28rpx; background: rgba(255,255,255,0.18); border-radius: 28rpx; padding: 10rpx 26rpx; }
+.viewer-op-del { color: #ff6d6d; }
 </style>

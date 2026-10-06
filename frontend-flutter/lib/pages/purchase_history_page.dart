@@ -29,15 +29,17 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   /// 所选月份（头部月份切换器，列表联动显示该月进货）
   int _selYear = DateTime.now().year;
   int _selMonth = DateTime.now().month;
+  /// 用户是否手动切换过月份（手动后不再自动跳最后记录月份；默认自动=最后一条有记录的月份）
+  bool _userPickedMonth = false;
   /// 当月进货总额（仅支出统计：进货页无收入/结余）
   double _monthExpense = 0;
   int _monthCount = 0;
   int _monthItems = 0;
-  /// 月份滚动联动（与交易页一致）：列表滑动时顶部月份跟随；点标题弹年月选择
-  late final ScrollController _listCtrl = ScrollController()..addListener(_onScroll);
+  /// 月份只由顶部月份选择器控制（pickMonth）——滚动不再联动切月（对齐交易页 0.17.317；
+  /// 原实现列表滚动时顶部月份跟随日期头并重算统计=滑动变月，用户否决）
+  late final ScrollController _listCtrl = ScrollController();
+  /// 日期头 GlobalKey：仅月份选择器跳转定位用（_scrollToMonth），不再滚动联动
   final Map<String, GlobalKey> _dateHeaderKeys = {};
-  Timer? _scrollDebounce;
-  bool _scrollPicking = false;
   /// 附件计数：明细行（purchase_item）与单据（purchase）各一份；行级查空回退单据
   final Map<String, int> _buyLineAttachCount = {};
   final Map<String, int> _buyAttachCount = {};
@@ -53,49 +55,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
   void dispose() {
     SyncService.version.removeListener(_onSync);
     _listCtrl.dispose();
-    _scrollDebounce?.cancel();
     super.dispose();
-  }
-
-  /// 列表滚动 → 顶部月份跟随最上方日期头（防抖 100ms；编程滚动时不联动防回跳）
-  void _onScroll() {
-    if (_scrollPicking) return;
-    _scrollDebounce?.cancel();
-    _scrollDebounce = Timer(const Duration(milliseconds: 100), _syncMonthFromScroll);
-  }
-
-  void _syncMonthFromScroll() {
-    if (!mounted || _scrollPicking) return;
-    // 联动锚点 = 顶部"进货金额统计卡"栏位线（非视口最顶部）：取 dy 最接近该栏位的日期头——
-    // 9 月时 9 月初头正对统计卡栏位 → 标签 9 月；8 月 31 头只在视口顶部露头（未到栏位）不算，
-    // 直到它滚到统计卡栏位附近才切 8 月（符合"移动的位置是显示金额那一栏"）
-    const lineY = 130.0; // 统计卡栏位线（视口顶部往下；顶部=月份行+统计卡）
-    final viewportH = MediaQuery.of(context).size.height;
-    double? best;
-    String? bestKey;
-    for (final e in _dateHeaderKeys.entries) {
-      final ctx = e.value.currentContext;
-      if (ctx == null) continue;
-      final box = ctx.findRenderObject();
-      if (box is! RenderBox) continue;
-      final dy = box.localToGlobal(Offset.zero).dy;
-      if (dy < -80 || dy > viewportH + 80) continue; // 视口附近（含刚滚出上一头）
-      final diff = (dy - lineY).abs();
-      if (best == null || diff < best) {
-        best = diff;
-        bestKey = e.key;
-      }
-    }
-    if (bestKey == null || bestKey.length < 7) return;
-    final y = int.tryParse(bestKey.substring(0, 4));
-    final m = int.tryParse(bestKey.substring(5, 7));
-    if (y == null || m == null || m < 1 || m > 12) return;
-    if (y == _selYear && m == _selMonth) return;
-    setState(() {
-      _selYear = y;
-      _selMonth = m;
-      _filterByRange(_purchases); // 列表全量：联动只跟随月份显示 + 重算当月统计，不重载（避免跳月丢数据）
-    });
   }
 
   void _onSync() {
@@ -110,6 +70,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
 
   /// 切换月份（±1 月）：列表联动
   void _shiftMonth(int delta) {
+    _userPickedMonth = true; // 手动切换后不自动跳最后记录月份
     final y = _selYear;
     final m = _selMonth + delta;
     if (m < 1) {
@@ -132,15 +93,13 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       month: _selMonth,
     );
     if (picked == null) return;
-    // 编程滚动期间禁用滚动联动，避免"选 9 月、滚动时被顶部 8 月日期头切回 8 月"
-    _scrollPicking = true;
+    _userPickedMonth = true; // 手动切换后不自动跳最后记录月份
     setState(() {
       _selYear = picked.year;
       _selMonth = picked.month;
       _filterByRange(_purchases); // 重算当月统计（列表全量不变）
     });
     _scrollToMonth();
-    Future.delayed(const Duration(milliseconds: 600), () => _scrollPicking = false);
   }
 
   /// 滚动到所选月份第一个日期头（月份选择器跳转；无该月数据则停留在原位）
@@ -176,6 +135,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     // 传本次加载的 local（冷启动首次 _purchases 未就绪也能按本次列表统计）；
     // 云端 counts 由渲染后的 withCloud 调用覆盖（Web 上传/其他端新增的附件本地表没同步到）
     if (!kIsWeb) await _loadAttachCounts(purchases: local);
+    _jumpToLatestMonth(local); // 默认月份 = 最后一条有记录的月份（用户未手动切月时）
     // Web 端 LocalDb 恒空：跳过空渲染，避免删除/同步通知时列表"空白→填充"跳动；仅本地有数据才先渲染
     if ((!kIsWeb || local.isNotEmpty) && mounted) {
       setState(() {
@@ -194,6 +154,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         final rows = ((d['purchases'] as List?) ?? []).cast<Map<String, dynamic>>();
         await LocalDb.upsertList('purchases', rows);
         if (!mounted) return;
+        _jumpToLatestMonth(rows); // 默认月份 = 最后一条有记录的月份（用户未手动切月时）
         setState(() {
           _filterByRange(rows);
           _purchases = rows;
@@ -307,6 +268,31 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       final total = items.fold<double>(0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
       return {...m, 'total': total, 'items': items};
     }).toList();
+  }
+
+  /// 默认月份 = 最后一条有记录的月份：用户未手动切月时，加载后跳到最新记录所在月份
+  /// （当前月无数据时用户看到的不应是空统计，而是最近有记录月份；之后可手动切月）
+  void _jumpToLatestMonth(List<Map<String, dynamic>> rows) {
+    if (_userPickedMonth) return;
+    String? latest;
+    for (final p in rows) {
+      final od = _date(p['happened_at']);
+      final items = ((p['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      for (final it in items) {
+        final id = '${it['happened_at'] ?? ''}';
+        final d = id.length >= 10 ? id.substring(0, 10) : od;
+        if (d.isNotEmpty && (latest == null || d.compareTo(latest) > 0)) latest = d;
+      }
+      if (items.isEmpty && od.isNotEmpty && (latest == null || od.compareTo(latest) > 0)) latest = od;
+    }
+    if (latest != null && latest.length >= 7) {
+      final ny = int.tryParse(latest.substring(0, 4));
+      final nm = int.tryParse(latest.substring(5, 7));
+      if (ny != null && nm != null && (ny != _selYear || nm != _selMonth)) {
+        _selYear = ny;
+        _selMonth = nm;
+      }
+    }
   }
 
   /// 当月进货统计（行级口径：金额/天数/件数都按行日期归月度——单改商品日期到当月即计入，不被整单日期遮蔽）

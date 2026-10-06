@@ -68,7 +68,7 @@ Future<Map<String, dynamic>?> editSaleLine(
                 children: [
                   DateField(
                     controller: dateCtrl,
-                    label: '日期（YYYY-MM-DD）',
+                    hint: 'YYYY-MM-DD', // 弹窗窄列：label 会浮起成两行，用 hint 保持单行显示值
                   ),
                 ],
               ),

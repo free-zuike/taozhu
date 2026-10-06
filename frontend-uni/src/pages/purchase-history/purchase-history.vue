@@ -19,7 +19,7 @@
       </view>
     </view>
 
-    <scroll-view scroll-y class="flow" @scroll="onFlowScroll">
+    <scroll-view scroll-y class="flow">
     <!-- 进货流水：按日期分组 + 行级卡片平铺（对齐 App 出货/进货流式列表） -->
     <view v-for="g in buyGroups" :key="g.date">
       <view class="day-bar" @click="openBuyBatch(g.date)">
@@ -49,17 +49,29 @@
     <view v-if="buyGroups.length === 0" class="empty">该月暂无进货记录</view>
     </scroll-view>
 
-    <!-- 附件弹层 -->
-    <view v-if="attach.show" class="mask" @click="attach.show = false">
-      <view class="sheet" @click.stop>
-        <view class="sheet-title">凭证附件</view>
-        <scroll-view scroll-y class="attach-scroll">
-          <view v-for="(a, i) in attach.list" :key="a.key" class="attach-item">
-            <image class="attach-img" :src="attachmentUrl(a.key)" mode="aspectFill" @click="previewAttach(i)" />
-            <text class="attach-del" @click="removeAttach(a.key)">删除</text>
+    <!-- 附件查看/上传/删除：全屏大图查看器（对齐 App：点击直接全屏大图 + 上边操作按钮） -->
+    <view v-if="attach.show" class="mask" @click="closeAttach">
+      <!-- 有图：全屏查看器 -->
+      <view v-if="attach.list.length > 0" class="viewer" @click.stop>
+        <swiper class="viewer-swiper" :current="attach.index" @change="onViewerChange">
+          <swiper-item v-for="a in attach.list" :key="a.key">
+            <image class="viewer-img" :src="attachmentUrl(a.key)" mode="aspectFit" @click.stop />
+          </swiper-item>
+        </swiper>
+        <view class="viewer-top">
+          <text class="viewer-close" @click="closeAttach">✕</text>
+          <text class="viewer-count">{{ attach.index + 1 }}/{{ attach.list.length }}</text>
+          <view class="viewer-ops">
+            <text class="viewer-op" @click="uploadAttach">添加</text>
+            <text class="viewer-op" @click="downloadAttach">下载</text>
+            <text class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
           </view>
-          <view v-if="attach.list.length === 0" class="empty">暂无凭证，点下方添加</view>
-        </scroll-view>
+        </view>
+      </view>
+      <!-- 无图：空态提示可添加 -->
+      <view v-else class="sheet" @click.stop>
+        <view class="sheet-title">凭证附件</view>
+        <view class="empty">暂无凭证，点下方添加</view>
         <view class="attach-actions">
           <button class="btn-sub" @click="uploadAttach">+ 添加凭证（拍照/相册）</button>
           <button class="btn-save" @click="attach.show = false">完成</button>
@@ -96,6 +108,8 @@ import { fmtAmount } from '../../utils/money';
 
 const selYear = ref(new Date().getFullYear());
 const selMonth = ref(new Date().getMonth() + 1);
+/// 用户是否手动切换过月份（手动后不自动跳最后记录月份；默认=最后一条有记录的月份）
+let userPickedMonth = false;
 const purchases = ref<Array<Record<string, any>>>([]);
 const mExpense = ref(0);
 const mDays = ref(0);
@@ -154,7 +168,7 @@ const itemForm = ref<{
   quantity: string; unit: string; salePrice: string; date: string;
 }>({ show: false, orderId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', date: '' });
 
-const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }> }>({ show: false, entity: 'purchase', id: '', list: [] });
+const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number }>({ show: false, entity: 'purchase', id: '', list: [], index: 0 });
 // 附件计数（行级 purchase_item / 单据级 purchase）
 const attachCounts = ref<Record<string, Record<string, number>>>({ purchase_item: {}, purchase: {} });
 
@@ -187,6 +201,7 @@ function monthRange(): { from: string; to: string } {
 }
 
 function shiftMonth(delta: number) {
+  userPickedMonth = true; // 手动切月后不自动跳最后记录月份
   let y = selYear.value;
   let m = selMonth.value + delta;
   if (m < 1) { y--; m = 12; }
@@ -202,6 +217,7 @@ function shiftMonth(delta: number) {
 }
 
 function pickMonth() {
+  userPickedMonth = true; // 手动切月后不自动跳最后记录月份
   uni.showActionSheet({
     itemList: ['上一月', '下一月', '回到本月'],
     success: (r) => {
@@ -216,19 +232,8 @@ function pickMonth() {
   });
 }
 
-// 列表滚动 → 顶部月份跟随当前可见日期（对齐 App：滚动到哪月统计卡显示哪月）
-function onFlowScroll() {
-  if (buyGroups.value.length === 0) return;
-  const first = buyGroups.value[0];
-  if (!first || !first.date) return;
-  const m = parseInt(first.date.slice(5, 7), 10);
-  const y = parseInt(first.date.slice(0, 4), 10);
-  if (y && m && (y !== selYear.value || m !== selMonth.value)) {
-    selYear.value = y;
-    selMonth.value = m;
-    calcMonthly();
-  }
-}
+// 月份只由顶部月份选择器控制（pickMonth），滚动不再联动切月（对齐交易页 0.17.317；
+// 原实现 onFlowScroll 按列表首组日期强制切月并重算=滚动时顶部月份乱跳，已删除）
 
 async function load() {
   try {
@@ -242,6 +247,30 @@ async function load() {
     purchases.value = (purchaseItems && purchaseItems.length > 0)
         ? assembleFromRows(purchaseItems)
         : (results[0].purchases || []);
+    // 默认月份 = 最后一条有记录的月份（用户未手动切月时；当前月无数据不显示空统计）
+    if (!userPickedMonth) {
+      let latest = '';
+      for (const p of purchases.value) {
+        const od = String(p.happened_at || '').slice(0, 10);
+        const items = (p.items as Array<Record<string, any>>) || [];
+        if (items.length === 0) {
+          if (od && od > latest) latest = od;
+          continue;
+        }
+        for (const it of items) {
+          const d = String(it.happened_at || od).slice(0, 10);
+          if (d && d > latest) latest = d;
+        }
+      }
+      if (latest.length >= 7) {
+        const ny = parseInt(latest.slice(0, 4), 10);
+        const nm = parseInt(latest.slice(5, 7), 10);
+        if (ny && nm && (ny !== selYear.value || nm !== selMonth.value)) {
+          selYear.value = ny;
+          selMonth.value = nm;
+        }
+      }
+    }
     // 当月统计（行级口径：金额/天数/件数按行日期归月度，对齐 App _filterByRange）
     calcMonthly();
     loadAttachCounts();
@@ -398,7 +427,7 @@ async function saveItem() {
 }
 
 async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') {
-  attach.value = { show: true, entity, id, list: [] };
+  attach.value = { show: true, entity, id, list: [], index: 0 };
   let list: Array<{ key: string }> = [];
   try {
     const d = await getAttachments(entity, id);
@@ -414,15 +443,46 @@ async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') 
     } catch (_) {}
   }
   attach.value.list = list;
-  // 点击凭证直接全屏看图（对齐 App：不再先看小图弹层再点一次；多张左右滑动，关闭后弹层可管理/删除）
-  if (list.length > 0) {
-    uni.previewImage({ urls: list.map((a) => attachmentUrl(a.key)), current: 0 });
-  }
+  // 全屏查看器直接打开（有图看大图；无图显示空态可添加）
 }
 
-function previewAttach(i: number) {
-  const urls = attach.value.list.map((a) => attachmentUrl(a.key));
-  uni.previewImage({ urls, current: urls[i] });
+function closeAttach() {
+  attach.value.show = false;
+}
+
+function onViewerChange(e: { detail: { current: number } }) {
+  attach.value.index = e.detail.current;
+}
+
+function downloadAttach() {
+  const it = attach.value.list[attach.value.index];
+  if (!it) return;
+  uni.showLoading({ title: '下载中…' });
+  uni.downloadFile({
+    url: attachmentUrl(it.key),
+    success(res) {
+      if (res.statusCode !== 200) {
+        uni.hideLoading();
+        uni.showToast({ title: '下载失败', icon: 'none' });
+        return;
+      }
+      uni.saveImageToPhotosAlbum({
+        filePath: res.tempFilePath,
+        success() {
+          uni.hideLoading();
+          uni.showToast({ title: '已保存到相册', icon: 'success' });
+        },
+        fail(e) {
+          uni.hideLoading();
+          uni.showToast({ title: e.errMsg?.includes('auth') ? '需要相册权限' : '保存失败', icon: 'none' });
+        },
+      });
+    },
+    fail() {
+      uni.hideLoading();
+      uni.showToast({ title: '下载失败', icon: 'none' });
+    },
+  });
 }
 
 async function uploadAttach() {
@@ -449,7 +509,9 @@ async function removeAttach(key: string) {
   if (!(await confirm('删除凭证', '确定删除这张凭证吗？'))) return;
   try {
     await deleteAttachment(key);
+    const idx = attach.value.list.findIndex((a) => a.key === key);
     attach.value.list = attach.value.list.filter((a) => a.key !== key);
+    if (idx >= 0 && attach.value.index >= idx && attach.value.index > 0) attach.value.index -= 1;
     uni.showToast({ title: '已删除', icon: 'success' });
     loadAttachCounts();
   } catch (e) {
@@ -539,4 +601,14 @@ async function loadAttachCounts() {
 .attach-actions { display: flex; gap: 16rpx; }
 .attach-actions .btn-sub { flex: 1; }
 .attach-actions .btn-save { flex: 1; }
+/* 全屏凭证查看器（对齐 App attachment_viewer：大图 + 上边操作按钮） */
+.viewer { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: #000; display: flex; flex-direction: column; }
+.viewer-swiper { flex: 1; width: 100%; }
+.viewer-img { width: 100%; height: 100%; }
+.viewer-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 24rpx 28rpx; background: linear-gradient(rgba(0,0,0,0.5), transparent); box-sizing: border-box; }
+.viewer-close { color: #fff; font-size: 40rpx; line-height: 1; padding: 8rpx; }
+.viewer-count { color: rgba(255,255,255,0.85); font-size: 26rpx; }
+.viewer-ops { display: flex; gap: 28rpx; }
+.viewer-op { color: #fff; font-size: 28rpx; background: rgba(255,255,255,0.18); border-radius: 28rpx; padding: 10rpx 26rpx; }
+.viewer-op-del { color: #ff6d6d; }
 </style>

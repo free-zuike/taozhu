@@ -763,12 +763,21 @@ class _SalePageState extends State<SalePage> {
   Future<void> _pickRowDate(_Row row) async {
     final cur = DateTime.tryParse(row.happenedAt.trim().isEmpty ? _dateCtrl.text.trim() : row.happenedAt.trim());
     final now = DateTime.now();
-    final picked = await pickThemeDate(
-      context,
-      initial: cur ?? now,
-      firstDate: DateTime(now.year - 5),
-      lastDate: DateTime(now.year + 5, 12, 31),
-    );
+    // 批量直编（dateRows）用紧凑滚轮（对齐小程序 picker mode=date，不占屏幕）；
+    // 普通记单/编辑仍用三段式大月历
+    final picked = widget.dateRows != null && widget.dateRows!.isNotEmpty
+        ? await pickThemeDateCompact(
+            context,
+            initial: cur ?? now,
+            firstDate: DateTime(now.year - 5),
+            lastDate: DateTime(now.year + 5, 12, 31),
+          )
+        : await pickThemeDate(
+            context,
+            initial: cur ?? now,
+            firstDate: DateTime(now.year - 5),
+            lastDate: DateTime(now.year + 5, 12, 31),
+          );
     if (picked == null) return;
     setState(() => row.happenedAt =
         '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}');
@@ -1492,6 +1501,7 @@ class _SalePageState extends State<SalePage> {
             icon: Icons.calendar_today_outlined,
             label: _editing ? '日期（新加商品默认）' : '日期',
             hint: '点击选择日期（可补录历史）',
+            compact: widget.dateRows != null && widget.dateRows!.isNotEmpty, // 批量直编=紧凑滚轮（对齐小程序 picker）
           ),
           if (_editing)
             Padding(
