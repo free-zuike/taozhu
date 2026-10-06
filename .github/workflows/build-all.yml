@@ -406,8 +406,8 @@ jobs:
         run: |
           $VERSION = (Select-String -Path "frontend-flutter/lib/version.dart" -Pattern "APP_VERSION = '([^']+)'").Matches[0].Groups[1].Value
           if (-not $VERSION) { Write-Error "版本提取失败"; exit 1 }
-          Compress-Archive -Path "frontend-flutter/build/windows/x64/runner/Release/*" -DestinationPath "$env:TEMP/taozhu-windows-${VERSION}.zip"
-          Get-Item "$env:TEMP/taozhu-windows-${VERSION}.zip" | Select-Object Name, Length
+          Compress-Archive -Path "frontend-flutter/build/windows/x64/runner/Release/*" -DestinationPath "$env:RUNNER_TEMP/taozhu-windows-${VERSION}.zip"
+          Get-Item "$env:RUNNER_TEMP/taozhu-windows-${VERSION}.zip" | Select-Object Name, Length
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -635,15 +635,14 @@ jobs:
           rm -f /tmp/private.key
 
       - name: Package miniprogram zip
-        # 有微信上传密钥才打包留底（fork 用户未配 secrets 则跳过；release 上传统一由 publish job 处理）
-        if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' }}
+        # 构建产物留底 zip 不依赖微信密钥（release 上传统一由 publish job 处理）；
+        # 微信平台上传（miniprogram-ci）才需要密钥，见上一步
         run: |
-          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || exit 0)
+          VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || exit 1)
           cd frontend-uni/dist/build/mp-weixin && zip -qr "/tmp/taozhu-miniprogram-${VERSION}.zip" . && cd -
           ls -lh "/tmp/taozhu-miniprogram-${VERSION}.zip"
 
       - name: Upload miniprogram artifact
-        if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: dist-miniprogram
