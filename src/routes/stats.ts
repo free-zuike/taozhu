@@ -327,14 +327,21 @@ statsRouter.get('/summary', async (c) => {
   const purchase_total = buyRows.results.reduce((s, x) => s + roundMoney(Number(x.amount) || 0, money), 0);
 
   // 截止 end 的总欠款（区间前累计也计入：全部出货 − 全部收款，时间 ≤ end）；进货视图无欠款
-  // SQL 占位符顺序：all_sales(<=?, client=?) → all_paid(<=?, client=?)
-  const debtParams: unknown[] = clientId ? [end, clientId, end, clientId] : [end, end];
-  const debtSql = `SELECT
-      COALESCE((SELECT SUM(si.amount) FROM sale_items si
-                WHERE si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}), 0) AS all_sales,
-      COALESCE((SELECT SUM(amount + waived) FROM payments
-                WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}), 0) AS all_paid`;
-  const debt = await db.prepare(debtSql).bind(...debtParams).first<{ all_sales: number; all_paid: number }>();
+  // 口径=每笔先舍入再累加（与区间统计/账本一致）：勿 SQL SUM 原始值后一次舍入——
+  // 尾数会被"吞"（三间 10月 133.3+67.8+146.2+80.5=427.8，SUM=428.0→428，上层再统计继续进位放大）
+  const debtParams: unknown[] = clientId ? [end, clientId] : [end];
+  const [debtSaleRows, debtPayRows] = kind === 'purchase'
+    ? [{ results: [] as Array<{ amount: number }> }, { results: [] as Array<{ amount: number; waived: number }> }]
+    : await Promise.all([
+        db.prepare(
+          `SELECT amount FROM sale_items WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
+        ).bind(...debtParams).all<{ amount: number }>(),
+        db.prepare(
+          `SELECT amount, waived FROM payments WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
+        ).bind(...debtParams).all<{ amount: number; waived: number }>(),
+      ]);
+  const allSales = debtSaleRows.results.reduce((s, x) => s + r(x.amount), 0);
+  const allPaid = debtPayRows.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
 
   return c.json({
     start, end, kind,
@@ -342,7 +349,7 @@ statsRouter.get('/summary', async (c) => {
     sales_total: r(sales_total), gross_profit: canSeeProfit ? r(gross_profit) : 0,
     sales_count: saleRows.results.length,
     paid_total: r(paid_total), purchase_total: r(purchase_total),
-    debt: kind === 'purchase' ? 0 : r((debt?.all_sales ?? 0) - (debt?.all_paid ?? 0)),
+    debt: kind === 'purchase' ? 0 : r(allSales - allPaid),
   });
 });
 
@@ -456,7 +463,7 @@ statsRouter.get('/category-statement', async (c) => {
   if (!cat) return c.json({ error: '店铺分类不存在' }, 404);
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const [saleRows, payRows, debtRows, clientRows] = await Promise.all([
+  const [saleRows, payRows, debtRows, debtPayRows, clientRows] = await Promise.all([
     c.env.DB.prepare(
       `SELECT client_id, amount FROM sale_items
        WHERE client_id IN (SELECT id FROM clients WHERE category_id = ?)
@@ -467,14 +474,19 @@ statsRouter.get('/category-statement', async (c) => {
        WHERE client_id IN (SELECT id FROM clients WHERE category_id = ?)
          AND happened_at >= ? AND happened_at <= ?`,
     ).bind(categoryId, start, end).all<{ client_id: string; amount: number; waived: number }>(),
+    // 期末欠款：每笔先舍入再累加（口径与 /stats/summary 一致，勿 SQL SUM 原始后一次舍入——尾数进位放大）
     c.env.DB.prepare(
-      `SELECT c.id,
-        COALESCE((SELECT SUM(si.amount) FROM sale_items si
-                  WHERE si.client_id = c.id AND si.happened_at <= ?), 0) AS all_sales,
-        COALESCE((SELECT SUM(p.amount + p.waived) FROM payments p
-                  WHERE p.client_id = c.id AND p.happened_at <= ?), 0) AS all_paid
-       FROM clients c WHERE c.category_id = ? AND c.deleted_at IS NULL`,
-    ).bind(end, end, categoryId).all<{ id: string; all_sales: number; all_paid: number }>(),
+      `SELECT si.client_id AS cid, si.amount AS amount
+       FROM sale_items si
+       WHERE si.client_id IN (SELECT id FROM clients WHERE category_id = ? AND deleted_at IS NULL)
+         AND si.happened_at <= ?`,
+    ).bind(categoryId, end).all<{ cid: string; amount: number }>(),
+    c.env.DB.prepare(
+      `SELECT p.client_id AS cid, p.amount AS amount, p.waived AS waived
+       FROM payments p
+       WHERE p.client_id IN (SELECT id FROM clients WHERE category_id = ? AND deleted_at IS NULL)
+         AND p.happened_at <= ?`,
+    ).bind(categoryId, end).all<{ cid: string; amount: number; waived: number }>(),
     c.env.DB.prepare(
       `SELECT id, name FROM clients WHERE category_id = ? AND deleted_at IS NULL ORDER BY name`,
     ).bind(categoryId).all<{ id: string; name: string }>(),
@@ -488,7 +500,12 @@ statsRouter.get('/category-statement', async (c) => {
     paidMap.set(id, (paidMap.get(id) ?? 0) + r(Number(x.amount) || 0));
     waivedMap.set(id, (waivedMap.get(id) ?? 0) + r(Number(x.waived) || 0));
   }
-  const debtMap = new Map(debtRows.results.map((x) => [x.id, r((x.all_sales ?? 0) - (x.all_paid ?? 0))]));
+  const debtMap = new Map<string, number>();
+  for (const x of debtRows.results) debtMap.set(x.cid, (debtMap.get(x.cid) ?? 0) + r(x.amount));
+  for (const x of debtPayRows.results) {
+    // 收款整笔 r(amount + waived) 后扣减（与区间统计/账本单笔显示一致；勿拆开各自舍入）
+    debtMap.set(x.cid, (debtMap.get(x.cid) ?? 0) - r((Number(x.amount) || 0) + (Number(x.waived) || 0)));
+  }
   const clients = clientRows.results.map((c2) => ({
     id: c2.id, name: c2.name,
     sales_total: salesMap.get(c2.id) ?? 0,

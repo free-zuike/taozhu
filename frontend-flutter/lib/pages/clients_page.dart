@@ -123,13 +123,14 @@ class _ClientsPageState extends State<ClientsPage> {
       final s = <String, double>{};
       final p = <String, double>{};
       try {
-        for (final x in await LocalDb.getAll('sales')) {
+        // 每笔先舍入再累加（与服务端 debt 口径一致——勿原始 SUM 后一次舍入，尾数进位放大 427.8 vs 428）
+        for (final x in await LocalDb.getAll('sale_items')) {
           final id = '${x['client_id']}';
-          s[id] = (s[id] ?? 0) + ((x['total'] as num?)?.toDouble() ?? 0);
+          s[id] = (s[id] ?? 0) + Money.round((x['amount'] as num?)?.toDouble() ?? 0);
         }
         for (final x in await LocalDb.getAll('payments')) {
           final id = '${x['client_id']}';
-          p[id] = (p[id] ?? 0) + ((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0);
+          p[id] = (p[id] ?? 0) + Money.round(((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0));
         }
       } catch (_) {}
       _clientDebt = {

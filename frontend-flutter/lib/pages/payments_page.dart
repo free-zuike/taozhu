@@ -69,16 +69,16 @@ class _PaymentsPageState extends State<PaymentsPage> {
     final localPays = await LocalDb.getAll('payments');
     // 原生本地化：列表页刷新只读本地，同步只由「我的」页/进应用自动同步驱动
     if (!kIsWeb) {
-      // 本地计算各店应收（欠款）：Σ出货总额 − Σ收款金额（与后端口径一致）
+      // 本地计算各店应收（欠款）：Σ出货 − Σ收款（每笔先舍入再累加，与服务端 /clients debt 口径一致）
       final s = <String, double>{};
       final p = <String, double>{};
-      for (final x in await LocalDb.getAll('sales')) {
+      for (final x in await LocalDb.getAll('sale_items')) {
         final id = '${x['client_id']}';
-        s[id] = (s[id] ?? 0) + ((x['total'] as num?)?.toDouble() ?? 0);
+        s[id] = (s[id] ?? 0) + Money.round((x['amount'] as num?)?.toDouble() ?? 0);
       }
       for (final x in await LocalDb.getAll('payments')) {
         final id = '${x['client_id']}';
-        p[id] = (p[id] ?? 0) + ((x['amount'] as num?)?.toDouble() ?? 0);
+        p[id] = (p[id] ?? 0) + Money.round(((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0));
       }
       _clientDebt = {
         for (final id in {...s.keys, ...p.keys}) id: (s[id] ?? 0) - (p[id] ?? 0),

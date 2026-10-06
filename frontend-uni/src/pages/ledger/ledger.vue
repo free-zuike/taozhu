@@ -31,7 +31,7 @@
       <view :class="['seg-item', { active: tab === 'payments' }]" @click="switchTab('payments')">收款</view>
     </view>
 
-    <scroll-view scroll-y class="flow" :scroll-top="scrollTop" @scroll="onFlowScroll">
+    <scroll-view scroll-y class="flow" :scroll-top="scrollTop">
     <view v-if="tab === 'sales'">
       <!-- 按日期分组 + 商品明细行平铺（对齐 App：日期头 + 流水行卡片） -->
       <view v-for="g in saleGroups" :key="g.date">
@@ -499,28 +499,9 @@ function switchTab(t: 'sales' | 'payments') {
   tab.value = t;
 }
 
-// 日期分组 → 当前可见首日（滚动联动月份：顶部月份跟随当前可见日期，对齐 App）
-function onFlowScroll(e: { detail: { scrollTop: number } }) {
-  const top = e.detail.scrollTop;
-  // 简单映射：按日期分组行的顺序是倒序（最新在上），取第一个视觉可见的日期头。
-  // 由于小程序 scroll-view 无法逐行定位，这里用 scrollTop 与累计高度估算——
-  // 精确联动由月度卡月份标签 + 点击选择器保证（App 端已做日期头 GlobalKey 精准联动）。
-  void top;
-  syncMonthFromScroll();
-}
-
-function syncMonthFromScroll() {
-  if (saleGroups.value.length === 0) return;
-  // 取第一条（最新日期）作为月份锚点：滚动到该片区即跟随
-  const first = saleGroups.value[0];
-  const m = first && first.date ? parseInt(first.date.slice(5, 7), 10) : selMonth.value;
-  const y = first && first.date ? parseInt(first.date.slice(0, 4), 10) : selYear.value;
-  if (y && m && (y !== selYear.value || m !== selMonth.value)) {
-    selYear.value = y;
-    selMonth.value = m;
-    load();
-  }
-}
+// 月份只由顶部月度卡选择器控制（pickMonth），滚动不再联动改月份：
+// 原实现每次滚动都强制切回"最新记账月"并 load() 重拉全列表 → 整页跳动+双向横跳（用户否决）。
+// 列表始终全量显示（注释见 load），滚动保持位置不动。
 
 const confirm = (title: string, content: string) =>
   new Promise<boolean>((resolve) => {

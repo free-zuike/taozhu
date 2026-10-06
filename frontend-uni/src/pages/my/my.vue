@@ -95,7 +95,7 @@
       <button class="btn-logout" @click="logout">退出登录</button>
       <button class="btn-switch" @click="switchAccount">切换账号</button>
     </view>
-    <view class="ver">陶朱 小程序</view>
+    <view class="ver">陶朱 小程序 v{{ APP_VERSION }}</view>
 
     <!-- 服务器设置弹层：切换域名（保存后清 token 回登录页重新登录） -->
     <view v-if="showServer" class="mask" @click="showServer = false">
@@ -107,8 +107,6 @@
         <button class="btn-cancel" @click="showServer = false">取消</button>
       </view>
     </view>
-    <!-- 版本号（对齐 App 我的页底部） -->
-    <text class="ver">陶朱 v{{ APP_VERSION }}</text>
   </view>
 </template>
 
@@ -334,7 +332,6 @@ function switchAccount() {
 .bottom { display: flex; gap: 20rpx; margin: 24rpx 0 16rpx; }
 .btn-logout { flex: 1; background: var(--card-bg); color: #f56c6c; border-radius: 24rpx; font-size: 30rpx; border: 1rpx solid #f56c6c; }
 .btn-switch { flex: 1; background: var(--primary); color: #fff; border-radius: 24rpx; font-size: 30rpx; }
-.ver { text-align: center; color: var(--text-sub); font-size: 22rpx; margin-top: 8rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }

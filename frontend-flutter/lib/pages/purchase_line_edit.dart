@@ -5,6 +5,7 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../widgets/number_pad_field.dart';
+import '../widgets/date_field.dart';
 import 'attachment_viewer.dart';
 import 'change_category.dart';
 import 'router.dart';
@@ -61,29 +62,9 @@ Future<Map<String, dynamic>?> editPurchaseLine(
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: dateCtrl,
-                      decoration: const InputDecoration(labelText: '日期（YYYY-MM-DD）'),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '选择日期',
-                    visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.calendar_month_outlined, size: 20),
-                    onPressed: () async {
-                      final now = DateTime.now();
-                      final cur = DateTime.tryParse(dateCtrl.text.trim()) ?? now;
-                      final picked = await showDatePicker(
-                        context: ctx,
-                        initialDate: cur,
-                        firstDate: DateTime(now.year - 3),
-                        lastDate: DateTime(now.year + 3, 12, 31),
-                      );
-                      if (picked == null) return;
-                      dateCtrl.text = '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
-                      setDlg(() {});
-                    },
+                  DateField(
+                    controller: dateCtrl,
+                    label: '日期（YYYY-MM-DD）',
                   ),
                 ],
               ),

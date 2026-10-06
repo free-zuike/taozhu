@@ -762,11 +762,12 @@ class _SalePageState extends State<SalePage> {
   /// 修改某一行商品的独立日期（不影响其他行）
   Future<void> _pickRowDate(_Row row) async {
     final cur = DateTime.tryParse(row.happenedAt.trim().isEmpty ? _dateCtrl.text.trim() : row.happenedAt.trim());
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: cur ?? DateTime.now(),
-      firstDate: DateTime(DateTime.now().year - 5),
-      lastDate: DateTime(DateTime.now().year + 5, 12, 31),
+    final now = DateTime.now();
+    final picked = await pickThemeDate(
+      context,
+      initial: cur ?? now,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 5, 12, 31),
     );
     if (picked == null) return;
     setState(() => row.happenedAt =

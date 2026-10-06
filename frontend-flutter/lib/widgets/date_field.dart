@@ -25,19 +25,10 @@ class DateField extends StatelessWidget {
   Future<void> _pick(BuildContext context) async {
     final now = DateTime.now();
     final current = DateTime.tryParse(controller.text.trim());
-    final picked = await showModalBottomSheet<DateTime>(
-      context: context,
-      isScrollControlled: false,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => _ThemeDateSheet(
+    final picked = await pickThemeDate(context,
         initial: current ?? now,
         firstDate: firstDate ?? DateTime(now.year - 10),
-        lastDate: lastDate ?? DateTime(now.year + 5, 12, 31),
-      ),
-    );
+        lastDate: lastDate ?? DateTime(now.year + 5, 12, 31));
     if (picked != null) {
       controller.text = '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
     }
@@ -69,6 +60,29 @@ class DateField extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 弹出三段式 (年/月/日) 日期选择弹层，返回选中日期（表单页/行独立日期共用）
+Future<DateTime?> pickThemeDate(
+  BuildContext context, {
+  required DateTime initial,
+  DateTime? firstDate,
+  DateTime? lastDate,
+}) {
+  final now = DateTime.now();
+  return showModalBottomSheet<DateTime>(
+    context: context,
+    isScrollControlled: false,
+    backgroundColor: Theme.of(context).colorScheme.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => _ThemeDateSheet(
+      initial: initial,
+      firstDate: firstDate ?? DateTime(now.year - 10),
+      lastDate: lastDate ?? DateTime(now.year + 5, 12, 31),
+    ),
+  );
 }
 
 /// 自绘日期选择弹层：年/月/日三段式（对齐交易页顶部年月形态 + 补「日」）——
@@ -148,38 +162,38 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
     final daysInMonth = _daysInMonth;
 
     Widget dayCell(int d) {
-      final enabled = !_outside(DateTime(_year, _month, d));
-      final selected = d == _selDay;
-      final isT = _year == today.year && _month == today.month && d == today.day;
-      return Expanded(
-        child: AspectRatio(
-          aspectRatio: 1,
-          child: Padding(
-            padding: const EdgeInsets.all(2),
-            child: Material(
-              color: selected ? c.primary : Colors.transparent,
+      final blank = d > daysInMonth; // 本月不足 31 天的空白格：禁点、空文本（勿用 99 占位——DateTime 会 normalize 到跨月日期）
+      final enabled = !blank && !_outside(DateTime(_year, _month, d));
+      final selected = !blank && d == _selDay;
+      final isT = !blank && _year == today.year && _month == today.month && d == today.day;
+      // 固定宽高单元格（Wrap 内）——不能返回 Expanded（仅 Flex 可用，否则白屏异常）
+      return AspectRatio(
+        aspectRatio: 1,
+        child: Padding(
+          padding: const EdgeInsets.all(2),
+          child: Material(
+            color: selected ? c.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            child: InkWell(
               borderRadius: BorderRadius.circular(10),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(10),
-                onTap: enabled ? () => setState(() => _selDay = d) : null,
-                child: Container(
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                      color: isT && !selected ? c.primary : Colors.transparent,
-                      width: 1.2,
-                    ),
-                    borderRadius: BorderRadius.circular(10),
+              onTap: enabled ? () => setState(() => _selDay = d) : null,
+              child: Container(
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: isT && !selected ? c.primary : Colors.transparent,
+                    width: 1.2,
                   ),
-                  child: Text(
-                    '$d',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: selected || isT ? FontWeight.w700 : FontWeight.normal,
-                      color: selected
-                          ? Colors.white
-                          : (enabled ? c.textMain : c.textSub.withOpacity(0.35)),
-                    ),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  blank ? '' : '$d',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: selected || isT ? FontWeight.w700 : FontWeight.normal,
+                    color: selected
+                        ? Colors.white
+                        : (enabled ? c.textMain : c.textSub.withOpacity(0.35)),
                   ),
                 ),
               ),
@@ -242,7 +256,7 @@ class _ThemeDateSheetState extends State<_ThemeDateSheet> {
                 for (var d = 1; d <= 31; d++)
                   SizedBox(
                     width: (MediaQuery.of(context).size.width - 32 - 16) / 7,
-                    child: dayCell(d <= daysInMonth ? d : 99),
+                    child: dayCell(d),
                   ),
               ],
             ),

@@ -14,6 +14,7 @@ import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../widgets/date_field.dart';
 import '../widgets/center_sheet.dart';
 import '../widgets/number_pad_field.dart';
 import '../widgets/year_month_picker.dart';
@@ -525,7 +526,7 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   /// 本地全量汇总：商品数量 = 出货明细行数（去单据化：一张单多商品 = 多行，与「我的」页本店交易口径一致）；
-  /// 欠款 = Σ出货总额 − Σ收款金额（与后端口径一致）
+  /// 欠款 = Σ出货总额 − Σ收款金额（与后端口径一致：每笔先舍入再累加，尾数不吞——427.8 实证）
   Map<String, ({int count, double debt})> _localStats(
       List<Map<String, dynamic>> sales, List<Map<String, dynamic>> pays) {
     final saleSum = <String, double>{};
@@ -588,7 +589,7 @@ class _LedgerPageState extends State<LedgerPage> {
     final monthStart = _fmtDate(DateTime(y, m, 1));
     final monthEnd = _fmtDate(DateTime(y, m + 1, 0));
     bool inMonth(String d) => d.isNotEmpty && d.compareTo(monthStart) >= 0 && d.compareTo(monthEnd) <= 0;
-    double localSold = 0; // 售出=出货
+    double localSold = 0; // 售出=出货（每笔先舍入再累加，与单笔显示一致）
     for (final s in _sales) {
       if (_clientId != null && '${s['client_id']}' != _clientId) continue;
       final orderDate = _date('${s['happened_at'] ?? ''}');
@@ -601,7 +602,7 @@ class _LedgerPageState extends State<LedgerPage> {
         localSold += Money.round((it['amount'] as num?)?.toDouble() ?? 0);
       }
     }
-    double localPaid = 0; // 收入=收款
+    double localPaid = 0; // 收入=收款（每笔先舍入再累加，与单笔显示一致）
     for (final p in _payments) {
       if (_clientId != null && '${p['client_id']}' != _clientId) continue;
       final d = _date('${p['happened_at'] ?? ''}');
@@ -627,7 +628,7 @@ class _LedgerPageState extends State<LedgerPage> {
     // 网络值（精确，含其他设备写入）优先；未加载时本地快照兜底
     final sold = _mLoaded ? _mSold : localSold;
     final gross = _mLoaded ? _mGross : localGross;
-    final debt = _mLoaded ? _mDebt : (localSold - localPaid);
+    final debt = _mLoaded ? _mDebt : (localSold - localPaid); // 未回款=应收欠款（每笔先舍入再累加：与单笔显示/对账口径一致——427.8 正确，勿原始 SUM 尾数吞并）
     final balance = _mLoaded ? _mBalance : localGross; // 结余 = 毛利（售出 − 成本，不含进货）
 
     Widget col(String label, double value, Color color) {
@@ -1062,7 +1063,7 @@ class _LedgerPageState extends State<LedgerPage> {
                 label: '金额（元）',
               ),
               const SizedBox(height: 8),
-              TextField(controller: dateCtrl, decoration: const InputDecoration(labelText: '日期（YYYY-MM-DD）')),
+              DateField(controller: dateCtrl, label: '日期（YYYY-MM-DD）'),
               const SizedBox(height: 8),
               InkWell(
                 borderRadius: BorderRadius.circular(8),

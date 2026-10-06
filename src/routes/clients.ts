@@ -34,6 +34,15 @@ clientsRouter.get('/', async (c) => {
     ? await c.env.DB.prepare(`${sql} AND c.name LIKE ? ORDER BY c.name`).bind(`%${q}%`).all()
     : await c.env.DB.prepare(`${sql} ORDER BY c.name`).all();
   const money = await getRoundingConfig(c.env.DB);
+  const [debtRows, payRows2] = await Promise.all([
+    c.env.DB.prepare(`SELECT client_id AS cid, amount FROM sale_items`).all<{ cid: string; amount: number }>(),
+    c.env.DB.prepare(`SELECT client_id AS cid, amount, waived FROM payments`).all<{ cid: string; amount: number; waived: number }>(),
+  ]);
+  const debtMap = new Map<string, number>();
+  for (const x of debtRows.results) debtMap.set(x.cid, (debtMap.get(x.cid) ?? 0) + roundMoney(Number(x.amount) || 0, money));
+  for (const x of payRows2.results) {
+    debtMap.set(x.cid, (debtMap.get(x.cid) ?? 0) - roundMoney((Number(x.amount) || 0) + (Number(x.waived) || 0), money));
+  }
   return c.json({ clients: rows.results.map((r) => {
     const row = r as unknown as ClientRow & { sales_total: number; paid_total: number; sale_count: number; payment_count: number; category_name: string | null; first_book_date: string | null };
     return {
@@ -44,8 +53,8 @@ clientsRouter.get('/', async (c) => {
       category_id: row.category_id ?? '', category_name: row.category_name ?? '',
       sales_total: row.sales_total, paid_total: row.paid_total,
       sale_count: row.sale_count ?? 0, payment_count: row.payment_count ?? 0,
-      // 欠款实时按当前舍入规则重算（展示口径；存储不变）
-      debt: roundMoney(Number(row.sales_total) - Number(row.paid_total), money),
+      // 欠款=每笔先舍入再累加的差（与统计/账本口径一致；勿 SQL SUM 原始后一次舍入——尾数进位放大，427.8 vs 428 实证）
+      debt: roundMoney(debtMap.get(row.id) ?? 0, money),
     };
   }) });
 });
