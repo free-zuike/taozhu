@@ -87,32 +87,25 @@
     </view>
     </scroll-view>
 
-    <!-- 附件查看/上传/删除：全屏大图查看器（对齐 App：点击直接全屏大图 + 上边操作按钮） -->
-    <view v-if="attach.show" class="mask" @click="closeAttach">
-      <!-- 有图：全屏查看器 -->
-      <view v-if="attach.list.length > 0" class="viewer" @click.stop>
-        <swiper class="viewer-swiper" :current="attach.index" @change="onViewerChange">
-          <swiper-item v-for="a in attach.list" :key="a.key">
-            <image class="viewer-img" :src="attachmentUrl(a.key)" mode="aspectFit" @click.stop />
-          </swiper-item>
-        </swiper>
-        <view class="viewer-top">
-          <text class="viewer-close" @click="closeAttach">✕</text>
-          <text class="viewer-count">{{ attach.index + 1 }}/{{ attach.list.length }}</text>
-          <view class="viewer-ops">
-            <text class="viewer-op" @click="uploadAttach">添加</text>
-            <text class="viewer-op" @click="downloadAttach">下载</text>
-            <text class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
-          </view>
-        </view>
+    <!-- 附件查看/上传/删除：全屏大图查看器（对齐 App：点击直接全屏，不再先弹小弹层；有图看大图，无图全屏空态可添加） -->
+    <view v-if="attach.show" class="viewer" @click.stop>
+      <!-- 有图：swiper 大图 -->
+      <swiper v-if="attach.list.length > 0" class="viewer-swiper" :current="attach.index" @change="onViewerChange">
+        <swiper-item v-for="a in attach.list" :key="a.key">
+          <image class="viewer-img" :src="attachmentUrl(a.key)" mode="aspectFit" @click.stop />
+        </swiper-item>
+      </swiper>
+      <!-- 无图：全屏空态（不再弹"凭证附件/完成"sheet，直接在全屏查看器里添加） -->
+      <view v-else class="viewer-empty">
+        <text class="viewer-empty-tx">暂无凭证，点上方「添加」上传</text>
       </view>
-      <!-- 无图：空态提示可添加 -->
-      <view v-else class="sheet" @click.stop>
-        <view class="sheet-title">凭证附件</view>
-        <view class="empty">暂无凭证，点下方添加</view>
-        <view class="attach-actions">
-          <button class="btn-sub" @click="uploadAttach">+ 添加凭证（拍照/相册）</button>
-          <button class="btn-save" @click="attach.show = false">完成</button>
+      <view class="viewer-top">
+        <text class="viewer-close" @click="closeAttach">✕</text>
+        <text class="viewer-count">{{ attach.list.length > 0 ? attach.index + 1 + '/' + attach.list.length : '' }}</text>
+        <view class="viewer-ops">
+          <text class="viewer-op" @click="uploadAttach">添加</text>
+          <text v-if="attach.list.length > 0" class="viewer-op" @click="downloadAttach">下载</text>
+          <text v-if="attach.list.length > 0" class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
         </view>
       </view>
     </view>
@@ -146,8 +139,19 @@
           <input class="ipt flex1" v-model="itemForm.salePrice" type="digit" :placeholder="itemForm.isPurchase ? '进价（元）' : '售价（元）'" />
           <input v-if="itemForm.countUnit" class="ipt flex1" v-model="itemForm.countQty" type="digit" :placeholder="'折' + itemForm.countUnit" />
         </view>
-        <input class="ipt" v-model="itemForm.date" placeholder="日期 YYYY-MM-DD" />
+        <!-- 日期：picker 原生滚轮（对齐 App 行编辑 DateField，不可手输） -->
+        <picker mode="date" :value="itemForm.date || today" @change="onFormDate">
+          <view class="field-inner">
+            <text class="label">日期</text>
+            <text class="value" :class="{ placeholder: !itemForm.date }">{{ itemForm.date || '选择日期' }}</text>
+          </view>
+        </picker>
         <input class="ipt" v-model="itemForm.note" placeholder="备注（选填）" />
+        <!-- 该条凭证附件（对齐 App 行编辑弹窗：查看/添加，点击直接全屏查看器） -->
+        <view class="attach-row" @click="openFormAttach">
+          <text class="label">该条凭证附件</text>
+          <text class="value attach-go">查看/添加</text>
+        </view>
         <view class="dlg-ops">
           <button class="btn-del" :disabled="saving" @click="deleteItem">删除该行</button>
           <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
@@ -187,7 +191,22 @@ const payForm = ref<{
 const itemForm = ref<{
   show: boolean; isPurchase: boolean; saleId: string; itemId: string; itemName: string;
   quantity: string; unit: string; salePrice: string; countQty: string; countUnit: string; date: string; note: string;
-}>({ show: false, isPurchase: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', countQty: '', countUnit: '', date: '', note: '' });
+  category: string; // 当前分类名（修改分类行显示）
+}>({ show: false, isPurchase: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', countQty: '', countUnit: '', date: '', note: '', category: '' });
+
+const today = new Date().toISOString().slice(0, 10);
+
+// 日期选择（picker mode=date，对齐 App 行编辑滚轮，不可手输）
+function onFormDate(e: { detail: { value: string } }) {
+  itemForm.value.date = e.detail.value;
+}
+
+// 打开该条凭证（行级优先、单据级回退，直接全屏查看器）
+function openFormAttach() {
+  const f = itemForm.value;
+  if (!f.saleId) return;
+  showAttach(f.isPurchase ? 'purchase_item' : 'sale_item', f.itemId, f.isPurchase ? 'purchase' : 'sale', f.saleId);
+}
 
 // ── 附件凭证 ──
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number }>({
@@ -592,6 +611,7 @@ function editSaleLine(l: SaleLine) {
     countUnit: String(l.count_unit || ''),
     date: l.date.slice(0, 10),
     note: String(l.note ?? ''),
+    category: String(l.category || ''),
   };
 }
 
@@ -631,6 +651,7 @@ function editSaleItem(s: Record<string, any>, it: Record<string, any>) {
     countUnit: String(it.count_unit || ''),
     date: String(it.happened_at || s.happened_at || '').slice(0, 10),
     note: String(it.note ?? ''),
+    category: String(it.category || it.item_category || ''),
   };
 }
 
@@ -649,6 +670,7 @@ function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
     countUnit: String(it.count_unit || ''),
     date: String(it.happened_at || p.happened_at || '').slice(0, 10),
     note: String(it.note ?? ''),
+    category: String(it.category || it.item_category || ''),
   };
 }
 
@@ -870,6 +892,8 @@ async function removePayment(p: Record<string, any>) {
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .form-row { display: flex; gap: 16rpx; }
 .form-row .ipt { flex: 1; }
+.attach-row { display: flex; justify-content: space-between; align-items: center; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; margin-bottom: 16rpx; }
+.attach-go { color: var(--primary); }
 .flex1 { flex: 1; }
 .btn-del { background: var(--card-bg); color: #f56c6c; border: 1rpx solid #f56c6c; border-radius: 12rpx; font-size: 30rpx; }
 .dlg-ops { display: flex; gap: 20rpx; margin-top: 8rpx; }
@@ -892,4 +916,6 @@ async function removePayment(p: Record<string, any>) {
 .viewer-ops { display: flex; gap: 28rpx; }
 .viewer-op { color: #fff; font-size: 28rpx; background: rgba(255,255,255,0.18); border-radius: 28rpx; padding: 10rpx 26rpx; }
 .viewer-op-del { color: #ff6d6d; }
+.viewer-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+.viewer-empty-tx { color: rgba(255,255,255,0.7); font-size: 28rpx; }
 </style>

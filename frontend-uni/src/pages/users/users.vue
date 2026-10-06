@@ -11,11 +11,22 @@
     <button class="btn-add" @click="openForm()">+ 新增账号</button>
 
     <view v-for="u in users" :key="u.id" class="card">
-      <view class="head">
-        <text class="name">{{ u.username }}</text>
-        <text :class="['role', { admin: u.role === 'admin' }]">{{ u.role === 'admin' ? '老板' : '店员' }}</text>
-        <text class="op" @click="openForm(u)">编辑</text>
-        <text class="del" @click="remove(u)">删除</text>
+      <view class="row">
+        <!-- 头像圆（首字母，对齐 App UserAvatar） -->
+        <view class="u-avatar" :style="{ background: avatarBg(u) }">
+          <text class="u-avatar-tx">{{ (u.display_name || u.username || '陶').slice(0, 1) }}</text>
+        </view>
+        <view class="head">
+          <view class="head-top">
+            <text class="name">{{ u.display_name || u.username }}</text>
+            <text :class="['role', { admin: u.role === 'admin' }]">{{ u.role === 'admin' ? '老板' : '店员' }}</text>
+          </view>
+          <text class="sub">登录 {{ u.username }}</text>
+        </view>
+        <view class="head-ops">
+          <text class="op" @click="openForm(u)">编辑</text>
+          <text class="del" @click="remove(u)">删除</text>
+        </view>
       </view>
     </view>
     <view v-if="users.length === 0" class="empty">暂无账号</view>
@@ -43,7 +54,7 @@ import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
 
-interface User { id: string; username: string; role: string }
+interface User { id: string; username: string; role: string; display_name?: string }
 
 const users = ref<User[]>([]);
 const showForm = ref(false);
@@ -78,6 +89,15 @@ function openForm(u?: User) {
 
 function goAccount() {
   uni.navigateTo({ url: '/pages/account/account' });
+}
+
+/// 头像底色（按名字确定性取色，对齐 App UserAvatar 的色板风格）
+function avatarBg(u: User): string {
+  const palettes = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#9C27B0'];
+  let hash = 0;
+  const s = u.display_name || u.username || '陶';
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return palettes[hash % palettes.length];
 }
 
 async function save() {
@@ -137,12 +157,18 @@ function remove(u: User) {
 .page { min-height: 100vh;  background: var(--page-bg); }
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
 .card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
-.head { display: flex; align-items: center; }
+.row { display: flex; align-items: center; }
+.u-avatar { width: 72rpx; height: 72rpx; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.u-avatar-tx { color: #fff; font-size: 32rpx; font-weight: bold; }
+.head { flex: 1; min-width: 0; margin-left: 20rpx; display: flex; flex-direction: column; gap: 4rpx; }
+.head-top { display: flex; align-items: center; }
 .name { font-size: 30rpx; font-weight: bold; }
-.role { margin-left: 16rpx; font-size: 24rpx; color: var(--primary); background: var(--primary-soft); border-radius: 8rpx; padding: 4rpx 12rpx; }
+.role { margin-left: 12rpx; font-size: 22rpx; color: var(--primary); background: var(--primary-soft); border-radius: 8rpx; padding: 2rpx 12rpx; }
 .role.admin { color: #f56c6c; background: var(--danger-bg); }
-.op { margin-left: auto; color: var(--primary); font-size: 26rpx; }
-.del { margin-left: 32rpx; color: #f56c6c; font-size: 26rpx; }
+.sub { font-size: 23rpx; color: var(--text-sub); }
+.head-ops { display: flex; align-items: center; margin-left: 8rpx; flex-shrink: 0; }
+.op { color: var(--primary); font-size: 26rpx; }
+.del { margin-left: 28rpx; color: #f56c6c; font-size: 26rpx; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }

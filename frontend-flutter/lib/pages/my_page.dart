@@ -325,22 +325,36 @@ class _MyPageState extends State<MyPage> {
         if (days < 1) days = 1;
       }
       // 店铺结余 = 当前店铺全部月份毛利（售出 − 成本，不含进货）
+      // 与交易页月度结余同源：行级 sale_items（整单嵌套 items 可能缺 cost_price 快照导致两端对不上，实证差异）
       final selId = await SyncService.selectedClientId();
+      await Money.refresh(); // 同步服务器舍入配置（与交易页/服务器口径一致，避免本地旧 digits 算错）
       // 本店交易数量 = 商品数量（当前店铺出货明细行数，一张单多商品=多行——用户"应该是商品的数量"）
       final curCount = (selId == null || selId.isEmpty)
           ? 0
           : sales
               .where((s) => '${s['client_id']}' == selId)
               .fold<int>(0, (sum, s) => sum + (((s['items'] as List?) ?? []).length));
-      // 毛利 = Σ(售出单价 − 成本单价) × 数量（明细行 sale_price/cost_price）
+      // 毛利 = Σ(售出单价 − 成本单价) × 数量（行级 sale_items，与交易页本地聚合同源）；
+      // Web 无本地库 → 服务器 /sales 行级 sale_items 分支兜底
       var grossProfit = 0.0;
-      for (final s in sales) {
-        if (selId != null && '${s['client_id']}' != selId) continue;
-        final items = ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>();
-        for (final it in items) {
-          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-          grossProfit += (((it['sale_price'] as num?)?.toDouble() ?? 0) - ((it['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+      if (kIsWeb) {
+        for (final s in sales) {
+          if (selId != null && '${s['client_id']}' != selId) continue;
+          final items = ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+          for (final it in items) {
+            final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+            grossProfit += (((it['sale_price'] as num?)?.toDouble() ?? 0) - ((it['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+          }
         }
+      } else {
+        try {
+          final si = await LocalDb.getAll('sale_items');
+          for (final r in si) {
+            if (selId != null && '${r['client_id']}' != '$selId') continue;
+            final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
+            grossProfit += (((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * qty;
+          }
+        } catch (_) {}
       }
       setState(() {
         _bookDays = days;

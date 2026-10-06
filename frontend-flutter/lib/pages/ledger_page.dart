@@ -1168,11 +1168,10 @@ class _LedgerPageState extends State<LedgerPage> {
     return DefaultTabController(
       length: 2,
       child: Scaffold(
-        appBar: AppBar(
-        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
-          // 出货/收款 TabBar 已移入 body（统计栏下边，对齐小程序 seg），AppBar 不再挂 bottom
-        ),
-        body: Stack(
+        // 去掉空 AppBar（统计卡直接顶到安全区下，对齐小程序：不再有统计栏上方的空背景条）
+        body: SafeArea(
+          bottom: false,
+          child: Stack(
           children: [
             Positioned.fill(child: themePageBackground(context)),
             Column(
@@ -1284,6 +1283,7 @@ class _LedgerPageState extends State<LedgerPage> {
           ],
         ),
         ],
+      ),
       ),
       ),
     );

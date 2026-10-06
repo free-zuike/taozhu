@@ -64,13 +64,12 @@ Future<Map<String, dynamic>?> editSaleLine(
                 label: '售价（元）',
               ),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  DateField(
-                    controller: dateCtrl,
-                    hint: 'YYYY-MM-DD', // 弹窗窄列：label 会浮起成两行，用 hint 保持单行显示值
-                  ),
-                ],
+              // 日期：compact 滚轮（与小程序 picker 一致）+ 隐藏后缀小图标（窄弹窗里 16px 图标像小点），只显示日期一行
+              DateField(
+                controller: dateCtrl,
+                compact: true,
+                showSuffixIcon: false,
+                hint: 'YYYY-MM-DD',
               ),
               const SizedBox(height: 4),
               // 商品分类（商品级，全局生效）：点击「修改分类」选择后即时保存

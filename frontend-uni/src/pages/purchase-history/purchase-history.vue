@@ -49,45 +49,58 @@
     <view v-if="buyGroups.length === 0" class="empty">该月暂无进货记录</view>
     </scroll-view>
 
-    <!-- 附件查看/上传/删除：全屏大图查看器（对齐 App：点击直接全屏大图 + 上边操作按钮） -->
-    <view v-if="attach.show" class="mask" @click="closeAttach">
-      <!-- 有图：全屏查看器 -->
-      <view v-if="attach.list.length > 0" class="viewer" @click.stop>
-        <swiper class="viewer-swiper" :current="attach.index" @change="onViewerChange">
-          <swiper-item v-for="a in attach.list" :key="a.key">
-            <image class="viewer-img" :src="attachmentUrl(a.key)" mode="aspectFit" @click.stop />
-          </swiper-item>
-        </swiper>
-        <view class="viewer-top">
-          <text class="viewer-close" @click="closeAttach">✕</text>
-          <text class="viewer-count">{{ attach.index + 1 }}/{{ attach.list.length }}</text>
-          <view class="viewer-ops">
-            <text class="viewer-op" @click="uploadAttach">添加</text>
-            <text class="viewer-op" @click="downloadAttach">下载</text>
-            <text class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
-          </view>
-        </view>
+    <!-- 附件查看/上传/删除：全屏大图查看器（对齐 App：点击直接全屏，不再先弹小弹层；有图看大图，无图全屏空态可添加） -->
+    <view v-if="attach.show" class="viewer" @click.stop>
+      <!-- 有图：swiper 大图 -->
+      <swiper v-if="attach.list.length > 0" class="viewer-swiper" :current="attach.index" @change="onViewerChange">
+        <swiper-item v-for="a in attach.list" :key="a.key">
+          <image class="viewer-img" :src="attachmentUrl(a.key)" mode="aspectFit" @click.stop />
+        </swiper-item>
+      </swiper>
+      <!-- 无图：全屏空态（不再弹"凭证附件/完成"sheet，直接在全屏查看器里添加） -->
+      <view v-else class="viewer-empty">
+        <text class="viewer-empty-tx">暂无凭证，点上方「添加」上传</text>
       </view>
-      <!-- 无图：空态提示可添加 -->
-      <view v-else class="sheet" @click.stop>
-        <view class="sheet-title">凭证附件</view>
-        <view class="empty">暂无凭证，点下方添加</view>
-        <view class="attach-actions">
-          <button class="btn-sub" @click="uploadAttach">+ 添加凭证（拍照/相册）</button>
-          <button class="btn-save" @click="attach.show = false">完成</button>
+      <view class="viewer-top">
+        <text class="viewer-close" @click="closeAttach">✕</text>
+        <text class="viewer-count">{{ attach.list.length > 0 ? attach.index + 1 + '/' + attach.list.length : '' }}</text>
+        <view class="viewer-ops">
+          <text class="viewer-op" @click="uploadAttach">添加</text>
+          <text v-if="attach.list.length > 0" class="viewer-op" @click="downloadAttach">下载</text>
+          <text v-if="attach.list.length > 0" class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
         </view>
       </view>
     </view>
 
-    <!-- 单商品编辑弹层 -->
+    <!-- 单商品编辑弹层（对齐 App 单行编辑：数量/单位/进价/折合计数/日期/该条凭证/备注/删除，保存走行级 PATCH） -->
     <view v-if="itemForm.show" class="mask" @click="itemForm.show = false">
       <view class="sheet" @click.stop>
         <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
-        <input class="ipt" v-model="itemForm.quantity" type="digit" placeholder="数量" />
-        <input class="ipt" v-model="itemForm.unit" placeholder="单位（斤/件/箱…）" />
-        <input class="ipt" v-model="itemForm.salePrice" type="digit" placeholder="进价（元）" />
-        <input class="ipt" v-model="itemForm.date" placeholder="日期 YYYY-MM-DD" />
-        <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
+        <view class="form-row">
+          <input class="ipt flex1" v-model="itemForm.quantity" type="digit" placeholder="数量" />
+          <input class="ipt flex1" v-model="itemForm.unit" placeholder="单位" />
+        </view>
+        <view class="form-row">
+          <input class="ipt flex1" v-model="itemForm.salePrice" type="digit" placeholder="进价（元）" />
+          <input v-if="itemForm.countUnit" class="ipt flex1" v-model="itemForm.countQty" type="digit" :placeholder="'折' + itemForm.countUnit" />
+        </view>
+        <!-- 日期：picker 原生滚轮（对齐 App 行编辑 DateField，不可手输） -->
+        <picker mode="date" :value="itemForm.date || today" @change="onFormDate">
+          <view class="field-inner">
+            <text class="label">日期</text>
+            <text class="value" :class="{ placeholder: !itemForm.date }">{{ itemForm.date || '选择日期' }}</text>
+          </view>
+        </picker>
+        <input class="ipt" v-model="itemForm.note" placeholder="备注（选填）" />
+        <!-- 该条凭证附件（对齐 App 行编辑弹窗：查看/添加，点击直接全屏查看器） -->
+        <view class="attach-row" @click="openFormAttach">
+          <text class="label">该条凭证附件</text>
+          <text class="value attach-go">查看/添加</text>
+        </view>
+        <view class="dlg-ops">
+          <button class="btn-del" :disabled="saving" @click="deleteItem">删除该行</button>
+          <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
+        </view>
       </view>
     </view>
   </view>
@@ -123,6 +136,7 @@ type BuyLine = {
   key: string; date: string; week: string; item_name: string; note: string;
   purchase_price: number; quantity: string | number; unit: string; amount: number;
   category: string; itemId: string; orderId: string; order: Record<string, any>;
+  count_qty?: number | null; count_unit?: string; // 折合计数（对齐 App 行编辑）
 };
 type BuyGroup = { date: string; week: string; count: number; amount: number; lines: BuyLine[] };
 const buyGroups = computed<BuyGroup[]>(() => {
@@ -157,6 +171,7 @@ const buyGroups = computed<BuyGroup[]>(() => {
         quantity: it.quantity ?? '', unit: String(it.unit || ''), amount: Number(it.amount || 0),
         category: String(it.category_name || it.category || ''),
         itemId: String(it.id || ''), orderId: String(p.id), order: p,
+        count_qty: it.count_qty ?? null, count_unit: String(it.count_unit || ''),
       });
     }
   }
@@ -165,8 +180,22 @@ const buyGroups = computed<BuyGroup[]>(() => {
 
 const itemForm = ref<{
   show: boolean; orderId: string; itemId: string; itemName: string;
-  quantity: string; unit: string; salePrice: string; date: string;
-}>({ show: false, orderId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', date: '' });
+  quantity: string; unit: string; salePrice: string; countQty: string; countUnit: string; date: string; note: string;
+  category: string;
+}>({ show: false, orderId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', countQty: '', countUnit: '', date: '', note: '', category: '' });
+
+const today = new Date().toISOString().slice(0, 10);
+
+function onFormDate(e: { detail: { value: string } }) {
+  itemForm.value.date = e.detail.value;
+}
+
+// 打开该条凭证（行级优先、单据级回退，直接全屏查看器）
+function openFormAttach() {
+  const f = itemForm.value;
+  if (!f.orderId) return;
+  showAttach('purchase_item', f.itemId, 'purchase', f.orderId);
+}
 
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number }>({ show: false, entity: 'purchase', id: '', list: [], index: 0 });
 // 附件计数（行级 purchase_item / 单据级 purchase）
@@ -368,7 +397,11 @@ function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
     quantity: String(it.quantity ?? ''),
     unit: String(it.unit || ''),
     salePrice: String(it.purchase_price ?? it.price ?? ''),
+    countQty: it.count_qty ? String(it.count_qty) : '',
+    countUnit: String(it.count_unit || ''),
     date: String(it.happened_at || p.happened_at || '').slice(0, 10),
+    note: String(it.note ?? ''),
+    category: String(it.category || it.category_name || ''),
   };
 }
 
@@ -410,17 +443,41 @@ async function saveItem() {
   }
   saving.value = true;
   try {
+    const countQty = Number(itemForm.value.countQty) > 0 ? Number(itemForm.value.countQty) : null;
     await request(`/purchases/items/${itemForm.value.itemId}`, 'PATCH', {
       quantity: qty,
       unit: itemForm.value.unit,
       purchase_price: Number(itemForm.value.salePrice) || 0,
+      count_qty: countQty,
       happened_at: itemForm.value.date,
+      note: itemForm.value.note,
     });
     uni.showToast({ title: '已保存', icon: 'success' });
     itemForm.value.show = false;
     load();
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '保存失败', icon: 'none' });
+  } finally {
+    saving.value = false;
+  }
+}
+
+// 弹窗内删除该行（对齐 App 单行编辑「删除」按钮：DELETE 行级接口）
+async function deleteItem() {
+  if (!itemForm.value.itemId) {
+    uni.showToast({ title: '该行无独立明细，无法单独删除', icon: 'none' });
+    return;
+  }
+  if (!(await confirm('删除商品', `确定删除「${itemForm.value.itemName}」这一行吗？仅删除该商品，库存自动回滚。`))) return;
+  saving.value = true;
+  try {
+    const id = itemForm.value.itemId;
+    await request(`/purchases/items/${id}`, 'DELETE');
+    uni.showToast({ title: '已删除该商品', icon: 'success' });
+    itemForm.value.show = false;
+    load();
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
   } finally {
     saving.value = false;
   }
@@ -593,6 +650,18 @@ async function loadAttachCounts() {
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.field-inner { display: flex; justify-content: space-between; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; margin-bottom: 16rpx; }
+.label { color: var(--text-sub); font-size: 28rpx; }
+.value { color: var(--text-main); font-size: 28rpx; }
+.placeholder { color: var(--text-sub); }
+.form-row { display: flex; gap: 16rpx; }
+.form-row .ipt { flex: 1; }
+.flex1 { flex: 1; }
+.btn-del { background: var(--card-bg); color: #f56c6c; border: 1rpx solid #f56c6c; border-radius: 12rpx; font-size: 30rpx; }
+.dlg-ops { display: flex; gap: 20rpx; margin-top: 8rpx; }
+.dlg-ops .btn-save, .dlg-ops .btn-del { flex: 1; }
+.attach-row { display: flex; justify-content: space-between; align-items: center; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; margin-bottom: 16rpx; }
+.attach-go { color: var(--primary); }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
@@ -611,4 +680,6 @@ async function loadAttachCounts() {
 .viewer-ops { display: flex; gap: 28rpx; }
 .viewer-op { color: #fff; font-size: 28rpx; background: rgba(255,255,255,0.18); border-radius: 28rpx; padding: 10rpx 26rpx; }
 .viewer-op-del { color: #ff6d6d; }
+.viewer-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+.viewer-empty-tx { color: rgba(255,255,255,0.7); font-size: 28rpx; }
 </style>

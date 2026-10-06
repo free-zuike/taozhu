@@ -13,6 +13,8 @@ class DateField extends StatelessWidget {
   final IconData? icon;
   final Color? focusColor;
   final bool compact;
+  /// 是否显示后缀日历小图标（窄弹窗（单商品编辑）里 16px 图标会显得像多余的小点，传 false 只留日期一行）
+  final bool showSuffixIcon;
 
   const DateField({
     super.key,
@@ -24,6 +26,7 @@ class DateField extends StatelessWidget {
     this.icon,
     this.focusColor,
     this.compact = false,
+    this.showSuffixIcon = true,
   });
 
   Future<void> _pick(BuildContext context) async {
@@ -56,7 +59,9 @@ class DateField extends StatelessWidget {
         labelText: label,
         hintText: hint,
         prefixIcon: icon == null ? null : Icon(icon, size: 20, color: c.textSub),
-        suffixIcon: const Icon(Icons.calendar_today_outlined, size: 16, color: Color(0xFF909399)),
+        suffixIcon: showSuffixIcon
+            ? const Icon(Icons.calendar_today_outlined, size: 16, color: Color(0xFF909399))
+            : null,
         filled: true,
         fillColor: c.field,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
