@@ -458,6 +458,45 @@ describe('同步协议', () => {
     expect(dB.sale_items).toBe(0);
   });
 
+  it('panel 单请求聚合返回全局+店铺级计数与附件口径（合并原 7 请求）', async () => {
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: 'panel菜', prices: [{ unit: '斤', purchase_price: 2.0, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const priceId = items.items[0].prices[0].id;
+    const a = await call(env, 'POST', '/api/v1/clients', token, { name: 'panel店' });
+    const idA = (await a.json()) as { id: string };
+    await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: idA.id, happened_at: '2026-01-03',
+      items: [{ price_id: priceId, quantity: 1 }],
+    });
+    // 无 client_id：全局计数 + 附件口径字段
+    const g = await call(env, 'GET', '/api/v1/sync/panel', token);
+    expect(g.status).toBe(200);
+    const gd = (await g.json()) as Record<string, unknown>;
+    expect(gd.clients).toBe(1);
+    expect(gd.sale_items).toBe(1);
+    expect(gd.purchase_items).toBe(0);
+    expect(gd.payments).toBe(0);
+    expect(typeof gd.attach_file_total).toBe('number');
+    expect(typeof gd.attach_ref_count).toBe('number');
+    expect(gd.client_sale_attach).toBeUndefined(); // 未传 client_id 不返回店铺级
+    // 带 client_id：店铺级计数 + 附件聚合结构（对齐 /attachments/counts）
+    const c = await call(env, 'GET', `/api/v1/sync/panel?client_id=${idA.id}`, token);
+    const cd = (await c.json()) as Record<string, unknown>;
+    expect(cd.client_sale_items).toBe(1);
+    expect(cd.client_payments).toBe(0);
+    const saleAttach = cd.client_sale_attach as { total: number; ids: unknown[] };
+    expect(saleAttach.total).toBe(0); // 未上传附件
+    expect(Array.isArray(saleAttach.ids)).toBe(true);
+    const payAttach = cd.client_payment_attach as { total: number };
+    expect(payAttach.total).toBe(0);
+    const lineAttach = cd.client_sale_item_attach as { total: number };
+    expect(lineAttach.total).toBe(0);
+  });
+
   it('staff full/拉取：item 进价与单据进价快照打码为 0', async () => {
     const staffToken = await loginStaff(env);
     await call(env, 'POST', '/api/v1/items', token, {

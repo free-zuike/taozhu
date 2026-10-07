@@ -17,8 +17,9 @@
       <button v-if="!isDateRows" class="copy-btn" :disabled="loading" @click="copyLast">复制上一笔</button>
       <button v-if="!isDateRows" class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
       <view v-if="isDateRows" class="batch-voucher" @click="showBatchAttach"><text class="mi">&#xe3f4;</text>整单凭证</view>
-      <text v-if="isDateRows" class="batch-hint">该日 {{ rows.length }} 行 · 保存按原单分组提交</text>
+      <button v-if="isDateRows" class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
     </view>
+    <text v-if="isDateRows" class="batch-hint">该日 {{ rows.length }} 行 · 保存按原单分组提交</text>
 
     <!-- AI 识别状态（识别中 / 语音原文） -->
     <view v-if="aiBusy" class="ai-tip">{{ aiTip }}</view>
@@ -32,11 +33,11 @@
           <text class="idx">{{ i + 1 }}</text>
           <input class="goods-field" :class="{ ph: !row.itemName }" v-model="row.itemName" placeholder="选商品（可输入或选择）" @blur="onItemInput(i)" />
           <text v-if="row.rowId" class="att-btn" @click.stop="showAttach('purchase_item', row.rowId, 'purchase', row.orderId)"><text class="mi">&#xe3f4;</text></text>
-          <text class="del" @click="rows.splice(i, 1)">删</text>
+          <text class="del mi" @click="rows.splice(i, 1)">&#xe872;</text>
         </view>
         <input class="unit-field" :class="{ ph: !row.unit }" v-model="row.unit" placeholder="单位（可手动填写）" @blur="onUnitBlur(i)" />
         <view class="price-hint" :class="{ ph: !row.priceLabel }">{{ row.priceLabel || '输入商品名自动带出单位与价格' }}</view>
-        <picker class="date-pick" mode="date" :value="row.happenedAt || date" @change="(e) => (row.happenedAt = e.detail.value)">
+        <picker class="date-pick" mode="date" :value="row.happenedAt || date" @change="(e: any) => (row.happenedAt = e.detail.value)">
           <view class="row-date">该行日期：{{ (row.happenedAt || date).slice(5) }}　点此修改</view>
         </picker>
         <view class="num-row">
@@ -56,14 +57,14 @@
     </view>
     <input class="ipt-note" v-model="note" placeholder="整单备注（选填，如：供应商/送货单号…）" />
 
-    <!-- 底部固定悬浮栏（对齐 App：合计+添加+提交固定在底部） -->
+    <!-- 底部固定悬浮栏（对齐 App：合计+添加+提交同一行固定底部） -->
     <view class="bottom-bar">
       <view class="footer">
         <button class="btn-add" @click="addRow">+ 添加商品</button>
         <button v-if="!isDateRows" class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
         <text class="total">合计 <text class="total-num">¥{{ fmtAmount(total) }}</text></text>
+        <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (isDateRows ? '保存该日修改' : (editId ? '保存修改' : '提交进货单')) }}</button>
       </view>
-      <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (isDateRows ? '保存该日修改' : (editId ? '保存修改' : '提交进货单')) }}</button>
     </view>
 
     <!-- 新商品入库弹窗（分类两级联动：先一级后二级，对齐 App；未匹配商品不静默丢弃） -->
@@ -117,7 +118,7 @@
 import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { computed, ref } from 'vue';
-import { onLoad, onShow, onHide } from '@dcloudio/uni-app';
+import { onLoad, onShow, onHide, onBackPress } from '@dcloudio/uni-app';
 import { request, getToken, uploadAi, uploadAttachment, getAttachments, deleteAttachment, attachmentUrl } from '../../api';
 import { fmtAmount, initRounding } from '../../utils/money';
 import { onWs, offWs } from '../../ws';
@@ -307,6 +308,14 @@ function insertRow(i: number) {
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number; canEdit: boolean }>({
   show: false, entity: '', id: '', list: [], index: 0, canEdit: true,
 });
+// 安卓返回键/左滑返回：查看器开着先关查看器（对齐账本/进货历史根页行为）
+onBackPress(() => {
+  if (attach.value.show) {
+    attach.value.show = false;
+    return true;
+  }
+  return false;
+});
 
 /// 批量直编整单凭证：聚合该日全部原单的单据级附件（可添加/删除，挂第一张原单——对齐 App orderIds.first）
 async function showBatchAttach() {
@@ -487,7 +496,7 @@ function aiPhoto() {
       aiBusy.value = true;
       aiTip.value = 'AI 识别中…';
       try {
-        const d = await uploadAi<{ items?: Array<Record<string, any>> }>(`/ai/parse-photo?purpose=purchase`, 'photo', fp);
+        const d = await uploadAi<{ items?: Array<Record<string, any>>; date?: string }>(`/ai/parse-photo?purpose=purchase`, 'photo', fp);
         pendingPhoto.value = fp; // 识别原图：提交成功后才上传为本单凭证（对齐全量同步/进货历史单据级凭证）
         fillFromDrafts(d.items || [], String(d.date ?? ''));;
       } catch (e) {
@@ -511,7 +520,7 @@ function aiText() {
       aiBusy.value = true;
       aiTip.value = 'AI 解析中…';
       try {
-        const d = await request<{ items?: Array<Record<string, any>> }>(`/ai/parse-text?purpose=purchase`, 'POST', { text });
+        const d = await request<{ items?: Array<Record<string, any>>; date?: string }>(`/ai/parse-text?purpose=purchase`, 'POST', { text });
         fillFromDrafts(d.items || [], String(d.date ?? ''));;
       } catch (e) {
         uni.showToast({ title: (e as Error).message || '识别失败', icon: 'none' });
@@ -545,7 +554,7 @@ function startVoiceRecord() {
     }
     aiTip.value = 'AI 识别中…';
     try {
-      const d = await uploadAi<{ text?: string; items?: Array<Record<string, any>> }>(`/ai/parse-voice?purpose=purchase`, 'audio', fp);
+      const d = await uploadAi<{ text?: string; items?: Array<Record<string, any>>; date?: string }>(`/ai/parse-voice?purpose=purchase`, 'audio', fp);
       if (d.text) uni.showToast({ title: `语音识别：${d.text}`, icon: 'none', duration: 2500 });
       fillFromDrafts(d.items || [], String(d.date ?? ''));;
     } catch (e) {
@@ -565,9 +574,9 @@ function startVoiceRecord() {
 }
 
 /// AI 识别结果 → 匹配已有商品填行（拍照/文字/语音共用）
-function fillFromDrafts(list: Array<Record<string, any>>, date = '') {
+function fillFromDrafts(list: Array<Record<string, any>>, draftDate = '') {
   // 日期回填（识别出的单据日期 YYYY-MM-DD，进货无购货单位字段）
-  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) date.value = date;
+  if (draftDate && /^\d{4}-\d{2}-\d{2}$/.test(draftDate)) date.value = draftDate;
   if (!list || list.length === 0) {
     uni.showToast({ title: '未识别到商品，请手动填写', icon: 'none' });
     return;
@@ -826,7 +835,7 @@ async function submit() {
 .head-row .field { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }
 .copy-btn { flex-shrink: 0; background: var(--card-bg); color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
-.batch-hint { flex-shrink: 0; align-self: center; background: var(--violet-bg); color: #7c4dff; border-radius: 12rpx; font-size: 24rpx; padding: 12rpx 20rpx; }
+.batch-hint { flex-shrink: 0; align-self: center; background: var(--violet-bg); color: #7c4dff; border-radius: 12rpx; font-size: 24rpx; padding: 12rpx 20rpx; display: block; margin: 0 0 12rpx 8rpx; }
 .ai-btn { flex-shrink: 0; background: var(--card-bg); color: #7c4dff; border: 1rpx solid #7c4dff; border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
 .ai-tip { background: var(--violet-bg); color: #7c4dff; border-radius: 12rpx; padding: 16rpx 24rpx; margin-bottom: 16rpx; font-size: 26rpx; }
 .field { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
@@ -860,7 +869,7 @@ async function submit() {
 .ins-line { flex: 1; height: 1rpx; background: var(--divider); }
 .ins-tx { font-size: 22rpx; color: var(--primary); }
 .ipt-note { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 26rpx; }
-.del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; flex-shrink: 0; }
+.del { color: #f56c6c; font-size: 36rpx; padding: 8rpx; flex-shrink: 0; line-height: 1; }
 /* 全屏凭证查看器（对齐 App attachment_viewer） */
 .viewer { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: #000; display: flex; flex-direction: column; z-index: 200; }
 .viewer-swiper { flex: 1; width: 100%; }
@@ -873,16 +882,16 @@ async function submit() {
 .viewer-op-del { color: #ff6d6d; }
 .viewer-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
 .viewer-empty-tx { color: rgba(255,255,255,0.7); font-size: 28rpx; }
-.footer { display: flex; justify-content: space-between; align-items: center; margin: 20rpx 0; }
+.footer { display: flex; align-items: center; gap: 16rpx; margin: 0; }
 /* 底部固定悬浮栏（对齐 App 固定栏）：页面留白避免内容被栏遮挡 */
 .bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 16rpx 24rpx 20rpx; background: var(--page-bg); border-top: 1rpx solid var(--divider); z-index: 20; }
 .page { padding-bottom: 220rpx; }
-.btn-add { font-size: 28rpx; }
-.btn-voucher { font-size: 26rpx; background: var(--card-bg); color: #22c55e; border: 1rpx solid #22c55e; border-radius: 12rpx; padding: 0 20rpx; height: 76rpx; line-height: 76rpx; }
-.total { font-size: 28rpx; }
+.btn-add { font-size: 26rpx; padding: 0 16rpx; height: 72rpx; line-height: 72rpx; flex-shrink: 0; }
+.btn-voucher { font-size: 24rpx; background: var(--card-bg); color: #22c55e; border: 1rpx solid #22c55e; border-radius: 12rpx; padding: 0 16rpx; height: 72rpx; line-height: 72rpx; flex-shrink: 0; }
+.total { flex: 1; text-align: right; font-size: 28rpx; }
 .total-num { color: #f56c6c; font-weight: bold; font-size: 34rpx; }
 /* 进货记单按钮用成功绿（对齐 App purchase_page：提交/加行 success 色系） */
-.btn-submit { background: #22c55e; color: #fff; border-radius: 12rpx; font-size: 32rpx; }
+.btn-submit { flex-shrink: 0; background: #22c55e; color: #fff; border-radius: 12rpx; font-size: 30rpx; height: 80rpx; line-height: 80rpx; padding: 0 32rpx; }
 /* 新商品入库弹窗（对齐其他页 mask/sheet 弹层） */
 .mask { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); z-index: 100; display: flex; align-items: center; justify-content: center; }
 .sheet { width: 84%; background: var(--card-bg); border: var(--card-border); border-radius: 20rpx; padding: 28rpx 24rpx; }

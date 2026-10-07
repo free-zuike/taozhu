@@ -130,10 +130,11 @@ function pickSkin(id: string) {
 /** 当前选中主题色的 hex（供图案预览实时取色） */
 const selectedColor = () => (presets.find((p) => p.id === cur.value)?.color ?? '#409EFF');
 /** 当前选中主题色的图案预览（随配色实时变化） */
-const skinPreview = () => {
+const skinPreview = (): string => {
   const p = selectedColor();
   const s = skins.find((x) => x.id === curSkin.value);
-  return s && typeof s.preview === 'function' ? s.preview(p) : s?.preview ?? '#f5f7fa';
+  if (s && typeof s.preview === 'function') return s.preview(p);
+  return typeof s?.preview === 'string' ? s.preview : '#f5f7fa';
 };
 
 onShow(async () => {

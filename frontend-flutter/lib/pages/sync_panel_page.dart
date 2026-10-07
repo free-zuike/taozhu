@@ -170,48 +170,32 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     } catch (e) {
       localError = e.toString().replaceFirst('Exception: ', '');
     }
-    // 服务器数据：并行拉取，各自容错（失败置 null，页面显示 —）
+    // 服务器数据：单请求聚合（/sync/panel 合并原 7 请求：stats 全局+店铺级、3×附件 counts、
+    // 物理文件数、引用数）——更快且原子一致；失败置 null，页面显示 —
     Map<String, dynamic>? serverStats;
     Map<String, dynamic>? clientStats;
     Map<String, dynamic>? saleCounts;
     Map<String, dynamic>? payCounts;
     Map<String, dynamic>? saleLineCounts; // 明细行级附件（v0.17.61+ 每行商品独立凭证）
     Map<String, dynamic>? attachTotal;
-    Map<String, dynamic>? serverInUse; // 服务器在用附件（引用记录 = 实际附件数）
-    await Future.wait([
-      _safe(() async {
-        serverStats = await Api.instance.get('/sync/stats').timeout(const Duration(seconds: 6));
-      }),
-      if (selectedId.isNotEmpty) ...[
-        _safe(() async {
-          clientStats = await Api.instance
-              .get('/sync/stats?client_id=$selectedId')
-              .timeout(const Duration(seconds: 6));
-        }),
-        _safe(() async {
-          saleCounts = await Api.instance
-              .post('/attachments/counts', {'entity': 'sale', 'client_id': selectedId})
-              .timeout(const Duration(seconds: 6));
-        }),
-        _safe(() async {
-          payCounts = await Api.instance
-              .post('/attachments/counts', {'entity': 'payment', 'client_id': selectedId})
-              .timeout(const Duration(seconds: 6));
-        }),
-        _safe(() async {
-          saleLineCounts = await Api.instance
-              .post('/attachments/counts', {'entity': 'sale_item', 'client_id': selectedId})
-              .timeout(const Duration(seconds: 6));
-        }),
-      ],
-      _safe(() async {
-        attachTotal = await Api.instance.get('/attachments/total').timeout(const Duration(seconds: 6));
-      }),
-      // 服务器在用附件数（引用记录数 = 实际附件数，对齐参考实现口径：每笔交易挂载算一个）
-      _safe(() async {
-        serverInUse = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 10));
-      }),
-    ]);
+    var serverAttachRefs = 0; // 服务器引用表条数（/sync/panel attach_ref_count）
+    await _safe(() async {
+      final p = await Api.instance
+          .get('/sync/panel${selectedId.isNotEmpty ? '?client_id=$selectedId' : ''}')
+          .timeout(const Duration(seconds: 12));
+      serverStats = p;
+      if (selectedId.isNotEmpty) {
+        clientStats = {
+          'sale_items': p['client_sale_items'],
+          'payments': p['client_payments'],
+        };
+        saleCounts = p['client_sale_attach'] as Map<String, dynamic>?;
+        payCounts = p['client_payment_attach'] as Map<String, dynamic>?;
+        saleLineCounts = p['client_sale_item_attach'] as Map<String, dynamic>?;
+      }
+      attachTotal = {'total': p['attach_file_total']};
+      serverAttachRefs = (p['attach_ref_count'] as num?)?.toInt() ?? 0;
+    });
     // 附件本地副本计数（依赖服务器返回的单据 id）
     var clientLocalAttach = 0;
     var clientServerAttach = 0;
@@ -245,12 +229,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       localAttachTotal = await _localAllAttachCount();
     }
     // 实际附件数（引用记录口径，对齐参考实现：每个商品/单据挂载算一个附件）——
-    // 服务器=attachment_refs 在用引用数（in-use 条数）；本地=本地附件引用表条数
-    var serverAttachRefs = 0;
-    final inUse = serverInUse;
-    if (inUse != null) {
-      serverAttachRefs = ((inUse['attachments'] as List?) ?? []).length;
-    }
+    // 服务器=引用表条数（/sync/panel attach_ref_count，上面已取）；本地=本地附件引用表条数
     var localAttachRefs = 0;
     if (!kIsWeb) {
       try {

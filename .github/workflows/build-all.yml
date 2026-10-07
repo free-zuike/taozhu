@@ -80,12 +80,47 @@ jobs:
         run: npm test
   # ── 前端单测（Flutter）：纯逻辑测试（版本函数等），不依赖网络/后端 mock ──
 
+  # ── Flutter 静态分析门禁：仅跑 flutter analyze（不构建产物），编译错提前暴露，
+  # 避免"推到平台 build 才失败"白等 12 分钟；各平台 job 都依赖本 job（needs: analyze） ──
+  analyze:
+    needs: [check]
+    if: github.repository == 'free-zuike/taozhu'
+    runs-on: ubuntu-latest
+    name: Flutter analyze
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.2
+          cache: true
+
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('frontend-flutter/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Generate platforms & analyze
+        working-directory: frontend-flutter
+        run: |
+          flutter create --org com.taozhu --project-name taozhu_app .
+          # flutter create 生成的脚手架 test/widget_test.dart 引用不存在的 MyApp（根类是 TaoZhuApp），
+          # 不删会导致 analyze 编译失败——删掉后 test/ 仅剩真实单测
+          rm -f test/widget_test.dart
+          flutter analyze
+          # 双保险：单独跑一次真实单测（analyze 不执行测试逻辑）
+          flutter test test/
+
   # ── 统一创建 Release（test 后第一件事）：各平台上传资产前 release 必须已存在——
   # 创建时刻按 push 顺序单调递增（列表顺序稳定）；各平台 job 只上传资产，不再 5 分钟等待/竞争创建 ──
 
   # ── Android APK（正式签名，按 ABI 拆包 + universal 兜底）────────────────────────────
   apk:
-    needs: [test]
+    needs: [test, analyze]
     if: github.repository == 'free-zuike/taozhu'
     runs-on: ubuntu-latest
     name: Android APK
@@ -237,7 +272,7 @@ jobs:
 
   # ── Linux 桌面 ─────────────────────────────────────────────────────────────────────
   linux:
-    needs: [test, check]
+    needs: [test, check, analyze]
     if: ${{ github.repository == 'free-zuike/taozhu' || needs.check.outputs.has_cf == 'true' }}
     runs-on: ubuntu-latest
     name: Linux 桌面
@@ -352,7 +387,7 @@ jobs:
           retention-days: 1
   # ── Windows 桌面 ────────────────────────────────────────────────────────────────────
   windows:
-    needs: [test]
+    needs: [test, analyze]
     if: github.repository == 'free-zuike/taozhu'
     runs-on: windows-latest
     name: Windows 桌面
@@ -427,7 +462,7 @@ jobs:
 
   # ── macOS ──────────────────────────────────────────────────────────────────────────
   macos:
-    needs: [test]
+    needs: [test, analyze]
     if: github.repository == 'free-zuike/taozhu'
     runs-on: macos-latest
     name: macOS

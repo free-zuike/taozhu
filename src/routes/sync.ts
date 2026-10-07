@@ -304,4 +304,107 @@ syncRouter.get('/stats', async (c) => {
   });
 });
 
+// GET /sync/panel — 同步面板单请求聚合（原 7 请求：/sync/stats 全局+店铺级、3×/attachments/counts、
+// /attachments/total、/attachments/in-use 引用数 → 1 请求，更快且原子一致）。面板只读展示；
+// 各单查端点保留供其他调用方（同步下载、清理页等）使用。
+// 返回：全局计数同 /stats + attach_file_total/attach_ref_count；client_id 非空时附加
+// client_sale_items/client_payments + client_*_attach（{counts,total,ids}，对齐 /attachments/counts）。
+syncRouter.get('/panel', async (c) => {
+  const db = c.env.DB;
+  const clientId = c.req.query('client_id')?.trim() ?? '';
+  // 附件计数（按店铺聚合，SQL 对齐 /attachments/counts：引用表计数 + 单据级叠加行级引用）
+  const countAttach = async (entity: 'sale' | 'payment' | 'sale_item') => {
+    let ids: string[] = [];
+    if (entity === 'sale') {
+      const rows = await db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items WHERE client_id = ?').bind(clientId).all<{ id: string }>();
+      ids = rows.results.map((r) => r.id);
+    } else if (entity === 'payment') {
+      const rows = await db.prepare('SELECT id FROM payments WHERE client_id = ?').bind(clientId).all<{ id: string }>();
+      ids = rows.results.map((r) => r.id);
+    } else {
+      const rows = await db.prepare('SELECT id FROM sale_items WHERE client_id = ?').bind(clientId).all<{ id: string }>();
+      ids = rows.results.map((r) => r.id);
+    }
+    if (ids.length === 0) return { counts: {}, total: 0, ids: [] };
+    const counts: Record<string, number> = {};
+    const CHUNK = 90;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const part = ids.slice(i, i + CHUNK);
+      const refRows = await db.prepare(
+        `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${part.map(() => '?').join(',')}) GROUP BY entity_id`,
+      ).bind(entity, ...part).all<{ entity_id: string; cnt: number }>();
+      for (const r of refRows.results) counts[r.entity_id] = (counts[r.entity_id] ?? 0) + Number(r.cnt);
+    }
+    // 单据级（sale）统计：计入该单全部明细行的行级引用（整单凭证实际挂行级）
+    if (entity === 'sale') {
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const part = ids.slice(i, i + CHUNK);
+        const rows = await db.prepare(
+          `SELECT id, sale_id AS order_id FROM sale_items WHERE sale_id IN (${part.map(() => '?').join(',')}) AND client_id = ?`,
+        ).bind(...part, clientId).all<{ id: string; order_id: string }>();
+        if (rows.results.length > 0) {
+          const lineIds = rows.results.map((r) => r.id);
+          const lineCountByLineId = new Map<string, number>();
+          for (let j = 0; j < lineIds.length; j += CHUNK) {
+            const linePart = lineIds.slice(j, j + CHUNK);
+            const lineRefs = await db.prepare(
+              `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${linePart.map(() => '?').join(',')}) GROUP BY entity_id`,
+            ).bind('sale_item', ...linePart).all<{ entity_id: string; cnt: number }>();
+            for (const r of lineRefs.results) lineCountByLineId.set(r.entity_id, (lineCountByLineId.get(r.entity_id) ?? 0) + Number(r.cnt));
+          }
+          for (const r of rows.results) {
+            const n = lineCountByLineId.get(r.id) ?? 0;
+            if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
+          }
+        }
+      }
+    }
+    return { counts, total: Object.values(counts).reduce((a, b) => a + b, 0), ids };
+  };
+  const [
+    clients, items, catItems, catClients, paymentAccounts, saleItems, purchaseItems, payments,
+    fileTotal, refCount,
+  ] = await Promise.all([
+    db.prepare('SELECT COUNT(*) AS n FROM clients WHERE deleted_at IS NULL').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM items WHERE deleted_at IS NULL').first<{ n: number }>(),
+    db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'item'").first<{ n: number }>(),
+    db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'client'").first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM sale_items').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM purchase_items').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM payments').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(DISTINCT file_key) AS n FROM attachment_refs').first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM attachment_refs').first<{ n: number }>(),
+  ]);
+  const out: Record<string, unknown> = {
+    clients: clients?.n ?? 0,
+    items: items?.n ?? 0,
+    categories_item: catItems?.n ?? 0,
+    categories_client: catClients?.n ?? 0,
+    payment_accounts: paymentAccounts?.n ?? 0,
+    sale_items: saleItems?.n ?? 0,
+    purchase_items: purchaseItems?.n ?? 0,
+    purchases: purchaseItems?.n ?? 0,
+    payments: payments?.n ?? 0,
+    server_cursor: await maxCursor(db),
+    attach_file_total: fileTotal?.n ?? 0,
+    attach_ref_count: refCount?.n ?? 0,
+  };
+  if (clientId) {
+    const [cSales, cPayments, saleAttach, payAttach, saleLineAttach] = await Promise.all([
+      db.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE client_id = ?').bind(clientId).first<{ n: number }>(),
+      db.prepare('SELECT COUNT(*) AS n FROM payments WHERE client_id = ?').bind(clientId).first<{ n: number }>(),
+      countAttach('sale'),
+      countAttach('payment'),
+      countAttach('sale_item'),
+    ]);
+    out.client_sale_items = cSales?.n ?? 0;
+    out.client_payments = cPayments?.n ?? 0;
+    out.client_sale_attach = saleAttach;
+    out.client_payment_attach = payAttach;
+    out.client_sale_item_attach = saleLineAttach;
+  }
+  return c.json(out);
+});
+
 export { buildPayload };

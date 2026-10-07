@@ -10,14 +10,14 @@
 
     <!-- 月度卡（对齐 App：左侧年月两层点击切换 + 竖线 + 右侧四列统计；列表全量，月份只影响统计卡） -->
     <view class="month-card">
-      <view class="month-left" @click="pickMonth">
+      <picker class="month-left" mode="date" fields="month" :value="monthVal" @change="onPickMonth">
         <text class="month-y">{{ selYear }}年</text>
         <view class="month-row">
           <text class="month-m">{{ selMonth }}月</text>
           <text class="month-caret">▾</text>
         </view>
         <text class="month-tip">点击切换</text>
-      </view>
+      </picker>
       <view class="mdivider"></view>
       <view class="mcols">
         <view class="mcol"><text class="ml">售出</text><text class="mv" style="color:var(--primary)">¥{{ fmtNum(mSold) }}</text></view>
@@ -178,7 +178,7 @@
 </template>
 
 <script setup lang="ts">
-import { onShow, onHide } from '@dcloudio/uni-app';
+import { onShow, onHide, onBackPress } from '@dcloudio/uni-app';
 import { onWs, offWs } from '../../ws';
 
 import { useThemeVars } from '../../theme';
@@ -227,6 +227,14 @@ function openFormAttach() {
 // ── 附件凭证 ──
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number }>({
   show: false, entity: '', id: '', list: [], index: 0,
+});
+// 安卓返回键/左滑返回：查看器开着先关查看器（本页为 tabBar 根页，直接返回=退出小程序）
+onBackPress(() => {
+  if (attach.value.show) {
+    attach.value.show = false;
+    return true;
+  }
+  return false;
 });
 // 附件计数：sale_item（行级）/ sale（无明细备注行的单据级）/ payment（收款单据级）→ id → 张数
 const attachCounts = ref<Record<string, Record<string, number>>>({ sale_item: {}, sale: {}, payment: {} });
@@ -358,6 +366,17 @@ async function removeAttach(key: string) {
 // ── 月份/店铺筛选 ──
 const selYear = ref(new Date().getFullYear());
 const selMonth = ref(new Date().getMonth() + 1);
+const pad = (n: number) => String(n).padStart(2, '0');
+const monthVal = computed(() => `${selYear.value}-${pad(selMonth.value)}`);
+// 年月直接选择（对齐对账单 fields=month 原生选择器；不提供未来月，无需钳制）
+function onPickMonth(e: { detail: { value: string } }) {
+  const [y, m] = e.detail.value.split('-').map(Number);
+  if (y && m >= 1 && m <= 12) {
+    selYear.value = y;
+    selMonth.value = m;
+    loadMonthly();
+  }
+}
 const clients = ref<Array<{ id: string; name: string }>>([]);
 const clientNames = ref<string[]>([]);
 const filterClientId = ref('');
@@ -436,41 +455,11 @@ const saleGroups = computed<SaleGroup[]>(() => {
 function monthRange(): { from: string; to: string } {
   const y = selYear.value;
   const m = selMonth.value;
-  const pad = (n: number) => String(n).padStart(2, '0');
   const from = `${y}-${pad(m)}-01`;
   // 当月最后一天（下月 0 日）
   const next = new Date(y, m, 0); // m 是 1-12，new Date(y,m,0) = 当月最后一天
   const to = `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`;
   return { from, to };
-}
-function shiftMonth(delta: number) {
-  let y = selYear.value;
-  let m = selMonth.value + delta;
-  if (m < 1) { y--; m = 12; }
-  if (m > 12) { y++; m = 1; }
-  // 不能选未来月份（与 App 端一致）：当年不超过当前月
-  const now = new Date();
-  if (y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1)) {
-    y = now.getFullYear();
-    m = now.getMonth() + 1;
-  }
-  selYear.value = y;
-  selMonth.value = m;
-  loadMonthly();
-}
-function pickMonth() {
-  uni.showActionSheet({
-    itemList: ['上一月', '下一月', '回到本月'],
-    success: (r) => {
-      if (r.tapIndex === 0) shiftMonth(-1);
-      else if (r.tapIndex === 1) shiftMonth(1);
-      else if (r.tapIndex === 2) {
-        selYear.value = new Date().getFullYear();
-        selMonth.value = new Date().getMonth() + 1;
-        loadMonthly();
-      }
-    },
-  });
 }
 function onClientFilter(e: { detail: { value: number } }) {
   const c = clients.value[e.detail.value];

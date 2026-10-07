@@ -3,14 +3,14 @@
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <!-- 月份 + 进货统计同一行（对齐 App：左年月两层 + 竖线 + 右三列：进货金额/天数/商品件数；列表全量，月份只影响统计） -->
     <view class="month-card">
-      <view class="month-left" @click="pickMonth">
+      <picker class="month-left" mode="date" fields="month" :value="monthVal" @change="onPickMonth">
         <text class="month-y">{{ selYear }}年</text>
         <view class="month-row">
           <text class="month-m">{{ selMonth }}月</text>
           <text class="month-caret">▾</text>
         </view>
         <text class="month-tip">点击切换</text>
-      </view>
+      </picker>
       <view class="mdivider"></view>
       <view class="mcols3">
         <view class="mcol3"><text class="mv red">¥{{ fmt(mExpense) }}</text><text class="ml">进货金额</text></view>
@@ -127,7 +127,7 @@
 </template>
 
 <script setup lang="ts">
-import { onShow, onHide } from '@dcloudio/uni-app';
+import { onShow, onHide, onBackPress } from '@dcloudio/uni-app';
 import { onWs, offWs } from '../../ws';
 
 import { useThemeVars } from '../../theme';
@@ -141,6 +141,18 @@ import { fmtAmount, fmtPrice } from '../../utils/money';
 
 const selYear = ref(new Date().getFullYear());
 const selMonth = ref(new Date().getMonth() + 1);
+const pad = (n: number) => String(n).padStart(2, '0');
+const monthVal = computed(() => `${selYear.value}-${pad(selMonth.value)}`);
+// 年月直接选择（对齐对账单 fields=month 原生选择器；不提供未来月，无需钳制）
+function onPickMonth(e: { detail: { value: string } }) {
+  const [y, m] = e.detail.value.split('-').map(Number);
+  if (y && m >= 1 && m <= 12) {
+    userPickedMonth = true; // 手动切月后不自动跳最后记录月份
+    selYear.value = y;
+    selMonth.value = m;
+    calcMonthly();
+  }
+}
 /// 用户是否手动切换过月份（手动后不自动跳最后记录月份；默认=最后一条有记录的月份）
 let userPickedMonth = false;
 const purchases = ref<Array<Record<string, any>>>([]);
@@ -218,6 +230,14 @@ function openFormAttach() {
 }
 
 const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number }>({ show: false, entity: 'purchase', id: '', list: [], index: 0 });
+// 安卓返回键/左滑返回：查看器开着先关查看器（本页为 tabBar 根页，直接返回=退出小程序）
+onBackPress(() => {
+  if (attach.value.show) {
+    attach.value.show = false;
+    return true;
+  }
+  return false;
+});
 // 附件计数（行级 purchase_item / 单据级 purchase）
 const attachCounts = ref<Record<string, Record<string, number>>>({ purchase_item: {}, purchase: {} });
 
@@ -242,43 +262,10 @@ onShow(async () => {
 function monthRange(): { from: string; to: string } {
   const y = selYear.value;
   const m = selMonth.value;
-  const pad = (n: number) => String(n).padStart(2, '0');
   const from = `${y}-${pad(m)}-01`;
   const next = new Date(y, m, 0);
   const to = `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`;
   return { from, to };
-}
-
-function shiftMonth(delta: number) {
-  userPickedMonth = true; // 手动切月后不自动跳最后记录月份
-  let y = selYear.value;
-  let m = selMonth.value + delta;
-  if (m < 1) { y--; m = 12; }
-  if (m > 12) { y++; m = 1; }
-  const now = new Date();
-  if (y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1)) {
-    y = now.getFullYear();
-    m = now.getMonth() + 1;
-  }
-  selYear.value = y;
-  selMonth.value = m;
-  calcMonthly();
-}
-
-function pickMonth() {
-  userPickedMonth = true; // 手动切月后不自动跳最后记录月份
-  uni.showActionSheet({
-    itemList: ['上一月', '下一月', '回到本月'],
-    success: (r) => {
-      if (r.tapIndex === 0) shiftMonth(-1);
-      else if (r.tapIndex === 1) shiftMonth(1);
-      else if (r.tapIndex === 2) {
-        selYear.value = new Date().getFullYear();
-        selMonth.value = new Date().getMonth() + 1;
-        calcMonthly();
-      }
-    },
-  });
 }
 
 // 月份只由顶部月份选择器控制（pickMonth），滚动不再联动切月（对齐交易页 0.17.317；
@@ -654,7 +641,7 @@ async function loadAttachCounts() {
 .amt { font-size: 30rpx; font-weight: bold; color: #ef4444; flex-shrink: 0; margin-left: 12rpx; }
 .line2 { display: flex; align-items: center; gap: 6rpx; margin-bottom: 6rpx; }
 .cat-ic { font-size: 22rpx; color: var(--text-sub); }
-.l2-cat { font-size: 22rpx; color: var(--text-sub); background: none; border-radius: 0; padding: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.l2-cat { font-size: 22rpx; color: var(--text-sub); background: none; border-radius: 0; padding: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attach-entry { margin-left: 8rpx; display: flex; align-items: center; gap: 6rpx; flex-shrink: 0; padding: 4rpx; }
 .attach-ic { width: 34rpx; height: 34rpx; }
 .attach-ic-off { opacity: 0.35; }

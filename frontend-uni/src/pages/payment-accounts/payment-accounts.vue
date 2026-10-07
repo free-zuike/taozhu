@@ -27,7 +27,7 @@
     </view>
     <view v-if="accounts.length === 0" class="empty">暂无账户，点下方新增</view>
 
-    <button class="btn-add" @click="showAdd = true">+ 新增收款账户</button>
+    <button class="btn-add" @click="showForm = true">+ 新增收款账户</button>
 
     <!-- 新增/编辑弹层 -->
     <view v-if="showForm" class="mask" @click="showForm = false">

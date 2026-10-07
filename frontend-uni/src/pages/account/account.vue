@@ -15,16 +15,16 @@
     <view class="group-title">账号设置</view>
     <view class="grp">
       <view class="row" @click="changeAvatar">
-        <view class="r-ic ic-blue"><text class="ic-tx">🖼️</text></view><view class="r-body"><text class="r-tx">头像</text><text class="r-sub">拍照 / 从相册选择更换</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xe853;</text></view><view class="r-body"><text class="r-tx">头像</text><text class="r-sub">拍照 / 从相册选择更换</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="changeUsername">
-        <view class="r-ic ic-green"><text class="ic-tx">✏️</text></view><view class="r-body"><text class="r-tx">用户名</text><text class="r-sub">显示用名称，1-30 字</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xe3c9;</text></view><view class="r-body"><text class="r-tx">用户名</text><text class="r-sub">显示用名称，1-30 字</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="changePassword">
-        <view class="r-ic ic-orange"><text class="ic-tx">🔑</text></view><view class="r-body"><text class="r-tx">修改密码</text><text class="r-sub">验证旧密码，新密码至少 6 位</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xe899;</text></view><view class="r-body"><text class="r-tx">修改密码</text><text class="r-sub">验证旧密码，新密码至少 6 位</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="toggleTotp">
-        <view class="r-ic ic-purple"><text class="ic-tx">🛡️</text></view><view class="r-body"><text class="r-tx">两步验证（2FA）</text><text class="r-sub">{{ totpOn ? '已开启，点击关闭' : '验证器扫码/密钥开启' }}</text></view>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xe832;</text></view><view class="r-body"><text class="r-tx">两步验证（2FA）</text><text class="r-sub">{{ totpOn ? '已开启，点击关闭' : '验证器扫码/密钥开启' }}</text></view>
         <text class="state-tag" :class="totpOn ? 'on' : 'off'">{{ totpOn ? '已开启' : '未开启' }}</text>
       </view>
     </view>
