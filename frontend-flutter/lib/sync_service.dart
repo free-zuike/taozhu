@@ -816,14 +816,64 @@ class SyncService {
         }
       } catch (_) {}
       if (pending.isEmpty && extra.isEmpty) return 0;
+      // 附件删除变更兜底收敛：旧客户端入队的删除变更 payload 只有 md5-only 内容 key（解析不出
+      // 实体）→ 服务器按"共用图保护"拒绝（400）；LWW/其他原因被拒也会留队列。此类变更若一直
+      // push 失败，pendingDel 过滤会让本地引用表永远少 N 条（同步面板"本地91/服务器95"差 4 的根因）。
+      // 放在分批推送前统一处理一次（若放批循环内=每批基于同一 pending 快照重复处理同一条
+      // →"附件删除兜底成功"日志刷屏）：服务器 in-use 仍有该 key → 用规范化三元组直连删除；
+      // in-use 已无该 key → 服务器已删/无此引用，本地队列残留直接清掉。
+      final skipIds = <int>{};
+      try {
+        final attachDeletes = pending
+            .where((x) => '${x['entity_type'] ?? ''}' == 'attachment' && '${x['action'] ?? ''}' == 'delete')
+            .toList();
+        if (attachDeletes.isNotEmpty) {
+          final inUse = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
+          final inUseList = ((inUse['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
+          for (final x in attachDeletes) {
+            final sid = '${x['entity_sync_id'] ?? ''}';
+            // 优先用 payload 携带的 entity/id（新客户端删除带三元组），否则用服务器 in-use 匹配
+            final p = (x['payload'] as Map<String, dynamic>?) ?? {};
+            var e = '${p['entity'] ?? ''}'.trim();
+            var i = '${p['id'] ?? ''}'.trim();
+            if (e.isEmpty || i.isEmpty) {
+              final match = inUseList
+                  .where((a) => '${a['key'] ?? ''}' == sid || '${a['file'] ?? ''}' == sid.split('/').last)
+                  .firstOrNull;
+              if (match != null) {
+                e = '${match['entity'] ?? ''}';
+                i = '${match['id'] ?? ''}';
+              }
+            }
+            if (e.isNotEmpty && i.isNotEmpty) {
+              try {
+                await Api.instance.delete('/attachments?key=$sid&entity=$e&id=$i');
+                appLog('sync', '附件删除兜底成功：$sid（$e/$i）', level: 'info');
+                final id = x['id'];
+                if (id is int) { await LocalDb.removePendingChange(id); skipIds.add(id); }
+                continue;
+              } catch (_) {}
+            }
+            // 服务器 in-use 已无该引用（此前已删成功/引用本就不存在）→ 本地队列残留直接清掉
+            appLog('sync', '附件删除已在服务器生效，清理本地残留变更：$sid', level: 'info');
+            final id = x['id'];
+            if (id is int) { await LocalDb.removePendingChange(id); skipIds.add(id); }
+          }
+        }
+      } catch (_) {}
+      final pendingLeft = pending
+          .where((x) {
+        final id0 = x['id'];
+        return !(id0 is int && skipIds.contains(id0));
+      }).toList();
       final did = await deviceId();
       // 分批：extra（删除标记，数量少、固定时间戳幂等）单独一批，pending 每 50 条一批
       const batchSize = 50;
-      final batchStarts = <int>[]; // pending 每批起始下标（extra 批 = -1）
+      final batchStarts = <int>[]; // pendingLeft 每批起始下标（extra 批 = -1）
       final batches = <List<Map<String, dynamic>>>[];
       if (extra.isNotEmpty) { batches.add(extra); batchStarts.add(-1); }
-      for (var start = 0; start < pending.length; start += batchSize) {
-        final batchPending = pending.skip(start).take(batchSize).toList();
+      for (var start = 0; start < pendingLeft.length; start += batchSize) {
+        final batchPending = pendingLeft.skip(start).take(batchSize).toList();
         batchStarts.add(start);
         batches.add(batchPending.map((x) {
           final m = Map<String, dynamic>.from(x);
@@ -871,55 +921,11 @@ class SyncService {
           }
           continue; // extra 批无本地 pending id 可移除
         }
-        // 附件删除变更兜底收敛：旧客户端入队的删除变更 payload 只有 md5-only 内容 key（解析不出
-        // 实体）→ 服务器按"共用图保护"拒绝（400）；LWW/其他原因被拒也会留队列。此类变更若一直
-        // push 失败，pendingDel 过滤会让本地引用表永远少 N 条（同步面板"本地91/服务器95"差 4 的根因）。
-        // 这里对**本地队列全部附件删除变更**做收敛（不只看 rejected samples）：
-        // 服务器 in-use 仍有该 key → 用其规范化三元组直连删除（引用行真正删掉，pull 后本地表对齐）；
-        // in-use 已无该 key → 说明服务器此前已删/无此引用，本地队列残留直接清掉。
-        try {
-          final attachDeletes = pending
-              .where((x) => '${x['entity_type'] ?? ''}' == 'attachment' && '${x['action'] ?? ''}' == 'delete')
-              .toList();
-          if (attachDeletes.isNotEmpty) {
-            final inUse = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
-            final inUseList = ((inUse['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
-            for (final x in attachDeletes) {
-              final sid = '${x['entity_sync_id'] ?? ''}';
-              // 优先用 payload 携带的 entity/id（新客户端删除带三元组），否则用服务器 in-use 匹配
-              final p = (x['payload'] as Map<String, dynamic>?) ?? {};
-              var e = '${p['entity'] ?? ''}'.trim();
-              var i = '${p['id'] ?? ''}'.trim();
-              if (e.isEmpty || i.isEmpty) {
-                final match = inUseList
-                    .where((a) => '${a['key'] ?? ''}' == sid || '${a['file'] ?? ''}' == sid.split('/').last)
-                    .firstOrNull;
-                if (match != null) {
-                  e = '${match['entity'] ?? ''}';
-                  i = '${match['id'] ?? ''}';
-                }
-              }
-              if (e.isNotEmpty && i.isNotEmpty) {
-                try {
-                  await Api.instance.delete('/attachments?key=$sid&entity=$e&id=$i');
-                  appLog('sync', '附件删除兜底成功：$sid（$e/$i）', level: 'info');
-                  final id = x['id'];
-                  if (id is int) await LocalDb.removePendingChange(id);
-                  continue;
-                } catch (_) {}
-              }
-              // 服务器 in-use 已无该引用（此前已删成功/引用本就不存在）→ 本地队列残留直接清掉
-              appLog('sync', '附件删除已在服务器生效，清理本地残留变更：$sid', level: 'info');
-              final id = x['id'];
-              if (id is int) await LocalDb.removePendingChange(id);
-            }
-          }
-        } catch (_) {}
         // 本批被接受的条目按顺序移除（服务端 accepted=应用成功数，顺序与批内一致）
         var removed = 0;
         final removedIds = <int>{};
         for (var k = 0; k < batch.length && removed < accepted; k++) {
-          final pid = pending[startIdx + k];
+          final pid = pendingLeft[startIdx + k];
           final lid = pid['id'];
           if (lid is int && !removedIds.contains(lid)) {
             await LocalDb.removePendingChange(lid);
@@ -945,7 +951,7 @@ class SyncService {
             for (var k = 0; k < batch.length; k++) {
               final key = '${batch[k]['entity_type'] ?? ''}:${batch[k]['entity_sync_id'] ?? ''}';
               if (!conflictKeys.contains(key)) continue;
-              final pid = pending[startIdx + k];
+              final pid = pendingLeft[startIdx + k];
               final lid = pid['id'];
               final ts = DateTime.tryParse('${batch[k]['updated_at'] ?? ''}');
               if (lid is int && ts != null && !removedIds.contains(lid)) {
