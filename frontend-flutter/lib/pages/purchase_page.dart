@@ -106,6 +106,9 @@ class _PurchasePageState extends State<PurchasePage> {
     return '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
   }
 
+  /// 批量直编模式（进货历史某日进入：该日全部行平铺，按原单分组 PATCH）
+  bool get isDateRows => widget.dateRows != null && widget.dateRows!.isNotEmpty;
+
   @override
   void dispose() {
     _dateCtrl.dispose();
@@ -965,9 +968,7 @@ class _PurchasePageState extends State<PurchasePage> {
     }
     setState(() => _busy = true);
     // 写本地优先：构建完整 payload → 落本地库 → 入队列 → debounce push
-    final isDateRows = widget.dateRows != null && widget.dateRows!.isNotEmpty;
-    final purchaseId = _purchaseId;
-    // 单据日期 = 明细行最大日期
+    final purchaseId = _purchaseId;    // 单据日期 = 明细行最大日期
     final orderDate = valid
         .map((r) => r.happenedAt.trim().isEmpty ? _dateCtrl.text.trim() : r.happenedAt.trim())
         .reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
@@ -1064,7 +1065,8 @@ class _PurchasePageState extends State<PurchasePage> {
             _webPurchaseId = '${r['id']}';
           }
         }
-        toast(context, '已保存');\n        _submitted = true;
+        toast(context, '已保存');
+        _submitted = true;
         // 提交成功后才上传识别原图附件（Web）：新建用服务端返回的真实单据 id，
         // 编辑/批量直编用现有单 id——挂错 id 会导致 Web 端"附件看不到"
         if (kIsWeb) unawaited(_uploadPending(

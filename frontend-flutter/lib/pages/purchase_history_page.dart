@@ -909,7 +909,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       if (y != _selYear || m != _selMonth) {
         _selYear = y;
         _selMonth = m;
-        _loadMonthly();
+        _filterByRange(_purchases); // 重算当月统计（列表全量不变）
       }
     }
     return false;

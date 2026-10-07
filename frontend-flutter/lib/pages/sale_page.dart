@@ -119,6 +119,9 @@ class _SalePageState extends State<SalePage> {
     return '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
   }
 
+  /// 批量直编模式（账本某日进入：该日全部行平铺，按原单分组 PATCH）
+  bool get isDateRows => widget.dateRows != null && widget.dateRows!.isNotEmpty;
+
   @override
   void dispose() {
     _dateCtrl.dispose();
@@ -1122,7 +1125,6 @@ class _SalePageState extends State<SalePage> {
     }
     setState(() => _busy = true);
     // 写本地优先：构建完整 payload → 落本地库（立即可见）→ 入待推送队列 → debounce push
-    final isDateRows = widget.dateRows != null && widget.dateRows!.isNotEmpty;
     final saleId = _saleId;
     final clientName = _clients.where((c) => c['id'] == _clientId).firstOrNull?['name'] as String? ?? '';
     // 单据日期 = 明细行最大日期（行独立日期，分组/对账以最新行为准）
@@ -1226,7 +1228,8 @@ class _SalePageState extends State<SalePage> {
             _webSaleId = '${r['id']}';
           }
         }
-        toast(context, '已保存');\n        _submitted = true;
+        toast(context, '已保存');
+        _submitted = true;
         // 提交成功后才上传识别原图附件（Web）：新建用服务端返回的真实单据 id，
         // 编辑/批量直编用现有单 id（批量直编挂真实原单）——挂错 id 会导致 Web 端"附件看不到"
         if (kIsWeb) unawaited(_uploadPending(
