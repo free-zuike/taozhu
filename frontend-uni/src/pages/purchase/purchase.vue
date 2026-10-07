@@ -35,7 +35,7 @@
           <text v-if="row.rowId" class="att-btn" @click.stop="showAttach('purchase_item', row.rowId, 'purchase', row.orderId)"><text class="mi">&#xe3f4;</text></text>
           <text class="del" @click="rows.splice(i, 1)">删</text>
         </view>
-        <picker class="price-pick" mode="selector" :range="row.priceLabels" @change="(e) => onPrice(i, e.detail.value)">
+        <picker class="price-pick" mode="selector" :range="row.prices" range-key="unit" @change="(e) => onPrice(i, e.detail.value)">
           <view class="price-field" :class="{ ph: !row.priceLabel }">{{ row.priceLabel || '单位 / 价格' }}</view>
         </picker>
         <picker class="date-pick" mode="date" :value="row.happenedAt || date" @change="(e) => (row.happenedAt = e.detail.value)">
@@ -285,13 +285,18 @@ function addRow() {
   rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
 }
 
-/// 在该行上方插入一行（补识别漏行/调整顺序与图片一致；对齐 App 行内插入）
+/// 在该行上方插入一行（补识别漏行/调整顺序与图片一致；对齐 App 行内插入）。
+/// 弹「补录/新商品」二选一：补录=并入上方行原单（共享整单凭证），新商品=独立新单（附件单独挂）
 function insertRow(i: number) {
-  const row: Row = { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: `pi${Date.now()}${Math.floor(Math.random() * 0x7fffffff)}`, orderId: '' };
-  // 归入上方行原单：插入位置=提交位置（服务端 PATCH 按数组序重建），且整单凭证挂原单时插入行同单可见；
-  // 无上方原单（最上方/上方是新行）=独立新单（保存时 POST 成单）
-  if (i > 0 && rows.value[i - 1].orderId) row.orderId = rows.value[i - 1].orderId;
-  rows.value.splice(i, 0, row);
+  uni.showActionSheet({
+    itemList: ['补录（并入上方原单）', '新商品（独立新单）'],
+    success: (res) => {
+      const row: Row = { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: `pi${Date.now()}${Math.floor(Math.random() * 0x7fffffff)}`, orderId: '' };
+      // 补录：归入上方行原单（插入位置=提交位置，整单凭证挂原单时插入行同单可见）
+      if (res.tapIndex === 0 && i > 0 && rows.value[i - 1].orderId) row.orderId = rows.value[i - 1].orderId;
+      rows.value.splice(i, 0, row);
+    },
+  });
 }
 
 // ── 行级凭证附件（对齐 App 行头附件按钮：点击直接全屏查看器，可添加/下载/删除）──

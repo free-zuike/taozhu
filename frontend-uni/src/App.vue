@@ -2,14 +2,17 @@
 import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
 import { startWs, stopWs } from "./ws";
 import { getToken } from "./api";
-// 加载 Material Icons 字体（与 App 端同款字体，码点一致——小程序图标与 App 完全一致）
+import { MATERIAL_ICONS_BASE64 } from "./static/fonts/material-icons-base64";
+// 加载 Material Icons 字体（与 App 端同款字体，码点一致——小程序图标与 App 完全一致）。
+// 微信小程序 loadFontFace 不支持本地文件路径（只支持网络 URL 或 base64），
+// 故用 base64 内联（约 167KB）；H5 端走 @font-face 本地路径。
 function loadIconFont() {
   // @ts-expect-error 各平台 loadFontFace 挂载点（uni/wx/tt/qq…）
   const api = typeof wx !== 'undefined' ? wx : (typeof uni !== 'undefined' ? uni : null);
   if (api?.loadFontFace) {
     api.loadFontFace({
       family: 'MaterialIcons',
-      source: 'url("/static/fonts/MaterialIcons-Regular.woff2")',
+      source: MATERIAL_ICONS_BASE64,
       global: true,
       fail: () => {},
     });

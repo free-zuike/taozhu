@@ -1345,21 +1345,50 @@ class _PurchasePageState extends State<PurchasePage> {
     ));
   }
 
+  /// 点击插入条：弹「补录/新商品」二选一——补录=并入上方行原单（共享整单凭证），
+  /// 新商品=独立新单（附件单独挂）；对齐用户"补录和新商品插入方式显著分开"
+  Future<void> _promptInsert(int i) async {
+    final mode = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.merge_type),
+              title: const Text('补录（并入上方原单）'),
+              subtitle: const Text('补漏的商品，整单凭证共享可见'),
+              onTap: () => Navigator.pop(ctx, 'merge'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.note_add_outlined),
+              title: const Text('新商品（独立新单）'),
+              subtitle: const Text('补的不是原单商品，单独成一单、附件单独挂'),
+              onTap: () => Navigator.pop(ctx, 'new'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (mode == null || !mounted) return;
+    setState(() {
+      final row = _newPRow()..happenedAt = _dateCtrl.text.trim();
+      // 补录：归入上方行原单（插入位置=提交位置，整单凭证挂原单时插入行同单可见）；
+      // 新商品：保持独立新单（保存时行级落库/独立成单）
+      if (mode == 'merge' && i > 0 && _rows[i - 1].origPurchaseId.isNotEmpty) {
+        row.origPurchaseId = _rows[i - 1].origPurchaseId;
+        _rowPurchaseId[row.rowId] = row.origPurchaseId;
+      }
+      _rows.insert(i, row);
+    });
+  }
+
   /// 行上方插入条：点击在该行上方插入一行（补识别漏行/调整顺序与凭证一致）。
   /// 独立细条不占行头宽度（行头放 ➕ 会挤压商品名输入框，用户反馈只显示一个字）
   Widget _insertBar(int i) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return InkWell(
-      onTap: () => setState(() {
-        final row = _newPRow()..happenedAt = _dateCtrl.text.trim();
-        // 归入上方行原单：插入位置=提交位置（服务端 PATCH 按数组序重建、账本按 sort 展开），
-        // 且整单凭证挂原单时插入行同单可见；无上方原单（最上方/上方是新行）=独立新单
-        if (i > 0 && _rows[i - 1].origPurchaseId.isNotEmpty) {
-          row.origPurchaseId = _rows[i - 1].origPurchaseId;
-          _rowPurchaseId[row.rowId] = row.origPurchaseId;
-        }
-        _rows.insert(i, row);
-      }),
+      onTap: () => _promptInsert(i),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(
