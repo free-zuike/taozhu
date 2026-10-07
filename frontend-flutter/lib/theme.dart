@@ -16,7 +16,7 @@ Future<void> setThemeMode(ThemeMode mode) async {
   final p = await SharedPreferences.getInstance();
   final key = mode == ThemeMode.dark ? 'dark' : (mode == ThemeMode.light ? 'light' : 'system');
   await p.setString('theme_mode', key);
-  unawaited(pushTheme()); // 明暗模式上传（其他端 WS 收到后应用）
+  unawaited(ThemeConfig.instance.pushTheme()); // 明暗模式上传（其他端 WS 收到后应用）
 }
 
 /// 启动时恢复上次主题模式（默认跟随系统）

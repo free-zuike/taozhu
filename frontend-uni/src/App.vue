@@ -57,5 +57,8 @@ onHide(() => {
   line-height: 1;
   display: inline-block;
   -webkit-font-smoothing: antialiased;
+  /* 图标线条=主题主色（对齐 App：图标与设置的颜色一致，线条深色、背景浅底；
+     个别需要其他色的位置用更具体的类覆盖） */
+  color: var(--primary);
 }
 </style>
