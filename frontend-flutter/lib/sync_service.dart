@@ -1155,6 +1155,39 @@ class SyncService {
   static Future<void> cleanupOrphanLocalAttachments() async {
     try {
       if (kIsWeb) return;
+      // 僵尸引用清理：识别/取消残留（引用表有行但目标实体在本地库不存在，如临时单 id）——
+      // 先删引用行，随后下方文件扫描会把无引用的副本文件当孤儿删掉（否则"存储清理扫不到"）。
+      // 仅本地库已全量同步时执行（防未同步时误删真实在用引用）。
+      if (await isFullDone()) {
+        try {
+          final refRows0 = await LocalDb.getAll('attachment_refs');
+          if (refRows0.isNotEmpty) {
+            final saleIds = <String>{}; final saleLineIds = <String>{};
+            final payIds = <String>{}; final purchaseIds = <String>{}; final purchaseLineIds = <String>{};
+            for (final s in await LocalDb.getAll('sale_items')) { saleIds.add('${s['sale_id'] ?? ''}'); saleLineIds.add('${s['id'] ?? ''}'); }
+            for (final p in await LocalDb.getAll('payments')) payIds.add('${p['id'] ?? ''}');
+            for (final p in await LocalDb.getAll('purchase_items')) { purchaseIds.add('${p['purchase_id'] ?? ''}'); purchaseLineIds.add('${p['id'] ?? ''}'); }
+            bool valid(String e, String i) {
+              switch (e) {
+                case 'sale': return saleIds.contains(i);
+                case 'sale_item': return saleLineIds.contains(i);
+                case 'payment': return payIds.contains(i);
+                case 'purchase': return purchaseIds.contains(i);
+                case 'purchase_item': return purchaseLineIds.contains(i);
+              }
+              return true; // 未知实体宁留勿删
+            }
+            for (final r in refRows0) {
+              final e = '${r['entity'] ?? ''}';
+              final i = '${r['entity_id'] ?? ''}';
+              if (e.isEmpty || i.isEmpty) continue;
+              if (valid(e, i)) continue;
+              await LocalDb.deleteOne('attachment_refs', '${e}/${i}/${r['file'] ?? ''}');
+              appLog('sync', '清理僵尸附件引用：$e/$i（${r['file'] ?? ''}）', level: 'info');
+            }
+          }
+        } catch (_) {}
+      }
       final root = await getApplicationDocumentsDirectory();
       final base = Directory('${root.path}/attachments');
       if (!base.existsSync()) return;

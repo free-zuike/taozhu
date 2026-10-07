@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../local_db.dart';
 import '../utils/money.dart';
 import 'router.dart';
 
 /// 金额舍入设置（仅老板）：进位临界（四舍五入/5舍6入/自定义 0~1）+ 精度（元/角/分）。
 /// 保存 PUT /settings/rounding（服务器权威），广播后各端刷新本地口径；本地缓存同步更新。
+/// 店铺结账抹零（round_stage/round_unit）也在此设置：欠款按各店口径计算（0.17.323 起）。
 class RoundingSettingsPage extends StatefulWidget {
   const RoundingSettingsPage({super.key});
   @override
@@ -16,6 +18,7 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
   double _carry = 0.5;
   int _digits = 2;
   bool _saving = false;
+  List<Map<String, dynamic>> _clients = [];
 
   // 预设档位（进位临界）：四舍五入 0.5 / 5舍6入 0.6 / 自定义（数值输入）
   static const presets = <(String, double)>[
@@ -23,6 +26,14 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
     ('5舍6入（尾数 5 舍、≥6 进）', 0.6),
     ('四舍六入（尾数≥7 进，更收紧）', 0.7),
   ];
+
+  static const _stageNames = {
+    'none': '不抹零',
+    'txn': '每单抹零',
+    'day': '按天抹零',
+    'total': '结账抹零',
+  };
+  static const _unitNames = {'yuan': '元', 'jiao': '角', 'fen': '分'};
 
   @override
   void initState() {
@@ -32,6 +43,71 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
     _carry = Money.carry;
     _digits = Money.digits;
     _loading = false;
+    _loadClients();
+  }
+
+  Future<void> _loadClients() async {
+    try {
+      final local = await LocalDb.getAllByName('clients');
+      if (mounted) setState(() => _clients = local);
+    } catch (_) {}
+  }
+
+  String _stageText(Map<String, dynamic> c) {
+    final cfg = normalizeRoundConfig(c['round_stage'], c['round_unit']);
+    return '${_stageNames[cfg.stage] ?? '不抹零'}${_unitNames[cfg.unit] ?? ''}';
+  }
+
+  Future<void> _editClientRounding(Map<String, dynamic> c) async {
+    final cfg = normalizeRoundConfig(c['round_stage'], c['round_unit']);
+    var stage = cfg.stage;
+    var unit = cfg.unit;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: Text('${c['name']} 抹零设置'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: stage,
+                decoration: const InputDecoration(labelText: '抹零方式'),
+                items: _stageNames.entries
+                    .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                    .toList(),
+                onChanged: (v) => setDlg(() => stage = v ?? stage),
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                initialValue: unit,
+                decoration: const InputDecoration(labelText: '抹零精度'),
+                items: _unitNames.entries
+                    .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                    .toList(),
+                onChanged: (v) => setDlg(() => unit = v ?? unit),
+              ),
+              const SizedBox(height: 6),
+              const Text('欠款按此口径计算（记录金额不变，仅欠款面抹零）', style: TextStyle(fontSize: 12)),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await Api.instance.patch('/clients/${c['id']}', {'round_stage': stage, 'round_unit': unit});
+      final updated = Map<String, dynamic>.from(c)..['round_stage'] = stage..['round_unit'] = unit;
+      await LocalDb.upsertOne('clients', updated);
+      if (mounted) setState(() => _clients = _clients.map((x) => '${x['id']}' == '${c['id']}' ? updated : x).toList());
+      toast(context, '已保存（欠款按新口径重算）');
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
   }
 
   Future<void> _save() async {
@@ -107,6 +183,30 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
                   onPressed: _saving ? null : _save,
                   child: Text(_saving ? '保存中…' : '保存'),
                 ),
+                if (_clients.isNotEmpty) ...[
+                  const SizedBox(height: 26),
+                  const Text('店铺结账抹零（欠款按各店设置计算）', style: TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  Text('记录金额不变，仅欠款面按店铺抹零方式/精度计算；点店铺修改', style: TextStyle(fontSize: 12, color: Theme.of(context).extension<TaozhuColors>()!.textSub)),
+                  const SizedBox(height: 6),
+                  Card(
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    child: Column(
+                      children: [
+                        for (final c in _clients)
+                          ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.store_outlined, size: 20, color: Color(0xFF409EFF)),
+                            title: Text('${c['name']}', style: const TextStyle(fontSize: 14)),
+                            subtitle: Text('抹零：${_stageText(c)}', style: const TextStyle(fontSize: 12)),
+                            trailing: const Icon(Icons.chevron_right, size: 18),
+                            onTap: () => _editClientRounding(c),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
     );

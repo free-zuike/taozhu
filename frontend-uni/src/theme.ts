@@ -34,6 +34,10 @@ export function getThemeMode(): ThemeMode {
 
 export function setThemeMode(m: ThemeMode) {
   uni.setStorageSync(MODE_KEY, m);
+  // 跨端同步明暗：上传服务器（其他端 WS 收到后应用；失败静默本地仍生效）
+  // eslint-disable-next-line @typescript-eslint/no-floating-promises
+  import('./api').then(({ request }) =>
+    request('/settings/theme_config', 'PUT', { theme_mode: m }).catch(() => {}));
 }
 
 /** 背景图案 id（''=渐变 / 'none'=纯色 / coin|bamboo|ledger|flow|ripple，对齐 App/Web） */
@@ -294,7 +298,7 @@ function pageBackgroundVars(primary: string, dark: boolean, skin: string): { pat
 export function useThemeVars() {
   const vars = ref<Record<string, string>>({ '--primary': defaultPrimary, '--page-bg': '#f5f7fa', '--card-bg': '#ffffff' });
   const patternSrc = ref('');
-  const load = () => {
+  const apply = () => {
     try {
       const primary = getThemePrimary();
       const dark = isDark();
@@ -337,10 +341,25 @@ export function useThemeVars() {
       console.warn('[theme] load 异常（保持默认变量）', e);
     }
   };
-  load();
-  onShow(load);
-  onThemeChange(load); // 系统明暗切换（follow 模式）→ 立即重算变量+tabBar
-  return { tv: vars, patternSrc, refresh: load };
+  apply();
+  // 跨端明暗同步：拉服务器 theme_mode（App/其他端改的明暗）→ 本地覆盖后重算（防"小程序黑色/App 浅色"不一致）
+  const syncMode = async () => {
+    try {
+      const { request } = await import('./api');
+      const d = await request<Record<string, any>>('/settings/theme_config', 'GET');
+      const tm = String(d.theme_mode || '');
+      if (tm && tm !== getThemeMode()) {
+        uni.setStorageSync(MODE_KEY, tm);
+        apply();
+      }
+    } catch (_) {}
+  };
+  onShow(() => {
+    apply();
+    syncMode();
+  });
+  onThemeChange(apply); // 系统明暗切换（follow 模式）→ 立即重算变量+tabBar
+  return { tv: vars, patternSrc, refresh: apply };
 }
 
 /** tabBar 深色适配：微信原生 tabBar 不随页面 CSS 变量，主题加载/切换时动态设置底部栏配色 */

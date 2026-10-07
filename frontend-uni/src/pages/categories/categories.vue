@@ -10,18 +10,33 @@
 
     <view v-for="c in top" :key="c.id" class="card">
       <view class="head">
-        <text class="name">{{ c.name }}</text>
+        <text class="name" @click="showCatItems(c)">{{ c.name }}</text>
         <text class="op" @click="openForm(c.id, c.name)">加子类</text>
         <text class="op" @click="openRename(c)">改名</text>
         <text class="del" @click="remove(c)">删除</text>
       </view>
       <view v-for="ch in childrenOf(c.id)" :key="ch.id" class="child">
-        <text class="ch-name">{{ ch.name }}</text>
+        <text class="ch-name" @click="showCatItems(ch)">{{ ch.name }}</text>
         <text class="op" @click="openRename(ch)">改名</text>
         <text class="del" @click="remove(ch)">删除</text>
       </view>
     </view>
     <view v-if="top.length === 0" class="empty">暂无分类，点上方新增</view>
+
+    <!-- 分类下商品/店铺查看弹层（点分类名称） -->
+    <view v-if="itemsDlg" class="mask" @click="itemsDlg = false">
+      <view class="sheet" @click.stop>
+        <text class="s-title">「{{ itemsTitle }}」分类{{ type === 'item' ? '商品' : '店铺' }}（{{ itemsList.length }}）</text>
+        <scroll-view scroll-y class="items-scroll">
+          <view v-for="(it, i) in itemsList" :key="i" class="it-row">
+            <text class="it-name">{{ it.name }}</text>
+            <text v-if="type === 'item' && it.priceLabel" class="it-price">{{ it.priceLabel }}</text>
+          </view>
+          <view v-if="itemsList.length === 0" class="empty">暂无{{ type === 'item' ? '商品' : '店铺' }}</view>
+        </scroll-view>
+        <button class="btn-save" @click="itemsDlg = false">关闭</button>
+      </view>
+    </view>
 
     <!-- 新增/重命名弹层 -->
     <view v-if="showForm" class="mask" @click="showForm = false">
@@ -53,6 +68,43 @@ const form = ref<{ title: string; name: string; id?: string; parentId?: string; 
 
 const top = computed(() => cats.value.filter((c) => !c.parent_id));
 const childrenOf = (id: string) => cats.value.filter((c) => c.parent_id === id);
+
+// 分类下商品/店铺查看（点分类名称）：item=商品列表（名称+首价格）；client=店铺列表
+const itemsDlg = ref(false);
+const itemsTitle = ref('');
+const itemsList = ref<Array<{ name: string; priceLabel?: string }>>([]);
+
+async function showCatItems(c: Cat) {
+  const ids = [c.id, ...childrenOf(c.id).map((x) => x.id)];
+  itemsTitle.value = c.name;
+  itemsDlg.value = true;
+  itemsList.value = [];
+  if (type.value === 'item') {
+    try {
+      const d = await request<{ items?: Array<{ id: string; name: string; category_id?: string | null; prices?: Array<{ unit: string; sale_price: number }> }> }>('/items', 'GET');
+      const all = d.items || [];
+      itemsList.value = all
+          .filter((it) => ids.includes(String(it.category_id || '')))
+          .map((it) => ({
+            name: it.name,
+            priceLabel: (it.prices || [])[0] ? `${(it.prices as Array<{ unit: string; sale_price: number }>)[0].unit}：售价 ¥${Number((it.prices as Array<{ unit: string; sale_price: number }>)[0].sale_price || 0).toFixed(2)}` : '',
+          }));
+    } catch (e) {
+      uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
+      itemsDlg.value = false;
+    }
+  } else {
+    try {
+      const d = await request<{ clients?: Array<{ id: string; name: string; category_id?: string | null }> }>('/clients', 'GET');
+      itemsList.value = (d.clients || [])
+          .filter((cl) => ids.includes(String(cl.category_id || '')))
+          .map((cl) => ({ name: cl.name }));
+    } catch (e) {
+      uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
+      itemsDlg.value = false;
+    }
+  }
+}
 
 onShow(async () => {
   if (!getToken()) {
@@ -148,6 +200,11 @@ async function remove(c: Cat) {
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
+.s-title { font-size: 30rpx; font-weight: 700; margin-bottom: 16rpx; display: block; }
+.items-scroll { max-height: 60vh; }
+.it-row { display: flex; align-items: center; justify-content: space-between; padding: 18rpx 8rpx; border-bottom: 1rpx solid var(--divider); }
+.it-name { font-size: 28rpx; color: var(--text-main); }
+.it-price { font-size: 24rpx; color: var(--text-sub); }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

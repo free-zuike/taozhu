@@ -158,27 +158,8 @@ class _PurchasePageState extends State<PurchasePage> {
     toast(context, '识别中…');
     final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
     _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
-    if (kIsWeb) {
-      setState(() => _pendingPhoto = bytes);
-    } else {
-      await _attachRecognized(bytes);
-    }
-    toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
-  }
-
-  /// 识别原图立即挂为本单凭证（App 本地优先）：写公共目录副本 + 引用表 + 入队上传，
-  /// 打开凭证查看器立即可见——与"整单凭证上传"同链路（单据级一份，全商品行共享）。
-  Future<void> _attachRecognized(Uint8List bytes) async {
-    try {
-      final fileName = '${md5.convert(bytes).toString()}.jpg';
-      final root = await getApplicationDocumentsDirectory();
-      final adir = Directory('${root.path}/attachments');
-      if (!adir.existsSync()) adir.createSync(recursive: true);
-      final af = File('${adir.path}/$fileName');
-      if (!af.existsSync()) await af.writeAsBytes(bytes);
-      await SyncService.enqueueAttachmentUpload(entity: 'purchase', id: _purchaseId, fileName: fileName);
-      SyncService.version.notifyListeners();
-    } catch (_) {}
+    setState(() => _pendingPhoto = bytes); // App/Web 一致：提交成功才挂载上传（取消不保留）
+    toast(context, '识别完成（原图将在提交后作为本单凭证）');
   }
 
   Future<void> _load() async {
@@ -1032,7 +1013,11 @@ class _PurchasePageState extends State<PurchasePage> {
         toast(context, '已保存');
         // 提交成功后才上传识别原图附件（Web）：新建用服务端返回的真实单据 id，
         // 编辑/批量直编用现有单 id——挂错 id 会导致 Web 端"附件看不到"
-        if (kIsWeb) unawaited(_uploadPending(_webPurchaseId.isNotEmpty ? _webPurchaseId : purchaseId, valid));
+        if (kIsWeb) unawaited(_uploadPending(
+            _webPurchaseId.isNotEmpty
+                ? _webPurchaseId
+                : (isDateRows && _orderIds.isNotEmpty ? _orderIds.first : purchaseId),
+            valid));
       } catch (e) {
         toast(context, e.toString().replaceFirst('Exception: ', ''));
       } finally {
@@ -1082,7 +1067,9 @@ class _PurchasePageState extends State<PurchasePage> {
     appLog('sync', '本地保存进货 ${valid.length} 行（${_editing ? '编辑' : '新增'}），已入队待推送${_pendingPhoto != null ? '，识别原图待上传为附件' : ''}', level: 'info');
     SyncService.version.notifyListeners();
     // 提交成功后才上传识别原图附件（App 本地写完入队后）
-    unawaited(_uploadPending(purchaseId, valid));
+    // 提交成功后才上传识别原图附件（App 本地写完入队后）；
+    // 批量直编挂真实原单 id（dateRows 无 _purchaseId 真实单，此前挂临时 id=进货历史查不到）
+    unawaited(_uploadPending(isDateRows && _orderIds.isNotEmpty ? _orderIds.first : purchaseId, valid));
     if (mounted) Navigator.pop(context, true);
     if (mounted) setState(() => _busy = false);
   }

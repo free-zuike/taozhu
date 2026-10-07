@@ -10,12 +10,13 @@ import 'api.dart';
 /// 全局主题模式（跟随系统 / 白天 / 黑夜），MaterialApp 监听切换
 final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.system);
 
-/// 切换主题模式并持久化（'system' | 'light' | 'dark'）
+/// 切换主题模式并持久化（'system' | 'light' | 'dark'）+ 跨端同步（小程序/Web 明暗跟随）
 Future<void> setThemeMode(ThemeMode mode) async {
   themeNotifier.value = mode;
   final p = await SharedPreferences.getInstance();
   final key = mode == ThemeMode.dark ? 'dark' : (mode == ThemeMode.light ? 'light' : 'system');
   await p.setString('theme_mode', key);
+  unawaited(pushTheme()); // 明暗模式上传（其他端 WS 收到后应用）
 }
 
 /// 启动时恢复上次主题模式（默认跟随系统）
@@ -309,7 +310,7 @@ class ThemeConfig extends ChangeNotifier {
     if (_applyingServer) return;
     try {
       await Api.instance.put('/settings/theme_config',
-          {'preset_id': _presetId, 'skin_id': _skinId, 'bg_enabled': _bgEnabled});
+          {'preset_id': _presetId, 'skin_id': _skinId, 'bg_enabled': _bgEnabled, 'theme_mode': themeNotifier.value.name});
       final p = await SharedPreferences.getInstance();
       await p.setBool(_kDirty, false);
       _dirtyCache = false;
@@ -327,14 +328,22 @@ class ThemeConfig extends ChangeNotifier {
       final sid = '${d['skin_id'] ?? ''}';
       final bg = d['bg_enabled'] == true;
       final hasBg = d.containsKey('bg_enabled') && d['bg_enabled'] is bool;
+      final tm = '${d['theme_mode'] ?? ''}';
       // 服务器无主题配置（从未设置过）→ 不覆盖本地：否则空值会关闭本地已开启的背景
-      if (pid.isEmpty && sid.isEmpty && !hasBg) return;
+      if (pid.isEmpty && sid.isEmpty && !hasBg && tm.isEmpty) return;
       var changed = false;
       if (pid.isNotEmpty && pid != _presetId) { _presetId = pid; changed = true; }
       if (sid.isNotEmpty && sid != _skinId) { _skinId = sid; changed = true; }
       if (hasBg && bg != _bgEnabled) { _bgEnabled = bg; changed = true; }
+      if (tm.isNotEmpty && tm != themeNotifier.value.name) {
+        themeNotifier.value = tm == 'dark'
+            ? ThemeMode.dark
+            : (tm == 'light' ? ThemeMode.light : ThemeMode.system);
+        changed = true;
+      }
       if (changed) {
         final p = await SharedPreferences.getInstance();
+        await p.setString('theme_mode', themeNotifier.value.name);
         await p.setString(_kPreset, _presetId);
         await p.setString(_kSkin, _skinId);
         await p.setBool(_kBg, _bgEnabled);

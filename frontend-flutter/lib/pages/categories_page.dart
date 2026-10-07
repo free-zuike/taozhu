@@ -249,6 +249,60 @@ class _CategoriesPageState extends State<CategoriesPage> {
     );
   }
 
+  /// 查看该分类下商品/店铺（弹层列表）：商品按本地 items 镜像 category_id 匹配（一级=含子分类）；
+  /// 店铺按 clients 镜像 category_id 匹配。
+  Future<void> _viewItems(Map<String, dynamic> c) async {
+    final ids = <String>{'${c['id']}'};
+    for (final ch in _childrenOf('${c['id']}')) ids.add('${ch['id']}');
+    final isItem = _type == 'item';
+    final src = isItem
+        ? await LocalDb.getAllByName('items')
+        : await LocalDb.getAllByName('clients');
+    final rows = src.where((x) => ids.contains('${x['category_id'] ?? ''}')).toList();
+    if (!mounted) return;
+    if (rows.isEmpty) { toast(context, '该分类下暂无${isItem ? '商品' : '店铺'}'); return; }
+    await showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+              child: Text('「${c['name']}」分类${isItem ? '商品' : '店铺'}（${rows.length} 个）',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final r in rows)
+                    ListTile(
+                      dense: true,
+                      leading: Icon(isItem ? Icons.inventory_2_outlined : Icons.store_outlined,
+                          size: 20, color: const Color(0xFF409EFF)),
+                      title: Text('${r['name']}', style: const TextStyle(fontSize: 14)),
+                      subtitle: isItem ? _itemPriceText(r) : null,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 商品镜像的首单位价格文本（prices 数组首项：单位+售价）
+  Widget _itemPriceText(Map<String, dynamic> it) {
+    final prices = (it['prices'] as List?) ?? const [];
+    if (prices.isEmpty) return const Text('（无价格）', style: TextStyle(fontSize: 12));
+    final p = (prices.first as Map);
+    return Text('${p['unit'] ?? '件'}：售价 ¥${(p['sale_price'] as num?)?.toStringAsFixed(2) ?? '0.00'}',
+        style: const TextStyle(fontSize: 12));
+  }
+
   Widget _itemTile(Map<String, dynamic> c, {required bool indent}) {
     final isParent = _childrenOf('${c['id']}').isNotEmpty;
     final collapsed = _collapsed.contains('${c['id']}');
@@ -280,6 +334,11 @@ class _CategoriesPageState extends State<CategoriesPage> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            IconButton(
+              icon: const Icon(Icons.view_list_outlined, size: 20),
+              tooltip: '查看该分类下${_type == 'item' ? '商品' : '店铺'}',
+              onPressed: () => _viewItems(c),
+            ),
             if (isParent && !indent)
               Icon(collapsed ? Icons.expand_more : Icons.expand_less, size: 20, color: _c.textSub),
             IconButton(

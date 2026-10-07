@@ -15,9 +15,13 @@
       </view>
 
       <view class="dates">
-        <input class="ipt" v-model="from" placeholder="开始日期" />
+        <picker class="ipt" mode="date" fields="month" :value="from.slice(0, 7)" @change="onFrom">
+          <view class="date-pick">{{ from.slice(0, 7) }}</view>
+        </picker>
         <text class="to">至</text>
-        <input class="ipt" v-model="to" placeholder="结束日期" />
+        <picker class="ipt" mode="date" fields="month" :value="to.slice(0, 7)" @change="onTo">
+          <view class="date-pick">{{ to.slice(0, 7) }}</view>
+        </picker>
       </view>
 
       <button class="btn-save" :disabled="loading" @click="load">{{ loading ? '生成中…' : '生成对账单' }}</button>
@@ -66,7 +70,7 @@ const clientNames = ref<string[]>(['全部店铺']);
 const clientName = ref('全部店铺');
 let clientId = '';
 
-const period = ref<'month' | 'last'>('month');
+const period = ref<'month' | 'last' | 'custom'>('month');
 const from = ref('');
 const to = ref('');
 const loading = ref(false);
@@ -99,6 +103,28 @@ function today(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/// 年月直接选择（对齐"直接选年月"）：开始月=该月 1 号，结束月=该月最后一天
+function onFrom(e: { detail: { value: string } }) {
+  const v = e.detail.value; // YYYY-MM
+  if (!v) return;
+  from.value = `${v}-01`;
+  const end = monthEnd(v);
+  if (!to.value || to.value.slice(0, 7) < v) to.value = end;
+  period.value = 'custom';
+}
+function onTo(e: { detail: { value: string } }) {
+  const v = e.detail.value;
+  if (!v) return;
+  to.value = monthEnd(v);
+  if (!from.value || from.value.slice(0, 7) > v) from.value = `${v}-01`;
+  period.value = 'custom';
+}
+function monthEnd(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return `${y}-${String(m).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
 }
 
 function applyPeriod(p: 'month' | 'last') {
@@ -217,6 +243,7 @@ function copyCsv() {
 .seg-item.active { color: var(--primary); font-weight: bold; background: var(--primary-soft); }
 .dates { display: flex; align-items: center; gap: 12rpx; margin-bottom: 20rpx; }
 .ipt { flex: 1; background: var(--input-bg); border-radius: 12rpx; padding: 16rpx 20rpx; font-size: 26rpx; }
+.date-pick { color: var(--text-main); }
 .to { color: var(--text-sub); }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; margin-bottom: 20rpx; }
 .btn-copy { background: var(--card-bg); border: 1rpx solid var(--primary); color: var(--primary); border-radius: 12rpx; font-size: 28rpx; margin-top: 12rpx; }

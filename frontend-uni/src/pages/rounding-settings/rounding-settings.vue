@@ -27,6 +27,19 @@
     </view>
 
     <button class="btn" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+
+    <view class="group-title">店铺结账抹零（欠款按各店设置计算）</view>
+    <view class="tip">记录金额不变，仅欠款面按店铺抹零方式/精度计算；点店铺修改</view>
+    <view class="card">
+      <view class="b-row" v-for="c in clients" :key="c.id" @click="editClientRounding(c)">
+        <view class="b-left">
+          <text class="r-tx">{{ c.name }}</text>
+          <text class="r-sub">抹零：{{ stageLabel(c.round_stage, c.round_unit) }}</text>
+        </view>
+        <text class="r-arrow">›</text>
+      </view>
+      <view v-if="clients.length === 0" class="tip">暂无店铺</view>
+    </view>
   </view>
 </template>
 
@@ -51,6 +64,41 @@ const digitOpts = [
 const carry = ref(0.5);
 const digits = ref(2);
 const saving = ref(false);
+const clients = ref<Array<Record<string, any>>>([]);
+
+const stageNames = ['不抹零', '每单抹零', '按天抹零', '结账抹零'];
+const stageValues = ['none', 'txn', 'day', 'total'];
+const unitNames = ['元', '角', '分'];
+const unitValues = ['yuan', 'jiao', 'fen'];
+const stageLabel = (s: any, u: any) => {
+  const si = stageValues.indexOf(String(s || 'none'));
+  const ui = unitValues.indexOf(String(u || 'yuan'));
+  return `${stageNames[si >= 0 ? si : 0]}${unitNames[ui >= 0 ? ui : 0]}`;
+};
+
+/// 店铺抹零设置：先选方式再选精度（对齐 App 店铺编辑弹窗两个下拉）
+function editClientRounding(c: Record<string, any>) {
+  uni.showActionSheet({
+    itemList: stageNames,
+    success: (r1) => {
+      const stage = stageValues[r1.tapIndex] || 'none';
+      uni.showActionSheet({
+        itemList: unitNames,
+        success: async (r2) => {
+          const unit = unitValues[r2.tapIndex] || 'yuan';
+          try {
+            await request(`/clients/${c.id}`, 'PATCH', { round_stage: stage, round_unit: unit });
+            c.round_stage = stage;
+            c.round_unit = unit;
+            uni.showToast({ title: '已保存（欠款按新口径重算）', icon: 'success' });
+          } catch (e) {
+            uni.showToast({ title: (e as Error).message || '保存失败', icon: 'none' });
+          }
+        },
+      });
+    },
+  });
+}
 
 onShow(async () => {
   if (!getToken()) {
@@ -66,6 +114,11 @@ onShow(async () => {
       carry.value = Number(d.carry) || 0.5;
       digits.value = [0, 1, 2].includes(Number(d.digits)) ? Number(d.digits) : 2;
     }
+  } catch (_) {}
+  // 店铺抹零列表（欠款按各店口径；本地优先渲染+后台核对）
+  try {
+    const dc = await request<{ clients: Array<Record<string, any>> }>('/clients', 'GET');
+    clients.value = dc.clients || [];
   } catch (_) {}
 });
 
@@ -92,6 +145,10 @@ async function save() {
 .card { background: var(--card-bg, #fff); border: 1px solid var(--card-border, #eee); border-radius: 24rpx; padding: 10rpx 24rpx; }
 .tip { font-size: 25rpx; color: var(--text-sub, #8a8f98); line-height: 1.6; padding: 16rpx 4rpx; }
 .b-row { display: flex; align-items: center; justify-content: space-between; padding: 24rpx 4rpx; border-bottom: 1px solid var(--card-border, #f2f3f5); }
+.b-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6rpx; }
+.r-tx { font-size: 30rpx; color: var(--text-main); }
+.r-sub { font-size: 24rpx; color: var(--text-sub); }
+.r-arrow { font-size: 32rpx; color: var(--text-sub); margin-left: 16rpx; }
 .b-row:last-child { border-bottom: none; }
 .r-tx { font-size: 28rpx; color: var(--text-main, #222); }
 .radio { width: 36rpx; height: 36rpx; border-radius: 50%; border: 3rpx solid #c8ccd4; box-sizing: border-box; }
