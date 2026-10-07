@@ -10,15 +10,18 @@
 
     <view v-for="c in top" :key="c.id" class="card">
       <view class="head">
+        <view class="cat-ic"><text class="mi">&#xe2c7;</text></view>
         <text class="name" @click="showCatItems(c)">{{ c.name }}</text>
-        <text class="op" @click="openForm(c.id, c.name)">加子类</text>
-        <text class="op" @click="openRename(c)">改名</text>
-        <text class="del" @click="remove(c)">删除</text>
+        <text class="view-hint" @click="showCatItems(c)">查看</text>
+        <text class="mi op-ic" @click="openForm(c.id, c.name)">&#xe145;</text>
+        <text class="mi op-ic" @click="openRename(c)">&#xe3c9;</text>
+        <text class="mi op-ic op-del" @click="remove(c)">&#xe92e;</text>
       </view>
       <view v-for="ch in childrenOf(c.id)" :key="ch.id" class="child">
+        <text class="mi sub-ic">&#xe2c7;</text>
         <text class="ch-name" @click="showCatItems(ch)">{{ ch.name }}</text>
-        <text class="op" @click="openRename(ch)">改名</text>
-        <text class="del" @click="remove(ch)">删除</text>
+        <text class="mi op-ic" @click="openRename(ch)">&#xe3c9;</text>
+        <text class="mi op-ic op-del" @click="remove(ch)">&#xe92e;</text>
       </view>
     </view>
     <view v-if="top.length === 0" class="empty">暂无分类，点上方新增</view>
@@ -191,11 +194,15 @@ async function remove(c: Cat) {
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
 .card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; margin-bottom: 12rpx; }
-.name { font-size: 30rpx; font-weight: bold; }
-.child { display: flex; align-items: center; padding: 10rpx 0 10rpx 32rpx; border-top: 1rpx solid var(--divider); }
-.ch-name { font-size: 28rpx; }
-.op { margin-left: 24rpx; color: var(--primary); font-size: 26rpx; }
-.del { margin-left: 24rpx; color: #f56c6c; font-size: 26rpx; }
+.cat-ic { width: 52rpx; height: 52rpx; border-radius: 14rpx; background: var(--primary-soft); display: flex; align-items: center; justify-content: center; margin-right: 14rpx; flex-shrink: 0; }
+.cat-ic .mi { font-size: 28rpx; }
+.name { font-size: 30rpx; font-weight: bold; flex: 1; min-width: 0; }
+.view-hint { font-size: 22rpx; color: var(--primary); margin-right: 12rpx; flex-shrink: 0; }
+.op-ic { font-size: 30rpx; color: var(--text-sub); margin-left: 20rpx; flex-shrink: 0; }
+.op-ic.op-del { color: #f56c6c; }
+.child { display: flex; align-items: center; padding: 10rpx 0 10rpx 14rpx; border-top: 1rpx solid var(--divider); }
+.sub-ic { font-size: 26rpx; color: var(--text-sub); margin-right: 10rpx; flex-shrink: 0; }
+.ch-name { font-size: 28rpx; flex: 1; min-width: 0; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }

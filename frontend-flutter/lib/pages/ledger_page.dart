@@ -227,6 +227,40 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
+  /// 交易列表与顶部统计联动：滚动时按视口内最顶部日期头切统计月份（对齐 0.17.316 联动，
+  /// 0.17.317 因"整体移动滑动变月"移除；用户现明确要求恢复联动）
+  bool _syncMonthWithScroll(ScrollNotification n) {
+    if (n is ScrollStartNotification || n is ScrollUpdateNotification || n is ScrollEndNotification) {
+      _syncMonthFromViewport();
+    }
+    return false;
+  }
+
+  void _syncMonthFromViewport() {
+    double? bestTop;
+    String? bestDate;
+    for (final e in _dateHeaderKeys.entries) {
+      final ctx = e.value.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject();
+      if (box is! RenderBox) continue;
+      final top = box.localToGlobal(Offset.zero).dy;
+      if (top > -40 && top < 120 && (bestTop == null || top < bestTop)) {
+        bestTop = top;
+        bestDate = e.key;
+      }
+    }
+    if (bestDate == null || bestDate.length < 7) return;
+    final y = int.tryParse(bestDate.substring(0, 4));
+    final m = int.tryParse(bestDate.substring(5, 7));
+    if (y == null || m == null) return;
+    if (y != _selYear || m != _selMonth) {
+      _selYear = y;
+      _selMonth = m;
+      _loadMonthly();
+    }
+  }
+
   static String _fmtDate(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
@@ -1517,9 +1551,11 @@ class _LedgerPageState extends State<LedgerPage> {
     for (final l in lines) {
       (grouped['${l['date']}'] ??= []).add(l);
     }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView(
+    return NotificationListener<ScrollNotification>(
+      onNotification: _syncMonthWithScroll,
+      child: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
         controller: _flowCtrl,
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
         children: [
@@ -1556,6 +1592,7 @@ class _LedgerPageState extends State<LedgerPage> {
           ],
         ],
       ),
+    ),
     );
   }
 
