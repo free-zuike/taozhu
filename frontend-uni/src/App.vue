@@ -2,7 +2,21 @@
 import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
 import { startWs, stopWs } from "./ws";
 import { getToken } from "./api";
+// 加载 Material Icons 字体（与 App 端同款字体，码点一致——小程序图标与 App 完全一致）
+function loadIconFont() {
+  // @ts-expect-error 各平台 loadFontFace 挂载点（uni/wx/tt/qq…）
+  const api = typeof wx !== 'undefined' ? wx : (typeof uni !== 'undefined' ? uni : null);
+  if (api?.loadFontFace) {
+    api.loadFontFace({
+      family: 'MaterialIcons',
+      source: 'url("/static/fonts/MaterialIcons-Regular.woff2")',
+      global: true,
+      fail: () => {},
+    });
+  }
+}
 onLaunch(() => {
+  loadIconFont();
   // 已登录则启动实时同步（其他端删除/修改 → WS 通知 → 当前页自动刷新）
   if (getToken()) startWs();
 });
@@ -22,5 +36,23 @@ onHide(() => {
 .page {
   position: relative;
   z-index: 0;
+}
+
+/* Material Icons（与 App 端同款字体/码点）：图标一致铁律——
+   页面内图标统一用 <text class="mi">（unicode 码点），H5 端走 @font-face，小程序端 wx.loadFontFace */
+@font-face {
+  font-family: 'MaterialIcons';
+  src: url('/static/fonts/MaterialIcons-Regular.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+}
+.mi {
+  font-family: 'MaterialIcons';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 32rpx;
+  line-height: 1;
+  display: inline-block;
+  -webkit-font-smoothing: antialiased;
 }
 </style>

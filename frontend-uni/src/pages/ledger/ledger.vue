@@ -36,12 +36,14 @@
       <!-- 按日期分组 + 商品明细行平铺（对齐 App：日期头 + 流水行卡片） -->
       <view v-for="g in saleGroups" :key="g.date">
         <view class="day-bar" :data-date="g.date" @click="openSaleBatch(g.date)">
+          <text class="mi day-ic">&#xe742;</text>
           <text class="day-name">{{ g.week }}</text>
           <text class="day-total">{{ g.count }} 件 · 合计 ¥{{ fmtNum(g.amount) }}</text>
+          <text class="mi day-arrow">&#xe5cc;</text>
         </view>
         <view v-for="l in g.lines" :key="l.key" class="card-sale" :class="profitClass(l)" @click="editSaleLine(l)" @longpress="deleteSaleLine(l)">
           <view class="line-top">
-            <view class="store-ic"><text class="st-tx">🏪</text></view>
+            <view class="store-ic"><text class="mi st-tx">&#xeA12;</text></view>
             <view class="line-main">
               <!-- ① 商品名+备注（全店视图才前缀店名，选中店铺不显示——对齐 App） -->
               <text class="line-name">{{ filterClientId ? l.item_name : (l.client_name ? l.client_name + ' · ' + l.item_name : l.item_name) }}<text class="line-note" v-if="l.note">  {{ l.note }}</text></text>
@@ -849,8 +851,10 @@ async function removePayment(p: Record<string, any>) {
 .sub { font-size: 26rpx; color: var(--text-sub); margin-bottom: 12rpx; }
 /* 出货流水：日期头 + 行级卡片（对齐 App _saleLineTile：圆角10 + 1px 描边无阴影 + 盈亏着色） */
 .day-bar { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 8rpx 10rpx; }
-.day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); }
+.day-ic { color: var(--primary); font-size: 28rpx; margin-right: 8rpx; }
+.day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); flex: 1; }
 .day-total { font-size: 23rpx; color: var(--text-sub); }
+.day-arrow { color: var(--text-sub); font-size: 30rpx; margin-left: 8rpx; }
 .card-sale { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 16rpx 18rpx; margin-bottom: 12rpx; box-shadow: none; }
 .card-sale.profit-win { border-color: rgba(34, 197, 94, 0.4); }
 .card-sale.profit-loss { border-color: rgba(239, 68, 68, 0.4); }

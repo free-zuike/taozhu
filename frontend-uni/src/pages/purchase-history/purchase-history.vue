@@ -23,8 +23,10 @@
     <!-- 进货流水：按日期分组 + 行级卡片平铺（对齐 App 出货/进货流式列表） -->
     <view v-for="g in buyGroups" :key="g.date">
       <view class="day-bar" @click="openBuyBatch(g.date)">
+        <text class="mi day-ic">&#xe742;</text>
         <text class="day-name">{{ g.week }}</text>
         <text class="day-total">{{ g.count }} 件 · 合计 ¥{{ fmt(g.amount) }}</text>
+        <text class="mi day-arrow">&#xe5cc;</text>
       </view>
       <view v-for="l in g.lines" :key="l.key" class="card-buy" @click="editBuyLine(l)" @longpress="deleteBuyLine(l)">
         <view class="head">
@@ -620,8 +622,10 @@ async function loadAttachCounts() {
 /* 进货流水：日期头 + 行级卡片（对齐 App 流式列表；与出货流水同构） */
 .flow { height: calc(100vh - 260rpx); }
 .day-bar { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 8rpx 10rpx; }
-.day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); }
+.day-ic { color: var(--primary); font-size: 28rpx; margin-right: 8rpx; }
+.day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); flex: 1; }
 .day-total { font-size: 23rpx; color: var(--text-sub); }
+.day-arrow { color: var(--text-sub); font-size: 30rpx; margin-left: 8rpx; }
 .card-buy { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 20rpx 22rpx; margin-bottom: 12rpx; box-shadow: none; }
 .buy-line1 { display: flex; align-items: baseline; gap: 14rpx; margin-bottom: 6rpx; }
 .l2-tx { font-size: 23rpx; color: var(--text-sub); }

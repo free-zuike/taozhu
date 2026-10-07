@@ -31,7 +31,7 @@ class DateField extends StatelessWidget {
     this.lastDate,
     this.icon,
     this.focusColor,
-    this.compact = false,
+    this.compact = true,
     this.showSuffixIcon = true,
     this.filled = true,
     this.onChanged,

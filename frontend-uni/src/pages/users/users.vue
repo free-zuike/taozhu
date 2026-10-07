@@ -7,32 +7,38 @@
       <view :class="['seg-tab-item', { active: tab === 'users' }]" @click="tab = 'users'">账号管理</view>
     </view>
 
-    <!-- 账号设置（对齐 App 成员页「账号设置」tab 内联：点 tab 直接查看，不再多点一层入口） -->
+    <!-- 账号设置（对齐 App AccountSettingsPage embed：头像卡 + 账号组 4 行，点 tab 直接查看） -->
     <view v-if="tab === 'account'">
       <view class="avatar-card" @click="changeAvatar">
         <image v-if="avatarUrl" class="avatar-img" :src="avatarUrl" mode="aspectFill" />
         <view v-else class="avatar-ph">{{ (name || '陶').slice(0, 1) }}</view>
         <view class="avatar-info">
-          <text class="a-name">{{ name }}</text>
-          <text class="a-sub">{{ roleText }} · {{ account }}</text>
+          <text class="a-name">{{ name || (roleText === '店员' ? '店员账号' : '老板账号') }}</text>
+          <text class="a-sub">点击头像或右上角信息可修改</text>
         </view>
-        <text class="a-arrow">›</text>
+        <text class="a-cam">📷</text>
       </view>
 
-      <view class="group-title">账号设置</view>
+      <view class="group-title">账号</view>
       <view class="grp">
-        <view class="s-row" @click="changeAvatar">
-          <view class="r-ic ic-blue"><text class="ic-tx">🖼️</text></view><view class="r-body"><text class="r-tx">头像</text><text class="r-sub">拍照 / 从相册选择更换</text></view><text class="r-arrow">›</text>
+        <view class="s-row">
+          <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE006;</text></view>
+          <view class="r-body"><text class="r-tx">登录账号</text><text class="r-sub">{{ account || '—' }}</text></view>
         </view>
         <view class="s-row" @click="changeUsername">
-          <view class="r-ic ic-green"><text class="ic-tx">✏️</text></view><view class="r-body"><text class="r-tx">用户名</text><text class="r-sub">显示用名称，1-30 字</text></view><text class="r-arrow">›</text>
+          <view class="r-ic ic-green"><text class="mi ic-tx">&#xEA67;</text></view>
+          <view class="r-body"><text class="r-tx">用户名</text><text class="r-sub">{{ name || '—' }}</text></view>
+          <text class="r-arrow">›</text>
         </view>
         <view class="s-row" @click="changePassword">
-          <view class="r-ic ic-orange"><text class="ic-tx">🔑</text></view><view class="r-body"><text class="r-tx">修改密码</text><text class="r-sub">验证旧密码，新密码至少 6 位</text></view><text class="r-arrow">›</text>
+          <view class="r-ic ic-orange"><text class="mi ic-tx">&#xEADE;</text></view>
+          <view class="r-body"><text class="r-tx">修改密码</text><text class="r-sub">需验证当前密码</text></view>
+          <text class="r-arrow">›</text>
         </view>
         <view class="s-row" @click="toggleTotp">
-          <view class="r-ic ic-purple"><text class="ic-tx">🛡️</text></view><view class="r-body"><text class="r-tx">两步验证（2FA）</text><text class="r-sub">{{ totpOn ? '已开启，点击关闭' : '验证器扫码/密钥开启' }}</text></view>
-          <text class="state-tag" :class="totpOn ? 'on' : 'off'">{{ totpOn ? '已开启' : '未开启' }}</text>
+          <view class="r-ic ic-purple"><text class="mi ic-tx">&#xE8E8;</text></view>
+          <view class="r-body"><text class="r-tx">两步验证</text><text class="r-sub">{{ totpOn ? '已开启（登录需验证码）' : '未开启（建议开启）' }}</text></view>
+          <text class="r-arrow">›</text>
         </view>
       </view>
     </view>
@@ -94,8 +100,8 @@ interface User { id: string; username: string; role: string; display_name?: stri
 const users = ref<User[]>([]);
 const showForm = ref(false);
 const saving = ref(false);
-// 页面分段：账号设置 / 账号管理（对齐 App 成员页双 Tab；默认账号管理=用户常看的列表）
-const tab = ref<'account' | 'users'>('users');
+// 页面分段：账号设置 / 账号管理（对齐 App 成员页双 Tab；默认账号设置=本人信息，账号管理=成员列表）
+const tab = ref<'account' | 'users'>('account');
 const form = ref<{ id?: string; username: string; password: string; role: string }>({
   id: undefined, username: '', password: '', role: 'staff',
 });
@@ -389,6 +395,7 @@ function remove(u: User) {
 .a-name { font-size: 32rpx; font-weight: bold; color: var(--text-main); }
 .a-sub { font-size: 24rpx; color: var(--text-sub); }
 .a-arrow { font-size: 36rpx; color: var(--text-sub); }
+.a-cam { font-size: 36rpx; color: var(--primary); }
 .group-title { font-size: 26rpx; font-weight: 600; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; }
 .grp { background: var(--card-bg); border: var(--card-border); border-radius: 32rpx; margin-bottom: 24rpx; overflow: hidden; }
 .s-row { display: flex; align-items: center; padding: 24rpx; border-bottom: 1rpx solid var(--divider); }

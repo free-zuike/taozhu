@@ -22,25 +22,33 @@
     <!-- AI 识别状态（识别中 / 语音原文） -->
     <view v-if="aiBusy" class="ai-tip">{{ aiTip }}</view>
 
-    <view v-for="(row, i) in rows" :key="i" class="row">
-      <view class="row-main">
-        <picker class="picker" mode="selector" :range="itemNames" @change="(e) => onItem(i, e.detail.value)">
-          <view class="mini-field">{{ row.itemName || '选商品' }}</view>
-        </picker>
-        <picker class="picker" mode="selector" :range="row.priceLabels" @change="(e) => onPrice(i, e.detail.value)">
-          <view class="mini-field">{{ row.priceLabel || '单位' }}</view>
-        </picker>
-        <input class="num" type="digit" v-model="row.quantity" placeholder="数量" />
-        <input class="num" type="digit" v-model="row.purchasePrice" placeholder="进价" />
-        <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折${row.countUnit}`" />
-        <picker class="date-pick" mode="date" :value="row.happenedAt || date" @change="(e) => (row.happenedAt = e.detail.value)">
-          <view class="mini-field">{{ row.happenedAt ? row.happenedAt.slice(5) : '日期' }}</view>
-        </picker>
-        <text class="amt">¥{{ rowAmount(row) }}</text>
-        <text class="ins" @click="insertRow(i)">插</text>
-        <text class="del" @click="rows.splice(i, 1)">删</text>
+    <view v-for="(row, i) in rows" :key="i">
+      <view class="ins-bar" @click="insertRow(i)">
+        <view class="ins-line"></view><text class="ins-tx">＋ 在此上方插入</text><view class="ins-line"></view>
       </view>
-      <input class="row-note" v-model="row.note" placeholder="行备注（选填）" />
+      <view class="row-card">
+        <view class="head-row">
+          <text class="idx">{{ i + 1 }}</text>
+          <picker class="goods-pick" mode="selector" :range="itemNames" @change="(e) => onItem(i, e.detail.value)">
+            <view class="goods-field" :class="{ ph: !row.itemName }">{{ row.itemName || '选商品（可输入或选择）' }}</view>
+          </picker>
+          <text v-if="row.rowId" class="att-btn" @click.stop="showAttach('purchase_item', row.rowId, 'purchase', row.orderId)"><text class="mi">&#xe3f4;</text></text>
+          <text class="del" @click="rows.splice(i, 1)">删</text>
+        </view>
+        <picker class="price-pick" mode="selector" :range="row.priceLabels" @change="(e) => onPrice(i, e.detail.value)">
+          <view class="price-field" :class="{ ph: !row.priceLabel }">{{ row.priceLabel || '单位 / 价格' }}</view>
+        </picker>
+        <picker class="date-pick" mode="date" :value="row.happenedAt || date" @change="(e) => (row.happenedAt = e.detail.value)">
+          <view class="row-date">该行日期：{{ (row.happenedAt || date).slice(5) }}　点此修改</view>
+        </picker>
+        <view class="num-row">
+          <input class="num" type="digit" v-model="row.quantity" placeholder="数量" />
+          <input class="num" type="digit" v-model="row.purchasePrice" placeholder="进价（可直接改）" />
+        </view>
+        <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折合 ${row.countUnit} 数`" />
+        <view class="amt-line">金额 <text class="amt">¥{{ rowAmount(row) }}</text></view>
+        <input class="row-note" v-model="row.note" placeholder="行备注（选填）" />
+      </view>
     </view>
     <input class="ipt-note" v-model="note" placeholder="整单备注（选填，如：供应商/送货单号…）" />
 
@@ -77,6 +85,27 @@
         </view>
       </view>
     </view>
+
+    <!-- 附件查看/上传/删除：全屏大图查看器（对齐 App：点击直接全屏，有图看大图，无图全屏空态可添加） -->
+    <view v-if="attach.show" class="viewer" @click.stop>
+      <swiper v-if="attach.list.length > 0" class="viewer-swiper" :current="attach.index" @change="onViewerChange">
+        <swiper-item v-for="a in attach.list" :key="a.key">
+          <image class="viewer-img" :src="attachmentUrl(a.key)" mode="aspectFit" @click.stop />
+        </swiper-item>
+      </swiper>
+      <view v-else class="viewer-empty">
+        <text class="viewer-empty-tx">暂无凭证，点上方「添加」上传</text>
+      </view>
+      <view class="viewer-top">
+        <text class="viewer-close" @click="closeAttach">✕</text>
+        <text class="viewer-count">{{ attach.list.length > 0 ? attach.index + 1 + '/' + attach.list.length : '' }}</text>
+        <view class="viewer-ops">
+          <text class="viewer-op" @click="uploadAttach">添加</text>
+          <text v-if="attach.list.length > 0" class="viewer-op" @click="downloadAttach">下载</text>
+          <text v-if="attach.list.length > 0" class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -85,7 +114,7 @@ import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { computed, ref } from 'vue';
 import { onLoad, onShow, onHide } from '@dcloudio/uni-app';
-import { request, getToken, uploadAi, uploadAttachment } from '../../api';
+import { request, getToken, uploadAi, uploadAttachment, getAttachments, deleteAttachment, attachmentUrl } from '../../api';
 import { fmtAmount, initRounding } from '../../utils/money';
 import { onWs, offWs } from '../../ws';
 
@@ -259,6 +288,106 @@ function addRow() {
 /// 在该行上方插入一行（补识别漏行/调整顺序与图片一致；对齐 App 行内插入）
 function insertRow(i: number) {
   rows.value.splice(i, 0, { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
+}
+
+// ── 行级凭证附件（对齐 App 行头附件按钮：点击直接全屏查看器，可添加/下载/删除）──
+const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number }>({
+  show: false, entity: '', id: '', list: [], index: 0,
+});
+
+async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') {
+  attach.value = { show: true, entity, id, list: [], index: 0 };
+  let list: Array<{ key: string }> = [];
+  try {
+    const d = await getAttachments(entity, id);
+    list = d.attachments || [];
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '加载凭证失败', icon: 'none' });
+    return;
+  }
+  if (list.length === 0 && fbEntity && fbId) {
+    try {
+      const d = await getAttachments(fbEntity, fbId);
+      list = d.attachments || [];
+    } catch (_) {}
+  }
+  attach.value.list = list;
+}
+
+function closeAttach() {
+  attach.value.show = false;
+}
+
+function onViewerChange(e: { detail: { current: number } }) {
+  attach.value.index = e.detail.current;
+}
+
+function uploadAttach() {
+  uni.chooseImage({
+    count: 1,
+    sourceType: ['camera', 'album'],
+    success: async (res) => {
+      const path = res.tempFilePaths?.[0];
+      if (!path) return;
+      try {
+        const d = await uploadAttachment(attach.value.entity, attach.value.id, path);
+        attach.value.list.push({ key: d.key });
+        uni.showToast({ title: '已添加', icon: 'success' });
+      } catch (e) {
+        uni.showToast({ title: (e as Error).message || '上传失败', icon: 'none' });
+      }
+    },
+  });
+}
+
+function downloadAttach() {
+  const it = attach.value.list[attach.value.index];
+  if (!it) return;
+  uni.showLoading({ title: '下载中…' });
+  uni.downloadFile({
+    url: attachmentUrl(it.key),
+    success(res) {
+      if (res.statusCode !== 200) {
+        uni.hideLoading();
+        uni.showToast({ title: '下载失败', icon: 'none' });
+        return;
+      }
+      uni.saveImageToPhotosAlbum({
+        filePath: res.tempFilePath,
+        success() {
+          uni.hideLoading();
+          uni.showToast({ title: '已保存到相册', icon: 'success' });
+        },
+        fail(e) {
+          uni.hideLoading();
+          uni.showToast({ title: e.errMsg?.includes('auth') ? '需要相册权限' : '保存失败', icon: 'none' });
+        },
+      });
+    },
+    fail() {
+      uni.hideLoading();
+      uni.showToast({ title: '下载失败', icon: 'none' });
+    },
+  });
+}
+
+async function removeAttach(key: string) {
+  uni.showModal({
+    title: '删除凭证',
+    content: '确定删除这张凭证图片吗？',
+    success: async (r) => {
+      if (!r.confirm) return;
+      try {
+        await deleteAttachment(key);
+        const idx = attach.value.list.findIndex((a) => a.key === key);
+        attach.value.list = attach.value.list.filter((a) => a.key !== key);
+        if (idx >= 0 && attach.value.index >= idx && attach.value.index > 0) attach.value.index -= 1;
+        uni.showToast({ title: '已删除', icon: 'success' });
+      } catch (e) {
+        uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
+      }
+    },
+  });
 }
 
 const skippedRef = ref(0); // dateRows 加载被跳过的商品行数（商品已删/停用）
@@ -663,20 +792,42 @@ async function submit() {
 .row {
   background: var(--card-bg); border-radius: 12rpx; padding: 16rpx; margin-bottom: 12rpx;
 }
-.row-main { display: flex; align-items: center; gap: 12rpx; }
+/* 行卡片（对齐 App purchase_page：商品名/单位/行日期/数量进价分行） */
+.row-card { background: var(--card-bg); border-radius: 16rpx; padding: 18rpx 20rpx; margin-bottom: 14rpx; }
+.head-row { display: flex; align-items: center; gap: 12rpx; }
+.idx { width: 44rpx; height: 44rpx; border-radius: 12rpx; background: var(--primary-soft); color: var(--primary); font-size: 24rpx; font-weight: bold; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.goods-pick { flex: 1; min-width: 0; }
+.goods-field { background: var(--input-bg); border-radius: 10rpx; padding: 16rpx 18rpx; font-size: 28rpx; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.goods-field.ph { color: var(--text-sub); }
+.att-btn { color: #409EFF; padding: 6rpx; font-size: 34rpx; }
+.price-pick { margin-top: 12rpx; }
+.price-field { background: var(--input-bg); border-radius: 10rpx; padding: 14rpx 18rpx; font-size: 26rpx; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.price-field.ph { color: var(--text-sub); }
+.date-pick { margin-top: 12rpx; }
+.row-date { background: var(--input-bg); border-radius: 10rpx; padding: 12rpx 16rpx; font-size: 24rpx; color: var(--primary); }
+.num-row { display: flex; gap: 12rpx; margin-top: 12rpx; }
+.num { flex: 1; background: var(--input-bg); border-radius: 10rpx; padding: 14rpx; font-size: 26rpx; text-align: center; }
+.num.count { margin-top: 12rpx; }
+.amt-line { display: flex; justify-content: space-between; align-items: center; margin-top: 10rpx; font-size: 24rpx; color: var(--text-sub); }
+.amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }
 .row-note { background: var(--input-bg); border-radius: 8rpx; padding: 10rpx 14rpx; font-size: 22rpx; margin-top: 10rpx; width: 100%; box-sizing: border-box; }
-.picker { flex: 1; min-width: 0; }
-.date-pick { width: 96rpx; flex-shrink: 0; }
-.mini-field {
-  background: var(--input-bg); border-radius: 8rpx; padding: 12rpx; font-size: 24rpx; text-align: center;
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-}
-.num { width: 90rpx; background: var(--input-bg); border-radius: 8rpx; padding: 12rpx; font-size: 24rpx; text-align: center; }
-.num.count { width: 110rpx; }
+.ins-bar { display: flex; align-items: center; gap: 16rpx; padding: 8rpx 16rpx; }
+.ins-line { flex: 1; height: 1rpx; background: var(--divider); }
+.ins-tx { font-size: 22rpx; color: var(--primary); }
 .ipt-note { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 26rpx; }
-.amt { width: 110rpx; font-size: 24rpx; color: #f56c6c; }
-.del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; }
-.ins { color: #409EFF; font-size: 24rpx; padding: 8rpx; }
+.del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; flex-shrink: 0; }
+/* 全屏凭证查看器（对齐 App attachment_viewer） */
+.viewer { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: #000; display: flex; flex-direction: column; z-index: 200; }
+.viewer-swiper { flex: 1; width: 100%; }
+.viewer-img { width: 100%; height: 100%; }
+.viewer-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 24rpx 28rpx; background: linear-gradient(rgba(0,0,0,0.5), transparent); box-sizing: border-box; }
+.viewer-close { color: #fff; font-size: 40rpx; line-height: 1; padding: 8rpx; }
+.viewer-count { color: rgba(255,255,255,0.85); font-size: 26rpx; }
+.viewer-ops { display: flex; gap: 28rpx; }
+.viewer-op { color: #fff; font-size: 28rpx; background: rgba(255,255,255,0.18); border-radius: 28rpx; padding: 10rpx 26rpx; }
+.viewer-op-del { color: #ff6d6d; }
+.viewer-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+.viewer-empty-tx { color: rgba(255,255,255,0.7); font-size: 28rpx; }
 .footer { display: flex; justify-content: space-between; align-items: center; margin: 20rpx 0; }
 /* 底部固定悬浮栏（对齐 App 固定栏）：页面留白避免内容被栏遮挡 */
 .bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 16rpx 24rpx 20rpx; background: var(--page-bg); border-top: 1rpx solid var(--divider); z-index: 20; }

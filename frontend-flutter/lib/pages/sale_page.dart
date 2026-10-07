@@ -759,25 +759,16 @@ class _SalePageState extends State<SalePage> {
     return true;
   }
 
-  /// 修改某一行商品的独立日期（不影响其他行）
+  /// 修改某一行商品的独立日期（不影响其他行）。统一紧凑滚轮（对齐小程序 picker mode=date，不占屏幕）
   Future<void> _pickRowDate(_Row row) async {
     final cur = DateTime.tryParse(row.happenedAt.trim().isEmpty ? _dateCtrl.text.trim() : row.happenedAt.trim());
     final now = DateTime.now();
-    // 批量直编（dateRows）用紧凑滚轮（对齐小程序 picker mode=date，不占屏幕）；
-    // 普通记单/编辑仍用三段式大月历
-    final picked = widget.dateRows != null && widget.dateRows!.isNotEmpty
-        ? await pickThemeDateCompact(
-            context,
-            initial: cur ?? now,
-            firstDate: DateTime(now.year - 5),
-            lastDate: DateTime(now.year + 5, 12, 31),
-          )
-        : await pickThemeDate(
-            context,
-            initial: cur ?? now,
-            firstDate: DateTime(now.year - 5),
-            lastDate: DateTime(now.year + 5, 12, 31),
-          );
+    final picked = await pickThemeDateCompact(
+      context,
+      initial: cur ?? now,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 5, 12, 31),
+    );
     if (picked == null) return;
     setState(() => row.happenedAt =
         '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}');
@@ -1392,7 +1383,10 @@ class _SalePageState extends State<SalePage> {
         children: [
           _infoCard(),
           const SizedBox(height: 10),
-          for (int i = 0; i < _rows.length; i++) _buildRow(i),
+          for (int i = 0; i < _rows.length; i++) ...[
+            _insertBar(i),
+            _buildRow(i),
+          ],
           const SizedBox(height: 10),
           // 添加商品（提交栏固定在底部悬浮）
           OutlinedButton.icon(
@@ -1501,7 +1495,6 @@ class _SalePageState extends State<SalePage> {
             icon: Icons.calendar_today_outlined,
             label: _editing ? '日期（新加商品默认）' : '日期',
             hint: '点击选择日期（可补录历史）',
-            compact: widget.dateRows != null && widget.dateRows!.isNotEmpty, // 批量直编=紧凑滚轮（对齐小程序 picker）
             onChanged: (_) => setState(() {
               // 批量直编：改批量日期=全部行改期（行级独立日期清空统一跟随新日期，
               // 对齐小程序"批量日期（全部行改期）"；普通/编辑模式只影响新行与无独立日期的行）
@@ -1549,6 +1542,30 @@ class _SalePageState extends State<SalePage> {
         ],
       ),
     ));
+  }
+
+  /// 行上方插入条：点击在该行上方插入一行（补识别漏行/调整顺序与凭证一致）。
+  /// 独立细条不占行头宽度（行头放 ➕ 会挤压商品名输入框，用户反馈只显示一个字）
+  Widget _insertBar(int i) {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    return InkWell(
+      onTap: () => setState(
+          () => _rows.insert(i, _newRow()..happenedAt = _dateCtrl.text.trim())),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          children: [
+            Expanded(child: Divider(color: c.primary.withOpacity(0.25), height: 1)),
+            const SizedBox(width: 8),
+            Icon(Icons.add_circle_outline, size: 15, color: c.primary.withOpacity(0.7)),
+            const SizedBox(width: 4),
+            Text('在此上方插入', style: TextStyle(fontSize: 12, color: c.primary.withOpacity(0.7))),
+            const SizedBox(width: 8),
+            Expanded(child: Divider(color: c.primary.withOpacity(0.25), height: 1)),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildRow(int i) {
@@ -1602,13 +1619,6 @@ class _SalePageState extends State<SalePage> {
                       '出货明细行凭证', lineIds: [row.rowId], orderIds: _orderIds),
                 ),
               ],
-              const SizedBox(width: 4),
-              IconButton(
-                tooltip: '在此行上方插入一行',
-                icon: const Icon(Icons.add_circle_outline, size: 20, color: Color(0xFF67C23A)),
-                onPressed: () => setState(() =>
-                    _rows.insert(i, _newRow()..happenedAt = _dateCtrl.text.trim())),
-              ),
               const SizedBox(width: 4),
               IconButton(
                 tooltip: '删除此商品',
