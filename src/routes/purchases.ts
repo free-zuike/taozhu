@@ -69,7 +69,7 @@ purchasesRouter.post('/', async (c) => {
     // 去单据化：无 purchases 头表（已物理删除），行即主记录，进货批次由 purchase_id 关联
   ];
 
-  for (const item of items) {
+  for (const [i, item] of items.entries()) {
     const price = priceMap.get(item.price_id);
     if (!price) return c.json({ error: `价格不存在: ${item.price_id}` }, 400);
     const qty = Number(item.quantity);
@@ -87,9 +87,9 @@ purchasesRouter.post('/', async (c) => {
       : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sync_key, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(randomId(), purchaseId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount,
-        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null),
+        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null, i),
     );
     // 进货增加库存（进销单位换算：折合过则按计数单位累计，否则按原单位）
     batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
@@ -134,7 +134,7 @@ purchasesRouter.get('/', async (c) => {
   const ids = aggRows.results.map((r) => r.id);
   const detail = await chunkQuery(ids, (chunk) =>
     c.env.DB.prepare(
-      `SELECT pi.*, i.name AS item_name, i.category AS item_category FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')}) ORDER BY pi.created_at`,
+      `SELECT pi.*, i.name AS item_name, i.category AS item_category FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')}) ORDER BY pi.sort, pi.created_at`,
     ).bind(...chunk).all().then((r) => r.results));
   const byId = new Map<string, unknown[]>();
   for (const d of detail) {
@@ -152,7 +152,7 @@ purchasesRouter.get('/', async (c) => {
      FROM purchase_items pi
      LEFT JOIN items i ON i.id = pi.item_id
      WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')})
-     ORDER BY pi.created_at`,
+     ORDER BY pi.sort, pi.created_at`,
     ).bind(...chunk).all().then((r) => r.results));
   return c.json({
     total: countRow?.cnt ?? 0,
@@ -172,7 +172,7 @@ purchasesRouter.get('/:id', async (c) => {
   const id = c.req.param('id');
   const rows = await c.env.DB.prepare(
     `SELECT pi.*, i.name AS item_name, i.category AS item_category
-     FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ? ORDER BY pi.created_at`,
+     FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ? ORDER BY pi.sort, pi.created_at`,
   ).bind(id).all<Record<string, unknown>>();
   if (rows.results.length === 0) return c.json({ error: '进货记录不存在' }, 404);
   const total = rows.results.reduce((s, r) => s + (Number(r.amount) || 0), 0);
@@ -311,7 +311,7 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       .all<{ id: string }>()).results.map((r) => r.id);
     batch.push(c.env.DB.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
     const newLineIds: string[] = [];
-    for (const item of items) {
+    for (const [i, item] of items.entries()) {
       const price = priceMap.get(item.price_id);
       if (!price) continue;
       const qty = Number(item.quantity);
@@ -326,9 +326,9 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       newLineIds.push(newId);
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).bind(newId, id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount2,
-          item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id),
+          item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id, i),
       );
       // 按新明细增加库存（进销单位换算：折合过则按计数单位累计）
       batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));

@@ -34,7 +34,7 @@
           <text class="amt" style="color:#f59e0b">¥{{ fmt(l.amount) }}</text>
         </view>
         <view class="buy-line1">
-          <text class="l2-tx">进价 ¥{{ fmt(l.purchase_price) }}<text v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</text></text>
+          <text class="l2-tx">进价 ¥{{ fmtPrice(l.purchase_price) }}<text v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</text></text>
           <text class="l2-cat" v-if="l.category">{{ l.category }}</text>
         </view>
         <view v-if="l.note" class="buy-note">{{ l.note }}</view>
@@ -119,7 +119,7 @@ import { ref, computed } from 'vue';
 ;
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 import { attachIconSrc } from '../../attach-icon';
-import { fmtAmount } from '../../utils/money';
+import { fmtAmount, fmtPrice } from '../../utils/money';
 
 const selYear = ref(new Date().getFullYear());
 const selMonth = ref(new Date().getMonth() + 1);

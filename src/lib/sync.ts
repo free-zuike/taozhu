@@ -96,7 +96,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       // 去单据化：head 表已物理删除，头字段由该批商品行聚合派生（契约不变）
       const rows = await db.prepare(
         `SELECT si.*, i.name AS item_name, i.category AS item_category
-         FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ? ORDER BY si.created_at`,
+         FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ? ORDER BY si.sort, si.created_at`,
       ).bind(id).all<Record<string, unknown>>();
       if (rows.results.length === 0) return null;
       const clientId = `${rows.results[0].client_id ?? ''}`;
@@ -117,7 +117,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
     case 'purchase': {
       const rows = await db.prepare(
         `SELECT pi.*, i.name AS item_name, i.category AS item_category
-         FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ? ORDER BY pi.created_at`,
+         FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ? ORDER BY pi.sort, pi.created_at`,
       ).bind(id).all<Record<string, unknown>>();
       if (rows.results.length === 0) return null;
       const happenedAt = rows.results.map((r) => `${r.happened_at ?? ''}`).reduce((a, b) => (a >= b ? a : b), '');
@@ -145,7 +145,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
         id: r.id, sale_id: r.sale_id, client_id: r.client_id ?? '', item_id: r.item_id,
         item_name: r.item_name, item_category: r.item_category ?? '', unit: r.unit ?? '',
         quantity: r.quantity ?? 0, count_qty: r.count_qty ?? null, sale_price: r.sale_price ?? 0, cost_price: r.cost_price ?? 0,
-        amount: r.amount ?? 0, happened_at: r.happened_at ?? '', note: r.note ?? '',
+        amount: r.amount ?? 0, happened_at: r.happened_at ?? '', note: r.note ?? '', sort: Number(r.sort) || 0,
         attachments: refs.results.map((x) => x.file_key),
       };
     }
@@ -162,7 +162,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
         id: r.id, purchase_id: r.purchase_id, item_id: r.item_id,
         item_name: r.item_name, item_category: r.item_category ?? '', unit: r.unit ?? '',
         quantity: r.quantity ?? 0, count_qty: r.count_qty ?? null, purchase_price: r.purchase_price ?? 0,
-        amount: r.amount ?? 0, happened_at: r.happened_at ?? '', note: r.note ?? '',
+        amount: r.amount ?? 0, happened_at: r.happened_at ?? '', note: r.note ?? '', sort: Number(r.sort) || 0,
         attachments: refs.results.map((x) => x.file_key),
       };
     }
@@ -235,10 +235,10 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
     const countQty = Number(it.count_qty);
     const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : qty;
     batch.push(db.prepare(
-      'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(it.id ?? randomId(), id, clientId, itemId, it.unit ?? '', qty, effCount === qty ? null : effCount,
       Number(it.sale_price) || 0, Number(it.cost_price) || 0, amount,
-      it.happened_at || p.happened_at || null, it.note ?? ''));
+      it.happened_at || p.happened_at || null, it.note ?? '', Number(it.sort) || 0));
     batch.push(stockDeltaFor(db, { item_id: itemId, unit: it.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: it.count_unit ?? null }, -1));
   }
   await db.batch(batch);
@@ -266,10 +266,10 @@ async function applyPurchaseUpsert(db: D1Database, id: string, p: Record<string,
     const countQty = Number(it.count_qty);
     const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : qty;
     batch.push(db.prepare(
-      'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(it.id ?? randomId(), id, itemId, it.unit ?? '', qty, effCount === qty ? null : effCount,
       Number(it.purchase_price) || 0, amount,
-      it.happened_at || p.happened_at || null, it.note ?? ''));
+      it.happened_at || p.happened_at || null, it.note ?? '', Number(it.sort) || 0));
     batch.push(stockDeltaFor(db, { item_id: itemId, unit: it.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: it.count_unit ?? null }, 1));
   }
   await db.batch(batch);
@@ -432,13 +432,13 @@ export async function applyChange(
           : [stockDeltaFor(db, { item_id: itemId, unit: p.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: p.count_unit ?? null }, -1)];
         await db.batch([
           db.prepare(
-            `INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, client_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, client_id, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET sale_id = excluded.sale_id, item_id = excluded.item_id, unit = excluded.unit,
                quantity = excluded.quantity, count_qty = excluded.count_qty, sale_price = excluded.sale_price, cost_price = excluded.cost_price,
-               amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note, client_id = excluded.client_id`,
+               amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note, client_id = excluded.client_id, sort = excluded.sort`,
           ).bind(id, saleId, itemId, p.unit ?? '', qty, effCount === qty ? null : effCount,
             Number(p.sale_price) || 0, Number(p.cost_price) || 0, amount,
-            p.happened_at || null, p.note ?? '', p.client_id ?? ''),
+            p.happened_at || null, p.note ?? '', p.client_id ?? '', Number(p.sort) || 0),
           ...stock,
         ]);
         if (isNew) {
@@ -498,13 +498,13 @@ export async function applyChange(
           : [stockDeltaFor(db, { item_id: itemId2, unit: p.unit ?? '', quantity: qty2, count_qty: effCount2 === qty2 ? null : effCount2, count_unit: p.count_unit ?? null }, 1)];
         await db.batch([
           db.prepare(
-            `INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET purchase_id = excluded.purchase_id, item_id = excluded.item_id, unit = excluded.unit,
                quantity = excluded.quantity, count_qty = excluded.count_qty, purchase_price = excluded.purchase_price,
-               amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note`,
+               amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note, sort = excluded.sort`,
           ).bind(id, purchaseId, itemId2, p.unit ?? '', qty2, effCount2 === qty2 ? null : effCount2,
             Number(p.purchase_price) || 0, amount2,
-            p.happened_at || null, p.note ?? ''),
+            p.happened_at || null, p.note ?? '', Number(p.sort) || 0),
           ...stock2,
         ]);
         if (isNew2) {

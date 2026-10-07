@@ -61,6 +61,7 @@ const DDL: string[] = [
     note TEXT DEFAULT '',
     created_by TEXT,
     sync_key TEXT,
+    sort INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id)`,
@@ -80,6 +81,7 @@ const DDL: string[] = [
     note TEXT DEFAULT '',
     created_by TEXT,
     sync_key TEXT,
+    sort INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id)`,
@@ -240,7 +242,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '7') {
+      if (meta?.value === '8') {
         schemaReady = true;
         return;
       }
@@ -377,6 +379,10 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     // v0.17.101.0 去单据化：商品行自包含店铺 client_id（同步/删除/统计按行走，不再依赖单据头）
     await ensureColumn(db, 'sale_items', 'client_id', 'TEXT');
+    // v0.17.326.0：行序 sort（批量直编插入行保持插入位置；同单行按提交顺序展示）
+    for (const t of ['sale_items', 'purchase_items'] as const) {
+      await ensureColumn(db, t, 'sort', 'INTEGER NOT NULL DEFAULT 0');
+    }
     // 头表（sales/purchases）仅旧库存在：删除行表自包含回填依赖头表数据，新库/已删头表库跳过
     const hasSalesHead = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sales'").first()) != null;
     const hasPurchasesHead = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'purchases'").first()) != null;
@@ -500,7 +506,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '7')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '8')",
     ).run();
     schemaReady = true;
     } catch (err) {

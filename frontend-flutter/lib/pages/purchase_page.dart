@@ -938,7 +938,7 @@ class _PurchasePageState extends State<PurchasePage> {
         .reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
     final itemsPayload = <Map<String, dynamic>>[];
     var totalCalc = 0.0;
-    for (final r in valid) {
+    for (final (i, r) in valid.indexed) {
       final opt = _items.where((x) => x['id'] == r.itemId).firstOrNull;
       final prices = ((opt?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
       final price = prices.where((p) => p['id'] == r.priceId).firstOrNull;
@@ -959,6 +959,7 @@ class _PurchasePageState extends State<PurchasePage> {
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
         'note': r.note, // 保留行原备注（payload 缺 note 会被同步 upsert 写成空）
+        'sort': i, // 行序=展示/插入顺序（服务端/账本按 sort 展开，插入行不再排末尾）
       };
       r.itemsPayload = rowPayload;
       itemsPayload.add(rowPayload);
@@ -974,7 +975,7 @@ class _PurchasePageState extends State<PurchasePage> {
       // Web 无本地库/同步队列：直连服务端。
       // 批量直编：按原单分组 PATCH；编辑：PATCH /purchases/:id 全量替换；新建：POST（sync_key 幂等）
       final webItems = [
-        for (final r in valid)
+        for (final (i, r) in valid.indexed)
           {
             'id': r.rowId, // 保留原行 id（服务端重建明细时不换新 id，行级附件不孤儿化）
             'price_id': r.priceId,
@@ -983,6 +984,7 @@ class _PurchasePageState extends State<PurchasePage> {
             'purchase_price': r.purchasePrice,
             'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
             'note': r.note,
+            'sort': i, // 行序=展示顺序（服务端按 sort 存储，插入行不排末尾）
           },
       ];
       try {
@@ -997,7 +999,7 @@ class _PurchasePageState extends State<PurchasePage> {
             await Api.instance.patch('/purchases/${e.key}', {
               'happened_at': orderDate,
               'items': [
-                for (final r in e.value)
+                for (final (i, r) in e.value.indexed)
                   {
                     'id': r.rowId,
                     'price_id': r.priceId,
@@ -1006,6 +1008,7 @@ class _PurchasePageState extends State<PurchasePage> {
                     'purchase_price': r.purchasePrice,
                     'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
                     'note': r.note,
+                    'sort': i,
                   },
               ],
             });
@@ -1347,8 +1350,16 @@ class _PurchasePageState extends State<PurchasePage> {
   Widget _insertBar(int i) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return InkWell(
-      onTap: () => setState(
-          () => _rows.insert(i, _newPRow()..happenedAt = _dateCtrl.text.trim())),
+      onTap: () => setState(() {
+        final row = _newPRow()..happenedAt = _dateCtrl.text.trim();
+        // 归入上方行原单：插入位置=提交位置（服务端 PATCH 按数组序重建、账本按 sort 展开），
+        // 且整单凭证挂原单时插入行同单可见；无上方原单（最上方/上方是新行）=独立新单
+        if (i > 0 && _rows[i - 1].origPurchaseId.isNotEmpty) {
+          row.origPurchaseId = _rows[i - 1].origPurchaseId;
+          _rowPurchaseId[row.rowId] = row.origPurchaseId;
+        }
+        _rows.insert(i, row);
+      }),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(

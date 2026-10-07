@@ -287,7 +287,11 @@ function addRow() {
 
 /// 在该行上方插入一行（补识别漏行/调整顺序与图片一致；对齐 App 行内插入）
 function insertRow(i: number) {
-  rows.value.splice(i, 0, { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
+  const row: Row = { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: `pi${Date.now()}${Math.floor(Math.random() * 0x7fffffff)}`, orderId: '' };
+  // 归入上方行原单：插入位置=提交位置（服务端 PATCH 按数组序重建），且整单凭证挂原单时插入行同单可见；
+  // 无上方原单（最上方/上方是新行）=独立新单（保存时 POST 成单）
+  if (i > 0 && rows.value[i - 1].orderId) row.orderId = rows.value[i - 1].orderId;
+  rows.value.splice(i, 0, row);
 }
 
 // ── 行级凭证附件（对齐 App 行头附件按钮：点击直接全屏查看器，可添加/下载/删除）──
@@ -715,7 +719,7 @@ async function submit() {
       for (const [oid, rowList] of byOrder.entries()) {
         await request(`/purchases/${oid}`, 'PATCH', {
           happened_at: date.value,
-          items: rowList.map((r) => ({
+          items: rowList.map((r, i) => ({
             id: r.rowId || undefined,
             price_id: r.priceId,
             quantity: Number(r.quantity),
@@ -723,6 +727,7 @@ async function submit() {
             purchase_price: Number(r.purchasePrice) || 0,
             happened_at: r.happenedAt || date.value,
             note: r.note || '',
+            sort: i, // 行序=展示/插入顺序（服务端按 sort 存储，插入行不排末尾）
           })),
         });
       }
@@ -731,7 +736,7 @@ async function submit() {
         await request('/purchases', 'POST', {
           happened_at: date.value,
           note: note.value.trim(),
-          items: newRows.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '' })),
+          items: newRows.map((r, i) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', sort: i })),
         });
       }
       for (const lid of origIds) {

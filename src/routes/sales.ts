@@ -77,7 +77,7 @@ salesRouter.post('/', async (c) => {
     // 去单据化：无 sales 头表（已物理删除），行即主记录，销售批次由 sale_id 关联
   ];
 
-  for (const item of items) {
+  for (const [i, item] of items.entries()) {
     const price = priceMap.get(item.price_id);
     if (!price || !price.active) {
       return c.json({ error: `价格不存在或已停用: ${item.price_id}` }, 400);
@@ -97,9 +97,9 @@ salesRouter.post('/', async (c) => {
     const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by, sync_key, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(siId, saleId, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, price.purchase_price, amount,
-        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null),
+        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null, i),
     );
     // 出货扣减库存（进销单位换算：折合过则按计数单位扣减，否则按原单位）
     batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, -1));
@@ -159,7 +159,7 @@ salesRouter.get('/', async (c) => {
   const detailRows = await chunkQuery(saleIds, (chunk) =>
     c.env.DB.prepare(
       `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id
-     WHERE si.sale_id IN (${chunk.map(() => '?').join(',')}) ORDER BY si.created_at`,
+     WHERE si.sale_id IN (${chunk.map(() => '?').join(',')}) ORDER BY si.sort, si.created_at`,
     ).bind(...chunk).all().then((r) => r.results));
 
   const bySale = new Map<string, unknown[]>();
@@ -235,7 +235,7 @@ salesRouter.get('/:id', async (c) => {
   const id = c.req.param('id');
   const rows = await c.env.DB.prepare(
     `SELECT si.*, i.name AS item_name, i.category AS item_category
-     FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ? ORDER BY si.created_at`,
+     FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ? ORDER BY si.sort, si.created_at`,
   ).bind(id).all<Record<string, unknown>>();
   if (rows.results.length === 0) return c.json({ error: '出货记录不存在' }, 404);
   const first = rows.results[0];
@@ -356,7 +356,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
     batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
     const happenedAt = body?.happened_at?.trim() || '';
     const newLineIds: string[] = [];
-    for (const item of items) {
+    for (const [i, item] of items.entries()) {
       const price = priceMap.get(item.price_id);
       if (!price || !price.active) continue;
       const qty = Number(item.quantity);
@@ -371,9 +371,9 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       newLineIds.push(newId);
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).bind(newId, id, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, price.purchase_price, amount,
-          item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', c.get('user').id),
+          item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', c.get('user').id, i),
       );
       // 按新明细扣减库存（进销单位换算：折合过则按计数单位扣减）
       batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, -1));

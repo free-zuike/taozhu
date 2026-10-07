@@ -375,7 +375,13 @@ class _LedgerPageState extends State<LedgerPage> {
       };
     }
     return byOrder.entries.map((e) {
-      final items = e.value;
+      // 行序=提交/插入顺序（sort 字段，服务端 PATCH 按数组序写索引）；旧数据无 sort=0 回退 id（时间）序
+      final items = e.value..sort((a, b) {
+        final sa = (a['sort'] as num?)?.toInt() ?? 0;
+        final sb = (b['sort'] as num?)?.toInt() ?? 0;
+        if (sa != sb) return sa.compareTo(sb);
+        return '${a['id'] ?? ''}'.compareTo('${b['id'] ?? ''}');
+      });
       final m = meta[e.key]!;
       final total = items.fold<double>(0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
       return {...m, 'total': total, 'items': items};
@@ -1589,8 +1595,8 @@ class _LedgerPageState extends State<LedgerPage> {
     if (isDirtyLine) {
       priceLine.write('（无明细 · 长按删除该脏行）');
     } else {
-      if (!_isStaff && costPrice != null) priceLine.write('进价 ¥${fmtMoney(costPrice.toDouble())} · ');
-      priceLine.write('售价 ¥${fmtMoney(salePrice?.toDouble() ?? 0)}');
+      if (!_isStaff && costPrice != null) priceLine.write('进价 ¥${fmtPrice(costPrice.toDouble())} · ');
+      priceLine.write('售价 ¥${fmtPrice(salePrice?.toDouble() ?? 0)}');
       if (qty.isNotEmpty) priceLine.write(' · ×$qty$unit');
     }
     return InkWell(

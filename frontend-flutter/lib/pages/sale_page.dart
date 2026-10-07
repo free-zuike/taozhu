@@ -1094,7 +1094,7 @@ class _SalePageState extends State<SalePage> {
         .reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
     final itemsPayload = <Map<String, dynamic>>[];
     var totalCalc = 0.0;
-    for (final r in valid) {
+    for (final (i, r) in valid.indexed) {
       final opt = _items.where((x) => x.id == r.itemId).firstOrNull;
       final price = opt?.prices.where((p) => p['id'] == r.priceId).firstOrNull;
       // 存储浮点原值（对齐参考项目 REAL：本地镜像/提交不取整；舍入配置只在统计/欠款/展示层换算）
@@ -1116,6 +1116,7 @@ class _SalePageState extends State<SalePage> {
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
         'note': r.note, // 保留行原备注（payload 缺 note 会被同步 upsert 写成空）
+        'sort': i, // 行序=展示/插入顺序（服务端/账本按 sort 展开，插入行不再排末尾）
       };
       r.itemsPayload = rowPayload;
       itemsPayload.add(rowPayload);
@@ -1134,7 +1135,7 @@ class _SalePageState extends State<SalePage> {
       // 批量直编：按原单分组 PATCH（各组保留原单号，只提交组内行）；
       // 编辑：PATCH /sales/:id 全量替换；新建：POST /sales（sync_key 幂等）
       final webItems = [
-        for (final r in valid)
+        for (final (i, r) in valid.indexed)
           {
             'id': r.rowId, // 保留原行 id（服务端重建明细时不换新 id，行级附件不孤儿化）
             'price_id': r.priceId,
@@ -1143,6 +1144,7 @@ class _SalePageState extends State<SalePage> {
             'sale_price': r.salePrice,
             'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
             'note': r.note,
+            'sort': i, // 行序=展示顺序（服务端按 sort 存储，插入行不排末尾）
           },
       ];
       try {
@@ -1158,7 +1160,7 @@ class _SalePageState extends State<SalePage> {
             await Api.instance.patch('/sales/${e.key}', {
               'happened_at': orderDate,
               'items': [
-                for (final r in e.value)
+                for (final (i, r) in e.value.indexed)
                   {
                     'id': r.rowId,
                     'price_id': r.priceId,
@@ -1166,6 +1168,7 @@ class _SalePageState extends State<SalePage> {
                     'sale_price': r.salePrice,
                     'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
                     'note': r.note,
+                    'sort': i,
                   },
               ],
             });
@@ -1549,8 +1552,16 @@ class _SalePageState extends State<SalePage> {
   Widget _insertBar(int i) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return InkWell(
-      onTap: () => setState(
-          () => _rows.insert(i, _newRow()..happenedAt = _dateCtrl.text.trim())),
+      onTap: () => setState(() {
+        final row = _newRow()..happenedAt = _dateCtrl.text.trim();
+        // 归入上方行原单：插入位置=提交位置（服务端 PATCH 按数组序重建、账本按 sort 展开），
+        // 且整单凭证挂原单时插入行同单可见；无上方原单（最上方/上方是新行）=独立新单
+        if (i > 0 && _rows[i - 1].origSaleId.isNotEmpty) {
+          row.origSaleId = _rows[i - 1].origSaleId;
+          _rowSaleId[row.rowId] = row.origSaleId;
+        }
+        _rows.insert(i, row);
+      }),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(

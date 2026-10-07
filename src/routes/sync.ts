@@ -197,7 +197,7 @@ syncRouter.get('/full', async (c) => {
   const clientNameOf = new Map(clientNameRows.map((c) => [c.id, c.name]));
   const saleDetail = await chunkQuery(saleIds, (chunk) =>
     db.prepare(
-      `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id IN (${chunk.map(() => '?').join(',')}) ORDER BY si.created_at`,
+      `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id IN (${chunk.map(() => '?').join(',')}) ORDER BY si.sort, si.created_at`,
     ).bind(...chunk).all().then((r) => r.results));
   const bySale = new Map<string, unknown[]>();
   for (const d of saleDetail) {
@@ -230,7 +230,7 @@ syncRouter.get('/full', async (c) => {
   const purchaseIds = purchaseRows.results.map((r) => (r as { id: string }).id);
   const purchaseDetail = await chunkQuery(purchaseIds, (chunk) =>
     db.prepare(
-      `SELECT pi.*, i.name AS item_name FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')}) ORDER BY pi.created_at`,
+      `SELECT pi.*, i.name AS item_name FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')}) ORDER BY pi.sort, pi.created_at`,
     ).bind(...chunk).all().then((r) => r.results));
   const byPurchase = new Map<string, unknown[]>();
   for (const d of purchaseDetail) {

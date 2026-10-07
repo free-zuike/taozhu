@@ -17,6 +17,16 @@ String fmtMoney(num v) {
 /// 0.6=5舍6入，可自定义 0~1）+ digits 精度（0=元/1=角/2=分，默认 2）。
 /// 本地缓存（SharedPreferences），登录/收到 rounding 事件时刷新——店员无写权限，只读服务器值；
 /// 首次使用（缓存未加载）用服务器默认四舍五入 2 位，行为与旧版一致。
+/// 单价/进价等"输入值"显示**不**走 fmtMoney（不跟随舍入位数，不进位——2.58 不能显示成 2.6），
+/// 用 fmtPrice 固定最多 2 位去尾零。
+String fmtPrice(num v) {
+  var t = v.toStringAsFixed(2);
+  if (t.contains('.')) {
+    t = t.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+  }
+  return t;
+}
+
 class Money {
   static double _carry = 0.5;
   static int _digits = 2;

@@ -60,8 +60,8 @@
           </view>
           <!-- ③ 进价 · 售价 · 数量（老板看进价；盈亏着色） -->
           <view class="line-bottom">
-            <text v-if="isAdmin && l.cost_price > 0" class="l2-tx">进价 ¥{{ fmtNum(l.cost_price) }} · </text>
-            <text class="l2-tx">售价 ¥{{ fmtNum(l.sale_price || 0) }}<template v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</template></text>
+            <text v-if="isAdmin && l.cost_price > 0" class="l2-tx">进价 ¥{{ fmtPrice(l.cost_price) }} · </text>
+            <text class="l2-tx">售价 ¥{{ fmtPrice(l.sale_price || 0) }}<template v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</template></text>
             <text v-if="isAdmin && l.cost_price > 0" class="l2-profit" :class="profitText(l)">{{ profitText(l) }}</text>
           </view>
         </view>
@@ -174,7 +174,7 @@ import { ref, computed } from 'vue';
 ;
 import { request, getToken, getRole, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 import { attachIconSrc } from '../../attach-icon';
-import { fmtAmount, roundAmount } from '../../utils/money';
+import { fmtAmount, roundAmount, fmtPrice } from '../../utils/money';
 
 const tab = ref<'sales' | 'payments'>('sales');
 // 老板才显示行级盈亏（进价=毛利敏感数据，店员隐藏；对齐 App 仅老板可见毛利）

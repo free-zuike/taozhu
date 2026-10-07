@@ -263,7 +263,13 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       };
     }
     return byOrder.entries.map((e) {
-      final items = e.value;
+      // 行序=提交/插入顺序（sort 字段，服务端 PATCH 按数组序写索引）；旧数据无 sort=0 回退 id（时间）序
+      final items = e.value..sort((a, b) {
+        final sa = (a['sort'] as num?)?.toInt() ?? 0;
+        final sb = (b['sort'] as num?)?.toInt() ?? 0;
+        if (sa != sb) return sa.compareTo(sb);
+        return '${a['id'] ?? ''}'.compareTo('${b['id'] ?? ''}');
+      });
       final m = meta[e.key]!;
       final total = items.fold<double>(0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
       return {...m, 'total': total, 'items': items};
@@ -500,7 +506,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         ? lineAttach
         : (_buyAttachCount['${order['id']}'] ?? 0);
     final priceLine = StringBuffer();
-    if (pp > 0) priceLine.write('进价 ¥${fmtMoney(pp)} · ');
+    if (pp > 0) priceLine.write('进价 ¥${fmtPrice(pp)} · ');
     priceLine.write('数量 ×$qty$unit');
     return InkWell(
       borderRadius: BorderRadius.circular(10),

@@ -304,8 +304,8 @@ class _ItemsPageState extends State<ItemsPage> {
                                       padding: const EdgeInsets.symmetric(vertical: 2),
                                       child: Text(
                                           _isStaff
-                                              ? '${p['unit']}：售价 ¥${fmtMoney((p['sale_price'] as num?)?.toDouble() ?? 0)}'
-                                              : '${p['unit']}：进价 ¥${fmtMoney((p['purchase_price'] as num?)?.toDouble() ?? 0)} → 售价 ¥${fmtMoney((p['sale_price'] as num?)?.toDouble() ?? 0)}',
+                                              ? '${p['unit']}：售价 ¥${fmtPrice((p['sale_price'] as num?)?.toDouble() ?? 0)}'
+                                              : '${p['unit']}：进价 ¥${fmtPrice((p['purchase_price'] as num?)?.toDouble() ?? 0)} → 售价 ¥${fmtPrice((p['sale_price'] as num?)?.toDouble() ?? 0)}',
                                           style: TextStyle(color: _c.textSub, fontSize: 13)),
                                     ),
                                 ],

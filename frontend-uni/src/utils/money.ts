@@ -66,3 +66,12 @@ export function fmtAmount(v: number): string {
   const c = roundingCfg();
   return roundMoney(v, c.carry, c.digits).toFixed(c.digits);
 }
+
+/** 单价/进价显示：原始值最多 2 位去尾零（不进位、不跟随舍入位数——价格是输入值，2.58 不能显示成 2.6） */
+export function fmtPrice(v: number): string {
+  let t = v.toFixed(2);
+  if (t.includes('.')) {
+    t = t.replace(/0+$/, '').replace(/\.$/, '');
+  }
+  return t;
+}

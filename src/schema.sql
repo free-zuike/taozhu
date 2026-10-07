@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   note TEXT DEFAULT '',
   created_by TEXT,
   sync_key TEXT,
+  sort INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id);
@@ -94,6 +95,7 @@ CREATE TABLE IF NOT EXISTS sale_items (
   note TEXT DEFAULT '',
   created_by TEXT,
   sync_key TEXT,
+  sort INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id);
