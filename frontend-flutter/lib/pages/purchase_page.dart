@@ -1407,7 +1407,7 @@ class _PurchasePageState extends State<PurchasePage> {
                 tooltip: '在此行上方插入一行',
                 icon: const Icon(Icons.add_circle_outline, size: 20, color: Color(0xFF409EFF)),
                 onPressed: () => setState(() =>
-                    _rows.insert(i, _newRow()..happenedAt = _dateCtrl.text.trim())),
+                    _rows.insert(i, _newPRow()..happenedAt = _dateCtrl.text.trim())),
               ),
               const SizedBox(width: 4),
               IconButton(
