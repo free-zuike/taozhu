@@ -790,7 +790,9 @@ class SyncService {
     }
   }
 
-  /// 推送本地待同步队列（批量 POST /sync/push）；成功移除，失败留队列
+  /// 推送本地待同步队列（批量 POST /sync/push）；成功移除，失败留队列。
+  /// 分批推送（每批 ≤50 条）：Workers 免费计划单请求 CPU 超限会稳定返回 503，
+  /// 一次推 300+ 条=死循环（"同步一直在重复上传，全部503/队列越堆越多"根因）。
   static Future<int> pushPending() async {
     if (kIsWeb) return 0;
     try {
@@ -815,126 +817,147 @@ class SyncService {
       } catch (_) {}
       if (pending.isEmpty && extra.isEmpty) return 0;
       final did = await deviceId();
-      final changes = [
-        ...extra,
-        ...pending.map((x) {
+      // 分批：extra（删除标记，数量少、固定时间戳幂等）单独一批，pending 每 50 条一批
+      const batchSize = 50;
+      final batchStarts = <int>[]; // pending 每批起始下标（extra 批 = -1）
+      final batches = <List<Map<String, dynamic>>>[];
+      if (extra.isNotEmpty) { batches.add(extra); batchStarts.add(-1); }
+      for (var start = 0; start < pending.length; start += batchSize) {
+        final batchPending = pending.skip(start).take(batchSize).toList();
+        batchStarts.add(start);
+        batches.add(batchPending.map((x) {
           final m = Map<String, dynamic>.from(x);
           m.remove('id'); // 队列内部 id 不传服务端
           return m;
-        }),
-      ];
-      final d = await Api.instance.post('/sync/push', {'device_id': did, 'changes': changes});
-      if (d == null) return 0;
-      final accepted = d['accepted'] as int? ?? 0;
-      // 推送明细日志：逐条记录（用户要一条变更一条日志，不聚合——"推送 N 条"看不出具体推了什么）
-      for (final ch in changes) {
-        final t = '${ch['entity_type'] ?? ''}';
-        final sid = '${ch['entity_sync_id'] ?? ''}';
-        final act = '${ch['action'] ?? 'upsert'}';
-        appLog('sync', '推送 $t $sid（$act）', level: 'info');
+        }).toList());
       }
-      appLog('sync', '本轮共推送 ${changes.length} 条变更，服务器接受 $accepted 条', level: 'info');
-      // 持久删除集合：仅清除"本地库已确实删掉/软删落库"的条目；
-      // 本地库只读导致 tombstone 未写入、行仍活跃的条目必须保留（含原时间戳）——
-      // 否则重启后 _load 失去过滤依据，已删商品复活（服务端已删也不影响：集合仅本地过滤用）
-      if (extra.isNotEmpty && accepted >= changes.length) {
-        try {
-          final stillLocal = <String>[];
-          for (final entry in delEntries) {
-            final sep = entry.lastIndexOf('@');
-            final id2 = sep > 0 ? entry.substring(0, sep) : entry;
-            final local = await LocalDb.getOne('items', id2);
-            if (local != null && '${local['deleted_at'] ?? ''}'.isEmpty) stillLocal.add(entry);
+      var totalAccepted = 0;
+      for (var bi = 0; bi < batches.length; bi++) {
+        final batch = batches[bi];
+        final startIdx = batchStarts[bi];
+        final isExtraBatch = startIdx < 0;
+        final d = await Api.instance.post('/sync/push', {'device_id': did, 'changes': batch});
+        if (d == null) return totalAccepted;
+        final accepted = d['accepted'] as int? ?? 0;
+        totalAccepted += accepted;
+        // 推送明细日志：逐条记录（用户要一条变更一条日志，不聚合——"推送 N 条"看不出具体推了什么）
+        for (final ch in batch) {
+          final t = '${ch['entity_type'] ?? ''}';
+          final sid = '${ch['entity_sync_id'] ?? ''}';
+          final act = '${ch['action'] ?? 'upsert'}';
+          appLog('sync', '推送 $t $sid（$act）', level: 'info');
+        }
+        appLog('sync', '本轮第 ${bi + 1}/${batches.length} 批推送 ${batch.length} 条，服务器接受 $accepted 条', level: 'info');
+        if (isExtraBatch) {
+          // 持久删除集合：仅清除"本地库已确实删掉/软删落库"的条目；
+          // 本地库只读导致 tombstone 未写入、行仍活跃的条目必须保留（含原时间戳）——
+          // 否则重启后 _load 失去过滤依据，已删商品复活（服务端已删也不影响：集合仅本地过滤用）
+          if (accepted >= batch.length) {
+            try {
+              final stillLocal = <String>[];
+              for (final entry in delEntries) {
+                final sep = entry.lastIndexOf('@');
+                final id2 = sep > 0 ? entry.substring(0, sep) : entry;
+                final local = await LocalDb.getOne('items', id2);
+                if (local != null && '${local['deleted_at'] ?? ''}'.isEmpty) stillLocal.add(entry);
+              }
+              final p = await SharedPreferences.getInstance();
+              if (stillLocal.isEmpty) {
+                await p.remove(kDeletedItemsKey);
+              } else if (stillLocal.length != delEntries.length) {
+                await p.setStringList(kDeletedItemsKey, stillLocal);
+              }
+            } catch (_) {}
           }
-          final p = await SharedPreferences.getInstance();
-          if (stillLocal.isEmpty) {
-            await p.remove(kDeletedItemsKey);
-          } else if (stillLocal.length != delEntries.length) {
-            await p.setStringList(kDeletedItemsKey, stillLocal);
+          continue; // extra 批无本地 pending id 可移除
+        }
+        // 附件删除变更兜底收敛：旧客户端入队的删除变更 payload 只有 md5-only 内容 key（解析不出
+        // 实体）→ 服务器按"共用图保护"拒绝（400）；LWW/其他原因被拒也会留队列。此类变更若一直
+        // push 失败，pendingDel 过滤会让本地引用表永远少 N 条（同步面板"本地91/服务器95"差 4 的根因）。
+        // 这里对**本地队列全部附件删除变更**做收敛（不只看 rejected samples）：
+        // 服务器 in-use 仍有该 key → 用其规范化三元组直连删除（引用行真正删掉，pull 后本地表对齐）；
+        // in-use 已无该 key → 说明服务器此前已删/无此引用，本地队列残留直接清掉。
+        try {
+          final attachDeletes = pending
+              .where((x) => '${x['entity_type'] ?? ''}' == 'attachment' && '${x['action'] ?? ''}' == 'delete')
+              .toList();
+          if (attachDeletes.isNotEmpty) {
+            final inUse = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
+            final inUseList = ((inUse['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
+            for (final x in attachDeletes) {
+              final sid = '${x['entity_sync_id'] ?? ''}';
+              // 优先用 payload 携带的 entity/id（新客户端删除带三元组），否则用服务器 in-use 匹配
+              final p = (x['payload'] as Map<String, dynamic>?) ?? {};
+              var e = '${p['entity'] ?? ''}'.trim();
+              var i = '${p['id'] ?? ''}'.trim();
+              if (e.isEmpty || i.isEmpty) {
+                final match = inUseList
+                    .where((a) => '${a['key'] ?? ''}' == sid || '${a['file'] ?? ''}' == sid.split('/').last)
+                    .firstOrNull;
+                if (match != null) {
+                  e = '${match['entity'] ?? ''}';
+                  i = '${match['id'] ?? ''}';
+                }
+              }
+              if (e.isNotEmpty && i.isNotEmpty) {
+                try {
+                  await Api.instance.delete('/attachments?key=$sid&entity=$e&id=$i');
+                  appLog('sync', '附件删除兜底成功：$sid（$e/$i）', level: 'info');
+                  final id = x['id'];
+                  if (id is int) await LocalDb.removePendingChange(id);
+                  continue;
+                } catch (_) {}
+              }
+              // 服务器 in-use 已无该引用（此前已删成功/引用本就不存在）→ 本地队列残留直接清掉
+              appLog('sync', '附件删除已在服务器生效，清理本地残留变更：$sid', level: 'info');
+              final id = x['id'];
+              if (id is int) await LocalDb.removePendingChange(id);
+            }
           }
         } catch (_) {}
-      }
-      // 服务端时间校准：设备时钟偏慢会让 LWW 拒绝本设备写入（删除/改分类在服务端不生效，
-      // pull 又拉回旧值）。用服务器时间给未推送成功的条目重刷 updated_at，下次推送必能胜出。
-      final serverTime = DateTime.tryParse('${d['server_time'] ?? ''}')?.toUtc();
-      final offset = serverTime?.difference(DateTime.now().toUtc());
-      // 附件删除变更兜底收敛：旧客户端入队的删除变更 payload 只有 md5-only 内容 key（解析不出
-      // 实体）→ 服务器按"共用图保护"拒绝（400）；LWW/其他原因被拒也会留队列。此类变更若一直
-      // push 失败，pendingDel 过滤会让本地引用表永远少 N 条（同步面板"本地91/服务器95"差 4 的根因）。
-      // 这里对**本地队列全部附件删除变更**做收敛（不只看 rejected samples）：
-      // 服务器 in-use 仍有该 key → 用其规范化三元组直连删除（引用行真正删掉，pull 后本地表对齐）；
-      // in-use 已无该 key → 说明服务器此前已删/无此引用，本地队列残留直接清掉。
-      try {
-        final attachDeletes = pending
-            .where((x) => '${x['entity_type'] ?? ''}' == 'attachment' && '${x['action'] ?? ''}' == 'delete')
-            .toList();
-        if (attachDeletes.isNotEmpty) {
-          final inUse = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
-          final inUseList = ((inUse['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
-          for (final x in attachDeletes) {
-            final sid = '${x['entity_sync_id'] ?? ''}';
-            // 优先用 payload 携带的 entity/id（新客户端删除带三元组），否则用服务器 in-use 匹配
-            final p = (x['payload'] as Map<String, dynamic>?) ?? {};
-            var e = '${p['entity'] ?? ''}'.trim();
-            var i = '${p['id'] ?? ''}'.trim();
-            if (e.isEmpty || i.isEmpty) {
-              final match = inUseList
-                  .where((a) => '${a['key'] ?? ''}' == sid || '${a['file'] ?? ''}' == sid.split('/').last)
-                  .firstOrNull;
-              if (match != null) {
-                e = '${match['entity'] ?? ''}';
-                i = '${match['id'] ?? ''}';
-              }
-            }
-            if (e.isNotEmpty && i.isNotEmpty) {
-              try {
-                await Api.instance.delete('/attachments?key=$sid&entity=$e&id=$i');
-                appLog('sync', '附件删除兜底成功：$sid（$e/$i）', level: 'info');
-                final id = x['id'];
-                if (id is int) await LocalDb.removePendingChange(id);
-                continue;
-              } catch (_) {}
-            }
-            // 服务器 in-use 已无该引用（此前已删成功/引用本就不存在）→ 本地队列残留直接清掉
-            appLog('sync', '附件删除已在服务器生效，清理本地残留变更：$sid', level: 'info');
-            final id = x['id'];
-            if (id is int) await LocalDb.removePendingChange(id);
+        // 本批被接受的条目按顺序移除（服务端 accepted=应用成功数，顺序与批内一致）
+        var removed = 0;
+        final removedIds = <int>{};
+        for (var k = 0; k < batch.length && removed < accepted; k++) {
+          final pid = pending[startIdx + k];
+          final lid = pid['id'];
+          if (lid is int && !removedIds.contains(lid)) {
+            await LocalDb.removePendingChange(lid);
+            removed++;
+            removedIds.add(lid);
           }
         }
-      } catch (_) {}
-      var removed = 0;
-      final removedIds = <int>{};
-      // 兜底直连删除已移除的被拒附件删除变更：此处跳过，避免重复计数把有效 accepted 挤掉
-      try {
-        final remainingIds = (await LocalDb.getPendingChanges())
-            .map((c) => c['id'])
-            .whereType<int>()
-            .toSet();
-        for (final x in pending) {
-          final id0 = x['id'];
-          if (id0 is int && !remainingIds.contains(id0)) removedIds.add(id0);
-        }
-      } catch (_) {}
-      for (final x in pending) {
-        if (removed >= accepted) break;
-        final id = x['id'];
-        if (id is! int || removedIds.contains(id)) continue;
-        await LocalDb.removePendingChange(id);
-        removed++;
-        removedIds.add(id);
-      }
-      if (offset != null) {
-        for (final x in pending) {
-          final id = x['id'];
-          if (id is! int || removedIds.contains(id)) continue;
-          final ts = DateTime.tryParse('${x['updated_at'] ?? ''}');
-          if (ts == null) continue;
-          await LocalDb.retimePendingChange(id, ts.toUtc().add(offset).toIso8601String());
+        // 服务端时间校准：设备时钟偏慢会让 LWW 拒绝本设备写入（删除/改分类在服务端不生效，
+        // pull 又拉回旧值）。只对**服务器明确拒绝的条目**（conflict_samples）重刷 updated_at——
+        // 不再对整批 pending 重刷：503 整批失败重试若刷新时间戳= LWW 通过→服务端重复应用+
+        // 重复审计（用户"审计有重复添加记录"根因）。
+        final serverTime = DateTime.tryParse('${d['server_time'] ?? ''}')?.toUtc();
+        final offset = serverTime?.difference(DateTime.now().toUtc());
+        if (offset != null) {
+          final conflictKeys = <String>{};
+          for (final s in (d['conflict_samples'] as List?) ?? const <Object>[]) {
+            final m = s as Map;
+            final et = '${m['entity_type'] ?? ''}';
+            final sid = '${m['entity_sync_id'] ?? ''}';
+            if (et.isNotEmpty && sid.isNotEmpty) conflictKeys.add('$et:$sid');
+          }
+          if (conflictKeys.isNotEmpty) {
+            for (var k = 0; k < batch.length; k++) {
+              final key = '${batch[k]['entity_type'] ?? ''}:${batch[k]['entity_sync_id'] ?? ''}';
+              if (!conflictKeys.contains(key)) continue;
+              final pid = pending[startIdx + k];
+              final lid = pid['id'];
+              final ts = DateTime.tryParse('${batch[k]['updated_at'] ?? ''}');
+              if (lid is int && ts != null && !removedIds.contains(lid)) {
+                await LocalDb.retimePendingChange(lid, ts.toUtc().add(offset).toIso8601String());
+              }
+            }
+          }
         }
       }
       // 推送成功后顺便拉取一次（其他设备的变更）
       await pullChanges();
-      return accepted;
+      return totalAccepted;
     } catch (e) {
       _lastSyncFailed = true;
       // 推送失败也要有可读日志（用户曾遇"2条没推送但只有403原文"）：记录实体类型与失败原因

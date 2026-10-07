@@ -281,7 +281,7 @@ function pageBackgroundVars(primary: string, dark: boolean, skin: string): { pat
   const ink = dark ? 'rgba(255,255,255,0.24)' : rgba(primary, 0.22);
   const ink2 = dark ? 'rgba(255,255,255,0.15)' : rgba(primary, 0.14);
   const baseTop = dark ? '#181b22' : alpha(primary, '14');
-  const baseBottom = dark ? '#12151c' : '#f5f7fa';
+  const baseBottom = dark ? '#12151c' : '#f6f7f9'; // 对齐 App scaffoldBackground 0xFFF6F7F9
   const gradient = `linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;
   if (skin === 'none') return { patternSrc: '', gradientCss: gradient };
   return { patternSrc: skinSvgSrc(skin, { ink, ink2 }), gradientCss: gradient };
@@ -300,10 +300,10 @@ export function useThemeVars() {
       const dark = isDark();
       const skin = getThemeSkin();
       const cardBg = dark ? 'rgba(35,40,51,0.88)' : 'rgba(255,255,255,0.88)'; // 半透明卡片：透出背景图案（对齐 App card alpha）
-      const textMain = dark ? '#e8eaf1' : '#303133';
-      const textSub = dark ? '#9aa2b3' : '#909399';
-      const divider = dark ? '#2e3440' : '#f0f2f5';
-      const inputBg = dark ? '#2a303c' : '#f5f7fa';
+      const textMain = dark ? '#e8eaf1' : '#111827'; // 对齐 App TaozhuColors.textMain（深黑，非偏灰）
+      const textSub = dark ? '#9aa2b3' : '#909399'; // 对齐 App textSub
+      const divider = dark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.06)'; // 对齐 App divider（6% 黑线）
+      const inputBg = dark ? '#2a303c' : '#f5f7fa'; // 对齐 App field
       const bg = pageBackgroundVars(primary, dark, skin);
       patternSrc.value = bg.patternSrc;
       vars.value = {

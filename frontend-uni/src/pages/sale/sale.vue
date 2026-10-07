@@ -18,7 +18,7 @@
       <button class="copy-btn" :disabled="loading" @click="copyLast">复制上一笔</button>
       <button class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
     </view>
-    <!-- 批量直编头：该日全部行统一改日期（批量改期），店铺为该日记录不变 -->
+    <!-- 批量直编头：该日全部行统一改日期（批量改期），店铺为该日记录不变；整单凭证=该日全部原单聚合查看 -->
     <view v-if="isDateRows" class="head-row">
       <picker class="field" mode="date" :value="date" @change="onDate">
         <view class="field-inner">
@@ -26,6 +26,7 @@
           <text class="value">{{ date }}</text>
         </view>
       </picker>
+      <view class="batch-voucher" @click="showBatchAttach"><text class="mi">&#xe3f4;</text>整单凭证</view>
       <text class="batch-hint">该日 {{ rows.length }} 行 · 保存按原单分组提交</text>
     </view>
 
@@ -40,15 +41,12 @@
       <view class="row-card">
         <view class="head-row">
           <text class="idx">{{ i + 1 }}</text>
-          <picker class="goods-pick" mode="selector" :range="itemNames" @change="(e) => onItem(i, e.detail.value)">
-            <view class="goods-field" :class="{ ph: !row.itemName }">{{ row.itemName || '选商品（可输入或选择）' }}</view>
-          </picker>
+          <input class="goods-field" :class="{ ph: !row.itemName }" v-model="row.itemName" placeholder="选商品（可输入或选择）" @blur="onItemInput(i)" />
           <text v-if="row.rowId" class="att-btn" @click.stop="showAttach('sale_item', row.rowId, 'sale', row.orderId)"><text class="mi">&#xe3f4;</text></text>
           <text class="del" @click="rows.splice(i, 1)">删</text>
         </view>
-        <picker class="price-pick" mode="selector" :range="row.prices" range-key="unit" @change="(e) => onPrice(i, e.detail.value)">
-          <view class="price-field" :class="{ ph: !row.priceLabel }">{{ row.priceLabel || '单位 / 价格' }}</view>
-        </picker>
+        <input class="unit-field" :class="{ ph: !row.unit }" v-model="row.unit" placeholder="单位（可手动填写）" @blur="onUnitBlur(i)" />
+        <view class="price-hint" :class="{ ph: !row.priceLabel }">{{ row.priceLabel || '输入商品名自动带出单位与价格' }}</view>
         <picker class="date-pick" mode="date" :value="row.happenedAt || date" @change="(e) => (row.happenedAt = e.detail.value)">
           <view class="row-date">该行日期：{{ (row.happenedAt || date).slice(5) }}　点此修改</view>
         </picker>
@@ -111,9 +109,9 @@
         <text class="viewer-close" @click="closeAttach">✕</text>
         <text class="viewer-count">{{ attach.list.length > 0 ? attach.index + 1 + '/' + attach.list.length : '' }}</text>
         <view class="viewer-ops">
-          <text class="viewer-op" @click="uploadAttach">添加</text>
+          <text v-if="attach.canEdit" class="viewer-op" @click="uploadAttach">添加</text>
           <text v-if="attach.list.length > 0" class="viewer-op" @click="downloadAttach">下载</text>
-          <text v-if="attach.list.length > 0" class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
+          <text v-if="attach.list.length > 0 && attach.canEdit" class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
         </view>
       </view>
     </view>
@@ -493,12 +491,26 @@ function insertRow(i: number) {
 }
 
 // ── 行级凭证附件（对齐 App 行头附件按钮：点击直接全屏查看器，可添加/下载/删除）──
-const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number }>({
-  show: false, entity: '', id: '', list: [], index: 0,
+const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number; canEdit: boolean }>({
+  show: false, entity: '', id: '', list: [], index: 0, canEdit: true,
 });
 
+/// 批量直编整单凭证：聚合该日全部原单的单据级附件（只读查看+下载，不提供添加/删除——多单归属不明确）
+async function showBatchAttach() {
+  const oids = Array.from(new Set(rows.value.map((r) => r.orderId).filter(Boolean)));
+  attach.value = { show: true, entity: 'sale', id: '', list: [], index: 0, canEdit: false };
+  const list: Array<{ key: string }> = [];
+  for (const oid of oids) {
+    try {
+      const d = await getAttachments('sale', oid);
+      list.push(...(d.attachments || []));
+    } catch (_) {}
+  }
+  attach.value.list = list;
+}
+
 async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') {
-  attach.value = { show: true, entity, id, list: [], index: 0 };
+  attach.value = { show: true, entity, id, list: [], index: 0, canEdit: true };
   let list: Array<{ key: string }> = [];
   try {
     const d = await getAttachments(entity, id);
@@ -641,26 +653,42 @@ async function loadDateRows() {
 
 const skippedRef = ref(0); // dateRows 加载被跳过的商品行数（商品已删/停用）
 
-function onItem(i: number, idx: number) {
-  const it = items.value[idx];
+/// 商品名输入失焦：精确匹配到已有商品 → 关联并带出默认单位/价格（不覆盖已手填价格）；
+/// 未匹配=自定义新商品名（itemId 留空，提交时可入库，对齐 App 名称输入关联）
+function onItemInput(i: number) {
   const row = rows.value[i];
-  if (!it) return;
-  row.itemId = it.id;
-  row.itemName = it.name;
-  row.prices = it.prices;
-  row.priceId = '';
-  row.priceLabel = '';
-  row.unit = '';
-  row.salePrice = '';
+  const name = (row.itemName || '').trim();
+  const match = items.value.find((x) => x.name === name);
+  if (!match) return;
+  row.itemId = match.id;
+  row.prices = match.prices;
+  row.itemName = match.name;
+  if (!row.priceId) {
+    const pr = match.prices.find((p) => p.unit === (row.unit || '')) || match.prices[0];
+    if (pr) {
+      row.priceId = pr.id;
+      row.unit = pr.unit;
+      row.priceLabel = `${pr.unit}（¥${pr.sale_price}·库存${pr.stock ?? 0}）`;
+      if (!row.salePrice) row.salePrice = String(pr.sale_price);
+    }
+  }
 }
-function onPrice(i: number, idx: number) {
-  const p = rows.value[i].prices[idx];
-  if (!p) return;
+
+/// 单位输入失焦：匹配到该商品的价格组合 → 带出价格；自定义单位（商品无此单位）=价格手动填（对齐 App）
+function onUnitBlur(i: number) {
   const row = rows.value[i];
-  row.priceId = p.id;
-  row.unit = p.unit;
-  row.priceLabel = `${p.unit}（¥${p.sale_price}·库存${p.stock ?? 0}）`;
-  row.salePrice = String(p.sale_price);
+  row.unit = (row.unit || '').trim();
+  if (!row.unit) { row.priceLabel = ''; return; }
+  const item = items.value.find((x) => x.id === row.itemId);
+  const price = item?.prices.find((p) => p.unit === row.unit);
+  if (price) {
+    row.priceId = price.id;
+    row.priceLabel = `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`;
+    if (!row.salePrice) row.salePrice = String(price.sale_price);
+  } else {
+    row.priceId = ''; // 自定义单位：价格手动填
+    row.priceLabel = `单位 ${row.unit}（自定义，价格请手动填写）`;
+  }
 }
 
 /// 手动添加凭证：选图暂存，提交成功随单上传（对齐 App「整单凭证」）
@@ -865,13 +893,14 @@ async function submit() {
 .row-card { background: var(--card-bg); border-radius: 16rpx; padding: 18rpx 20rpx; margin-bottom: 14rpx; }
 .head-row { display: flex; align-items: center; gap: 12rpx; }
 .idx { width: 44rpx; height: 44rpx; border-radius: 12rpx; background: var(--primary-soft); color: var(--primary); font-size: 24rpx; font-weight: bold; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.goods-pick { flex: 1; min-width: 0; }
-.goods-field { background: var(--input-bg); border-radius: 10rpx; padding: 16rpx 18rpx; font-size: 28rpx; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.goods-field { flex: 1; min-width: 0; background: var(--input-bg); border-radius: 10rpx; padding: 16rpx 18rpx; font-size: 28rpx; }
 .goods-field.ph { color: var(--text-sub); }
 .att-btn { color: #409EFF; padding: 6rpx; font-size: 34rpx; }
-.price-pick { margin-top: 12rpx; }
-.price-field { background: var(--input-bg); border-radius: 10rpx; padding: 14rpx 18rpx; font-size: 26rpx; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.price-field.ph { color: var(--text-sub); }
+.unit-field { margin-top: 12rpx; width: 100%; box-sizing: border-box; background: var(--input-bg); border-radius: 10rpx; padding: 14rpx 18rpx; font-size: 26rpx; }
+.unit-field.ph { color: var(--text-sub); }
+.price-hint { margin-top: 8rpx; font-size: 22rpx; color: var(--primary); }
+.price-hint.ph { color: var(--text-sub); }
+.batch-voucher { flex-shrink: 0; display: flex; align-items: center; gap: 6rpx; background: var(--card-bg); color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; font-size: 24rpx; padding: 16rpx 20rpx; }
 .date-pick { margin-top: 12rpx; }
 .row-date { background: var(--input-bg); border-radius: 10rpx; padding: 12rpx 16rpx; font-size: 24rpx; color: var(--primary); }
 .num-row { display: flex; gap: 12rpx; margin-top: 12rpx; }

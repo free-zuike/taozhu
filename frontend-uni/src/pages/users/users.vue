@@ -41,6 +41,15 @@
           <text class="r-arrow">›</text>
         </view>
       </view>
+
+      <view class="group-title">服务器</view>
+      <view class="grp">
+        <view class="s-row" @click="editServerBase">
+          <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE875;</text></view>
+          <view class="r-body"><text class="r-tx">服务器地址</text><text class="r-sub">{{ apiBase || '未设置' }}</text></view>
+          <text class="r-arrow">›</text>
+        </view>
+      </view>
     </view>
 
     <!-- 账号管理（对齐 App UsersPage embed：顶部管理头行 + 用户列表） -->
@@ -93,7 +102,7 @@ import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { request, getToken, getApiBase, getRole } from '../../api';
+import { request, getToken, getApiBase, setApiBase, getRole } from '../../api';
 
 interface User { id: string; username: string; role: string; display_name?: string }
 
@@ -112,6 +121,29 @@ const account = ref('');
 const roleText = ref('老板');
 const totpOn = ref(false);
 const avatarUrl = ref('');
+const apiBase = ref(getApiBase());
+
+/// 服务器地址修改（对齐 App 账号设置「服务器」组：弹输入框 → setApiBase 本地生效）
+function editServerBase() {
+  // #ifdef H5
+  uni.showToast({ title: '网页版使用当前访问域名，无需修改', icon: 'none' });
+  return;
+  // #endif
+  uni.showModal({
+    title: '服务器地址',
+    editable: true,
+    placeholderText: '如 https://您的域名',
+    content: apiBase.value,
+    success: (res) => {
+      if (!res.confirm) return;
+      const v = (res.content || '').trim();
+      if (!v) return uni.showToast({ title: '地址不能为空', icon: 'none' });
+      setApiBase(v);
+      apiBase.value = v;
+      uni.showToast({ title: '已保存，重新登录后生效', icon: 'success' });
+    },
+  });
+}
 
 onShow(async () => {
   if (!getToken()) {

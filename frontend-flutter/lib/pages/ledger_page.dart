@@ -936,6 +936,7 @@ class _LedgerPageState extends State<LedgerPage> {
           appLog('op', '出货 删除商品行：该条出货记录最后一行，整单一并删除');
           SyncService.version.notifyListeners();
           _load();
+          _loadMonthly(); // 删除后顶部月度统计卡同步刷新
           return;
         }
       } else {
@@ -954,6 +955,7 @@ class _LedgerPageState extends State<LedgerPage> {
           appLog('op', '出货 删除商品行：该条出货记录最后一行，整单一并删除');
           SyncService.version.notifyListeners();
           _load();
+          _loadMonthly(); // 删除后顶部月度统计卡同步刷新
           return;
         }
         // 非末行：该行凭证附件副本一并清（attachments/sale_item/{itemId}/），再镜像移除该行
@@ -984,6 +986,7 @@ class _LedgerPageState extends State<LedgerPage> {
       appLog('op', '出货 删除商品行：$name（${order['client_name'] ?? ''} ${_date(order['happened_at'])}）');
       SyncService.version.notifyListeners();
       _load();
+      _loadMonthly(); // 删除后顶部月度统计卡同步刷新
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -1019,6 +1022,7 @@ class _LedgerPageState extends State<LedgerPage> {
       appLog('op', '出货 删除记录：${order['client_name'] ?? ''} ${_date(order['happened_at'])}');
       SyncService.version.notifyListeners();
       _load();
+      _loadMonthly(); // 删除后顶部月度统计卡同步刷新（此前只 _load 不重算统计=删除后统计没变）
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }

@@ -1534,7 +1534,11 @@ class _SalePageState extends State<SalePage> {
               subtitle: const Text('上传一张凭证自动存到该单每个商品行', style: TextStyle(fontSize: 11)),
               trailing: const Icon(Icons.chevron_right, size: 20),
               onTap: () => showAttachmentViewer(
-                  context, 'sale', _saleId, '出货单附件',
+                  context, 'sale',
+                  // 批量直编：上传/查看挂真实原单 id（此前挂临时 _saleId=账本按真实单 id 查不到=附件不显示）；
+                  // 查看器 orderIds 双查覆盖该日全部原单
+                  _orderIds.isNotEmpty ? _orderIds.first : _saleId,
+                  '出货单附件',
                   lineIds: [
                     for (final r in _rows)
                       if (r.rowId.isNotEmpty) r.rowId,
