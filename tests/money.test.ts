@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { roundMoney, getRoundingConfig, DEFAULT_ROUNDING } from '../src/lib/money';
+import {
+  roundMoney, getRoundingConfig, DEFAULT_ROUNDING,
+  normalizeRoundConfig, floorToUnit, salesSideRounded, salesAggByConfig,
+} from '../src/lib/money';
 
 describe('money.roundMoney（进位临界 + 精度）', () => {
   it('默认四舍五入 2 位（分）', () => {
@@ -74,5 +77,81 @@ describe('money.getRoundingConfig（settings 表读取）', () => {
       }),
     } as unknown as D1Database;
     expect(await getRoundingConfig(db)).toEqual(DEFAULT_ROUNDING);
+  });
+});
+
+describe('money 店铺结账抹零 helper（round_stage/round_unit）', () => {
+  const M = { carry: 0.5, digits: 2 };
+
+  it('normalizeRoundConfig：合法档位保留、非法/缺省回退默认', () => {
+    expect(normalizeRoundConfig('day', 'yuan')).toEqual({ stage: 'day', unit: 'yuan' });
+    expect(normalizeRoundConfig('txn', 'jiao')).toEqual({ stage: 'txn', unit: 'jiao' });
+    expect(normalizeRoundConfig('total', 'fen')).toEqual({ stage: 'total', unit: 'fen' });
+    expect(normalizeRoundConfig('bogus', 'bogus')).toEqual({ stage: 'none', unit: 'yuan' });
+    expect(normalizeRoundConfig(null, undefined)).toEqual({ stage: 'none', unit: 'yuan' });
+  });
+
+  it('floorToUnit：元/角/分向下取整，负数向零取整', () => {
+    expect(floorToUnit(12.9, 'yuan')).toBe(12);
+    expect(floorToUnit(12.99, 'jiao')).toBe(12.9);
+    expect(floorToUnit(12.999, 'fen')).toBe(12.99);
+    expect(floorToUnit(-12.9, 'yuan')).toBe(-12); // 向零取整（出货侧恒正，负值仅"多付"理论边角）
+  });
+
+  it('salesSideRounded：none=逐笔舍入累加不取整（历史口径不变）', () => {
+    const rows = [
+      { sale_id: 'a', happened_at: '2026-10-01', amount: 6.45 },
+      { sale_id: 'a', happened_at: '2026-10-01', amount: 6.45 },
+      { sale_id: 'b', happened_at: '2026-10-02', amount: 3 },
+    ];
+    expect(salesSideRounded(rows, 'none', 'yuan', M)).toBe(15.9);
+  });
+
+  it('salesSideRounded：txn=每张出货单合计向下取整再累加', () => {
+    const rows = [
+      { sale_id: 'a', happened_at: '2026-10-01', amount: 6.45 },
+      { sale_id: 'a', happened_at: '2026-10-01', amount: 6.45 },
+      { sale_id: 'b', happened_at: '2026-10-01', amount: 3.5 },
+    ];
+    // 单 a 合计 12.9 → 12；单 b 3.5 → 3；合计 15
+    expect(salesSideRounded(rows, 'txn', 'yuan', M)).toBe(15);
+  });
+
+  it('salesSideRounded：day=每日出货合计向下取整（用户 12.9→12 语义）', () => {
+    const rows = [
+      { sale_id: 'a', happened_at: '2026-10-01', amount: 6.45 },
+      { sale_id: 'b', happened_at: '2026-10-01', amount: 6.45 },
+      { sale_id: 'c', happened_at: '2026-10-02', amount: 8.7 },
+    ];
+    // 10-01 合计 12.9 → 12；10-02 8.7 → 8；合计 20
+    expect(salesSideRounded(rows, 'day', 'yuan', M)).toBe(20);
+  });
+
+  it('salesSideRounded：day 组内每笔先舍入再累加（勿原始 SUM 后 floor）', () => {
+    // digits=0（元口径）：0.96 每笔先舍入=1 → 日合计 2 → floor 2；原始 SUM 1.92 → floor 1
+    const M0 = { carry: 0.5, digits: 0 };
+    const rows = [
+      { sale_id: 'a', happened_at: '2026-10-01', amount: 0.96 },
+      { sale_id: 'b', happened_at: '2026-10-01', amount: 0.96 },
+    ];
+    expect(salesSideRounded(rows, 'day', 'yuan', M0)).toBe(2);
+  });
+
+  it('salesSideRounded：total=全部合计一次向下取整', () => {
+    const rows = [
+      { sale_id: 'a', happened_at: '2026-10-01', amount: 6.45 },
+      { sale_id: 'b', happened_at: '2026-10-02', amount: 9.5 },
+    ];
+    expect(salesSideRounded(rows, 'total', 'yuan', M)).toBe(15); // 15.95 → 15
+  });
+
+  it('salesAggByConfig：多店按各自配置分别算再累加（查不到配置的店按 none）', () => {
+    const rows = [
+      { client_id: 'c1', sale_id: 'a', happened_at: '2026-10-01', amount: 12.9 },
+      { client_id: 'c2', sale_id: 'b', happened_at: '2026-10-01', amount: 12.9 },
+    ];
+    const cfgMap = new Map([['c1', { stage: 'day', unit: 'yuan' }]]);
+    // c1: 12.9→12；c2 无配置 none=12.9；合计 24.9
+    expect(salesAggByConfig(rows, cfgMap, M)).toBe(24.9);
   });
 });

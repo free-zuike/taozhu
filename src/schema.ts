@@ -21,6 +21,8 @@ const DDL: string[] = [
     start_date TEXT,
     end_date TEXT,
     month_start_day INTEGER NOT NULL DEFAULT 1,
+    round_stage TEXT NOT NULL DEFAULT 'none',
+    round_unit TEXT NOT NULL DEFAULT 'yuan',
     category_id TEXT,
     deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -238,7 +240,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '6') {
+      if (meta?.value === '7') {
         schemaReady = true;
         return;
       }
@@ -435,10 +437,13 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     for (const t of ['clients', 'items'] as const) {
       await ensureColumn(db, t, 'category_id', 'TEXT');
     }
-    // clients 另有：记账开始/结束日期（结账周期起止）+ 每月起始日（1-28，1=自然月）
+    // clients 另有：记账开始/结束日期（结账周期起止）+ 每月起始日（1-28，1=自然月）+ 结账抹零配置
     await ensureColumn(db, 'clients', 'start_date', 'TEXT');
     await ensureColumn(db, 'clients', 'end_date', 'TEXT');
     await ensureColumn(db, 'clients', 'month_start_day', 'INTEGER NOT NULL DEFAULT 1');
+    // v0.17.323.0：店铺级结账抹零（stage：none/txn/day/total；unit：yuan/jiao/fen）
+    await ensureColumn(db, 'clients', 'round_stage', "TEXT NOT NULL DEFAULT 'none'");
+    await ensureColumn(db, 'clients', 'round_unit', "TEXT NOT NULL DEFAULT 'yuan'");
     // payments 平账减免列（waived：欠款 = Σsales − Σ(amount+waived)）
     await ensureColumn(db, 'payments', 'waived', 'REAL NOT NULL DEFAULT 0');
     // v0.16.26.0：支付表幂等键 sync_key（sales/purchases 头表已物理删除，行级携带 sync_key）
@@ -495,7 +500,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '6')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '7')",
     ).run();
     schemaReady = true;
     } catch (err) {

@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS clients (
   start_date TEXT,
   end_date TEXT,
   month_start_day INTEGER NOT NULL DEFAULT 1,
+  round_stage TEXT NOT NULL DEFAULT 'none',
+  round_unit TEXT NOT NULL DEFAULT 'yuan',
   category_id TEXT,
   deleted_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))

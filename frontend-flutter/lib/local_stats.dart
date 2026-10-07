@@ -1,6 +1,7 @@
 /// 本地统计聚合（原生端零网络：所有统计从本地镜像计算，秒开；Web 无本地库 → 直连 API）。
 /// 与后端 /stats/* 响应字段同形，页面渲染零改动。去单据化后主记录=行级（sale_items/purchase_items）。
 import 'local_db.dart';
+import 'utils/money.dart';
 
 /// 本地镜像按区间+店铺聚合出货/毛利/收款/进货/欠款（与 /stats/summary 同形）
 /// kind='purchase'：换成进货口径（无店铺维度、无毛利/欠款，sales_total=进货额）
@@ -13,6 +14,26 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
   final inRange = (String h) => h.isNotEmpty && h.compareTo(start) >= 0 && h.compareTo(end) <= 0;
   double sold = 0, gross = 0, paid = 0, purchase = 0, debt = 0;
   var count = 0;
+  if (!isBuy) {
+    // 未回款 = 截止 end 累计出货（按各店抹零配置分组向下取整） − 累计收款（逐笔先舍入再累加），
+    // 与服务端 /stats/summary debt 口径一致
+    final cfgById = <String, ({String stage, String unit})>{
+      for (final c in await LocalDb.getAllByName('clients'))
+        '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+    };
+    final debtRows = rows.where((r) {
+      final h = '${r['happened_at'] ?? ''}';
+      return (sel.isEmpty || '${r['client_id'] ?? ''}' == sel) && h.isNotEmpty && h.compareTo(end) <= 0;
+    }).toList();
+    final saleDebt = sel.isNotEmpty
+        ? salesSideRoundedLocal(debtRows, cfgById[sel]?.stage ?? 'none', cfgById[sel]?.unit ?? 'yuan')
+        : salesSideRoundedByClient(debtRows, cfgById).values.fold(0.0, (a, b) => a + b);
+    final paidDebt = pays.where((p) {
+      final h = '${p['happened_at'] ?? ''}';
+      return (sel.isEmpty || '${p['client_id'] ?? ''}' == sel) && h.isNotEmpty && h.compareTo(end) <= 0;
+    }).fold(0.0, (s, p) => s + Money.round(((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0)));
+    debt = saleDebt - paidDebt;
+  }
   for (final r in rows) {
     if (!isBuy) {
       final cid = '${r['client_id'] ?? ''}';
@@ -20,7 +41,6 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
     }
     final h = '${r['happened_at'] ?? ''}';
     final amt = (r['amount'] as num?)?.toDouble() ?? 0;
-    if (!isBuy && h.isNotEmpty && h.compareTo(end) <= 0) debt += amt; // 截止 end 累计出货
     if (!inRange(h)) continue;
     sold += amt;
     count++;
@@ -35,7 +55,6 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
     if (sel.isNotEmpty && cid != sel) continue;
     final amt = ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0);
     final h = '${p['happened_at'] ?? ''}';
-    if (h.isNotEmpty && h.compareTo(end) <= 0) debt -= amt;
     if (inRange(h)) paid += amt;
   }
   for (final b in buys) {
@@ -163,24 +182,31 @@ Future<Map<String, dynamic>> localMonthly(String year, String? clientId, {String
   return {'months': months};
 }
 
-/// 按店结账（与 /stats/clients 同形；含欠款与毛利）
+/// 按店结账（与 /stats/clients 同形；含欠款与毛利）。
+/// 欠款=各店按自身抹零配置（round_stage/round_unit）算出货侧累计 − 收款逐笔舍入（与服务端 /stats/clients 口径一致）
 Future<Map<String, dynamic>> localClientStats(String start, String end) async {
   final rows = await LocalDb.getAll('sale_items');
   final pays = await LocalDb.getAll('payments');
   final clients = await LocalDb.getAllByName('clients');
   final nameOf = {for (final c in clients) '${c['id']}': '${c['name'] ?? ''}'};
+  final cfgById = <String, ({String stage, String unit})>{
+    for (final c in clients) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+  };
+  final allSales = salesSideRoundedByClient(rows, cfgById);
   final agg = <String, Map<String, double>>{};
   for (final r in rows) {
     final cid = '${r['client_id'] ?? ''}';
     final h = '${r['happened_at'] ?? ''}';
     if (h.isEmpty) continue;
     final a = agg[cid] ??= {'sales_total': 0, 'paid_total': 0, 'gross_profit': 0, 'all_sales': 0, 'all_paid': 0};
-    a['all_sales'] = (a['all_sales'] ?? 0) + ((r['amount'] as num?)?.toDouble() ?? 0);
     if (h.compareTo(start) >= 0 && h.compareTo(end) <= 0) {
-      a['sales_total'] = (a['sales_total'] ?? 0) + ((r['amount'] as num?)?.toDouble() ?? 0);
+      a['sales_total'] = (a['sales_total'] ?? 0) + Money.round((r['amount'] as num?)?.toDouble() ?? 0);
       a['gross_profit'] = (a['gross_profit'] ?? 0) +
-          (((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * ((r['quantity'] as num?)?.toDouble() ?? 0);
+          Money.round((((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0)) * ((r['quantity'] as num?)?.toDouble() ?? 0));
     }
+  }
+  for (final e in agg.entries) {
+    e.value['all_sales'] = allSales[e.key] ?? 0;
   }
   for (final p in pays) {
     final cid = '${p['client_id'] ?? ''}';
@@ -188,8 +214,8 @@ Future<Map<String, dynamic>> localClientStats(String start, String end) async {
     if (h.isEmpty) continue;
     final amt = ((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0);
     final a = agg[cid] ??= {'sales_total': 0, 'paid_total': 0, 'gross_profit': 0, 'all_sales': 0, 'all_paid': 0};
-    a['all_paid'] = (a['all_paid'] ?? 0) + amt;
-    if (h.compareTo(start) >= 0 && h.compareTo(end) <= 0) a['paid_total'] = (a['paid_total'] ?? 0) + amt;
+    a['all_paid'] = (a['all_paid'] ?? 0) + Money.round(amt);
+    if (h.compareTo(start) >= 0 && h.compareTo(end) <= 0) a['paid_total'] = (a['paid_total'] ?? 0) + Money.round(amt);
   }
   final list = agg.entries.map((e) => <String, dynamic>{
     'id': e.key, 'name': nameOf[e.key] ?? '',

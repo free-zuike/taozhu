@@ -98,3 +98,62 @@ double roundMoney(double value, double carry, int digits) {
   final out = next >= threshold ? base + 1 : base;
   return (sign * out) / f;
 }
+
+/// 店铺结账抹零配置（对齐后端 RoundStage/RoundUnit）：
+/// stage：none=不抹零（逐笔舍入）；txn=每张出货单合计向下抹零；day=每日出货合计向下抹零；total=全部一次向下抹零。
+/// unit：向下取整档位（yuan=元/jiao=角/fen=分）。非法值回退默认，配置来自旧端/手工改库时兜底。
+({String stage, String unit}) normalizeRoundConfig(Object? stage, Object? unit) {
+  final s = '${stage ?? ''}';
+  final u = '${unit ?? ''}';
+  return (
+    stage: (s == 'txn' || s == 'day' || s == 'total') ? s : 'none',
+    unit: (u == 'jiao' || u == 'fen') ? u : 'yuan',
+  );
+}
+
+/// 向下取整到指定档位（负数对称，与 roundMoney 同向）
+double floorToUnit(double value, String unit) {
+  final f = unit == 'yuan' ? 1.0 : unit == 'jiao' ? 10.0 : 100.0;
+  final sign = value < 0 ? -1 : 1;
+  return sign * (value.abs() * f + 1e-9).floorToDouble() / f;
+}
+
+/// 出货侧按店铺抹零配置的欠款口径（对齐后端 salesSideRounded）：
+/// rows 为 sale_items 行（本地镜像，含 sale_id/happened_at/amount）。
+/// 组内一律「每笔先 Money.round 再累加」，组合计再向下取整到 unit。
+double salesSideRoundedLocal(List<Map<String, dynamic>> rows, String stage, String unit) {
+  if (stage == 'none') {
+    return rows.fold(0.0, (s, x) => s + Money.round((x['amount'] as num?)?.toDouble() ?? 0));
+  }
+  if (stage == 'total') {
+    final total = rows.fold(0.0, (s, x) => s + Money.round((x['amount'] as num?)?.toDouble() ?? 0));
+    return floorToUnit(total, unit);
+  }
+  final keyOf = stage == 'txn'
+      ? (Map<String, dynamic> x) => 's:${x['sale_id'] ?? ''}'
+      : (Map<String, dynamic> x) => 'd:${('${x['happened_at'] ?? ''}').length >= 10 ? '${x['happened_at']}'.substring(0, 10) : ''}';
+  final groups = <String, double>{};
+  for (final x in rows) {
+    final k = keyOf(x);
+    groups[k] = (groups[k] ?? 0) + Money.round((x['amount'] as num?)?.toDouble() ?? 0);
+  }
+  return groups.values.fold(0.0, (s, v) => s + floorToUnit(v, unit));
+}
+
+/// 本地全量出货行按各店抹零配置分别算出货侧欠款合计（对齐后端 salesAggByConfig）。
+/// cfgById 由本地 clients 镜像构建（同步 payload 已含 round_stage/round_unit）；查不到配置的店按 none。
+Map<String, double> salesSideRoundedByClient(
+  List<Map<String, dynamic>> saleRows,
+  Map<String, ({String stage, String unit})> cfgById,
+) {
+  final byClient = <String, List<Map<String, dynamic>>>{};
+  for (final x in saleRows) {
+    byClient.putIfAbsent('${x['client_id'] ?? ''}', () => []).add(x);
+  }
+  final out = <String, double>{};
+  for (final e in byClient.entries) {
+    final cfg = cfgById[e.key] ?? (stage: 'none', unit: 'yuan');
+    out[e.key] = salesSideRoundedLocal(e.value, cfg.stage, cfg.unit);
+  }
+  return out;
+}

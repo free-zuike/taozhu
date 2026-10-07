@@ -341,4 +341,51 @@ describe('按店铺分类汇总对账（美食城多档口总账）', () => {
     expect(items.items[0]?.quantity).toBe(30);
     expect(items.items[0]?.amount).toBe(30);
   });
+
+  it('店铺结账抹零：round_stage=day/round_unit=yuan 时欠款按日向下取整（12.9→12）', async () => {
+    // 新建店铺并保存抹零配置（POST /clients 应持久化并回读）
+    const created = (await (await call(env, 'POST', '/api/v1/clients', token,
+      { name: '抹零店', round_stage: 'day', round_unit: 'yuan' })).json()) as { id: string; round_stage: string; round_unit: string };
+    expect(created.round_stage).toBe('day');
+    expect(created.round_unit).toBe('yuan');
+    // 造两天出货：10-01 两笔合计 12.9（6.45+6.45）、10-02 一笔 8.7
+    for (const [id, saleId, qty, amt, day] of [
+      ['si-m1', 's-m1', 6.45, 6.45, '2026-10-01'],
+      ['si-m2', 's-m2', 6.45, 6.45, '2026-10-01'],
+      ['si-m3', 's-m3', 8.7, 8.7, '2026-10-02'],
+    ] as Array<[string, string, number, number, string]>) {
+      await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(id, saleId, created.id, 'i-1', '斤', qty, 2, 1, amt, day).run();
+    }
+    // 无收款：欠款 = 12（10-01）+ 8（10-02）= 20
+    const list = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string; debt: number }> };
+    const row = list.clients.find((x) => x.id === created.id)!;
+    expect(row.debt).toBe(20);
+    // /stats/summary 单店同口径
+    const sum = (await (await call(env, 'GET',
+      `/api/v1/stats/summary?start=2026-10-01&end=2026-10-31&client_id=${created.id}`, token)).json()) as { debt: number };
+    expect(sum.debt).toBe(20);
+    // PATCH 改回不抹零：欠款恢复 12.9+8.7=21.6
+    await call(env, 'PATCH', `/api/v1/clients/${created.id}`, token, { round_stage: 'none' });
+    const list2 = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string; debt: number }> };
+    expect(list2.clients.find((x) => x.id === created.id)!.debt).toBeCloseTo(21.6, 5);
+  });
+
+  it('店铺结账抹零：round_stage=txn 每单合计取整、total 结账总额取整、none 不变', async () => {
+    // 店 T：单 a 两笔 6.45+6.45（单合计 12.9→12）+ 单 b 一笔 3.5（→3）= txn 欠款 15
+    const created = (await (await call(env, 'POST', '/api/v1/clients', token,
+      { name: 'T店', round_stage: 'txn', round_unit: 'yuan' })).json()) as { id: string };
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-t1', 's-ta', created.id, 'i-1', '斤', 6.45, 2, 1, 6.45, '2026-10-01').run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-t2', 's-ta', created.id, 'i-1', '斤', 6.45, 2, 1, 6.45, '2026-10-01').run();
+    await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind('si-t3', 's-tb', created.id, 'i-1', '斤', 3.5, 2, 1, 3.5, '2026-10-02').run();
+    let list = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string; debt: number }> };
+    expect(list.clients.find((x) => x.id === created.id)!.debt).toBe(15);
+    // 改 total：全部 12.9+3.5=16.4 → 16
+    await call(env, 'PATCH', `/api/v1/clients/${created.id}`, token, { round_stage: 'total' });
+    list = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string; debt: number }> };
+    expect(list.clients.find((x) => x.id === created.id)!.debt).toBe(16);
+  });
 });

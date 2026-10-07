@@ -150,7 +150,6 @@ class _LedgerPageState extends State<LedgerPage> {
                     ((r['cost_price'] as num?)?.toDouble() ?? 0)) *
                 qty);
           }
-          if (h.isNotEmpty && h.compareTo(end) <= 0) debt += Money.round(amt); // 截止 end 累计出货
         }
         for (final p in pays) {
           if (!isSel('${p['client_id'] ?? ''}')) continue;
@@ -158,7 +157,29 @@ class _LedgerPageState extends State<LedgerPage> {
           final waived = (p['waived'] as num?)?.toDouble() ?? 0;
           final h = '${p['happened_at'] ?? ''}';
           if (inRange(h)) paid += Money.round(amount + waived);
-          if (h.isNotEmpty && h.compareTo(end) <= 0) debt -= Money.round(amount + waived); // 截止 end 累计收款
+        }
+        // 未回款 = 截止 end 累计出货（按各店抹零配置分组向下取整，与服务端 /stats/summary 口径一致）
+        //         − 截止 end 累计收款（逐笔先舍入再累加；实收无抹零）
+        final debtRows = rows.where((r) {
+          final h = '${r['happened_at'] ?? ''}';
+          return isSel('${r['client_id'] ?? ''}') && h.isNotEmpty && h.compareTo(end) <= 0;
+        }).toList();
+        final paidDebt = pays.where((p) {
+          final h = '${p['happened_at'] ?? ''}';
+          return isSel('${p['client_id'] ?? ''}') && h.isNotEmpty && h.compareTo(end) <= 0;
+        }).fold(0.0, (s, p) => s + Money.round(((p['amount'] as num?)?.toDouble() ?? 0) + ((p['waived'] as num?)?.toDouble() ?? 0)));
+        if (selId != null) {
+          // 单店视图：按该店自身抹零配置
+          final me = await LocalDb.getOne('clients', selId);
+          final cfg = normalizeRoundConfig(me?['round_stage'], me?['round_unit']);
+          debt = salesSideRoundedLocal(debtRows, cfg.stage, cfg.unit) - paidDebt;
+        } else {
+          // 全部店铺视图：各店按自身配置分别算出货侧再累加（None 店=逐笔舍入，行为不变）
+          final cfgById = <String, ({String stage, String unit})>{
+            for (final c in await LocalDb.getAllByName('clients'))
+              '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+          };
+          debt = salesSideRoundedByClient(debtRows, cfgById).values.fold(0.0, (a, b) => a + b) - paidDebt;
         }
       }
       if (!mounted) return;
@@ -274,7 +295,7 @@ class _LedgerPageState extends State<LedgerPage> {
       for (final cat in cats) '${cat['id']}': '${cat['name'] ?? ''}',
     };
     // 店铺选择弹层的笔数/欠款用本地全量汇总（与后端口径一致：笔数=出货单数，欠款=Σ出货-Σ收款）
-    _clientStat = _localStats(allSales, allPays);
+    _clientStat = _localStats(allSales, allPays, firstLocal);
     var sales = allSales;
     var payments = allPays;
     // 选中店铺校验：当前 id 已被删除/不存在 → 回退第一个存档店铺（否则按已删店铺过滤出现"交易不显示"）
@@ -480,16 +501,32 @@ class _LedgerPageState extends State<LedgerPage> {
   }
 
   /// 本地全量汇总：商品数量 = 出货明细行数（去单据化：一张单多商品 = 多行，与「我的」页本店交易口径一致）；
-  /// 欠款 = Σ出货总额 − Σ收款金额（与后端口径一致：每笔先舍入再累加，尾数不吞——427.8 实证）
+  /// 欠款 = Σ出货总额（按各店抹零配置分组向下取整） − Σ收款金额（每笔先舍入再累加，与后端口径一致）
   Map<String, ({int count, double debt})> _localStats(
-      List<Map<String, dynamic>> sales, List<Map<String, dynamic>> pays) {
-    final saleSum = <String, double>{};
+      List<Map<String, dynamic>> sales, List<Map<String, dynamic>> pays,
+      List<Map<String, dynamic>> clients) {
+    final cfgById = <String, ({String stage, String unit})>{
+      for (final c in clients) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+    };
+    final saleByClient = <String, List<Map<String, dynamic>>>{};
     final saleCnt = <String, int>{};
     for (final s in sales) {
       final id = '${s['client_id']}';
-      // 每笔先舍入再累加（与单笔显示一致）
-      saleSum[id] = (saleSum[id] ?? 0) + Money.round((s['total'] as num?)?.toDouble() ?? 0);
+      saleByClient.putIfAbsent(id, () => []).add(s);
       saleCnt[id] = (saleCnt[id] ?? 0) + (((s['items'] as List?) ?? []).length);
+    }
+    final saleSum = <String, double>{};
+    for (final e in saleByClient.entries) {
+      final cfg = cfgById[e.key] ?? (stage: 'none', unit: 'yuan');
+      // 整单视图：每张单的 total 即出货合计（单内行金额），按店配置分组（txn=单合计/day=日合计/total=一次）向下取整
+      saleSum[e.key] = salesSideRoundedLocal(
+        e.value.map((o) => <String, dynamic>{
+          'sale_id': o['id'],
+          'happened_at': o['happened_at'],
+          'amount': o['total'],
+        }).toList(),
+        cfg.stage, cfg.unit,
+      );
     }
     final paySum = <String, double>{};
     for (final p in pays) {

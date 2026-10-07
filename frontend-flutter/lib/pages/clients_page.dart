@@ -123,11 +123,13 @@ class _ClientsPageState extends State<ClientsPage> {
       final s = <String, double>{};
       final p = <String, double>{};
       try {
-        // 每笔先舍入再累加（与服务端 debt 口径一致——勿原始 SUM 后一次舍入，尾数进位放大 427.8 vs 428）
-        for (final x in await LocalDb.getAll('sale_items')) {
-          final id = '${x['client_id']}';
-          s[id] = (s[id] ?? 0) + Money.round((x['amount'] as num?)?.toDouble() ?? 0);
-        }
+        // 各店抹零配置（同步 payload 已含 round_stage/round_unit；旧端/手工改库缺省=不抹零逐笔舍入）
+        final cfgById = <String, ({String stage, String unit})>{
+          for (final c in local) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+        };
+        // 出货侧按各店自身抹零配置分组（none=逐笔先舍入再累加；txn/day/total=组合计向下取整），
+        // 与服务端 /clients debt 口径一致——勿原始 SUM 后一次舍入（尾数进位放大 427.8 vs 428）
+        s.addAll(salesSideRoundedByClient(await LocalDb.getAll('sale_items'), cfgById));
         for (final x in await LocalDb.getAll('payments')) {
           final id = '${x['client_id']}';
           p[id] = (p[id] ?? 0) + Money.round(((x['amount'] as num?)?.toDouble() ?? 0) + ((x['waived'] as num?)?.toDouble() ?? 0));
@@ -197,6 +199,9 @@ class _ClientsPageState extends State<ClientsPage> {
         text: '${(((c?['month_start_day'] as num?) ?? 1)).toInt()}');
     String? selTopId;
     String? selSubId;
+    // 店铺结账抹零配置（round_stage/round_unit；编辑时取当前值，新增默认不抹零）
+    String selStage = c?['round_stage'] as String? ?? 'none';
+    String selUnit = c?['round_unit'] as String? ?? 'yuan';
     // 编辑时按当前分类反推一级/二级
     final curId = c?['category_id'] as String? ?? '';
     if (curId.isNotEmpty) {
@@ -259,6 +264,30 @@ class _ClientsPageState extends State<ClientsPage> {
                       style: TextStyle(color: _c.textSub, fontSize: 12)),
                 ),
               ],
+              // 店铺结账抹零方式/精度：按店配置可随时改（不写死），欠款按此口径计算
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: selStage,
+                decoration: const InputDecoration(labelText: '抹零方式'),
+                items: const [
+                  DropdownMenuItem(value: 'none', child: Text('不抹零（按舍入逐笔算欠款）')),
+                  DropdownMenuItem(value: 'txn', child: Text('每单抹零（每张出货单合计向下取整）')),
+                  DropdownMenuItem(value: 'day', child: Text('按天抹零（每日出货合计向下取整）')),
+                  DropdownMenuItem(value: 'total', child: Text('结账抹零（结账总额向下取整）')),
+                ],
+                onChanged: (v) => setDlg(() => selStage = v ?? 'none'),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: selUnit,
+                decoration: const InputDecoration(labelText: '抹零精度'),
+                items: const [
+                  DropdownMenuItem(value: 'yuan', child: Text('元（向下取整到元）')),
+                  DropdownMenuItem(value: 'jiao', child: Text('角（向下取整到角）')),
+                  DropdownMenuItem(value: 'fen', child: Text('分（向下取整到分）')),
+                ],
+                onChanged: (v) => setDlg(() => selUnit = v ?? 'yuan'),
+              ),
             ],
           ),
         ),
@@ -286,10 +315,12 @@ class _ClientsPageState extends State<ClientsPage> {
         if (c == null) {
           await Api.instance.post('/clients', {
             'name': name, 'month_start_day': msd, 'category_id': categoryId ?? '',
+            'round_stage': selStage, 'round_unit': selUnit,
           });
         } else {
           await Api.instance.patch('/clients/${c['id']}', {
             'name': name, 'month_start_day': msd, 'category_id': categoryId ?? '',
+            'round_stage': selStage, 'round_unit': selUnit,
           });
         }
         toast(context, '已保存');
@@ -306,6 +337,7 @@ class _ClientsPageState extends State<ClientsPage> {
       final payload = {
         'id': id, 'name': name, 'contact': '', 'phone': '', 'note': '',
         'start_date': '', 'end_date': '', 'month_start_day': msd,
+        'round_stage': selStage, 'round_unit': selUnit,
         'category_id': categoryId ?? '', 'deleted_at': null,
       };
       await LocalDb.upsertOne('clients', payload);
@@ -315,6 +347,8 @@ class _ClientsPageState extends State<ClientsPage> {
       payload['name'] = name;
       payload['month_start_day'] = msd;
       payload['category_id'] = categoryId ?? '';
+      payload['round_stage'] = selStage;
+      payload['round_unit'] = selUnit;
       await LocalDb.upsertOne('clients', payload);
       await SyncService.enqueueChange(entityType: 'client', entitySyncId: '${c['id']}', payload: payload);
     }

@@ -4,7 +4,7 @@
  *  故各接口不再用 SQL SUM 聚合金额，改为取明细行 JS reduce roundMoney 逐笔累加。 */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
-import { getRoundingConfig, roundMoney } from '../lib/money';
+import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesSideRounded, salesAggByConfig } from '../lib/money';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -34,7 +34,7 @@ statsRouter.get('/overview', async (c) => {
       .all<{ amount: number; waived: number }>(),
     db.prepare(`SELECT amount FROM purchase_items pi WHERE pi.happened_at = ?`).bind(date)
       .all<{ amount: number }>(),
-    db.prepare(`SELECT amount FROM sale_items`).all<{ amount: number }>(),
+    db.prepare(`SELECT client_id, sale_id, happened_at, amount FROM sale_items`).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
     db.prepare(`SELECT amount, waived FROM payments`).all<{ amount: number; waived: number }>(),
     db.prepare(
       `SELECT
@@ -49,16 +49,25 @@ statsRouter.get('/overview', async (c) => {
   const all_sales = allSales.results.reduce((s, x) => s + r(x.amount), 0);
   const all_paid = allPays.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
 
-  // 店铺欠款排行：全部历史逐笔舍入累加后求差（与账本店铺欠款口径一致）
-  const [cSales, cPays, clientRows] = await Promise.all([
-    db.prepare(`SELECT client_id, amount FROM sale_items`).all<{ client_id: string; amount: number }>(),
+  // 店铺欠款排行/全局欠款：各店按自身抹零配置算出货侧（无配置=None 逐笔舍入），收款侧逐笔舍入
+  const [cSales, cPays, clientRows, cfgRows] = await Promise.all([
+    db.prepare(`SELECT client_id, sale_id, happened_at, amount FROM sale_items`).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
     db.prepare(`SELECT client_id, amount, waived FROM payments`).all<{ client_id: string; amount: number; waived: number }>(),
     db.prepare(`SELECT id, name FROM clients WHERE deleted_at IS NULL`).all<{ id: string; name: string }>(),
+    db.prepare(`SELECT id, round_stage, round_unit FROM clients WHERE deleted_at IS NULL`).all<{ id: string; round_stage: string | null; round_unit: string | null }>(),
   ]);
+  const roundCfgMap = new Map(cfgRows.results.map((r) => [r.id, normalizeRoundConfig(r.round_stage, r.round_unit)]));
   const salesMap = new Map<string, number>();
   const paidMap = new Map<string, number>();
+  const saleByClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
   for (const x of cSales.results) {
-    salesMap.set(x.client_id, (salesMap.get(x.client_id) ?? 0) + r(x.amount));
+    const arr = saleByClient.get(x.client_id) ?? [];
+    arr.push({ sale_id: x.sale_id, happened_at: x.happened_at, amount: Number(x.amount) || 0 });
+    saleByClient.set(x.client_id, arr);
+  }
+  for (const [cid, rows] of saleByClient) {
+    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const };
+    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, money));
   }
   for (const x of cPays.results) {
     paidMap.set(x.client_id, (paidMap.get(x.client_id) ?? 0) + r((Number(x.amount) || 0) + (Number(x.waived) || 0)));
@@ -81,7 +90,8 @@ statsRouter.get('/overview', async (c) => {
     },
     totals: {
       all_sales: r(all_sales), all_paid: r(all_paid),
-      debt: r(all_sales - all_paid),
+      // 全局欠款 = Σ各店（按自身抹零配置算出货侧） − 全部收款（口径与每店欠款一致）
+      debt: r([...salesMap.values()].reduce((s, v) => s + v, 0) - all_paid),
       client_count: counts?.client_count ?? 0, item_count: counts?.item_count ?? 0,
     },
     top_debt_clients: topDebt.map((c2) => ({
@@ -100,26 +110,35 @@ statsRouter.get('/clients', async (c) => {
   const hasRange = !!(start && end);
   const cond = hasRange ? 'AND happened_at >= ? AND happened_at <= ?' : '';
   const params: unknown[] = hasRange ? [start, end] : [];
-  const [saleRows, payRows, clientRows] = await Promise.all([
+  const [saleRows, payRows, clientRows, cfgRows] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT si.client_id AS cid, si.amount AS amount,
+      `SELECT si.client_id AS cid, si.sale_id AS sale_id, si.happened_at AS happened_at, si.amount AS amount,
         (si.sale_price - si.cost_price) * si.quantity AS gross
        FROM sale_items si WHERE 1=1 ${cond}`,
-    ).bind(...params).all<{ cid: string; amount: number; gross: number }>(),
+    ).bind(...params).all<{ cid: string; sale_id: string; happened_at: string | null; amount: number; gross: number }>(),
     c.env.DB.prepare(
       `SELECT client_id AS cid, amount, waived FROM payments WHERE 1=1 ${cond}`,
     ).bind(...params).all<{ cid: string; amount: number; waived: number }>(),
     c.env.DB.prepare(`SELECT id, name FROM clients WHERE deleted_at IS NULL`).all<{ id: string; name: string }>(),
+    c.env.DB.prepare(`SELECT id, round_stage, round_unit FROM clients WHERE deleted_at IS NULL`).all<{ id: string; round_stage: string | null; round_unit: string | null }>(),
   ]);
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
+  const roundCfgMap = new Map(cfgRows.results.map((r2) => [r2.id, normalizeRoundConfig(r2.round_stage, r2.round_unit)]));
   const salesMap = new Map<string, number>();
   const grossMap = new Map<string, number>();
   const paidMap = new Map<string, number>();
+  // 出货侧按店抹零配置分组（txn=每单合计取整 / day=每日合计取整 / total=区间合计一次取整；None=逐笔舍入）
+  const saleByClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
   for (const x of saleRows.results) {
-    const id = x.cid;
-    salesMap.set(id, (salesMap.get(id) ?? 0) + r(x.amount));
-    grossMap.set(id, (grossMap.get(id) ?? 0) + r(x.gross));
+    grossMap.set(x.cid, (grossMap.get(x.cid) ?? 0) + r(x.gross));
+    const arr = saleByClient.get(x.cid) ?? [];
+    arr.push({ sale_id: x.sale_id, happened_at: x.happened_at, amount: Number(x.amount) || 0 });
+    saleByClient.set(x.cid, arr);
+  }
+  for (const [cid, rows] of saleByClient) {
+    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const };
+    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, money));
   }
   for (const x of payRows.results) {
     const id = x.cid;
@@ -329,19 +348,36 @@ statsRouter.get('/summary', async (c) => {
   // 截止 end 的总欠款（区间前累计也计入：全部出货 − 全部收款，时间 ≤ end）；进货视图无欠款
   // 口径=每笔先舍入再累加（与区间统计/账本一致）：勿 SQL SUM 原始值后一次舍入——
   // 尾数会被"吞"（三间 10月 133.3+67.8+146.2+80.5=427.8，SUM=428.0→428，上层再统计继续进位放大）
+  // 抹零店（round_stage≠none）：出货侧按该店配置分组向下取整（单店=该店配置；全店=各店各自配置），
+  // 收款侧仍逐笔舍入（实收无抹零）。
   const debtParams: unknown[] = clientId ? [end, clientId] : [end];
-  const [debtSaleRows, debtPayRows] = kind === 'purchase'
-    ? [{ results: [] as Array<{ amount: number }> }, { results: [] as Array<{ amount: number; waived: number }> }]
+  const [debtSaleRows, debtPayRows, roundRows] = kind === 'purchase'
+    ? [{ results: [] as Array<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }> }, { results: [] as Array<{ amount: number; waived: number }> }, { results: [] as Array<{ id: string; round_stage: string | null; round_unit: string | null }> }]
     : await Promise.all([
         db.prepare(
-          `SELECT amount FROM sale_items WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
-        ).bind(...debtParams).all<{ amount: number }>(),
+          `SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
+        ).bind(...debtParams).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
         db.prepare(
           `SELECT amount, waived FROM payments WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
         ).bind(...debtParams).all<{ amount: number; waived: number }>(),
+        db.prepare(
+          clientId
+            ? `SELECT id, round_stage, round_unit FROM clients WHERE id = ?`
+            : `SELECT id, round_stage, round_unit FROM clients WHERE deleted_at IS NULL`,
+        ).bind(...(clientId ? [clientId] : [])).all<{ id: string; round_stage: string | null; round_unit: string | null }>(),
       ]);
-  const allSales = debtSaleRows.results.reduce((s, x) => s + r(x.amount), 0);
   const allPaid = debtPayRows.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
+  let allSales: number;
+  if (kind === 'purchase') {
+    allSales = 0;
+  } else if (clientId) {
+    const cfg = normalizeRoundConfig(roundRows.results[0]?.round_stage, roundRows.results[0]?.round_unit);
+    allSales = salesSideRounded(debtSaleRows.results, cfg.stage, cfg.unit, money);
+  } else {
+    // 全店：按各店抹零配置分别算出货侧再累加（None 店=逐笔舍入，行为不变）
+    const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit)]));
+    allSales = salesAggByConfig(debtSaleRows.results, cfgMap, money);
+  }
 
   return c.json({
     start, end, kind,
@@ -463,12 +499,12 @@ statsRouter.get('/category-statement', async (c) => {
   if (!cat) return c.json({ error: '店铺分类不存在' }, 404);
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const [saleRows, payRows, debtRows, debtPayRows, clientRows] = await Promise.all([
+  const [saleRows, payRows, debtRows, debtPayRows, clientRows, roundRows] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT client_id, amount FROM sale_items
+      `SELECT client_id, sale_id, happened_at, amount FROM sale_items
        WHERE client_id IN (SELECT id FROM clients WHERE category_id = ?)
          AND happened_at >= ? AND happened_at <= ?`,
-    ).bind(categoryId, start, end).all<{ client_id: string; amount: number }>(),
+    ).bind(categoryId, start, end).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
     c.env.DB.prepare(
       `SELECT client_id, amount, waived FROM payments
        WHERE client_id IN (SELECT id FROM clients WHERE category_id = ?)
@@ -476,11 +512,11 @@ statsRouter.get('/category-statement', async (c) => {
     ).bind(categoryId, start, end).all<{ client_id: string; amount: number; waived: number }>(),
     // 期末欠款：每笔先舍入再累加（口径与 /stats/summary 一致，勿 SQL SUM 原始后一次舍入——尾数进位放大）
     c.env.DB.prepare(
-      `SELECT si.client_id AS cid, si.amount AS amount
+      `SELECT si.client_id AS cid, si.sale_id AS sale_id, si.happened_at AS happened_at, si.amount AS amount
        FROM sale_items si
        WHERE si.client_id IN (SELECT id FROM clients WHERE category_id = ? AND deleted_at IS NULL)
          AND si.happened_at <= ?`,
-    ).bind(categoryId, end).all<{ cid: string; amount: number }>(),
+    ).bind(categoryId, end).all<{ cid: string; sale_id: string; happened_at: string | null; amount: number }>(),
     c.env.DB.prepare(
       `SELECT p.client_id AS cid, p.amount AS amount, p.waived AS waived
        FROM payments p
@@ -490,18 +526,41 @@ statsRouter.get('/category-statement', async (c) => {
     c.env.DB.prepare(
       `SELECT id, name FROM clients WHERE category_id = ? AND deleted_at IS NULL ORDER BY name`,
     ).bind(categoryId).all<{ id: string; name: string }>(),
+    c.env.DB.prepare(
+      `SELECT id, round_stage, round_unit FROM clients WHERE category_id = ? AND deleted_at IS NULL`,
+    ).bind(categoryId).all<{ id: string; round_stage: string | null; round_unit: string | null }>(),
   ]);
+  const roundCfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit)]));
+  // 区间出货/期末欠款出货侧均按各店自身抹零配置分组（None 店=逐笔舍入，历史口径不变）
   const salesMap = new Map<string, number>();
   const paidMap = new Map<string, number>();
   const waivedMap = new Map<string, number>();
-  for (const x of saleRows.results) salesMap.set(x.client_id, (salesMap.get(x.client_id) ?? 0) + r(x.amount));
+  const saleByClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
+  for (const x of saleRows.results) {
+    const arr = saleByClient.get(x.client_id) ?? [];
+    arr.push({ sale_id: x.sale_id, happened_at: x.happened_at, amount: Number(x.amount) || 0 });
+    saleByClient.set(x.client_id, arr);
+  }
+  for (const [cid, rows] of saleByClient) {
+    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const };
+    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, money));
+  }
   for (const x of payRows.results) {
     const id = x.client_id;
     paidMap.set(id, (paidMap.get(id) ?? 0) + r(Number(x.amount) || 0));
     waivedMap.set(id, (waivedMap.get(id) ?? 0) + r(Number(x.waived) || 0));
   }
   const debtMap = new Map<string, number>();
-  for (const x of debtRows.results) debtMap.set(x.cid, (debtMap.get(x.cid) ?? 0) + r(x.amount));
+  const debtByClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
+  for (const x of debtRows.results) {
+    const arr = debtByClient.get(x.cid) ?? [];
+    arr.push({ sale_id: x.sale_id, happened_at: x.happened_at, amount: Number(x.amount) || 0 });
+    debtByClient.set(x.cid, arr);
+  }
+  for (const [cid, rows] of debtByClient) {
+    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const };
+    debtMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, money));
+  }
   for (const x of debtPayRows.results) {
     // 收款整笔 r(amount + waived) 后扣减（与区间统计/账本单笔显示一致；勿拆开各自舍入）
     debtMap.set(x.cid, (debtMap.get(x.cid) ?? 0) - r((Number(x.amount) || 0) + (Number(x.waived) || 0)));

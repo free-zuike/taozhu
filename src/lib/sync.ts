@@ -69,6 +69,7 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
       return {
         id: r.id, name: r.name, contact: r.contact ?? '', phone: r.phone ?? '', note: r.note ?? '',
         start_date: r.start_date ?? '', end_date: r.end_date ?? '', month_start_day: r.month_start_day ?? 1,
+        round_stage: r.round_stage ?? 'none', round_unit: r.round_unit ?? 'yuan',
         category_id: r.category_id ?? '', deleted_at: r.deleted_at ?? null,
       };
     }
@@ -333,13 +334,15 @@ export async function applyChange(
       case 'client':
         if (action === 'delete') break; // 店铺为软删（deleted_at），不做物理删除
         await db.prepare(
-          `INSERT INTO clients (id, name, contact, phone, note, start_date, end_date, month_start_day, category_id, deleted_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO clients (id, name, contact, phone, note, start_date, end_date, month_start_day, round_stage, round_unit, category_id, deleted_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET name = excluded.name, contact = excluded.contact, phone = excluded.phone,
              note = excluded.note, start_date = excluded.start_date, end_date = excluded.end_date,
-             month_start_day = excluded.month_start_day, category_id = excluded.category_id, deleted_at = excluded.deleted_at`,
+             month_start_day = excluded.month_start_day, round_stage = excluded.round_stage, round_unit = excluded.round_unit,
+             category_id = excluded.category_id, deleted_at = excluded.deleted_at`,
         ).bind(id, p.name ?? '', p.contact ?? '', p.phone ?? '', p.note ?? '',
           p.start_date ?? null, p.end_date ?? null, Number(p.month_start_day) || 1,
+          p.round_stage ?? 'none', p.round_unit ?? 'yuan',
           p.category_id ?? null, p.deleted_at ?? null).run();
         break;
       case 'item': {

@@ -49,6 +49,18 @@
         <input class="ipt" v-model="form.contact" placeholder="联系人" />
         <input class="ipt" v-model="form.phone" placeholder="电话" />
         <input class="ipt" v-model="form.note" placeholder="备注" />
+        <picker class="field" mode="selector" :range="stageNames" @change="onStageChange">
+          <view class="field-inner">
+            <text class="label">抹零方式</text>
+            <text class="value">{{ stageLabel(form.roundStage) }}</text>
+          </view>
+        </picker>
+        <picker class="field" mode="selector" :range="unitNames" @change="onUnitChange">
+          <view class="field-inner">
+            <text class="label">抹零精度</text>
+            <text class="value">{{ unitLabel(form.roundUnit) }}</text>
+          </view>
+        </picker>
         <button class="btn-save" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
       </view>
     </view>
@@ -78,14 +90,32 @@ interface Client {
   category_name?: string;
   first_book_date?: string;
   month_start_day?: number;
+  round_stage?: string;
+  round_unit?: string;
 }
 
 const clients = ref<Client[]>([]);
 const showForm = ref(false);
 const saving = ref(false);
-const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '' });
+const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan' });
 // 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
 const fmt = (n: number) => fmtAmount(Number(n) || 0);
+
+// 店铺结账抹零方式/精度（对齐 App 店铺编辑：none/txn/day/total + yuan/jiao/fen，随时可改）
+const stageNames = ['不抹零', '每单抹零', '按天抹零', '结账抹零'];
+const stageValues = ['none', 'txn', 'day', 'total'];
+const unitNames = ['元', '角', '分'];
+const unitValues = ['yuan', 'jiao', 'fen'];
+const stageLabel = (v: string) => stageNames[stageValues.indexOf(v)] ?? '不抹零';
+const unitLabel = (v: string) => unitNames[unitValues.indexOf(v)] ?? '元';
+
+function onStageChange(e: { detail: { value: number } }) {
+  form.value.roundStage = stageValues[e.detail.value] || 'none';
+}
+
+function onUnitChange(e: { detail: { value: number } }) {
+  form.value.roundUnit = unitValues[e.detail.value] || 'yuan';
+}
 
 /// 记账天数：首记日 → 今天（含当天，对齐 App _bookDays）
 function bookDays(c: Client): number {
@@ -147,7 +177,7 @@ async function load() {
 }
 
 function openAdd() {
-  form.value = { name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '' };
+  form.value = { name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan' };
   showForm.value = true;
 }
 
@@ -160,6 +190,8 @@ function openEdit(c: Client) {
     editId: c.id,
     categoryId: c.category_id || '',
     categoryName: (c.category_id ? (c.category_name || '') : ''),
+    roundStage: c.round_stage || 'none',
+    roundUnit: c.round_unit || 'yuan',
   };
   showForm.value = true;
 }
@@ -177,6 +209,8 @@ async function save() {
       phone: form.value.phone.trim(),
       note: form.value.note.trim(),
       category_id: form.value.categoryId,
+      round_stage: form.value.roundStage,
+      round_unit: form.value.roundUnit,
     };
     if (form.value.editId) {
       await request(`/clients/${form.value.editId}`, 'PATCH', body);

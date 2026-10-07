@@ -143,6 +143,7 @@ syncRouter.get('/full', async (c) => {
     return {
       id: r.id, name: r.name, contact: r.contact ?? '', phone: r.phone ?? '', note: r.note ?? '',
       start_date: r.start_date ?? '', end_date: r.end_date ?? '', month_start_day: r.month_start_day ?? 1,
+      round_stage: r.round_stage ?? 'none', round_unit: r.round_unit ?? 'yuan',
       category_id: r.category_id ?? '', deleted_at: r.deleted_at ?? null,
     };
   });
