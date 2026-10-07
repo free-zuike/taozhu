@@ -134,12 +134,24 @@
       <view class="sheet" @click.stop>
         <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
         <view class="form-row">
-          <input class="ipt flex1" v-model="itemForm.quantity" type="digit" placeholder="数量" />
-          <input class="ipt flex1" v-model="itemForm.unit" placeholder="单位" />
+          <view class="f-col">
+            <text class="f-label">数量</text>
+            <input class="ipt" v-model="itemForm.quantity" type="digit" placeholder="0" />
+          </view>
+          <view class="f-col">
+            <text class="f-label">单位</text>
+            <input class="ipt" v-model="itemForm.unit" placeholder="斤/件/箱…" />
+          </view>
         </view>
         <view class="form-row">
-          <input class="ipt flex1" v-model="itemForm.salePrice" type="digit" :placeholder="itemForm.isPurchase ? '进价（元）' : '售价（元）'" />
-          <input v-if="itemForm.countUnit" class="ipt flex1" v-model="itemForm.countQty" type="digit" :placeholder="'折' + itemForm.countUnit" />
+          <view class="f-col">
+            <text class="f-label">{{ itemForm.isPurchase ? '进价（元）' : '售价（元）' }}</text>
+            <input class="ipt" v-model="itemForm.salePrice" type="digit" placeholder="0" />
+          </view>
+          <view v-if="itemForm.countUnit" class="f-col">
+            <text class="f-label">折合 {{ itemForm.countUnit }} 数</text>
+            <input class="ipt" v-model="itemForm.countQty" type="digit" placeholder="0" />
+          </view>
         </view>
         <!-- 日期：picker 原生滚轮（对齐 App 行编辑 DateField，不可手输） -->
         <picker mode="date" :value="itemForm.date || today" @change="onFormDate">
@@ -933,7 +945,9 @@ async function removePayment(p: Record<string, any>) {
 .placeholder { color: var(--text-sub); }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .form-row { display: flex; gap: 16rpx; }
-.form-row .ipt { flex: 1; }
+.f-col { flex: 1; min-width: 0; }
+.f-label { display: block; font-size: 22rpx; color: var(--text-sub); margin-bottom: 8rpx; }
+.f-col .ipt { width: 100%; box-sizing: border-box; margin-bottom: 16rpx; }
 .attach-row { display: flex; justify-content: space-between; align-items: center; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; margin-bottom: 16rpx; }
 .attach-go { color: var(--primary); }
 .flex1 { flex: 1; }

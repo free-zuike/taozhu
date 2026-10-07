@@ -71,7 +71,7 @@
     <view class="bottom-bar">
       <view class="footer">
         <button class="btn-add" @click="addRow">+ 添加商品</button>
-        <button class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
+        <button v-if="!isDateRows" class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
         <text class="total">合计 <text class="total-num">¥{{ fmtAmount(total) }}</text></text>
       </view>
       <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (isDateRows ? '保存该日修改' : (editId ? '保存修改' : '提交出货单')) }}</button>
@@ -190,6 +190,8 @@ onLoad((options) => {
     date.value = options.date;
     uni.setNavigationBarTitle({ title: `批量编辑 ${options.date.slice(5)}` });
   }
+  // 批量直编按店铺隔离（账本日期栏进入时带 client_id 参数；全店视图进入不带=该日全部店铺行平铺）
+  if (options?.client_id) clientId.value = String(options.client_id);
 });
 
 // 金额舍入配置变更（其他端改设置）→ 先刷新本地口径再触发页面重渲（合计/行金额按新位数显示）

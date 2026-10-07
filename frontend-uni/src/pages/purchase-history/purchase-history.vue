@@ -83,12 +83,24 @@
       <view class="sheet" @click.stop>
         <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
         <view class="form-row">
-          <input class="ipt flex1" v-model="itemForm.quantity" type="digit" placeholder="数量" />
-          <input class="ipt flex1" v-model="itemForm.unit" placeholder="单位" />
+          <view class="f-col">
+            <text class="f-label">数量</text>
+            <input class="ipt" v-model="itemForm.quantity" type="digit" placeholder="0" />
+          </view>
+          <view class="f-col">
+            <text class="f-label">单位</text>
+            <input class="ipt" v-model="itemForm.unit" placeholder="斤/件/箱…" />
+          </view>
         </view>
         <view class="form-row">
-          <input class="ipt flex1" v-model="itemForm.salePrice" type="digit" placeholder="进价（元）" />
-          <input v-if="itemForm.countUnit" class="ipt flex1" v-model="itemForm.countQty" type="digit" :placeholder="'折' + itemForm.countUnit" />
+          <view class="f-col">
+            <text class="f-label">进价（元）</text>
+            <input class="ipt" v-model="itemForm.salePrice" type="digit" placeholder="0" />
+          </view>
+          <view v-if="itemForm.countUnit" class="f-col">
+            <text class="f-label">折合 {{ itemForm.countUnit }} 数</text>
+            <input class="ipt" v-model="itemForm.countQty" type="digit" placeholder="0" />
+          </view>
         </view>
         <!-- 日期：picker 原生滚轮（对齐 App 行编辑 DateField，不可手输） -->
         <picker mode="date" :value="itemForm.date || today" @change="onFormDate">
@@ -175,7 +187,7 @@ const buyGroups = computed<BuyGroup[]>(() => {
         item_name: String(it.item_name || ''), note: String(it.note || ''),
         purchase_price: Number(it.purchase_price || it.price || 0),
         quantity: it.quantity ?? '', unit: String(it.unit || ''), amount: Number(it.amount || 0),
-        category: String(it.category_name || it.category || ''),
+        category: String(it.item_category || it.category_name || it.category || ''),
         itemId: String(it.id || ''), orderId: String(p.id), order: p,
         count_qty: it.count_qty ?? null, count_unit: String(it.count_unit || ''),
       });
@@ -407,7 +419,7 @@ function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
     countUnit: String(it.count_unit || ''),
     date: String(it.happened_at || p.happened_at || '').slice(0, 10),
     note: String(it.note ?? ''),
-    category: String(it.category || it.category_name || ''),
+    category: String(it.item_category || it.category || it.category_name || ''),
   };
 }
 
@@ -640,8 +652,8 @@ async function loadAttachCounts() {
 .amt { font-size: 30rpx; font-weight: bold; color: #ef4444; flex-shrink: 0; margin-left: 12rpx; }
 .line2 { display: flex; align-items: center; gap: 6rpx; margin-bottom: 6rpx; }
 .cat-ic { font-size: 22rpx; color: var(--text-sub); }
-.l2-cat { font-size: 22rpx; color: var(--text-sub); background: none; border-radius: 0; padding: 0; flex-shrink: 0; }
-.attach-entry { margin-left: auto; display: flex; align-items: center; gap: 6rpx; flex-shrink: 0; padding: 4rpx; }
+.l2-cat { font-size: 22rpx; color: var(--text-sub); background: none; border-radius: 0; padding: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-entry { margin-left: 8rpx; display: flex; align-items: center; gap: 6rpx; flex-shrink: 0; padding: 4rpx; }
 .attach-ic { width: 34rpx; height: 34rpx; }
 .attach-ic-off { opacity: 0.35; }
 .attach-cnt { font-size: 20rpx; color: var(--primary); font-weight: 600; }
@@ -674,6 +686,9 @@ async function loadAttachCounts() {
 .placeholder { color: var(--text-sub); }
 .form-row { display: flex; gap: 16rpx; }
 .form-row .ipt { flex: 1; }
+.f-col { flex: 1; min-width: 0; }
+.f-label { display: block; font-size: 22rpx; color: var(--text-sub); margin-bottom: 8rpx; }
+.f-col .ipt { width: 100%; box-sizing: border-box; margin-bottom: 16rpx; }
 .flex1 { flex: 1; }
 .btn-del { background: var(--card-bg); color: #f56c6c; border: 1rpx solid #f56c6c; border-radius: 12rpx; font-size: 30rpx; }
 .dlg-ops { display: flex; gap: 20rpx; margin-top: 8rpx; }

@@ -855,7 +855,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                   padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
                   child: Row(
                     children: [
-                      Icon(Icons.edit_calendar_outlined, size: 15, color: c.success),
+                      Icon(Icons.edit_calendar_outlined, size: 15, color: c.primary),
                       const SizedBox(width: 4),
                       Text(_weekday(e.key),
                           style: TextStyle(

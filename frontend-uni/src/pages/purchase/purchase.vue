@@ -16,7 +16,7 @@
       </picker>
       <button v-if="!isDateRows" class="copy-btn" :disabled="loading" @click="copyLast">复制上一笔</button>
       <button v-if="!isDateRows" class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
-      <view class="batch-voucher" @click="showBatchAttach"><text class="mi">&#xe3f4;</text>整单凭证</view>
+      <view v-if="isDateRows" class="batch-voucher" @click="showBatchAttach"><text class="mi">&#xe3f4;</text>整单凭证</view>
       <text v-if="isDateRows" class="batch-hint">该日 {{ rows.length }} 行 · 保存按原单分组提交</text>
     </view>
 
@@ -60,7 +60,7 @@
     <view class="bottom-bar">
       <view class="footer">
         <button class="btn-add" @click="addRow">+ 添加商品</button>
-        <button class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
+        <button v-if="!isDateRows" class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
         <text class="total">合计 <text class="total-num">¥{{ fmtAmount(total) }}</text></text>
       </view>
       <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (isDateRows ? '保存该日修改' : (editId ? '保存修改' : '提交进货单')) }}</button>
