@@ -186,7 +186,13 @@ settingsRouter.put('/theme_config', async (c) => {
     bg_enabled: body.bg_enabled ? '1' : '0',
     theme_mode: body.theme_mode ?? '',
   }));
-  await notifyClients('theme_config');
+  // 广播 theme_config：其他端收到后直接应用 payload（ws 也是推送，不再 GET 回读）
+  await notifyClients('theme_config', {
+    preset_id: body.preset_id ?? '',
+    skin_id: body.skin_id ?? '',
+    bg_enabled: !!body.bg_enabled,
+    theme_mode: body.theme_mode ?? '',
+  });
   return c.json({ ok: true });
 });
 
@@ -203,7 +209,7 @@ settingsRouter.put('/rounding', async (c) => {
   if (![0, 1, 2].includes(digitsRaw)) return c.json({ error: '精度需为 0（元）/1（角）/2（分）' }, 400);
   await upsertSetting(c.env.DB, KEY_ROUND_CARRY, String(carry));
   await upsertSetting(c.env.DB, KEY_ROUND_DIGITS, String(digitsRaw));
-  // 广播 rounding：其他端收到后更新本地舍入口径（新记账即时按新规则，统计展示已有服务器数据重算）
-  await notifyClients('rounding');
+  // 广播 rounding：其他端收到后直接应用 payload 里的 carry/digits（ws 也是推送，不再 GET 回读兜底）
+  await notifyClients('rounding', { carry, digits: digitsRaw });
   return c.json({ carry, digits: digitsRaw, ok: true });
 });

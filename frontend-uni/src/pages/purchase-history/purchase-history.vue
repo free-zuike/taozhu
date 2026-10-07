@@ -82,6 +82,7 @@
     <view v-if="itemForm.show" class="mask" @click="itemForm.show = false">
       <view class="sheet" @click.stop>
         <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
+        <scroll-view scroll-y class="sheet-body">
         <view class="form-row">
           <view class="f-col">
             <text class="f-label">数量</text>
@@ -115,6 +116,7 @@
           <text class="label">该条凭证附件</text>
           <text class="value attach-go">查看/添加</text>
         </view>
+        </scroll-view>
         <view class="dlg-ops">
           <button class="btn-del" :disabled="saving" @click="deleteItem">删除该行</button>
           <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
@@ -620,7 +622,7 @@ async function loadAttachCounts() {
 
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
-.page { min-height: 100vh;  background: var(--page-bg); }
+.page { height: 100vh; overflow: hidden; display: flex; flex-direction: column; background: var(--page-bg); }
 .month-card { display: flex; align-items: center; background: transparent; border: none; border-radius: 0; padding: 4rpx 0 12rpx; margin-bottom: 4rpx; }
 .month-left { display: flex; flex-direction: column; align-items: center; justify-content: center; padding-right: 20rpx; }
 .month-y { font-size: 24rpx; font-weight: 600; color: var(--text-sub); line-height: 1.3; }
@@ -636,7 +638,7 @@ async function loadAttachCounts() {
 .red { color: #f56c6c; }
 .card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 /* 进货流水：日期头 + 行级卡片（对齐 App 流式列表；与出货流水同构） */
-.flow { height: calc(100vh - 260rpx); padding-bottom: 60rpx; box-sizing: border-box; }
+.flow { flex: 1; min-height: 0; padding-bottom: 60rpx; box-sizing: border-box; } /* 列表区占剩余高度内部滚动：月份卡固定顶部不随滑动消失 */
 .day-bar { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 8rpx 10rpx; }
 .day-ic { color: var(--primary); font-size: 28rpx; margin-right: 8rpx; }
 .day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); flex: 1; }
@@ -677,8 +679,10 @@ async function loadAttachCounts() {
 .tip-longpress { color: var(--text-sub); font-size: 22rpx; margin-left: auto; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
-.sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
+.sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; max-height: 85vh; display: flex; flex-direction: column; }
+.sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; flex-shrink: 0; }
+.sheet-body { flex: 1; min-height: 0; max-height: 60vh; }
+.dlg-ops { display: flex; gap: 20rpx; margin-top: 8rpx; flex-shrink: 0; padding-top: 16rpx; }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .field-inner { display: flex; justify-content: space-between; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; margin-bottom: 16rpx; }
 .label { color: var(--text-sub); font-size: 28rpx; }
@@ -704,7 +708,7 @@ async function loadAttachCounts() {
 .attach-actions .btn-sub { flex: 1; }
 .attach-actions .btn-save { flex: 1; }
 /* 全屏凭证查看器（对齐 App attachment_viewer：大图 + 上边操作按钮） */
-.viewer { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: #000; display: flex; flex-direction: column; }
+.viewer { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: #000; display: flex; flex-direction: column; z-index: 300; }
 .viewer-swiper { flex: 1; width: 100%; }
 .viewer-img { width: 100%; height: 100%; }
 .viewer-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 24rpx 28rpx; background: linear-gradient(rgba(0,0,0,0.5), transparent); box-sizing: border-box; }

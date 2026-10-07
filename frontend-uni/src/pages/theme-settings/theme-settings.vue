@@ -19,12 +19,29 @@
     </view>
 
     <view class="group-title">背景图案</view>
-    <view class="presets">
-      <view v-for="s in skins" :key="s.id" class="preset skin" @click="pickSkin(s.id)">
-        <view class="swatch skin-swatch" :style="{ background: typeof s.preview === 'function' ? s.preview(selectedColor) : s.preview }">
+    <view class="skins">
+      <view v-for="s in skins" :key="s.id" class="skin" :class="{ sel: curSkin === s.id }" @click="pickSkin(s.id)">
+        <view class="swatch skin-swatch" :style="{ background: typeof s.preview === 'function' ? s.preview(selectedColor()) : s.preview }">
           <text v-if="curSkin === s.id" class="check">✓</text>
         </view>
         <text class="p-name" :class="{ active: curSkin === s.id }">{{ s.name }}</text>
+      </view>
+    </view>
+
+    <view class="group-title">实时预览</view>
+    <view class="pv-card" :style="{ background: skinPreview() }">
+      <view class="pv-head">
+        <view class="pv-logo" :style="{ background: selectedColor() }"><text class="mi">&#xe7f1;</text></view>
+        <text class="pv-title">预览</text>
+        <text class="pv-badge" :style="{ color: selectedColor(), background: selectedColor() + '26' }">本月结余</text>
+      </view>
+      <view class="pv-sheet">
+        <view class="pv-line" style="width: 40%"></view>
+        <view class="pv-line" style="width: 60%"></view>
+        <view class="pv-btns">
+          <view class="pv-btn" :style="{ background: selectedColor() }">按钮</view>
+          <view class="pv-btn-o" :style="{ color: selectedColor(), borderColor: selectedColor() }">次要按钮</view>
+        </view>
       </view>
     </view>
 
@@ -52,15 +69,15 @@ const presets = [
   { id: 'green', name: '墨绿', color: '#2F7D63' },
   { id: 'navy', name: '藏青', color: '#2B5FD9' },
 ];
-// 图案预览用真实 SVG 迷你图（与 App/Web CustomPainter 同几何，颜色随主题主色）
+// 图案预览用真实 SVG 迷你图（与 App/Web CustomPainter 同几何，颜色随主题主色+明暗）
 const skins = [
-  { id: '', name: '渐变', preview: skinPreviewCss('', '#409EFF') },
-  { id: 'none', name: '纯色', preview: skinPreviewCss('none', '#409EFF') },
-  { id: 'coin', name: '铜钱', preview: (p: string) => skinPreviewCss('coin', p) },
-  { id: 'bamboo', name: '竹韵', preview: (p: string) => skinPreviewCss('bamboo', p) },
-  { id: 'ledger', name: '账本', preview: (p: string) => skinPreviewCss('ledger', p) },
-  { id: 'flow', name: '进销', preview: (p: string) => skinPreviewCss('flow', p) },
-  { id: 'ripple', name: '涟漪', preview: (p: string) => skinPreviewCss('ripple', p) },
+  { id: '', name: '渐变', preview: (p: string) => skinPreviewCss('', p, isDark()) },
+  { id: 'none', name: '纯色', preview: (p: string) => skinPreviewCss('none', p, isDark()) },
+  { id: 'coin', name: '铜钱', preview: (p: string) => skinPreviewCss('coin', p, isDark()) },
+  { id: 'bamboo', name: '竹韵', preview: (p: string) => skinPreviewCss('bamboo', p, isDark()) },
+  { id: 'ledger', name: '账本', preview: (p: string) => skinPreviewCss('ledger', p, isDark()) },
+  { id: 'flow', name: '进销', preview: (p: string) => skinPreviewCss('flow', p, isDark()) },
+  { id: 'ripple', name: '涟漪', preview: (p: string) => skinPreviewCss('ripple', p, isDark()) },
 ];
 // 当前选中主题色：从本地已存主题色反推对应预设（不写死 default——
 // 服务器拉取失败/离线时仍回选真实生效色，否则每次重开都显示选中 default）
@@ -155,4 +172,21 @@ onShow(async () => {
 .p-name.active { color: var(--primary); font-weight: bold; }
 .tip { font-size: 22rpx; color: var(--text-sub); margin: 24rpx 8rpx; }
 .btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; margin-top: 16rpx; }
+/* 背景图案缩略图：2 列大格（对齐 App GridView 2 列），预览随主题色+明暗 */
+.skins { display: flex; flex-wrap: wrap; gap: 20rpx; background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; margin-bottom: 24rpx; }
+.skin { width: calc(50% - 10rpx); display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
+.skin .skin-swatch { width: 100%; height: 170rpx; border-radius: 16rpx; border: 4rpx solid transparent; box-sizing: border-box; }
+.skin.sel .skin-swatch { border-color: var(--primary); }
+/* 实时预览卡（对齐 App：当前背景+卡片+按钮） */
+.pv-card { border-radius: 20rpx; padding: 24rpx; margin-bottom: 8rpx; border: 1px solid rgba(0,0,0,0.05); }
+.pv-head { display: flex; align-items: center; gap: 12rpx; }
+.pv-logo { width: 44rpx; height: 44rpx; border-radius: 10rpx; display: flex; align-items: center; justify-content: center; }
+.pv-logo .mi { color: #fff; font-size: 26rpx; }
+.pv-title { font-size: 26rpx; font-weight: 600; color: var(--text-main); flex: 1; }
+.pv-badge { font-size: 18rpx; padding: 4rpx 12rpx; border-radius: 8rpx; opacity: 0.9; }
+.pv-sheet { margin-top: 18rpx; background: var(--card-bg); border-radius: 14rpx; padding: 20rpx; }
+.pv-line { height: 14rpx; background: var(--divider); border-radius: 7rpx; margin-bottom: 12rpx; }
+.pv-btns { display: flex; gap: 16rpx; margin-top: 8rpx; }
+.pv-btn { flex: 1; height: 60rpx; border-radius: 12rpx; color: #fff; font-size: 24rpx; display: flex; align-items: center; justify-content: center; }
+.pv-btn-o { flex: 1; height: 60rpx; border-radius: 12rpx; border: 2rpx solid; font-size: 24rpx; display: flex; align-items: center; justify-content: center; background: var(--card-bg); }
 </style>

@@ -8,11 +8,18 @@
 
     <view class="group-title">进位临界（四舍五入的变体）</view>
     <view class="card">
-      <view class="b-row" v-for="(p, i) in presets" :key="i" @click="carry = p.v">
+      <view class="b-row" v-for="(p, i) in presets" :key="i" @click="pickPreset(p.v)">
         <view class="b-left">
           <text class="r-tx">{{ p.label }}</text>
         </view>
         <view :class="['radio', carry === p.v ? 'on' : '']"></view>
+      </view>
+      <view class="b-row" @click="editCustomCarry">
+        <view class="b-left">
+          <text class="r-tx">自定义（0.1~0.9）</text>
+          <text class="r-sub">当前：{{ customCarryDisplay }}</text>
+        </view>
+        <view :class="['radio', isCustomCarry ? 'on' : '']"></view>
       </view>
     </view>
 
@@ -44,7 +51,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
 import { useThemeVars } from '../../theme';
@@ -65,6 +72,33 @@ const carry = ref(0.5);
 const digits = ref(2);
 const saving = ref(false);
 const clients = ref<Array<Record<string, any>>>([]);
+
+// 进位临界：预设档快速选中；自定义 0.1~0.9 手动输入（对齐 App 自定义临界值滑块）
+const presetCarryValues = [0.5, 0.6, 0.7];
+const isCustomCarry = computed(() => !presetCarryValues.includes(carry.value));
+const customCarryDisplay = computed(() =>
+  isCustomCarry.value ? carry.value.toFixed(1) : '（未启用）',
+);
+function pickPreset(v: number) {
+  carry.value = v;
+}
+function editCustomCarry() {
+  uni.showModal({
+    title: '自定义进位临界',
+    content: '输入 0.1~0.9 的小数：尾数 ≥ 该值时进位（如 0.55 = 尾数≥0.55 进）。',
+    editable: true,
+    placeholderText: String(carry.value),
+    success: (r) => {
+      if (!r.confirm) return;
+      const v = Number((r.content || '').trim());
+      if (Number.isNaN(v) || v < 0.1 || v > 0.9) {
+        uni.showToast({ title: '请输入 0.1~0.9 之间的小数', icon: 'none' });
+        return;
+      }
+      carry.value = Math.round(v * 10) / 10;
+    },
+  });
+}
 
 const stageNames = ['不抹零', '每单抹零', '按天抹零', '结账抹零'];
 const stageValues = ['none', 'txn', 'day', 'total'];

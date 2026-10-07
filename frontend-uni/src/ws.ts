@@ -57,9 +57,30 @@ function connect() {
         const d = JSON.parse(res.data as string);
         if (typeof d === 'object' && d && typeof (d as Record<string, unknown>).type === 'string') {
           const type = (d as { type: string }).type;
-          // 金额舍入配置变更广播：先刷新本地口径缓存，再通知页面（页面重渲时读到新口径）
+          // 金额舍入配置变更广播：直接应用 payload（carry/digits，ws 也是推送，不再 GET 回读兜底）
           if (type === 'rounding') {
-            void import('./utils/money').then(async (m) => { await m.initRounding(); fire(type); fire('*'); });
+            const carry = Number((d as Record<string, unknown>).carry);
+            const digits = Number((d as Record<string, unknown>).digits);
+            if (carry > 0 && carry <= 1 && [0, 1, 2].includes(digits)) {
+              void import('./utils/money').then(async (m) => { m.applyRounding(carry, digits); fire(type); fire('*'); });
+            } else {
+              // 旧服务器广播无 payload：回退原逻辑（拉一次服务器）
+              void import('./utils/money').then(async (m) => { await m.initRounding(); fire(type); fire('*'); });
+            }
+            return;
+          }
+          // 主题配置变更广播：直接应用 payload（preset/skin/bg/mode，不再 GET 回读）
+          if (type === 'theme_config') {
+            void import('./theme').then((t) => {
+              const p = d as Record<string, unknown>;
+              t.applyThemePayload({
+                preset: (p.preset_id as string) || '',
+                skin: (p.skin_id as string) || '',
+                bg: p.bg_enabled !== false,
+                mode: (p.theme_mode as string) || '',
+              });
+              fire(type); fire('*');
+            });
             return;
           }
           fire(type);

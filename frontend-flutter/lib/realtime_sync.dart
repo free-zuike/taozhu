@@ -30,6 +30,9 @@ class RealtimeSync {
   Future<void> start() async {
     _closed = false;
     _failCount = 0;
+    // App 本地主题变更 → 触发同步推送（SyncService._scheduleThemeSync 内部注册，
+    // 与金额舍入等设置类一致：本地写 + dirty 随同步上传，不直连 PUT）
+    ThemeConfig.instance.onThemeLocalChanged ??= SyncService.scheduleThemeSync;
     await _connect();
   }
 
@@ -92,11 +95,18 @@ class RealtimeSync {
         // AI 配置变更：通知 AI 设置页等监听方重新拉取（不触发业务数据同步）
         SyncService.aiConfigChanged.notifyListeners();
       } else if (type == 'theme_config') {
-        // 主题配置变更（其他端改了预设/图案/背景）：拉取并应用
-        ThemeConfig.instance.pullTheme();
+        // 主题配置变更（其他端改了预设/图案/背景/明暗）：应用 payload（ws 也是推送，不 GET 回读兜底）
+        ThemeConfig.instance.applyPayload(d);
       } else if (type == 'rounding') {
-        // 金额舍入配置变更（老板在其他端改了进位/精度）：刷新本地口径，新记账即生效
-        Money.refresh();
+        // 金额舍入配置变更（老板在其他端改了进位/精度）：应用 payload（ws 也是推送，不 GET 回读兜底）
+        final carry = (d['carry'] as num?)?.toDouble();
+        final digits = (d['digits'] as num?)?.toInt();
+        if (carry != null && carry > 0 && carry <= 1 && digits != null && [0, 1, 2].contains(digits)) {
+          Money.apply(carry, digits);
+        } else {
+          // 旧服务器广播无 payload：回退拉一次服务器
+          Money.refresh();
+        }
       } else if (type == 'audit' || type == 'devices') {
         // 审计/设备列表变更（其他端删除等）：notify version——各页（audit_page/devices_page）监听后重拉
         SyncService.version.notifyListeners();

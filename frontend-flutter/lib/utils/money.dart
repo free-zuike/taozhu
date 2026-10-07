@@ -31,9 +31,11 @@ class Money {
   static double _carry = 0.5;
   static int _digits = 2;
   static bool _loaded = false;
+  static bool _dirty = false; // 本地有未推送的舍入口径修改（保存后置脏，随同步推送服务器并清）
 
   static double get carry => _carry;
   static int get digits => _digits;
+  static bool get roundingDirty => _dirty;
 
   /// 从服务器拉取舍入配置并写入本地缓存；失败保留缓存值（离线用旧口径，联网同步后刷新）。
   static Future<void> refresh() async {
@@ -62,6 +64,7 @@ class Money {
     final d = p.getInt('money_digits');
     if (c != null && c > 0 && c <= 1) _carry = c;
     if (d != null && [0, 1, 2].contains(d)) _digits = d;
+    _dirty = p.getBool('money_rounding_dirty') ?? false;
     _loaded = true;
   }
 
@@ -83,7 +86,7 @@ class Money {
   static double round(double value) => roundMoney(value, _carry, _digits);
 
   /// 保存后同步写入本地口径（不依赖网络回读——网络抖动失败也会静默，导致退出重进读旧缓存）。
-  /// 随后可再调 refresh() 与服务器核对；本地先更新保证"保存即生效、重进仍生效"。
+  /// 随后由同步队列推送服务器（_syncRounding），本端先生效保证"保存即生效、重进仍生效"。
   static Future<void> apply(double carry, int digits) async {
     if (!(carry > 0 && carry <= 1) || ![0, 1, 2].contains(digits)) return;
     _carry = carry;
@@ -92,6 +95,24 @@ class Money {
       final p = await SharedPreferences.getInstance();
       await p.setDouble('money_carry', carry);
       await p.setInt('money_digits', digits);
+    } catch (_) {}
+  }
+
+  /// 标记本地有未推送的舍入口径修改（保存后调用；随同步推送服务器并清除）——保存走本地优先，不直连改库
+  static Future<void> markRoundingDirty() async {
+    _dirty = true;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('money_rounding_dirty', true);
+    } catch (_) {}
+  }
+
+  /// 推送成功后清除脏标记
+  static Future<void> clearRoundingDirty() async {
+    _dirty = false;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool('money_rounding_dirty', false);
     } catch (_) {}
   }
 }

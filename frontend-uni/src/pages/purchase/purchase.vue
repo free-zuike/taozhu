@@ -308,10 +308,10 @@ const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ ke
   show: false, entity: '', id: '', list: [], index: 0, canEdit: true,
 });
 
-/// 批量直编整单凭证：聚合该日全部原单的单据级附件（只读查看+下载，不提供添加/删除——多单归属不明确）
+/// 批量直编整单凭证：聚合该日全部原单的单据级附件（可添加/删除，挂第一张原单——对齐 App orderIds.first）
 async function showBatchAttach() {
   const oids = Array.from(new Set(rows.value.map((r) => r.orderId).filter(Boolean)));
-  attach.value = { show: true, entity: 'purchase', id: '', list: [], index: 0, canEdit: false };
+  attach.value = { show: true, entity: 'purchase', id: oids[0] || '', list: [], index: 0, canEdit: true };
   const list: Array<{ key: string }> = [];
   for (const oid of oids) {
     try {

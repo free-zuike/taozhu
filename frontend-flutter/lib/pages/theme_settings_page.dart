@@ -109,7 +109,11 @@ class _ThemeSettingsPageState extends State<ThemeSettingsPage> {
     if (id.isEmpty) {
       preview = Container(
         decoration: BoxDecoration(
-          gradient: LinearGradient(colors: cfg.preset.bgGradient, begin: Alignment.topCenter, end: Alignment.bottomCenter),
+          gradient: LinearGradient(
+            colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : cfg.preset.bgGradient,
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
         ),
       );
     } else if (id == 'none') {

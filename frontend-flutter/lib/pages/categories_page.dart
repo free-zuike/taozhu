@@ -327,37 +327,47 @@ class _CategoriesPageState extends State<CategoriesPage> {
                   if (!_collapsed.add('${c['id']}')) _collapsed.remove('${c['id']}');
                 })
             : null,
-        subtitle: (isParent && !indent)
-            ? Text('${_childrenOf('${c['id']}').length} 个子分类 · ${collapsed ? '点击展开' : '点击收起'}',
-                style: TextStyle(fontSize: 11, color: _c.textSub))
-            : null,
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
+            _iconBtn(
               icon: const Icon(Icons.view_list_outlined, size: 20),
               tooltip: '查看该分类下${_type == 'item' ? '商品' : '店铺'}',
               onPressed: () => _viewItems(c),
             ),
             if (isParent && !indent)
               Icon(collapsed ? Icons.expand_more : Icons.expand_less, size: 20, color: _c.textSub),
-            IconButton(
+            _iconBtn(
               icon: const Icon(Icons.add, size: 20),
               tooltip: '添加子分类',
               // 一级分类可添加任意多个子分类；仅禁止二级分类继续加（防三级）
               onPressed: indent ? null : () => _add(parentId: '${c['id']}', parentName: '${c['name']}'),
             ),
-            IconButton(
+            _iconBtn(
               icon: const Icon(Icons.edit_outlined, size: 20),
+              tooltip: '改名',
               onPressed: () => _rename(c),
             ),
-            IconButton(
+            _iconBtn(
               icon: Icon(Icons.delete_outline, size: 20, color: _c.danger),
+              tooltip: '删除',
               onPressed: () => _delete(c),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// 行尾紧凑图标按钮：收紧命中区避免把分类名挤成竖排（此前横排 5 个默认 IconButton 宽度溢出）
+  Widget _iconBtn({required Icon icon, required String tooltip, VoidCallback? onPressed}) {
+    return IconButton(
+      icon: icon,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 40),
+      visualDensity: VisualDensity.compact,
     );
   }
 }

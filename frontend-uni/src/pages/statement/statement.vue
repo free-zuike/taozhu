@@ -39,7 +39,7 @@
       <view class="list-title">出货明细</view>
       <view v-for="s in sales" :key="s.id" class="list-row">
         <text class="lr-l">{{ s.client_name }} {{ s.happened_at }}</text>
-        <text class="lr-r red">¥{{ fmtAmount(Number(s.total)) }}</text>
+        <text class="lr-r red">¥{{ fmtAmount(Number((s.amount ?? s.total) || 0)) }}</text>
       </view>
       <view v-if="sales.length === 0" class="empty">周期内无出货</view>
 

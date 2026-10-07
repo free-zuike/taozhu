@@ -12,15 +12,18 @@ export function setHubEnv(env: { SYNC_HUB: DurableObjectNamespace }): void {
 
 /** 广播一次同步通知（变更流已写入后调用；失败静默，不影响主流程）
  *  type: sync=业务实体变更（默认）/ profile_change=用户资料（显示名/头像）变更 / ai_config=AI 配置变更
- *        theme_config=主题配置变更 / audit=操作审计变更（删除单条）/ devices=设备列表变更（删除设备） */
+ *        theme_config=主题配置变更 / audit=操作审计变更（删除单条）/ devices=设备列表变更（删除设备）
+ *  data: 可选负载（rounding=carry/digits、theme_config=preset 等）——客户端收到后**直接应用，不再 GET 回读**（ws 也是推送） */
 export async function notifyClients(
   type: 'sync' | 'profile_change' | 'ai_config' | 'theme_config' | 'rounding' | 'audit' | 'devices' = 'sync',
+  data?: Record<string, unknown>,
 ): Promise<void> {
   const hub = hubEnv?.SYNC_HUB;
   if (!hub) return;
   try {
     const id = hub.idFromName('global');
-    await hub.get(id).fetch(new Request(`http://sync-hub/notify?type=${type}`, { method: 'POST' }));
+    const body = JSON.stringify(data ?? {});
+    await hub.get(id).fetch(new Request(`http://sync-hub/notify?type=${type}`, { method: 'POST', body }));
   } catch {
     // 广播失败不影响写入主流程（客户端会在下次拉取时拿到变更）
   }
@@ -31,10 +34,11 @@ export class SyncHub {
   private sockets = new Set<WebSocket>();
 
   async fetch(request: Request): Promise<Response> {
-    // 内部通知（notifyClients 调用）：向全部在线连接广播（type 透传：sync / profile_change）
+    // 内部通知（notifyClients 调用）：向全部在线连接广播（type 透传：sync / profile_change；body 为负载 JSON）
     if (request.url.includes('/notify')) {
       const type = new URL(request.url).searchParams.get('type') || 'sync';
-      this.broadcast(type);
+      const data = await request.text().catch(() => '');
+      this.broadcast(type, data);
       return new Response('ok');
     }
     // WebSocket 升级（客户端连接，token 已在路由层校验）
@@ -53,8 +57,16 @@ export class SyncHub {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private broadcast(type: string): void {
-    const msg = JSON.stringify({ type });
+  private broadcast(type: string, dataJson = ''): void {
+    // 带负载：{type, ...data} 展开进消息（rounding 带 carry/digits、theme_config 带 preset 等）；
+    // 无负载：保持 {type} 不变（业务实体同步等仍走 pull）
+    let msg: string;
+    try {
+      const data = dataJson ? JSON.parse(dataJson) : {};
+      msg = JSON.stringify({ type, ...data });
+    } catch {
+      msg = JSON.stringify({ type });
+    }
     for (const s of this.sockets) {
       try {
         s.send(msg);

@@ -16,7 +16,12 @@ Future<void> setThemeMode(ThemeMode mode) async {
   final p = await SharedPreferences.getInstance();
   final key = mode == ThemeMode.dark ? 'dark' : (mode == ThemeMode.light ? 'light' : 'system');
   await p.setString('theme_mode', key);
-  unawaited(ThemeConfig.instance.pushTheme()); // 明暗模式上传（其他端 WS 收到后应用）
+  if (kIsWeb) {
+    unawaited(ThemeConfig.instance.pushTheme()); // Web 无本地库：直连上传（固有形态）
+  } else {
+    unawaited(ThemeConfig.instance.markThemeDirty()); // App 本地优先：dirty 由同步编排推送
+    ThemeConfig.instance.onThemeLocalChanged?.call();
+  }
 }
 
 /// 启动时恢复上次主题模式（默认跟随系统）
@@ -238,6 +243,9 @@ ThemePreset themePresetById(String id) =>
 class ThemeConfig extends ChangeNotifier {
   ThemeConfig._();
   static final ThemeConfig instance = ThemeConfig._();
+  /// 应用端（非 Web）本地主题变更后的调度钩子：由 SyncService 注册为触发同步推送；
+  /// Web 无本地库走直连（pushTheme），不走此钩子。
+  void Function()? onThemeLocalChanged;
   static const _kPreset = 'theme_preset_id';
   static const _kBg = 'theme_bg_enabled';
   static const _kSkin = 'theme_skin_id';
@@ -265,8 +273,12 @@ class ThemeConfig extends ChangeNotifier {
     _presetId = id;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setString(_kPreset, id);
-    unawaited(_markThemeDirty()); // dirty 防 pullTheme 立即拉旧值覆盖（跳回）
-    unawaited(pushTheme()); // Web/App 都立即上传：跨端即时同步（App 与 Web 同 AI 配置模式）
+    await markThemeDirty(); // dirty 防 pullTheme 立即拉旧值覆盖（跳回）；App 本地优先由同步推送
+    if (kIsWeb) {
+      await pushTheme(); // Web 无本地库：直连上传（固有形态）
+    } else {
+      onThemeLocalChanged?.call(); // 触发一次同步编排（_syncTheme 检测 dirty 后推送）
+    }
   }
 
   Future<void> setBgEnabled(bool v) async {
@@ -274,8 +286,12 @@ class ThemeConfig extends ChangeNotifier {
     _bgEnabled = v;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setBool(_kBg, v);
-    unawaited(_markThemeDirty());
-    unawaited(pushTheme());
+    await markThemeDirty();
+    if (kIsWeb) {
+      await pushTheme();
+    } else {
+      onThemeLocalChanged?.call();
+    }
   }
 
   Future<void> setSkin(String id) async {
@@ -288,15 +304,19 @@ class ThemeConfig extends ChangeNotifier {
     final p = await SharedPreferences.getInstance();
     await p.setString(_kSkin, id);
     await p.setBool(_kBg, true);
-    unawaited(_markThemeDirty());
-    unawaited(pushTheme());
+    await markThemeDirty();
+    if (kIsWeb) {
+      await pushTheme();
+    } else {
+      onThemeLocalChanged?.call();
+    }
   }
 
   bool _applyingServer = false; // 服务器应用中不回传，防跨端回环
   static const _kDirty = 'theme_dirty';
 
   /// 主题有本地未同步修改（随下次同步上传服务器；App 不直连写数据库）
-  Future<void> _markThemeDirty() async {
+  Future<void> markThemeDirty() async {
     _dirtyCache = true;
     final p = await SharedPreferences.getInstance();
     await p.setBool(_kDirty, true);
@@ -315,6 +335,42 @@ class ThemeConfig extends ChangeNotifier {
       await p.setBool(_kDirty, false);
       _dirtyCache = false;
     } catch (_) {}
+  }
+
+  /// WS theme_config 广播 payload 直接应用（预设/图案/背景/明暗；ws 也是推送，不再 GET 回读兜底）
+  Future<void> applyPayload(Map<dynamic, dynamic> d) async {
+    final pid = '${d['preset_id'] ?? ''}';
+    final sid = '${d['skin_id'] ?? ''}';
+    final bgRaw = d['bg_enabled'];
+    final bg = bgRaw is bool ? bgRaw : (d.containsKey('bg_enabled') ? bgRaw == true : null);
+    final tm = '${d['theme_mode'] ?? ''}';
+    if (pid.isEmpty && sid.isEmpty && bg == null && tm.isEmpty) return; // 无有效 payload：不覆盖本地
+    var changed = false;
+    if (pid.isNotEmpty && pid != _presetId) {
+      final preset = kThemePresets.where((p) => p.id == pid).firstOrNull;
+      if (preset != null) { _presetId = preset.id; changed = true; }
+    }
+    if (sid.isNotEmpty && sid != _skinId) { _skinId = sid; changed = true; }
+    if (bg != null && bg != _bgEnabled) { _bgEnabled = bg; changed = true; }
+    if (tm.isNotEmpty && tm != themeNotifier.value.name) {
+      themeNotifier.value = tm == 'dark'
+          ? ThemeMode.dark
+          : (tm == 'light' ? ThemeMode.light : ThemeMode.system);
+      changed = true;
+    }
+    if (!changed) return;
+    _applyingServer = true;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString('theme_mode', themeNotifier.value.name);
+      await p.setString(_kPreset, _presetId);
+      await p.setString(_kSkin, _skinId);
+      await p.setBool(_kBg, _bgEnabled);
+    } catch (_) {
+    } finally {
+      _applyingServer = false;
+    }
+    notifyListeners();
   }
 
   /// 拉取服务器主题并应用（同步 pull / 其他端变更 WS 通知 theme_config）

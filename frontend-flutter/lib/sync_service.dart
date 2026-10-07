@@ -10,6 +10,7 @@ import 'theme.dart';
 import 'avatar_cache.dart';
 import 'local_db.dart';
 import 'log.dart';
+import 'utils/money.dart';
 
 /// 商品持久删除集合 key（SharedPreferences 独立存储）：本地库只读/写失败时删除标记跨重启保留，
 /// 且 pushPending 合并该集合推送服务端（绕过只读队列）。与 items_page 共用。
@@ -1012,6 +1013,16 @@ class SyncService {
     });
   }
 
+  /// App 本地主题变更 → 触发一轮完整同步（_syncTheme 检测 dirty 后推送服务器，广播 WS；
+  /// Web 直连不经此钩子）。注册一次，供 ThemeConfig.onThemeLocalChanged 调用。
+  static void scheduleThemeSync() {
+    if (kIsWeb) return;
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () {
+      sync();
+    });
+  }
+
   /// 用户资料同步（对齐参考架构 syncMyProfile）：拉 /auth/me 把显示名/头像回写本地。
   /// 头像按 avatar_version 比对，有新版才下载（avatar_cache 内部 bump avatarChanged 通知页面）。
   /// 挂 sync() 编排末尾，也由 WS profile_change 事件独立触发；失败静默（保留旧缓存）。
@@ -1080,6 +1091,8 @@ class SyncService {
       await syncMyProfile();
       // ⑥ 主题配置随同步上传/拉取（App 不直连写数据库；Web 直连在设置页保存）
       await _syncTheme();
+      // ⑥b 金额舍入随同步上传（本地有未同步修改 → 推送服务器，不直连改库；服务端广播 WS payload 其他端应用）
+      await _syncRounding();
       // ⑦ 僵尸附件引用清理：引用目标实体不存在（识别取消残留等）→ 删引用行+对应副本文件；
       // 在用副本不清（孤儿文件仍由存储清理页扫描）——0.17.330 曾只加逻辑未挂调用点=从未执行
       await cleanupOrphanLocalAttachments();
@@ -1101,6 +1114,19 @@ class SyncService {
       } else {
         await ThemeConfig.instance.pullTheme();
       }
+    } catch (_) {}
+  }
+
+  /// 金额舍入随同步上传：本地有未推送修改（roundingDirty）→ PUT /settings/rounding 推送并清标记。
+  /// 本地优先：保存只写本地（Money.apply）+置脏，推送失败静默保留脏标记下次再推，不阻塞、不兜底；服务端广播 WS payload。
+  static Future<void> _syncRounding() async {
+    if (!Money.roundingDirty) return;
+    try {
+      await Api.instance.put('/settings/rounding', {
+        'carry': Money.carry,
+        'digits': Money.digits,
+      });
+      await Money.clearRoundingDirty();
     } catch (_) {}
   }
 

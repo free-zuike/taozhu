@@ -10,20 +10,30 @@
       <view v-for="d in devices" :key="d.id" class="card">
         <view class="head">
           <view class="d-icon">
-            <text class="d-emoji">{{ d.platform === 'Web' ? '🌐' : d.platform === '小程序' ? '📱' : '🖥️' }}</text>
+            <text class="mi d-mi">{{ platformIcon(d.platform) }}</text>
           </view>
           <view class="d-info">
             <text class="d-name">{{ d.device_name }}</text>
             <text class="d-sub">{{ d.platform }}<template v-if="d.version"> · v{{ d.version }}</template></text>
           </view>
           <text :class="['state', online(d.last_active_at) ? 'on' : 'off']">{{ online(d.last_active_at) ? '在线' : '离线' }}</text>
-          <text class="del" @click="remove(d)">删除</text>
+          <text class="mi d-del" @click="remove(d)">&#xe872;</text>
         </view>
         <view class="meta">
-          <text class="m-label">IP</text>
-          <text class="m-value">{{ d.ip || '--' }}</text>
-          <text class="m-label">最近活跃</text>
-          <text class="m-value">{{ shortTime(d.last_active_at) }}</text>
+          <view class="m-col">
+            <text class="m-value">{{ d.ip || '--' }}</text>
+            <text class="m-label">IP</text>
+          </view>
+          <view class="m-sep"></view>
+          <view class="m-col">
+            <text class="m-value">{{ d.version ? 'v' + d.version : '--' }}</text>
+            <text class="m-label">版本</text>
+          </view>
+          <view class="m-sep"></view>
+          <view class="m-col">
+            <text class="m-value m-time">{{ shortTime(d.last_active_at) }}</text>
+            <text class="m-label">最近活跃</text>
+          </view>
         </view>
       </view>
     </view>
@@ -44,6 +54,10 @@ const devices = ref<Device[]>([]);
 const loading = ref(true);
 
 const shortTime = (iso: string) => (iso && iso.length >= 16 ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}` : iso || '');
+
+/** 平台图标（Material 图标码点，对齐 App language/phone_iphone/smartphone 语义） */
+const platformIcon = (platform: string) =>
+  platform === 'Web' ? '&#xe894;' : platform === '小程序' ? '&#xe325;' : '&#xe32c;';
 
 /** 在线判定：最近活跃 5 分钟内=在线（设备任意请求都会节流更新 last_active_at） */
 const online = (iso: string) => {
@@ -114,15 +128,18 @@ function remove(d: Device) {
   width: 72rpx; height: 72rpx; border-radius: 18rpx; background: var(--primary-soft);
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
-.d-emoji { font-size: 34rpx; }
+.d-mi { font-size: 32rpx; color: var(--primary); }
 .d-info { flex: 1; display: flex; flex-direction: column; gap: 4rpx; }
 .d-name { font-size: 30rpx; font-weight: bold; color: var(--text-main); }
 .d-sub { font-size: 22rpx; color: var(--text-sub); }
 .state { font-size: 20rpx; padding: 4rpx 14rpx; border-radius: 999rpx; flex-shrink: 0; }
 .state.on { background: var(--ok-bg); color: #22c55e; }
 .state.off { background: var(--warn-bg); color: #e6a23c; }
-.del { font-size: 26rpx; color: #f56c6c; padding: 8rpx 16rpx; }
-.meta { display: flex; align-items: center; gap: 12rpx; margin-top: 20rpx; padding-top: 20rpx; border-top: 1rpx solid var(--divider); }
-.m-label { font-size: 22rpx; color: var(--text-sub); }
-.m-value { font-size: 24rpx; color: var(--text-main); font-weight: 600; }
+.d-del { font-size: 34rpx; color: #f56c6c; padding: 8rpx 12rpx; flex-shrink: 0; }
+.meta { display: flex; align-items: center; margin-top: 20rpx; padding-top: 20rpx; border-top: 1rpx solid var(--divider); }
+.m-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6rpx; min-width: 0; }
+.m-sep { width: 1rpx; height: 40rpx; background: var(--divider); flex-shrink: 0; }
+.m-label { font-size: 20rpx; color: var(--text-sub); }
+.m-value { font-size: 26rpx; color: var(--text-main); font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-time { font-size: 22rpx; }
 </style>

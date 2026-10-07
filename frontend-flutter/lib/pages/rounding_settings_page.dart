@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import 'router.dart';
@@ -100,36 +101,36 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
       ),
     );
     if (ok != true || !mounted) return;
-    try {
-      await Api.instance.patch('/clients/${c['id']}', {'round_stage': stage, 'round_unit': unit});
-      final updated = Map<String, dynamic>.from(c)..['round_stage'] = stage..['round_unit'] = unit;
+    final updated = Map<String, dynamic>.from(c)..['round_stage'] = stage..['round_unit'] = unit;
+    if (kIsWeb) {
+      // Web 无本地库/同步队列：直连服务端（App 走本地优先队列）
+      try {
+        await Api.instance.patch('/clients/${c['id']}', {'round_stage': stage, 'round_unit': unit});
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+        return;
+      }
+    } else {
+      // 本地优先：写本地镜像 + 入同步队列推送（App 不直连改服务器数据库）
       await LocalDb.upsertOne('clients', updated);
-      if (mounted) setState(() => _clients = _clients.map((x) => '${x['id']}' == '${c['id']}' ? updated : x).toList());
-      toast(context, '已保存（欠款按新口径重算）');
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      await SyncService.enqueueChange(entityType: 'client', entitySyncId: '${c['id']}', payload: updated);
     }
+    if (mounted) setState(() => _clients = _clients.map((x) => '${x['id']}' == '${c['id']}' ? updated : x).toList());
+    toast(context, '已保存（欠款按新口径重算）');
   }
 
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      await Api.instance.put('/settings/rounding', {
-        'carry': _carry,
-        'digits': _digits,
-      });
-    } catch (e) {
-      // 保存失败：不更新本地（本地口径仍是上次生效值，避免"失败的保存"污染展示）
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
-      return;
+      // 本地优先：先写本地口径（立即生效、重进仍生效、离线可用）；标记脏由同步队列推送
+      // （App 不直连改服务器数据库——服务端收到后广播 WS payload 各端直接应用）
+      await Money.apply(_carry, _digits);
+      await Money.markRoundingDirty();
+      SyncService.sync(); // 触发同步推送（失败静默保留脏标记下次再推，不阻塞、不兜底）
+      toast(context, '已保存（新记账按新规则计算）');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
-    // 本地优先：服务器已接受 → 同步写本地缓存（立即生效且重进仍生效，不依赖网络回读）。
-    // 广播后各端 WS 刷新；本端 apply 保证即使 refresh 抖动失败也不丢已保存值
-    await Money.apply(_carry, _digits);
-    Money.refresh(); // 后台与服务器核对（失败静默，本地值已正确）
-    toast(context, '已保存（新记账按新规则计算）');
   }
 
   String _digitsLabel(int d) => switch (d) { 0 => '元（整数）', 1 => '角（1 位小数）', _ => '分（2 位小数）' };

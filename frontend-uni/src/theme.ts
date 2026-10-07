@@ -49,6 +49,26 @@ export function setThemeSkin(id: string) {
   uni.setStorageSync(SKIN_KEY, id);
 }
 
+/** WS theme_config 广播 payload 直接应用（预设/图案/背景/明暗；ws 也是推送，不再 GET 回读兜底） */
+export function applyThemePayload(p: { preset?: string; skin?: string; bg?: boolean; mode?: string }) {
+  if (p.preset) setThemePrimary(p.preset.startsWith('#') ? p.preset : presetHexOf(p.preset));
+  if (p.skin !== undefined) setThemeSkin(p.skin);
+  if (p.mode === 'light' || p.mode === 'dark' || p.mode === 'follow') setThemeModeLocal(p.mode);
+}
+
+/** 预设 id → 主色 hex（对齐 App kThemePresets 默认蓝/陶朱红/富贵金/墨绿/藏青） */
+function presetHexOf(id: string): string {
+  const map: Record<string, string> = {
+    default: '#409EFF', zhuhong: '#C04633', gold: '#B8860B', green: '#2F7D63', navy: '#2B5FD9',
+  };
+  return map[id] ?? '#409EFF';
+}
+
+/** 本地写明暗（不 PUT 服务器：ws 推送来源即服务器，回传会造成回环） */
+function setThemeModeLocal(m: ThemeMode) {
+  uni.setStorageSync(MODE_KEY, m);
+}
+
 /** 当前是否深色：显式 dark 优先；follow 时随系统（微信原生 getSystemInfoSync().theme，
  *  需 app.json 声明 darkmode:true 才会返回 dark；uni 封装可能丢 theme 字段，直接读 wx） */
 export function isDark(): boolean {
@@ -269,14 +289,17 @@ function utf8ToBase64(s: string): string {
   return out;
 }
 
-/** 背景图案迷你预览（设置页缩略图）：与全屏同几何，色用主题主色高对比（对齐 App compact 预览） */
-export function skinPreviewCss(skin: string, primary: string): string {
-  if (skin === '') return 'linear-gradient(180deg, rgba(64,158,255,0.10), rgba(64,158,255,0.02))';
-  if (skin === 'none') return '#f5f7fa';
-  const ink = rgba(primary, 0.55);
-  const ink2 = rgba(primary, 0.32);
+/** 背景图案迷你预览（设置页缩略图）：与全屏同几何，色用主题主色高对比（对齐 App compact 预览）。
+ *  dark：深色模式缩略图=深底+提亮图案（不再显白——用户"深色模式下图案是白色"） */
+export function skinPreviewCss(skin: string, primary: string, dark = false): string {
+  if (skin === '') return dark
+    ? 'linear-gradient(180deg, #181b22, #12151c)'
+    : 'linear-gradient(180deg, rgba(64,158,255,0.10), rgba(64,158,255,0.02))';
+  if (skin === 'none') return dark ? '#181b22' : '#f5f7fa';
+  const ink = dark ? rgba(primary, 0.5) : rgba(primary, 0.55);
+  const ink2 = dark ? rgba(primary, 0.3) : rgba(primary, 0.32);
   const uri = skinSvgSrc(skin, { ink, ink2 });
-  return uri ? `url("${uri}") center / cover no-repeat, #ffffff` : '#f5f7fa';
+  return uri ? `url("${uri}") center / cover no-repeat, ${dark ? '#181b22' : '#ffffff'}` : (dark ? '#181b22' : '#f5f7fa');
 }
 
 /** 页面背景：渐变底色（CSS 渲染，小程序支持）+ SVG 图案（image 组件铺层，base64 兼容）
