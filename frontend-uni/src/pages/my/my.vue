@@ -36,7 +36,7 @@
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE7FC;</text></view><view class="r-body"><text class="r-tx">成员</text><text class="r-sub">账号设置 · 店员/老板账号</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/devices/devices')">
-        <view class="r-ic ic-green"><text class="mi ic-tx">&#xE1B1;</text></view><view class="r-body"><text class="r-tx">设备管理</text><text class="r-sub">登录设备列表，可删除</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE1B1;</text></view><view class="r-body"><text class="r-tx">设备管理</text><text class="r-sub">登录设备列表，可删除</text></view><text class="r-arrow">›</text>
       </view>
     </view>
 
@@ -46,13 +46,13 @@
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE8D1;</text></view><view class="r-body"><text class="r-tx">店铺管理</text><text class="r-sub">店铺列表、新增、编辑</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/payments/payments')">
-        <view class="r-ic ic-green"><text class="mi ic-tx">&#xEF63;</text></view><view class="r-body"><text class="r-tx">收款结账</text><text class="r-sub">登记收款、查看收款历史</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-green"><text class="mi ic-tx" style="color:#22c55e">&#xEF63;</text></view><view class="r-body"><text class="r-tx">收款结账</text><text class="r-sub">登记收款、查看收款历史</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/payment-accounts/payment-accounts')">
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE850;</text></view><view class="r-body"><text class="r-tx">收款账户</text><text class="r-sub">收款方式预设：现金/微信/支付宝…（独立页管理）</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/statement/statement')">
-        <view class="r-ic ic-orange"><text class="mi ic-tx">&#xE873;</text></view><view class="r-body"><text class="r-tx">对账单</text><text class="r-sub">按店铺+周期生成对账明细，一键复制发送</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-orange"><text class="mi ic-tx" style="color:#f59e0b">&#xE873;</text></view><view class="r-body"><text class="r-tx">对账单</text><text class="r-sub">按店铺+周期生成对账明细，一键复制发送</text></view><text class="r-arrow">›</text>
       </view>
     </view>
 
@@ -62,32 +62,32 @@
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE1A1;</text></view><view class="r-body"><text class="r-tx">库存</text><text class="r-sub">进货/出货自动维护，盘点与预警</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="go('/pages/items/items')">
-        <view class="r-ic ic-green"><text class="mi ic-tx">&#xEB70;</text></view><view class="r-body"><text class="r-tx">商品管理</text><text class="r-sub">商品与多单位价格</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xEB70;</text></view><view class="r-body"><text class="r-tx">商品管理</text><text class="r-sub">商品与多单位价格</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="go('/pages/categories/categories')">
-        <view class="r-ic ic-orange"><text class="mi ic-tx">&#xE892;</text></view><view class="r-body"><text class="r-tx">分类管理</text><text class="r-sub">商品分类 / 店铺分类（两级）</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE892;</text></view><view class="r-body"><text class="r-tx">分类管理</text><text class="r-sub">商品分类 / 店铺分类（两级）</text></view><text class="r-arrow">›</text>
       </view>
     </view>
 
     <view class="group-title">系统</view>
     <view class="grp">
       <view v-if="isAdmin" class="row" @click="go('/pages/backup/backup')">
-        <view class="r-ic ic-orange"><text class="mi ic-tx">&#xE864;</text></view><view class="r-body"><text class="r-tx">数据备份</text><text class="r-sub">导出全库存档 / 从备份合并恢复</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE864;</text></view><view class="r-body"><text class="r-tx">数据备份</text><text class="r-sub">导出全库存档 / 从备份合并恢复</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="go('/pages/logs/logs')">
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE160;</text></view><view class="r-body"><text class="r-tx">错误日志</text><text class="r-sub">请求失败记录，排障用</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/ai-settings/ai-settings')">
-        <view class="r-ic ic-purple"><text class="mi ic-tx">&#xE65F;</text></view><view class="r-body"><text class="r-tx">AI 识别设置</text><text class="r-sub">配置 AI 记账 Key 与模型</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE65F;</text></view><view class="r-body"><text class="r-tx">AI 识别设置</text><text class="r-sub">配置 AI 记账 Key 与模型</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/rounding-settings/rounding-settings')">
-        <view class="r-ic ic-green"><text class="mi ic-tx">&#xEA5F;</text></view><view class="r-body"><text class="r-tx">金额舍入</text><text class="r-sub">所有金额计算的进位方式与精度</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xEA5F;</text></view><view class="r-body"><text class="r-tx">金额舍入</text><text class="r-sub">所有金额计算的进位方式与精度</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="go('/pages/theme-settings/theme-settings')">
-        <view class="r-ic ic-gold"><text class="mi ic-tx">&#xE40A;</text></view><view class="r-body"><text class="r-tx">主题设置</text><text class="r-sub">配色主题 / 明暗模式 / 背景</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE40A;</text></view><view class="r-body"><text class="r-tx">主题设置</text><text class="r-sub">配色主题 / 明暗模式 / 背景</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/audit/audit')">
-        <view class="r-ic ic-red"><text class="mi ic-tx">&#xE889;</text></view><view class="r-body"><text class="r-tx">操作审计</text><text class="r-sub">登录/删除/修改等关键操作留痕</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE889;</text></view><view class="r-body"><text class="r-tx">操作审计</text><text class="r-sub">登录/删除/修改等关键操作留痕</text></view><text class="r-arrow">›</text>
       </view>
     </view>
 

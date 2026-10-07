@@ -51,8 +51,14 @@
           <view class="row-date">该行日期：{{ (row.happenedAt || date).slice(5) }}　点此修改</view>
         </picker>
         <view class="num-row">
-          <input class="num" type="digit" v-model="row.quantity" placeholder="数量" />
-          <input class="num" type="digit" v-model="row.salePrice" placeholder="售价（可直接改）" />
+          <view class="num-col">
+            <text class="num-label">数量</text>
+            <input class="num" type="digit" v-model="row.quantity" placeholder="0" />
+          </view>
+          <view class="num-col">
+            <text class="num-label">售价（可直接改）</text>
+            <input class="num" type="digit" v-model="row.salePrice" placeholder="0" />
+          </view>
         </view>
         <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折合 ${row.countUnit} 数`" />
         <view class="amt-line">金额 <text class="amt">¥{{ rowAmount(row) }}</text></view>
@@ -904,7 +910,9 @@ async function submit() {
 .date-pick { margin-top: 12rpx; }
 .row-date { background: var(--input-bg); border-radius: 10rpx; padding: 12rpx 16rpx; font-size: 24rpx; color: var(--primary); }
 .num-row { display: flex; gap: 12rpx; margin-top: 12rpx; }
-.num { flex: 1; background: var(--input-bg); border-radius: 10rpx; padding: 14rpx; font-size: 26rpx; text-align: center; }
+.num-col { flex: 1; min-width: 0; }
+.num-label { display: block; font-size: 22rpx; color: var(--text-sub); margin-bottom: 6rpx; }
+.num { flex: 1; background: var(--input-bg); border-radius: 10rpx; padding: 14rpx; font-size: 26rpx; text-align: center; width: 100%; box-sizing: border-box; }
 .num.count { margin-top: 12rpx; }
 .amt-line { display: flex; justify-content: space-between; align-items: center; margin-top: 10rpx; font-size: 24rpx; color: var(--text-sub); }
 .amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }

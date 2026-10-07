@@ -466,7 +466,7 @@ class _PurchasePageState extends State<PurchasePage> {
                           for (final it in list)
                             ListTile(
                               dense: true,
-                              leading: const Icon(Icons.label_outline, size: 18, color: Color(0xFF67C23A)),
+                              leading: const Icon(Icons.label_outline, size: 18, color: Color(0xFF409EFF)),
                               title: Text('${it['name']}'),
                               subtitle: '${it['category'] ?? ''}'.isNotEmpty
                                   ? Text('${it['category']}', style: const TextStyle(fontSize: 11))
@@ -649,7 +649,7 @@ class _PurchasePageState extends State<PurchasePage> {
                 onTap: () => Navigator.pop(ctx, ImageSource.camera),
               ),
               ListTile(
-                leading: const Icon(Icons.photo_library_outlined, color: Color(0xFF67C23A)),
+                leading: const Icon(Icons.photo_library_outlined, color: Color(0xFF409EFF)),
                 title: const Text('从相册选择'),
                 onTap: () => Navigator.pop(ctx, ImageSource.gallery),
               ),
@@ -1314,7 +1314,7 @@ class _PurchasePageState extends State<PurchasePage> {
             child: ListTile(
               dense: true,
               visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
-              leading: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF67C23A)),
+              leading: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF409EFF)),
               title: const Text('整单凭证（自动关联全部商品）', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               subtitle: const Text('上传一张凭证自动存到该单每个商品行', style: TextStyle(fontSize: 11)),
               trailing: const Icon(Icons.chevron_right, size: 20),
@@ -1383,13 +1383,13 @@ class _PurchasePageState extends State<PurchasePage> {
         padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(
           children: [
-            Expanded(child: Divider(color: c.success.withOpacity(0.25), height: 1)),
+            Expanded(child: Divider(color: c.primary.withOpacity(0.25), height: 1)),
             const SizedBox(width: 8),
-            Icon(Icons.add_circle_outline, size: 15, color: c.success.withOpacity(0.7)),
+            Icon(Icons.add_circle_outline, size: 15, color: c.primary.withOpacity(0.7)),
             const SizedBox(width: 4),
-            Text('在此上方插入', style: TextStyle(fontSize: 12, color: c.success.withOpacity(0.7))),
+            Text('在此上方插入', style: TextStyle(fontSize: 12, color: c.primary.withOpacity(0.7))),
             const SizedBox(width: 8),
-            Expanded(child: Divider(color: c.success.withOpacity(0.25), height: 1)),
+            Expanded(child: Divider(color: c.primary.withOpacity(0.25), height: 1)),
           ],
         ),
       ),
@@ -1416,12 +1416,12 @@ class _PurchasePageState extends State<PurchasePage> {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: c.success.withOpacity(0.12),
+                  color: c.primary.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Center(
                   child: Text('${i + 1}',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.success)),
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.primary)),
                 ),
               ),
               const SizedBox(width: 10),
@@ -1436,7 +1436,7 @@ class _PurchasePageState extends State<PurchasePage> {
               const SizedBox(width: 4),
               IconButton(
                 tooltip: '选择商品',
-                icon: const Icon(Icons.search, size: 22, color: Color(0xFF67C23A)),
+                icon: const Icon(Icons.search, size: 22, color: Color(0xFF409EFF)),
                 onPressed: () => _pickItem(row),
               ),
               // 行级附件：该条商品独立凭证（仅编辑已有明细行；新建未提交行无行 id）
@@ -1444,7 +1444,7 @@ class _PurchasePageState extends State<PurchasePage> {
                 const SizedBox(width: 4),
                 IconButton(
                   tooltip: '该行凭证附件',
-                  icon: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF67C23A)),
+                  icon: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF409EFF)),
                   onPressed: () => showAttachmentViewer(context, 'purchase', _purchaseId,
                       '进货明细行凭证', lineIds: [row.rowId], orderIds: _orderIds),
                 ),

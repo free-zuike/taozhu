@@ -821,7 +821,8 @@ async function removePayment(p: Record<string, any>) {
 
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
-.page { min-height: 100vh;  background: var(--page-bg); }
+.page { height: 100vh; overflow: hidden; display: flex; flex-direction: column; background: var(--page-bg); }
+.flow { flex: 1; min-height: 0; } /* 列表区占剩余高度内部滚动：统计栏/筛选/seg 固定顶部不随滑动消失 */
 .filter-bar { display: flex; justify-content: space-between; align-items: center; background: transparent; border-radius: 12rpx; padding: 8rpx 4rpx 12rpx; margin-bottom: 4rpx;}
 .month-nav { display: flex; align-items: center; }
 .month-label { font-size: 28rpx; font-weight: bold; }

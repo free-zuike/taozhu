@@ -40,8 +40,14 @@
           <view class="row-date">该行日期：{{ (row.happenedAt || date).slice(5) }}　点此修改</view>
         </picker>
         <view class="num-row">
-          <input class="num" type="digit" v-model="row.quantity" placeholder="数量" />
-          <input class="num" type="digit" v-model="row.purchasePrice" placeholder="进价（可直接改）" />
+          <view class="num-col">
+            <text class="num-label">数量</text>
+            <input class="num" type="digit" v-model="row.quantity" placeholder="0" />
+          </view>
+          <view class="num-col">
+            <text class="num-label">进价（可直接改）</text>
+            <input class="num" type="digit" v-model="row.purchasePrice" placeholder="0" />
+          </view>
         </view>
         <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折合 ${row.countUnit} 数`" />
         <view class="amt-line">金额 <text class="amt">¥{{ rowAmount(row) }}</text></view>
