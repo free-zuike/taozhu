@@ -1502,6 +1502,13 @@ class _SalePageState extends State<SalePage> {
             label: _editing ? '日期（新加商品默认）' : '日期',
             hint: '点击选择日期（可补录历史）',
             compact: widget.dateRows != null && widget.dateRows!.isNotEmpty, // 批量直编=紧凑滚轮（对齐小程序 picker）
+            onChanged: (_) => setState(() {
+              // 批量直编：改批量日期=全部行改期（行级独立日期清空统一跟随新日期，
+              // 对齐小程序"批量日期（全部行改期）"；普通/编辑模式只影响新行与无独立日期的行）
+              if (widget.dateRows != null && widget.dateRows!.isNotEmpty) {
+                for (final r in _rows) r.happenedAt = '';
+              }
+            }),
           ),
           if (_editing)
             Padding(
@@ -1597,6 +1604,13 @@ class _SalePageState extends State<SalePage> {
               ],
               const SizedBox(width: 4),
               IconButton(
+                tooltip: '在此行上方插入一行',
+                icon: const Icon(Icons.add_circle_outline, size: 20, color: Color(0xFF67C23A)),
+                onPressed: () => setState(() =>
+                    _rows.insert(i, _newRow()..happenedAt = _dateCtrl.text.trim())),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
                 tooltip: '删除此商品',
                 icon: Icon(Icons.delete_outline, color: c.danger),
                 onPressed: _rows.length > 1 ? () => setState(() => _rows.removeAt(i)) : null,
@@ -1673,7 +1687,7 @@ class _SalePageState extends State<SalePage> {
                   controller: row.qtyCtrl,
                   style: txtStyle,
                   decoration: _fieldDec(label: '数量'),
-                  onChanged: (v) => row.quantity = double.tryParse(v) ?? 0,
+                  onChanged: (v) => setState(() => row.quantity = double.tryParse(v) ?? 0),
                 ),
               ),
               const SizedBox(width: 10),
@@ -1682,7 +1696,7 @@ class _SalePageState extends State<SalePage> {
                   controller: row.saleCtrl,
                   style: txtStyle,
                   decoration: _fieldDec(label: '售价（可直接改）'),
-                  onChanged: (v) => row.salePrice = double.tryParse(v) ?? 0,
+                  onChanged: (v) => setState(() => row.salePrice = double.tryParse(v) ?? 0),
                 ),
               ),
             ],

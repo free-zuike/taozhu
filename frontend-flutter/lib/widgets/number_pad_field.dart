@@ -43,6 +43,7 @@ class NumberPadField extends StatelessWidget {
         controller: controller,
         allowDecimal: allowDecimal,
         maxLength: maxLength,
+        onChanged: onChanged,
       ),
     );
   }
@@ -56,7 +57,6 @@ class NumberPadField extends StatelessWidget {
       onTap: () => _openPad(context),
       keyboardType: TextInputType.none,
       style: style,
-      onChanged: onChanged,
       decoration: decoration ??
           InputDecoration(
             labelText: label,
@@ -74,11 +74,14 @@ class _NumberPadSheet extends StatefulWidget {
     required this.controller,
     required this.allowDecimal,
     this.maxLength,
+    this.onChanged,
   });
 
   final TextEditingController controller;
   final bool allowDecimal;
   final int? maxLength;
+  /// 确定写入时回调（TextField readOnly 不触发原生 onChanged，须在弹层写入后手动回调）
+  final ValueChanged<String>? onChanged;
 
   @override
   State<_NumberPadSheet> createState() => _NumberPadSheetState();
@@ -168,6 +171,7 @@ class _NumberPadSheetState extends State<_NumberPadSheet> {
               child: FilledButton(
                 onPressed: () {
                   widget.controller.text = _buf.text;
+                  widget.onChanged?.call(_buf.text);
                   Navigator.pop(context);
                 },
                 child: const Text('确定'),

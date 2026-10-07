@@ -48,6 +48,7 @@
           <view class="mini-field">{{ row.happenedAt ? row.happenedAt.slice(5) : '日期' }}</view>
         </picker>
         <text class="amt">¥{{ rowAmount(row) }}</text>
+        <text class="ins" @click="insertRow(i)">插</text>
         <text class="del" @click="rows.splice(i, 1)">删</text>
       </view>
       <input class="row-note" v-model="row.note" placeholder="行备注（选填）" />
@@ -448,6 +449,11 @@ function addRow() {
   rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
 }
 
+/// 在该行上方插入一行（补识别漏行/调整顺序与图片一致；对齐 App 行内插入）
+function insertRow(i: number) {
+  rows.value.splice(i, 0, { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
+}
+
 /// 批量直编加载（对齐 App dateRows）：该日全部行平铺。行保留原行 id/原单 id：
 /// 保存按原单分组 PATCH（items 带原 id 不换 id=行级附件不孤儿）；被删行=不提交即整体替换移除
 async function loadDateRows() {
@@ -729,6 +735,7 @@ async function submit() {
 .ipt-note { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 26rpx; }
 .amt { width: 110rpx; font-size: 24rpx; color: #f56c6c; }
 .del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; }
+.ins { color: #67C23A; font-size: 24rpx; padding: 8rpx; }
 .footer { display: flex; justify-content: space-between; align-items: center; margin: 20rpx 0; }
 /* 底部固定悬浮栏（对齐 App 固定栏）：页面留白避免内容被栏遮挡 */
 .bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 16rpx 24rpx 20rpx; background: var(--page-bg); border-top: 1rpx solid var(--divider); z-index: 20; }

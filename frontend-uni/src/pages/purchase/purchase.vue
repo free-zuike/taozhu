@@ -37,6 +37,7 @@
           <view class="mini-field">{{ row.happenedAt ? row.happenedAt.slice(5) : '日期' }}</view>
         </picker>
         <text class="amt">¥{{ rowAmount(row) }}</text>
+        <text class="ins" @click="insertRow(i)">插</text>
         <text class="del" @click="rows.splice(i, 1)">删</text>
       </view>
       <input class="row-note" v-model="row.note" placeholder="行备注（选填）" />
@@ -253,6 +254,11 @@ async function copyLast() {
 
 function addRow() {
   rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
+}
+
+/// 在该行上方插入一行（补识别漏行/调整顺序与图片一致；对齐 App 行内插入）
+function insertRow(i: number) {
+  rows.value.splice(i, 0, { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
 }
 
 const skippedRef = ref(0); // dateRows 加载被跳过的商品行数（商品已删/停用）
@@ -670,6 +676,7 @@ async function submit() {
 .ipt-note { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 26rpx; }
 .amt { width: 110rpx; font-size: 24rpx; color: #f56c6c; }
 .del { color: #f56c6c; font-size: 24rpx; padding: 8rpx; }
+.ins { color: #409EFF; font-size: 24rpx; padding: 8rpx; }
 .footer { display: flex; justify-content: space-between; align-items: center; margin: 20rpx 0; }
 /* 底部固定悬浮栏（对齐 App 固定栏）：页面留白避免内容被栏遮挡 */
 .bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 16rpx 24rpx 20rpx; background: var(--page-bg); border-top: 1rpx solid var(--divider); z-index: 20; }

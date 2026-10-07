@@ -18,6 +18,9 @@ class DateField extends StatelessWidget {
   /// 是否填充底色（弹窗/卡片内与其他无填充输入框并排时传 false 对齐视觉；
   /// 表单页传默认 true 与主题填充式输入框一致）
   final bool filled;
+  /// 日期写入回调（TextField readOnly 不触发原生 onChanged，选完日期写入后手动回调；
+  /// 批量直编顶栏用=改批量日期后页内行日期联动）
+  final ValueChanged<String>? onChanged;
 
   const DateField({
     super.key,
@@ -31,6 +34,7 @@ class DateField extends StatelessWidget {
     this.compact = false,
     this.showSuffixIcon = true,
     this.filled = true,
+    this.onChanged,
   });
 
   Future<void> _pick(BuildContext context) async {
@@ -46,7 +50,9 @@ class DateField extends StatelessWidget {
             firstDate: firstDate ?? DateTime(now.year - 10),
             lastDate: lastDate ?? DateTime(now.year + 5, 12, 31));
     if (picked != null) {
-      controller.text = '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+      final v = '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+      controller.text = v;
+      onChanged?.call(v);
     }
   }
 
