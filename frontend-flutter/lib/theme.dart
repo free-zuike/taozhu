@@ -505,9 +505,12 @@ abstract class _BaseSkinPainter extends CustomPainter {
     return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
   }
 
-  /// 图案色：暗色=白系半透明；亮色=纯主题主色（不混白——图案颜色与所选主题色完全一致，用户要求）
+  /// 图案色：暗色=主题主色提亮半透明（不显白——用户"黑暗模式下背景图案位置显示白色"；
+  /// 亮色=纯主题主色（不混白——图案颜色与所选主题色完全一致，用户要求）
   Color ink(double opacity, [double whiteMix = 0]) =>
-      dark ? Colors.white.withOpacity(opacity) : Color.lerp(primary, Colors.white, whiteMix)!.withOpacity(opacity);
+      dark
+          ? Color.lerp(primary, Colors.white, 0.55)!.withOpacity(opacity)
+          : Color.lerp(primary, Colors.white, whiteMix)!.withOpacity(opacity);
 
   /// 强调色（亮窗/花心等）：随主题色派生（亮色=主题色压暗，暗色=主题色提亮）
   Color accent(double opacity) =>

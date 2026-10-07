@@ -282,8 +282,9 @@ export function skinPreviewCss(skin: string, primary: string): string {
 /** 页面背景：渐变底色（CSS 渲染，小程序支持）+ SVG 图案（image 组件铺层，base64 兼容）
  *  返回 { patternSrc: 图案 image src（''=无图案）, gradientCss: 渐变底 } */
 function pageBackgroundVars(primary: string, dark: boolean, skin: string): { patternSrc: string; gradientCss: string } {
-  const ink = dark ? 'rgba(255,255,255,0.24)' : rgba(primary, 0.22);
-  const ink2 = dark ? 'rgba(255,255,255,0.15)' : rgba(primary, 0.14);
+  // 暗色图案=主题主色半透明（不显白——用户"黑暗模式下除渐变其他是白色"）；亮色=主题主色
+  const ink = dark ? rgba(primary, 0.30) : rgba(primary, 0.22);
+  const ink2 = dark ? rgba(primary, 0.18) : rgba(primary, 0.14);
   const baseTop = dark ? '#181b22' : alpha(primary, '14');
   const baseBottom = dark ? '#12151c' : '#f6f7f9'; // 对齐 App scaffoldBackground 0xFFF6F7F9
   const gradient = `linear-gradient(180deg, ${baseTop} 0%, ${baseBottom} 60%)`;

@@ -29,22 +29,26 @@
         <text class="mi day-arrow">&#xe5cc;</text>
       </view>
       <view v-for="l in g.lines" :key="l.key" class="card-buy" @click="editBuyLine(l)" @longpress="deleteBuyLine(l)">
-        <view class="head">
-          <text class="name">{{ l.item_name }}</text>
-          <text class="amt" style="color:#f59e0b">¥{{ fmt(l.amount) }}</text>
-        </view>
-        <view class="buy-line1">
-          <text class="l2-tx">进价 ¥{{ fmtPrice(l.purchase_price) }}<text v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</text></text>
-          <text class="l2-cat" v-if="l.category">{{ l.category }}</text>
-        </view>
-        <view v-if="l.note" class="buy-note">{{ l.note }}</view>
-        <view class="ops">
-          <!-- 单个附件入口（对齐 App：行级优先、空回退该单；无附件灰态，可点开添加） -->
-          <view class="attach-entry" @click.stop="showAttach(l.itemId ? 'purchase_item' : 'purchase', l.itemId || l.orderId, 'purchase', l.orderId)">
-            <image class="attach-ic" :class="{ 'attach-ic-off': attachOf(l) <= 0 }" :src="attachIconSrc" mode="aspectFit" />
-            <text v-if="attachOf(l) > 0" class="attach-cnt">{{ attachOf(l) }}</text>
+        <view class="line-main">
+          <view class="buy-ic"><text class="mi">&#xe854;</text></view>
+          <view class="line-body">
+            <view class="line1">
+              <text class="name">{{ l.item_name }}</text>
+              <text class="amt">¥{{ fmt(l.amount) }}</text>
+            </view>
+            <view class="line2">
+              <text class="mi cat-ic">&#xe892;</text>
+              <text class="l2-cat">{{ l.category || '未分类' }}</text>
+              <view class="attach-entry" @click.stop="showAttach(l.itemId ? 'purchase_item' : 'purchase', l.itemId || l.orderId, 'purchase', l.orderId)">
+                <image class="attach-ic" :class="{ 'attach-ic-off': attachOf(l) <= 0 }" :src="attachIconSrc" mode="aspectFit" />
+                <text v-if="attachOf(l) > 0" class="attach-cnt">{{ attachOf(l) }}</text>
+              </view>
+            </view>
+            <view class="line3">
+              <text class="l2-tx">进价 ¥{{ fmtPrice(l.purchase_price) }} · ×{{ l.quantity }}{{ l.unit }}</text>
+            </view>
+            <view v-if="l.note" class="buy-note">{{ l.note }}</view>
           </view>
-          <text class="tip-longpress" @click.stop>长按删除该商品</text>
         </view>
       </view>
     </view>
@@ -620,20 +624,30 @@ async function loadAttachCounts() {
 .red { color: #f56c6c; }
 .card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 /* 进货流水：日期头 + 行级卡片（对齐 App 流式列表；与出货流水同构） */
-.flow { height: calc(100vh - 260rpx); }
+.flow { height: calc(100vh - 260rpx); padding-bottom: 60rpx; box-sizing: border-box; }
 .day-bar { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 8rpx 10rpx; }
 .day-ic { color: var(--primary); font-size: 28rpx; margin-right: 8rpx; }
 .day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); flex: 1; }
 .day-total { font-size: 23rpx; color: var(--text-sub); }
 .day-arrow { color: var(--text-sub); font-size: 30rpx; margin-left: 8rpx; }
-.card-buy { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 20rpx 22rpx; margin-bottom: 12rpx; box-shadow: none; }
-.buy-line1 { display: flex; align-items: baseline; gap: 14rpx; margin-bottom: 6rpx; }
+.card-buy { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 16rpx 18rpx; margin-bottom: 12rpx; box-shadow: none; }
+.line-main { display: flex; align-items: flex-start; }
+.buy-ic { width: 56rpx; height: 56rpx; border-radius: 50%; background: var(--ok-bg); display: flex; align-items: center; justify-content: center; margin-right: 14rpx; flex-shrink: 0; }
+.buy-ic .mi { font-size: 26rpx; color: #22c55e; }
+.line-body { flex: 1; min-width: 0; }
+.line1 { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6rpx; }
+.name { font-size: 30rpx; font-weight: bold; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amt { font-size: 30rpx; font-weight: bold; color: #ef4444; flex-shrink: 0; margin-left: 12rpx; }
+.line2 { display: flex; align-items: center; gap: 6rpx; margin-bottom: 6rpx; }
+.cat-ic { font-size: 22rpx; color: var(--text-sub); }
+.l2-cat { font-size: 22rpx; color: var(--text-sub); background: none; border-radius: 0; padding: 0; flex-shrink: 0; }
+.attach-entry { margin-left: auto; display: flex; align-items: center; gap: 6rpx; flex-shrink: 0; padding: 4rpx; }
+.attach-ic { width: 34rpx; height: 34rpx; }
+.attach-ic-off { opacity: 0.35; }
+.attach-cnt { font-size: 20rpx; color: var(--primary); font-weight: 600; }
+.line3 { margin-bottom: 6rpx; }
 .l2-tx { font-size: 23rpx; color: var(--text-sub); }
-.l2-cat { font-size: 20rpx; color: var(--primary); background: var(--primary-soft); border-radius: 6rpx; padding: 2rpx 10rpx; }
-.buy-note { font-size: 22rpx; color: var(--text-sub); margin-bottom: 6rpx; }
-.head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8rpx; }
-.name { font-size: 30rpx; font-weight: bold; }
-.amt { font-size: 30rpx; font-weight: bold; color: #f56c6c; }
+.buy-note { font-size: 22rpx; color: var(--text-sub); }
 .line { display: flex; justify-content: space-between; align-items: center; padding: 10rpx 0; border-top: 1rpx solid var(--divider); }
 .line-left { flex: 1; min-width: 0; }
 .line-name-row { display: flex; align-items: center; gap: 12rpx; }

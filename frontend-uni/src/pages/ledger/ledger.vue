@@ -31,7 +31,7 @@
       <view :class="['seg-item', { active: tab === 'payments' }]" @click="switchTab('payments')">收款</view>
     </view>
 
-    <scroll-view scroll-y class="flow">
+    <scroll-view scroll-y class="flow" @scroll="onFlowScroll">
     <view v-if="tab === 'sales'">
       <!-- 按日期分组 + 商品明细行平铺（对齐 App：日期头 + 流水行卡片） -->
       <view v-for="g in saleGroups" :key="g.date">
@@ -508,6 +508,43 @@ async function loadAccounts() {
 function onEditMethod(e: { detail: { value: number } }) {
   payForm.value.method = accounts.value[e.detail.value] || '';
   payForm.value.methodIdx = e.detail.value;
+}
+
+// 月份-交易联动（对齐 App 滚动联动）：列表滚动时按视口内最顶部日期头切统计月份；
+// 节流 120ms + 年月变化才重算（防抖）
+let monthSyncTimer: ReturnType<typeof setTimeout> | null = null;
+function onFlowScroll() {
+  if (monthSyncTimer) return;
+  monthSyncTimer = setTimeout(() => {
+    monthSyncTimer = null;
+    syncMonthFromViewport();
+  }, 120);
+}
+function syncMonthFromViewport() {
+  // #ifndef H5
+  try {
+    const q = uni.createSelectorQuery();
+    q.selectAll('.day-bar').boundingClientRect((res: any) => {
+      const rects: Array<any> = Array.isArray(res) ? res : [res];
+      if (!rects || rects.length === 0) return;
+      let best: { top: number; date: string } | null = null;
+      for (const r of rects) {
+        const date = String(r?.dataset?.date || '');
+        if (!date || date.length < 7) continue;
+        if (r.top > -60 && r.top < 150 && (!best || r.top < best.top)) best = { top: r.top, date };
+      }
+      if (!best) return;
+      const y = Number(best.date.slice(0, 4));
+      const m = Number(best.date.slice(5, 7));
+      if (!y || !m) return;
+      if (y !== selYear.value || m !== selMonth.value) {
+        selYear.value = y;
+        selMonth.value = m;
+        loadMonthly();
+      }
+    }).exec();
+  } catch (_) {}
+  // #endif
 }
 
 async function load() {

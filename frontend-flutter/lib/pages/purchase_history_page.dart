@@ -836,9 +836,11 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     for (final l in sortedLines) {
       (grouped['${l['date']}'] ??= []).add(l);
     }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView(
+    return NotificationListener<ScrollNotification>(
+      onNotification: _syncMonthWithScroll,
+      child: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
         controller: _listCtrl,
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
         children: [
@@ -853,6 +855,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                   padding: const EdgeInsets.fromLTRB(4, 14, 4, 2),
                   child: Row(
                     children: [
+                      Icon(Icons.edit_calendar_outlined, size: 15, color: c.success),
+                      const SizedBox(width: 4),
                       Text(_weekday(e.key),
                           style: TextStyle(
                               fontSize: 13,
@@ -878,6 +882,36 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
           ],
         ],
       ),
+    ),
     );
+  }
+
+  /// 进货列表与顶部统计联动：滚动时按视口内最顶部日期头切统计月份（对齐出货 ledger 联动）
+  bool _syncMonthWithScroll(ScrollNotification n) {
+    if (n is ScrollStartNotification || n is ScrollUpdateNotification || n is ScrollEndNotification) {
+      double? bestTop;
+      String? bestDate;
+      for (final e in _dateHeaderKeys.entries) {
+        final ctx = e.value.currentContext;
+        if (ctx == null) continue;
+        final box = ctx.findRenderObject();
+        if (box is! RenderBox) continue;
+        final top = box.localToGlobal(Offset.zero).dy;
+        if (top > -40 && top < 120 && (bestTop == null || top < bestTop)) {
+          bestTop = top;
+          bestDate = e.key;
+        }
+      }
+      if (bestDate == null || bestDate.length < 7) return false;
+      final y = int.tryParse(bestDate.substring(0, 4));
+      final m = int.tryParse(bestDate.substring(5, 7));
+      if (y == null || m == null) return false;
+      if (y != _selYear || m != _selMonth) {
+        _selYear = y;
+        _selMonth = m;
+        _loadMonthly();
+      }
+    }
+    return false;
   }
 }

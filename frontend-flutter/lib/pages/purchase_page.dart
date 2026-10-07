@@ -117,7 +117,28 @@ class _PurchasePageState extends State<PurchasePage> {
       r.priceCtrl.dispose();
       r.countCtrl.dispose();
     }
+    // 未提交退出（取消）：清理识别即挂载的原图（引用+本地副本，零网络）
+    if (!_submitted && _recognizedFile != null) {
+      unawaited(_cleanupRecognizedOnCancel());
+    }
     super.dispose();
+  }
+
+  /// 取消退出时清理识别挂载：删引用行 + 删本地副本文件（识别挂载未入上传队列，零网络）
+  Future<void> _cleanupRecognizedOnCancel() async {
+    final file = _recognizedFile;
+    if (file == null) return;
+    final id = isDateRows && _orderIds.isNotEmpty ? _orderIds.first : _purchaseId;
+    try { await LocalDb.deleteOne('attachment_refs', 'purchase/$id/$file'); } catch (_) {}
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final f = File('${root.path}/attachments/$file');
+      if (f.existsSync()) {
+        final refs = await LocalDb.getAll('attachment_refs');
+        if (!refs.any((r) => '${r['file'] ?? ''}' == file)) await f.delete();
+      }
+    } catch (_) {}
+    appLog('sync', '识别取消清理：移除挂载 purchase/$id/$file（零网络）', level: 'info');
   }
 
   @override
@@ -158,9 +179,42 @@ class _PurchasePageState extends State<PurchasePage> {
     toast(context, '识别中…');
     final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
     _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
-    setState(() => _pendingPhoto = bytes); // App/Web 一致：提交成功才挂载上传（取消不保留）
-    toast(context, '识别完成（原图将在提交后作为本单凭证）');
+    if (kIsWeb) {
+      setState(() => _pendingPhoto = bytes); // Web 无本地库：保存成功后用服务端返回的单据 id 直传
+    } else {
+      await _attachRecognized(bytes); // App 本地：立即挂载（本地可见），取消时 dispose 清理
+    }
+    toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
   }
+
+  /// 识别原图立即挂为本单凭证（App 本地优先）：写公共目录副本 + 本地引用表登记
+  /// （提交前凭证查看器立即可见）；不立即上传——提交成功后才入队上传，取消=纯本地清理零网络。
+  /// 批量直编挂真实原单 id。
+  Future<void> _attachRecognized(Uint8List bytes) async {
+    try {
+      final fileName = '${md5.convert(bytes).toString()}.jpg';
+      final root = await getApplicationDocumentsDirectory();
+      final adir = Directory('${root.path}/attachments');
+      if (!adir.existsSync()) adir.createSync(recursive: true);
+      final af = File('${adir.path}/$fileName');
+      if (!af.existsSync()) await af.writeAsBytes(bytes);
+      _recognizedFile = fileName;
+      final id = isDateRows && _orderIds.isNotEmpty ? _orderIds.first : _purchaseId;
+      await LocalDb.upsertOne('attachment_refs', {
+        'id': 'purchase/$id/$fileName',
+        'entity': 'purchase',
+        'entity_id': id,
+        'file': fileName,
+        'key': 'taozhu/images/attachments/$fileName',
+      });
+      SyncService.version.notifyListeners();
+    } catch (_) {}
+  }
+
+  /// 识别挂载的文件名（dispose 取消时清理用）
+  String? _recognizedFile;
+
+  bool _submitted = false; // 已提交成功（取消退出时据此清理识别挂载）
 
   Future<void> _load() async {
     // Web（无本地库）：直连网络刷新；原生：只读本地库镜像（同步由「我的」页/进应用驱动，页面不访问网络）
@@ -1010,7 +1064,7 @@ class _PurchasePageState extends State<PurchasePage> {
             _webPurchaseId = '${r['id']}';
           }
         }
-        toast(context, '已保存');
+        toast(context, '已保存');\n        _submitted = true;
         // 提交成功后才上传识别原图附件（Web）：新建用服务端返回的真实单据 id，
         // 编辑/批量直编用现有单 id——挂错 id 会导致 Web 端"附件看不到"
         if (kIsWeb) unawaited(_uploadPending(

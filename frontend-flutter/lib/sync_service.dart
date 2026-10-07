@@ -1080,6 +1080,9 @@ class SyncService {
       await syncMyProfile();
       // ⑥ 主题配置随同步上传/拉取（App 不直连写数据库；Web 直连在设置页保存）
       await _syncTheme();
+      // ⑦ 僵尸附件引用清理：引用目标实体不存在（识别取消残留等）→ 删引用行+对应副本文件；
+      // 在用副本不清（孤儿文件仍由存储清理页扫描）——0.17.330 曾只加逻辑未挂调用点=从未执行
+      await cleanupOrphanLocalAttachments();
     } catch (e) {
       _lastSyncFailed = true;
       appLog('sync', '同步失败: ${e.toString().split('\n').first}', level: 'error');

@@ -6,6 +6,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
 import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
 
@@ -294,6 +295,11 @@ class _CleanupPageState extends State<CleanupPage> {
         } catch (_) {
           _inUseFailed = true;
         }
+        // 僵尸附件引用清理（引用目标实体不存在=识别取消残留等）：先清引用行，随后孤儿扫描可删对应文件
+        // ——"存储清理扫不到"根因（引用表还有垃圾行=不算孤儿）
+        try {
+          await SyncService.cleanupOrphanLocalAttachments();
+        } catch (_) {}
         final root = await getApplicationDocumentsDirectory();
         final att = Directory('${root.path}/attachments');
         // 本地副本统计：全部本地附件文件数（含在用+孤儿）——同步面板/用户"本地 6"口径
