@@ -312,6 +312,17 @@ async function syncAttachRefsAfterUpsert(
   for (const r of remove) {
     // 只删本实体引用行（主键精确删），共用文件的其他实体引用保留
     await db.prepare('DELETE FROM attachment_refs WHERE id = ?').bind(r.id).run();
+    // 引用变化入变更流（对齐参考架构：附件删除=delete 变更，其他端 pull 到后删本地引用+副本）
+    try {
+      const parts = String(r.id).split(':');
+      await recordChange(db, {
+        entity_type: 'attachment',
+        entity_sync_id: r.file_key,
+        action: 'delete',
+        payload: { file_key: r.file_key, file: r.file_key.split('/').pop() ?? '', entity: parts[0] ?? entityType, id: parts[1] ?? id },
+        updated_at: new Date().toISOString(),
+      });
+    } catch (_) {}
     // 删除后该文件是否零引用 → 才物理删 R2（删除以引用差集驱动）
     const cnt = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(r.file_key).first<{ n: number }>();
     if ((cnt?.n ?? 0) === 0) {

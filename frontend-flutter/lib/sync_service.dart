@@ -184,10 +184,8 @@ class SyncService {
           .where((r) => !tombstones.contains('${r['entity']}/${r['entity_id']}/${r['file']}'))
           .toList();
       // 待上传队列中的本地登记（添加附件立即可见，还没传到服务器/已传但 in-use 未回）：
-      // 全量刷新不能把它们冲掉，否则图标"添加后灭一次、上传成功才亮"——本地优先应始终亮。
-      // 合并：本地表中属于待上传队列且未被待删除过滤的行，保留在本次刷新结果里。
-      // 队列清空时机=downloadInUseAttachments 确认 in-use 已含该引用后（见下方 putAll 后清理），
-      // 上传成功不立即清队列——否则 in-use 未回时 putAll([]) 会把已登记行冲掉（图标闪烁根因）。
+      // 合并刷新不能把它们冲掉，否则图标"添加后灭一次、上传成功才亮"——本地优先应始终亮。
+      // 队列清空时机=downloadInUseAttachments 确认 in-use 已含该引用后（见下方清理）。
       try {
         final p = await SharedPreferences.getInstance();
         final pendingUploads = (p.getStringList(kPendingUploadsKey) ?? [])
@@ -205,12 +203,23 @@ class SyncService {
           }
         }
       } catch (_) {}
-      if (refs.isNotEmpty) {
-        await LocalDb.putAll('attachment_refs', refs);
-      } else {
-        // 全部删光也清空本地表（否则已删引用残留、图标不灭）
-        await LocalDb.putAll('attachment_refs', []);
-      }
+      // 本地引用表合并（对齐参考架构变更流驱动：**只增不删**——删除仅由变更流
+      // attachment delete 应用（pullChanges），in-use 快照不再覆盖本地表）：
+      // 服务器在用的新引用补进来（他端上传/首装兜底），本地已有的保留；
+      // 不删除本地已有行 = "删了又拉取"在机制上消失（配合墓碑挡本地删过但服务器未删的窗口）
+      try {
+        final locals = await LocalDb.getAll('attachment_refs');
+        final localIds = { for (final r in locals) '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${'${r['file'] ?? ''}'.split('/').last}' };
+        final merged = List<Map<String, dynamic>>.from(locals);
+        for (final r in refs) {
+          final id3 = '${r['entity']}/${r['entity_id']}/${r['file']}';
+          if (!localIds.contains(id3)) {
+            merged.add(r);
+            localIds.add(id3);
+          }
+        }
+        await LocalDb.putAll('attachment_refs', merged);
+      } catch (_) {}
       // 墓碑清理：服务器 in-use 快照已不含该三元组 = 删除已同步确认（服务器引用行已删），
       // 墓碑使命完成可清除（对齐参考实现 CouchDB 墓碑在复制确认后压缩）；仅清"服务器已无"
       // 的墓碑——服务器仍下发说明删除还没传播完，墓碑继续挡复活
@@ -773,32 +782,53 @@ class SyncService {
           final payload = ch['payload'] as Map<String, dynamic>? ?? {};
           var applied = false;
           try {
-            // 附件删除变更：其他端删了附件 → 本地同步删对应副本（引用变更流驱动跨端删除）
-            if (entityType == 'attachment' && action == 'delete') {
-              final root = await getApplicationDocumentsDirectory();
+            // 附件变更（对齐参考架构：附件是一等实体，上传=upsert 变更/删除=delete 变更，
+            // 客户端按变更流维护本地引用表，不依赖 in-use 全量快照覆盖）
+            if (entityType == 'attachment') {
               final key = '${payload['file_key'] ?? payload['key'] ?? ''}';
               if (key.isNotEmpty) {
-                // 优先用 payload 携带的 entity/id（新客户端），否则三前缀解析 key（兼容历史根级前缀）
-                final entity = '${payload['entity'] ?? ''}';
-                final eid = '${payload['id'] ?? ''}';
-                final parsed = (entity.isNotEmpty && eid.isNotEmpty)
-                    ? {'entity': entity, 'id': eid}
-                    : _parseAttachmentKey(key);
-                if (parsed != null) {
-                  // 本地待上传队列同步移除（同实体同文件）：其他端已删，本端残留待传条目
-                  // 不应再传回去（否则删除被上传复活）
-                  try {
-                    await removePendingUpload(
-                        entity: '${parsed['entity'] ?? ''}',
-                        id: '${parsed['id'] ?? ''}',
-                        fileName: key.split('/').last);
-                  } catch (_) {}
-                  final f = File('${root.path}/attachments/${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
-                  if (f.existsSync()) f.deleteSync();
-                  // 同步删除本地引用行（在下次 in-use 全量刷新前保持本地表一致，避免误判在用）
-                  try {
-                    await LocalDb.deleteOne('attachment_refs', '${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
-                  } catch (_) {}
+                if (action == 'delete') {
+                  // 其他端删了附件 → 本地同步删对应副本（引用变更流驱动跨端删除）
+                  final root = await getApplicationDocumentsDirectory();
+                  // 优先用 payload 携带的 entity/id（新客户端），否则三前缀解析 key（兼容历史根级前缀）
+                  final entity = '${payload['entity'] ?? ''}';
+                  final eid = '${payload['id'] ?? ''}';
+                  final parsed = (entity.isNotEmpty && eid.isNotEmpty)
+                      ? {'entity': entity, 'id': eid}
+                      : _parseAttachmentKey(key);
+                  if (parsed != null) {
+                    // 本地待上传队列同步移除（同实体同文件）：其他端已删，本端残留待传条目
+                    // 不应再传回去（否则删除被上传复活）
+                    try {
+                      await removePendingUpload(
+                          entity: '${parsed['entity'] ?? ''}',
+                          id: '${parsed['id'] ?? ''}',
+                          fileName: key.split('/').last);
+                    } catch (_) {}
+                    final f = File('${root.path}/attachments/${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
+                    if (f.existsSync()) f.deleteSync();
+                    // 同步删除本地引用行 + 删除墓碑（删除已由他端发起并进入变更流，本地无需墓碑）
+                    try {
+                      await LocalDb.deleteOne('attachment_refs', '${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
+                    } catch (_) {}
+                    try {
+                      await LocalDb.deleteOne(kDeletedAttachmentsStore, '${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
+                    } catch (_) {}
+                  }
+                } else {
+                  // upsert：他端上传附件 → 本地写引用行（下载由 downloadInUseAttachments 补齐）
+                  final entity = '${payload['entity'] ?? ''}';
+                  final eid = '${payload['id'] ?? ''}';
+                  if (entity.isNotEmpty && eid.isNotEmpty) {
+                    final file = '${payload['file'] ?? key.split('/').last}';
+                    await LocalDb.upsertOne('attachment_refs', {
+                      'id': '$entity/$eid/$file',
+                      'entity': entity,
+                      'entity_id': eid,
+                      'file': file,
+                      'key': key,
+                    });
+                  }
                 }
               }
               applied = true;

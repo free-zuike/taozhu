@@ -6,6 +6,7 @@ import { verifyToken } from '../lib/jwt';
 import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
 import { attachmentContentKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from '../lib/image-key';
+import { recordChange } from '../lib/sync';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -95,11 +96,27 @@ attachmentsRouter.post('/', async (c) => {
     await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
     // 附件引用表（引用驱动）：记录"哪个实体引用了哪个文件"。幂等：同 entity+entity_id+key 已存在则跳过，
     // 不同实体引用同一内容（同 md5 同 key）各自一行——多行/多单共享一份物理文件互不影响
-    await c.env.DB.prepare(
+    // 附件增删实时同步：引用变化入变更流（对齐参考架构——附件是一等实体，上传=一条 upsert 变更，
+    // 其他端 pull 到后写本地引用+下载；不再只依赖 in-use 全量快照轮询）
+    // 实体引用 id = `${entity}:${id}:${key}`（引用表主键语义）：同图多实体各自一条变更，
+    // LWW/幂等按引用 id 判定不串；幂等重传（引用已存在）不重复写变更（同内容同实体无变化）
+    const refId = `${entity}:${id}:${key}`;
+    const upserted = await c.env.DB.prepare(
       'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
-    ).bind(`${entity}:${id}:${key}`, entity, id, key, key.split('/').pop()?.replace('.jpg', '') ?? '').run();
-    // 附件增删实时同步：广播 {type:'sync'}，其他在线端收到后拉取并刷新附件计数/图标
-    await notifyClients();
+    ).bind(refId, entity, id, key, key.split('/').pop()?.replace('.jpg', '') ?? '').run();
+    if ((upserted.meta.changes ?? 0) > 0 || !(await c.env.DB.prepare(
+      'SELECT 1 FROM sync_changes WHERE entity_type = ? AND entity_sync_id = ? LIMIT 1',
+    ).bind('attachment', refId).first())) {
+      const user = c.get('user');
+      await recordChange(c.env.DB, {
+        entity_type: 'attachment',
+        entity_sync_id: refId,
+        action: 'upsert',
+        payload: { file_key: key, file: key.split('/').pop() ?? '', entity, id, md5: key.split('/').pop()?.replace('.jpg', '') ?? '' },
+        updated_at: new Date().toISOString(),
+        updated_by_username: user?.username ?? null,
+      });
+    }
     return c.json({ key }, 201);
   } catch (e) {
     // 500 明细进 Cloudflare 实时日志（控制台 → Workers → 实时日志可见），定位 R2/D1 失败原因
@@ -233,8 +250,19 @@ attachmentsRouter.get('/in-use', async (c) => {
     const file = r.file_key.split('/').pop() ?? '';
     if (!file) continue;
     if (!(inUse.get(r.entity) ?? new Set()).has(r.entity_id)) {
+      // 引用自愈：目标实体已删但引用行残留 → 删除并广播 delete 变更（对齐参考架构：
+      // 附件删除=变更流 delete，其他端 pull 到后清理本地引用/副本，不依赖 in-use 快照收敛）
       try {
         await db.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind(r.entity, r.entity_id).run();
+        try {
+          await recordChange(db, {
+            entity_type: 'attachment',
+            entity_sync_id: r.file_key,
+            action: 'delete',
+            payload: { file_key: r.file_key, file, entity: r.entity, id: r.entity_id },
+            updated_at: new Date().toISOString(),
+          });
+        } catch (_) {}
       } catch (_) {}
       continue;
     }
@@ -473,6 +501,21 @@ attachmentsRouter.delete('/', async (c) => {
   if ((cnt?.n ?? 0) === 0) {
     await store.delete(key);
   }
-  await notifyClients();
+  // 引用变化入变更流（对齐参考架构：删除=一条 delete 变更，其他端 pull 到后删本地引用+副本）
+  const entity = parsed?.entity ?? qEntity;
+  const entityId = parsed?.id ?? qId;
+  if (entity && entityId) {
+    const user = c.get('user');
+    await recordChange(db, {
+      entity_type: 'attachment',
+      entity_sync_id: key,
+      action: 'delete',
+      payload: { file_key: key, file: key.split('/').pop() ?? '', entity, id: entityId },
+      updated_at: new Date().toISOString(),
+      updated_by_username: user?.username ?? null,
+    });
+  } else {
+    await notifyClients();
+  }
   return c.body(null, 204);
 });
