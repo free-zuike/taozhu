@@ -19,6 +19,11 @@ const kDeletedItemsKey = 'taozhu_deleted_items';
 /// 待上传附件队列 key（SharedPreferences JSON 数组 [{entity,id,fileName}]）：
 /// 页面添加附件先落本地副本再入队，sync() 编排统一上传（附件上传是同步引擎一部分）。
 const kPendingUploadsKey = 'taozhu_pending_uploads';
+/// 附件删除墓碑表（本地持久化）：所有删除附件/删行/删单路径写入 {entity, entity_id, file}，
+/// pull 全量刷新先把命中墓碑的三元组剔除——对齐参考实现 CouchDB 墓碑语义：
+/// 删除永胜、已删引用绝不被快照复活（比内存 pendingDel 更强：覆盖删行/删单这类
+/// 没有 attachment 删除变更的路径）；服务器确认删除（in-use 快照已无该三元组）后清除墓碑。
+const kDeletedAttachmentsStore = 'deleted_attachments';
 
 /// pull apply 失败记录 key（SharedPreferences JSON 数组，上限 50 条）：
 /// 单条 apply 失败不阻塞整页游标——记录错误跳过，后续同实体 apply 成功自动清除（对齐 SyncErrorStore）。
@@ -151,25 +156,23 @@ class SyncService {
         }
       }
       inUse = ((d['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
-      // 本地待推送删除的附件引用（entity/id/file 三元组）：删除变更 push 成功前，服务器 in-use
-      // 仍下发旧引用（服务器引用行还没删）。此轮全量刷新若照单覆盖本地表→"删一下又复活"。
-      // 过滤掉待删除三元组：本设备删除过但未同步成功的，本地保持已删（下次 push 成功后再收敛）。
-      final pendingDel = <String>{};
+      // 本地删除墓碑（deleted_attachments）：所有删除附件/删行/删单路径写入，
+      // pull 全量刷新先把命中墓碑的三元组剔除——删除永胜，绝不被旧快照复活
+      // （对齐参考实现 CouchDB 墓碑语义；比内存 pendingDel 覆盖更全：删行删单元
+      //  无 attachment 删除变更，只有墓碑能挡住"删行后行级引用被 pull 写回"）
+      final tombstones = <String>{};
       try {
-        final pending = await LocalDb.getPendingChanges();
-        for (final c in pending) {
-          if ('${c['entity_type'] ?? ''}' != 'attachment' || '${c['action'] ?? ''}' != 'delete') continue;
-          final p = (c['payload'] as Map<String, dynamic>?) ?? {};
-          final e = '${p['entity'] ?? ''}';
-          final i = '${p['id'] ?? ''}';
-          final f = '${p['file_key'] ?? p['key'] ?? ''}'.split('/').last;
-          if (e.isNotEmpty && i.isNotEmpty && f.isNotEmpty) pendingDel.add('$e/$i/$f');
+        for (final t in await LocalDb.getAll(kDeletedAttachmentsStore)) {
+          final e = '${t['entity'] ?? ''}';
+          final i = '${t['entity_id'] ?? ''}';
+          final f = '${t['file'] ?? ''}';
+          if (e.isNotEmpty && i.isNotEmpty && f.isNotEmpty) tombstones.add('$e/$i/${f.split('/').last}');
         }
       } catch (_) {}
       // 持久化在用三元组：本地 attachment_refs store（每次同步全量刷新，删除的引用随之消失）
       // key=服务器真实 file_key（新旧格式都可能：旧格式化含实体段、新格式 md5-only）——
       // 删除时按真实 key 匹配服务器引用行（重构的新格式 key 匹配不到旧格式存量行）
-      final refs = inUse
+      var refs = inUse
           .map((a) => {
                 'id': '${a['entity'] ?? ''}/${a['id'] ?? ''}/${a['file'] ?? ''}',
                 'entity': a['entity'] ?? '',
@@ -178,7 +181,7 @@ class SyncService {
                 'key': a['key'] ?? '',
               })
           .where((r) => r['entity'] != '' && r['entity_id'] != '' && r['file'] != '')
-          .where((r) => !pendingDel.contains('${r['entity']}/${r['entity_id']}/${r['file']}'))
+          .where((r) => !tombstones.contains('${r['entity']}/${r['entity_id']}/${r['file']}'))
           .toList();
       // 待上传队列中的本地登记（添加附件立即可见，还没传到服务器/已传但 in-use 未回）：
       // 全量刷新不能把它们冲掉，否则图标"添加后灭一次、上传成功才亮"——本地优先应始终亮。
@@ -197,7 +200,7 @@ class SyncService {
           for (final r in locals) {
             final id3 = '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${'${r['file'] ?? ''}'.split('/').last}';
             if (!pendingUploads.contains(id3)) continue;
-            if (pendingDel.contains(id3)) continue;
+            if (tombstones.contains(id3)) continue;
             if (!refs.any((x) => '${x['id']}' == id3)) refs.add(r);
           }
         }
@@ -208,6 +211,25 @@ class SyncService {
         // 全部删光也清空本地表（否则已删引用残留、图标不灭）
         await LocalDb.putAll('attachment_refs', []);
       }
+      // 墓碑清理：服务器 in-use 快照已不含该三元组 = 删除已同步确认（服务器引用行已删），
+      // 墓碑使命完成可清除（对齐参考实现 CouchDB 墓碑在复制确认后压缩）；仅清"服务器已无"
+      // 的墓碑——服务器仍下发说明删除还没传播完，墓碑继续挡复活
+      try {
+        final serverIds = <String>{
+          for (final a in inUse)
+            '${a['entity'] ?? ''}/${a['id'] ?? ''}/${'${a['file'] ?? ''}'.split('/').last}',
+        };
+        final rows = await LocalDb.getAll(kDeletedAttachmentsStore);
+        for (final t in rows) {
+          final e = '${t['entity'] ?? ''}';
+          final i = '${t['entity_id'] ?? ''}';
+          final f = '${t['file'] ?? ''}';
+          if (e.isEmpty || i.isEmpty || f.isEmpty) continue;
+          if (!serverIds.contains('$e/$i/${f.split('/').last}')) {
+            await LocalDb.deleteOne(kDeletedAttachmentsStore, '$e/$i/$f');
+          }
+        }
+      } catch (_) {}
       // in-use 已确认包含的待上传条目 → 从队列移除（上传成功且服务器已落引用行；
       // 未含的保留在队列，下次合并保护继续生效——图标"添加后灭一次"根因修复）
       try {
@@ -317,6 +339,8 @@ class SyncService {
     // 行 id 用 entity/id/fileName（与同步全量刷新 putAll 的 id 拼法一致，幂等覆盖）；
     // key 按新格式内容 key 命名（同图一份；旧库/存量格式由同步以服务器真实 key 刷新覆盖）
     try {
+      // 用户删除过该附件又再次添加：删除墓碑作废（新添加生效，不能再挡本次挂载）
+      await clearTombstone(entity: entity, id: id, file: fileName);
       await LocalDb.upsertOne('attachment_refs', {
         'id': '${entity.trim()}/${id.trim()}/${fileName.trim()}',
         'entity': entity.trim(),
@@ -332,6 +356,40 @@ class SyncService {
       _attUploadLock = true;
       unawaited(uploadPendingAttachments().whenComplete(() => _attUploadLock = false));
     }
+  }
+
+  /// 记录附件删除墓碑（本地持久化）：删除附件/删行/删单后写入 {entity, entity_id, file}，
+  /// pull 全量刷新会先剔除墓碑命中的三元组——删除永胜，不会被旧快照复活。
+  /// 同实体同文件被用户重新添加（enqueueAttachmentUpload）时清除墓碑（新添加=原删除作废）。
+  /// 服务器确认删除（in-use 快照已无该三元组）后由 downloadInUseAttachments 清理墓碑。
+  static Future<void> tombstoneDeletedAttachment({
+    required String entity,
+    required String id,
+    required String file,
+  }) async {
+    try {
+      if (kIsWeb) return; // Web 无本地库：直连服务器删除，无本地快照复活窗口
+      final f = file.split('/').last;
+      if (f.isEmpty) return;
+      await LocalDb.upsertOne(kDeletedAttachmentsStore, {
+        'id': '$entity/$id/$f',
+        'entity': entity,
+        'entity_id': id,
+        'file': f,
+        'deleted_at': DateTime.now().toIso8601String(),
+      });
+    } catch (_) {}
+  }
+
+  /// 上传入队：同步移除同三元组删除墓碑（用户删除后又重新添加 = 删除作废，新添加生效）
+  static Future<void> clearTombstone({
+    required String entity,
+    required String id,
+    required String file,
+  }) async {
+    try {
+      await LocalDb.deleteOne(kDeletedAttachmentsStore, '$entity/$id/${file.split('/').last}');
+    } catch (_) {}
   }
 
   /// 删除附件时调用：从待上传队列移除对应条目（否则已删引用会在下次上传时"复活"——
@@ -387,11 +445,22 @@ class SyncService {
       }
       final stale = <String>[];
       final kept = <String>[];
+      // 删除墓碑：实体仍在但附件已被删（删附件未删行）的残留条目也不传——否则重传复活引用
+      final tomb = <String>{};
+      try {
+        for (final t in await LocalDb.getAll(kDeletedAttachmentsStore)) {
+          final e = '${t['entity'] ?? ''}';
+          final i = '${t['entity_id'] ?? ''}';
+          final f = '${t['file'] ?? ''}';
+          if (e.isNotEmpty && i.isNotEmpty && f.isNotEmpty) tomb.add('$e/$i/${f.split('/').last}');
+        }
+      } catch (_) {}
       for (final entry in entries) {
         try {
           final m = jsonDecode(entry) as Map<String, dynamic>;
           final e = '${m['entity'] ?? ''}';
           final i = '${m['id'] ?? ''}';
+          final f = '${'${m['fileName'] ?? ''}'.split('/').last}';
           final exists = switch (e) {
             'sale' => saleIds.contains(i),
             'sale_item' => saleLineIds.contains(i),
@@ -400,13 +469,13 @@ class SyncService {
             'payment' => payIds.contains(i),
             _ => true, // 未知实体类型：保留
           };
-          if (exists) {
+          if (exists && !tomb.contains('$e/$i/$f')) {
             kept.add(entry);
           } else {
             stale.add(entry);
-            appLog('sync', '附件队列清理：实体已删除，移除待传 $e/$i/${'${m['fileName'] ?? ''}'.split('/').last}', level: 'info');
+            appLog('sync', '附件队列清理：实体已删除或已有删除墓碑，移除待传 $e/$i/$f', level: 'info');
             try {
-              await LocalDb.deleteOne('attachment_refs', '$e/$i/${'${m['fileName'] ?? ''}'.split('/').last}');
+              await LocalDb.deleteOne('attachment_refs', '$e/$i/$f');
             } catch (_) {}
           }
         } catch (_) {
@@ -1256,6 +1325,9 @@ class SyncService {
             // 本地待上传队列同步移除（同实体同文件）：删除该实体后其附件不得再上传复活
             await removePendingUpload(
                 entity: entityType, id: id, fileName: f.split('/').last);
+            // 删除墓碑：删行/删单路径同样写墓碑（覆盖"删行后行级引用被 pull 快照写回"窗口）
+            await tombstoneDeletedAttachment(
+                entity: entityType, id: id, file: f.split('/').last);
           }
         }
       }

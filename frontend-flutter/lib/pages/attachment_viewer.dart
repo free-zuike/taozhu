@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
@@ -543,6 +544,7 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
           final file = '${r['file'] ?? ''}';
           if (keys.any((k) => k == file || k.split('/').last == file)) {
             await LocalDb.deleteOne('attachment_refs', '$re/$rid/$file');
+            await SyncService.tombstoneDeletedAttachment(entity: re, id: rid, file: file);
             localDeleted = true;
           }
         }
@@ -609,6 +611,9 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
               await Api.instance.delete('/attachments?key=$key&entity=${t.$1}&id=${t.$2}');
             } catch (_) {}
           }
+          // 本地删除墓碑：删除即写墓碑（对齐参考实现 CouchDB 墓碑），pull 快照永不再复活本三元组
+          await SyncService.tombstoneDeletedAttachment(
+              entity: t.$1, id: t.$2, file: key.split('/').last);
           // 同实体同文件若还在待上传队列（添加未同步过），一并移除——否则残留队列条目
           // 会在下次上传时把已删引用重新传回服务器（"删了又出现"的另一个来源）
           await SyncService.removePendingUpload(

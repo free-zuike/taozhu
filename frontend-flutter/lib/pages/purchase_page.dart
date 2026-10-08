@@ -215,6 +215,8 @@ class _PurchasePageState extends State<PurchasePage> {
       // 行级挂载：图挂到该次识别填充的每行（同图多行共享引用）；整单/批量查看器按 lineIds 聚合回全部批次图
       for (final rid in rowIds) {
         if (rid.isEmpty) continue;
+        // 用户删过该行该图又再次识别同图：删除墓碑作废（重新挂载生效）
+        await SyncService.clearTombstone(entity: 'purchase_item', id: rid, file: fileName);
         await LocalDb.upsertOne('attachment_refs', {
           'id': 'purchase_item/$rid/$fileName',
           'entity': 'purchase_item',
