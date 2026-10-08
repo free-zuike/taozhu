@@ -1,7 +1,11 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
+import 'system_proxy.dart';
 import 'theme.dart';
 import 'utils/money.dart';
 import 'pages/login_page.dart';
@@ -9,6 +13,13 @@ import 'widgets/bottom_shell.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 跟随系统代理：所有 HTTP 请求统一走系统代理（Windows 读注册表/Android 读系统属性），
+  // 启动即读 + 每 30s 重读（跟随代理软件开关变化）。Web 端浏览器自带代理，不注册。
+  if (!kIsWeb) {
+    SystemProxy.install();
+    unawaited(SystemProxy.refresh());
+    Timer.periodic(const Duration(seconds: 30), (_) => unawaited(SystemProxy.refresh()));
+  }
   final p = await SharedPreferences.getInstance();
   themeNotifier.value = restoreThemeMode(p.getString('theme_mode'));
   await ThemeConfig.instance.init();

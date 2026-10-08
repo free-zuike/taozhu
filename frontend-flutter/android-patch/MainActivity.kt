@@ -4,12 +4,15 @@ import android.app.DownloadManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import java.io.File
+import java.net.Proxy
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -107,6 +110,45 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             }
+        // 系统代理跟随：Dart 侧 findProxy 需要当前系统代理地址（代理软件开/关即时反映）。
+        // API 23+ 用 ConnectivityManager.defaultProxy（正规 API）；低版本兜底 Settings.Global
+        // http_proxy（格式 host:port）与系统属性 http.proxyHost/Port。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "taozhu/proxy")
+            .setMethodCallHandler { call, result ->
+                if (call.method != "getProxy") { result.notImplemented(); return@setMethodCallHandler }
+                val hostPort = systemProxy()
+                if (hostPort == null) result.success(null)
+                else result.success(mapOf("host" to hostPort.first, "port" to hostPort.second))
+            }
+    }
+
+    /** 当前系统代理 {host, port}；无代理返回 null（不抛异常，Dart 侧保持直连） */
+    private fun systemProxy(): Pair<String, Int>? {
+        if (Build.VERSION.SDK_INT >= 23) {
+            try {
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val p: Proxy? = cm.defaultProxy
+                if (p != null && p.type() != Proxy.Type.DIRECT && !p.host().isNullOrEmpty() && p.port() > 0) {
+                    return p.host() to p.port()
+                }
+            } catch (_: Exception) {}
+        }
+        // 低版本 / 默认代理为空：Settings.Global http_proxy（"host:port"）兜底
+        try {
+            val raw = Settings.Global.getString(contentResolver, "http_proxy")
+            if (!raw.isNullOrEmpty()) {
+                val clean = raw.split(",").firstOrNull()?.trim() ?: return null
+                val host = clean.substringBefore(":")
+                val port = clean.substringAfter(":", "").toIntOrNull()
+                if (host.isNotEmpty() && port != null && port > 0) return host to port
+            }
+        } catch (_: Exception) {}
+        try {
+            val host = System.getProperty("http.proxyHost")
+            val port = System.getProperty("http.proxyPort")?.toIntOrNull()
+            if (!host.isNullOrEmpty() && port != null && port > 0) return host to port
+        } catch (_: Exception) {}
+        return null
     }
 
     /** 设备主 ABI（对应拆包下载：arm64-v8a / armeabi-v7a / x86_64），兼容模拟器（x86_64 优先） */
