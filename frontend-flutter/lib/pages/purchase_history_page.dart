@@ -628,12 +628,14 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
       // 去掉空 AppBar（统计卡直接顶到安全区下，对齐小程序：不再有统计栏上方的空背景条）
-      body: SafeArea(
-        bottom: false,
-        child: Stack(
+      // 背景层放 Stack 最外层全屏覆盖（含状态栏区域）：顶部那条跟随主题背景而非 Scaffold 固定白/黑
+      //（对齐 stats_page 结构——SafeArea 只垫内容，不垫背景）
+      body: Stack(
         children: [
           Positioned.fill(child: themePageBackground(context)),
-          Column(
+          SafeArea(
+            bottom: false,
+            child: Column(
         children: [
           if (_offline)
             Container(
@@ -747,8 +749,8 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
           ),
         ],
       ),
-      ],
       ),
+      ],
       ),
     );
   }

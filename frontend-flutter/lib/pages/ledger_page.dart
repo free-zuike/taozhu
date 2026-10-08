@@ -1250,12 +1250,12 @@ class _LedgerPageState extends State<LedgerPage> {
       length: 2,
       child: Scaffold(
         // 去掉空 AppBar（统计卡直接顶到安全区下，对齐小程序：不再有统计栏上方的空背景条）
-        body: SafeArea(
-          bottom: false,
-          child: Stack(
+        body: Stack(
           children: [
             Positioned.fill(child: themePageBackground(context)),
-            Column(
+            SafeArea(
+          bottom: false,
+          child: Column(
           children: [
             if (_offline)
               Container(
@@ -1363,8 +1363,8 @@ class _LedgerPageState extends State<LedgerPage> {
             ),
           ],
         ),
-        ],
-      ),
+        ),
+      ],
       ),
       ),
     );

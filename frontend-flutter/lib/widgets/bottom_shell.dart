@@ -147,7 +147,11 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
         child: Container(
           height: 64,
           decoration: BoxDecoration(
-            color: dark ? const Color(0xFF1E1E1E) : Colors.white.withOpacity(0.96),
+            // 夜晚跟随主题色深调（非固定纯黑 0xFF1E1E1E）：用户"最下方也变成大黑条"——
+            // 底部导航栏背景应与页面背景同源（主题色系），白天半透明白、夜晚主题色掺黑
+            color: dark
+                ? Color.lerp(Theme.of(context).colorScheme.primary, Colors.black, 0.6)
+                : Colors.white.withOpacity(0.96),
             borderRadius: BorderRadius.circular(28),
             boxShadow: [
               BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.08), blurRadius: 16, offset: const Offset(0, 4)),
