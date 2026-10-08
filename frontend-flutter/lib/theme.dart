@@ -412,6 +412,13 @@ class ThemeConfig extends ChangeNotifier {
   }
 }
 
+/// 暗色页面底渐变：掺入主题主色（顶部条跟随主题色走，避免"白天白条/夜晚黑条"——
+/// 用户反馈统计/进货顶部条与页面颜色不一致）。亮色走 preset.bgGradient（主题浅色系）
+List<Color> _darkBgGradient(Color primary) => [
+      Color.lerp(primary, const Color(0xFF17181C), 0.45)!,
+      Color.lerp(primary, const Color(0xFF101216), 0.62)!,
+    ];
+
 /// 全局背景包装：MaterialApp.builder 使用——Scaffold 透明，背景（渐变/图案皮肤）透出
 Widget themeBackgroundWrap(BuildContext context, Widget? child) {
   if (child == null) return const SizedBox.shrink();
@@ -423,7 +430,7 @@ Widget themeBackgroundWrap(BuildContext context, Widget? child) {
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          colors: dark ? _darkBgGradient(preset.lightPrimary) : preset.bgGradient,
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
         ),
@@ -433,7 +440,7 @@ Widget themeBackgroundWrap(BuildContext context, Widget? child) {
   }
   final preset = cfg.preset;
   final skin = skinPatternById(cfg.skinId);
-  final colors = dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient;
+  final colors = dark ? _darkBgGradient(preset.lightPrimary) : preset.bgGradient;
   if (skin == null) {
     return Container(
       decoration: BoxDecoration(
@@ -459,7 +466,7 @@ Widget themePageBackground(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          colors: dark ? _darkBgGradient(preset.lightPrimary) : preset.bgGradient,
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
         ),
@@ -472,7 +479,7 @@ Widget themePageBackground(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          colors: dark ? _darkBgGradient(preset.lightPrimary) : preset.bgGradient,
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
         ),
@@ -492,7 +499,7 @@ Widget appBarBackground(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          colors: dark ? _darkBgGradient(preset.lightPrimary) : preset.bgGradient,
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
         ),
@@ -505,7 +512,7 @@ Widget appBarBackground(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
+          colors: dark ? _darkBgGradient(preset.lightPrimary) : preset.bgGradient,
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
         ),
@@ -556,8 +563,8 @@ abstract class _BaseSkinPainter extends CustomPainter {
       final bottom = dark ? const Color(0xFF15181F) : Color.lerp(primary, Colors.white, 0.58)!;
       return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
     }
-    final top = dark ? const Color(0xFF1A1C22) : Color.lerp(primary, Colors.white, 0.84)!;
-    final bottom = dark ? const Color(0xFF101216) : Color.lerp(primary, Colors.white, 0.62)!;
+    final top = dark ? Color.lerp(primary, const Color(0xFF101216), 0.72)! : Color.lerp(primary, Colors.white, 0.6)!;
+    final bottom = dark ? Color.lerp(primary, const Color(0xFF101216), 0.8)! : Color.lerp(primary, Colors.white, 0.4)!;
     return LinearGradient(colors: [top, bottom], begin: Alignment.topCenter, end: Alignment.bottomCenter);
   }
 

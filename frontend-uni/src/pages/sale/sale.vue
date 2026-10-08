@@ -461,7 +461,11 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', draftDate
     const price = Number(raw.price) || 0;
     const unit = String(raw.unit ?? '').trim();
     const match = items.value.find((it) => it.name === name || it.name.includes(name) || name.includes(it.name));
-    let row = rows.value.find((r) => !r.itemId && !r.itemName);
+    // 对齐 App 追加语义：仅初始单行空行时复用首行；否则一律顺延追加到末尾——
+    // 找"第一个空行"会填进中间遗留空行（用户插入的空行），新批次顺序打乱
+    let row = (rows.value.length === 1 && !rows.value[0].itemId && !rows.value[0].itemName)
+        ? rows.value[0]
+        : null;
     if (!row) {
       rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '' });
       row = rows.value[rows.value.length - 1];
