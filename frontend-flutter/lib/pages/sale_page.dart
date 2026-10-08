@@ -214,6 +214,7 @@ class _SalePageState extends State<SalePage> {
       final af = File('${adir.path}/$fileName');
       if (!af.existsSync()) await af.writeAsBytes(bytes);
       _recognizedFile = fileName;
+      _pendingPhoto = bytes; // 提交成功后才入队上传（_uploadPending 读它）；此前只本地挂载可见
       final id = isDateRows && _orderIds.isNotEmpty ? _orderIds.first : _saleId;
       await LocalDb.upsertOne('attachment_refs', {
         'id': 'sale/$id/$fileName',

@@ -1,5 +1,5 @@
 <template>
-  <view class="page" :style="tv">
+  <view class="page" :key="refreshTick" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="group-title">配色主题</view>
     <view class="presets">
@@ -85,6 +85,7 @@ const cur = ref(
   presets.find((p) => p.color.toLowerCase() === getThemePrimary().toLowerCase())?.id ?? 'default',
 );
 const curSkin = ref(getThemeSkin());
+const refreshTick = ref(0); // 点击即效：微信 CSS 变量运行时更新不及时，改 key 强制本页整树重渲
 /** 点击即生效 + 自动同步服务器（无保存按钮；主题配置=配置类，点击直接 PUT 服务器，其他端 WS 即时应用） */
 function applyLocal() {
   setThemeMode(mode.value);
@@ -93,6 +94,7 @@ function applyLocal() {
   if (c) setThemePrimary(c.color);
   refresh();
   applyTabBar();
+  refreshTick.value++;
   pushTheme();
 }
 /** 立即同步主题配置到服务器（小程序直连架构，无本地库；失败静默，下次进入再同步） */
@@ -173,9 +175,10 @@ onShow(async () => {
 .p-name.active { color: var(--primary); font-weight: bold; }
 .tip { font-size: 22rpx; color: var(--text-sub); margin: 24rpx 8rpx; }
 .btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; margin-top: 16rpx; }
-/* 背景图案缩略图：2 列大格（对齐 App GridView 2 列），预览随主题色+明暗 */
-.skins { display: flex; flex-wrap: wrap; gap: 20rpx; background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; margin-bottom: 24rpx; }
-.skin { width: calc(50% - 10rpx); display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
+/* 背景图案缩略图：2 列大格（对齐 App GridView 2 列），预览随主题色+明暗。
+   不用 flex gap/calc 减法（微信基础库兼容差，会塌成 1 列）：space-between + 固定百分比 + margin */
+.skins { display: flex; flex-wrap: wrap; justify-content: space-between; background: var(--card-bg); border-radius: 20rpx; padding: 24rpx; margin-bottom: 24rpx; }
+.skin { width: 48%; display: flex; flex-direction: column; align-items: center; margin-bottom: 20rpx; }
 .skin .skin-swatch { width: 100%; height: 170rpx; border-radius: 16rpx; border: 4rpx solid transparent; box-sizing: border-box; }
 .skin.sel .skin-swatch { border-color: var(--primary); }
 /* 实时预览卡（对齐 App：当前背景+卡片+按钮） */

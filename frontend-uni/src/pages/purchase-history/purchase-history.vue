@@ -82,7 +82,8 @@
     <view v-if="itemForm.show" class="mask" @click="itemForm.show = false">
       <view class="sheet" @click.stop>
         <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
-        <scroll-view scroll-y class="sheet-body">
+        <view class="sheet-body">
+        <scroll-view scroll-y class="sheet-body-scroll">
         <view class="form-row">
           <view class="f-col">
             <text class="f-label">数量</text>
@@ -117,6 +118,7 @@
           <text class="value attach-go">查看/添加</text>
         </view>
         </scroll-view>
+        </view>
         <view class="dlg-ops">
           <button class="btn-del" :disabled="saving" @click="deleteItem">删除该行</button>
           <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
@@ -668,7 +670,8 @@ async function loadAttachCounts() {
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; max-height: 85vh; display: flex; flex-direction: column; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; flex-shrink: 0; }
-.sheet-body { flex: 1; min-height: 0; max-height: 60vh; }
+.sheet-body { flex: 1; min-height: 0; max-height: 60vh; display: flex; }
+.sheet-body-scroll { flex: 1; height: 100%; }
 .dlg-ops { display: flex; gap: 20rpx; margin-top: 8rpx; flex-shrink: 0; padding-top: 16rpx; }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
 .field-inner { display: flex; justify-content: space-between; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; margin-bottom: 16rpx; }

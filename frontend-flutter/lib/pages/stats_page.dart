@@ -463,8 +463,8 @@ class _StatsPageState extends State<StatsPage> {
                   _sectionTitle(_isBuy ? '分类排行（进货额）' : '分类排行（出货额）'),
                   const SizedBox(height: 8),
                   for (final (i, c) in _cats.indexed)
-                    _rankCard(i + 1, _c.warning, '${c['category']}', '${c['quantity']} 件',
-                        '¥${fmtMoney(_num(c['amount']))}'),
+                    // 分类排行只显示出货/进货金额：不同分类下商品计数单位不同（斤/盒/件），数量跨分类合计无意义
+                    _rankCard(i + 1, _c.warning, '${c['category']}', '', '¥${fmtMoney(_num(c['amount']))}'),
                   if (_cats.isEmpty) _empty('该区间暂无分类数据', Icons.category_outlined),
                   if (!_isBuy && _clientId == null && _mode != 'year') ...[
                     const SizedBox(height: 20),

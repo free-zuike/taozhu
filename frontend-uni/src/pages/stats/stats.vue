@@ -98,7 +98,6 @@
       <view v-for="(c, i) in catRank" :key="i" class="row">
         <view class="left">
           <text class="name">{{ c.category }}</text>
-          <text class="meta">{{ c.quantity }} 件</text>
         </view>
         <text class="pay" style="color:var(--primary)">¥{{ fmt(c.amount) }}</text>
       </view>

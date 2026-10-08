@@ -1,37 +1,52 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <button class="btn" :disabled="busy" @click="backupNow">{{ busy ? '备份中…' : '立即备份到云端' }}</button>
-    <button class="btn-out" @click="exportBackup">导出备份（复制 JSON 存档）</button>
-    <button class="btn-out" @click="importBackup">导入备份（合并，不覆盖）</button>
-    <view class="tip">备份为全库 JSON 存档（云端历史可直接恢复，不覆盖现有数据；导出=把数据复制到剪贴板自行保存）</view>
+    <view class="group-title">备份</view>
+    <view class="grp">
+      <view class="tile" @click="backupNow">
+        <view class="t-ic ic-blue"><text class="mi ic-tx">&#xE2C3;</text></view>
+        <view class="t-body"><text class="t-tx">立即备份</text><text class="t-sub">手动备份全库到云端（历史可直接恢复），保留最近 {{ autoKeep }} 份</text></view>
+        <text class="t-arrow">›</text>
+      </view>
+      <view class="tile" @click="exportBackup">
+        <view class="t-ic ic-blue"><text class="mi ic-tx">&#xE2C0;</text></view>
+        <view class="t-body"><text class="t-tx">导出备份</text><text class="t-sub">导出全库 JSON 存档（建议定期导出留底）</text></view>
+        <text class="t-arrow">›</text>
+      </view>
+      <view class="tile" @click="importBackup">
+        <view class="t-ic ic-blue"><text class="mi ic-tx">&#xE88E;</text></view>
+        <view class="t-body"><text class="t-tx">导入备份</text><text class="t-sub">从备份 JSON 合并恢复（不覆盖现有数据）</text></view>
+        <text class="t-arrow">›</text>
+      </view>
+    </view>
 
     <view class="group-title">自动备份</view>
-    <view class="auto-card">
-      <view class="auto-row">
-        <text class="auto-label">每天时间</text>
-        <picker class="auto-pick" mode="time" :value="autoTime" @change="onAutoTime">
-          <view class="auto-value">{{ autoTime }}</view>
+    <view class="grp">
+      <view class="tile">
+        <view class="t-ic ic-blue"><text class="mi ic-tx">&#xE8B5;</text></view>
+        <view class="t-body"><text class="t-tx">自动备份时间</text><text class="t-sub">每天 {{ autoTime }}（北京时间）自动备份全库到云端</text></view>
+        <picker mode="time" :value="autoTime" @change="onAutoTime">
+          <text class="t-value">{{ autoTime }} ›</text>
         </picker>
       </view>
-      <view class="auto-row">
-        <text class="auto-label">保留份数</text>
-        <input class="auto-input" type="number" v-model="autoKeep" placeholder="7" />
+      <view class="tile" @click="pickAutoKeep">
+        <view class="t-ic ic-blue"><text class="mi ic-tx">&#xE889;</text></view>
+        <view class="t-body"><text class="t-tx">保留备份份数</text><text class="t-sub">云端只保留最近 {{ autoKeep }} 份，超出自动删除最旧</text></view>
+        <text class="t-value">{{ autoKeep }}</text>
       </view>
-      <button class="btn-save" @click="saveAuto">保存自动备份设置</button>
     </view>
 
-    <view class="group-title">备份历史<span class="badge">{{ backups.length }}</span></view>
-    <view v-if="backups.length === 0" class="empty">暂无备份，点上方按钮创建</view>
-    <view v-else class="list">
-      <view v-for="b in backups" :key="b.key" class="card">
-        <view class="info">
-          <text class="b-name">{{ b.name_display || b.name }}</text>
-          <text class="b-size">{{ b.size ? (b.size / 1024).toFixed(1) + ' KB' : '' }}</text>
-        </view>
-        <text class="op" @click="restore(b)">恢复</text>
+    <view class="group-title">备份历史（云端）<span class="badge">{{ backups.length }}</span></view>
+    <view v-if="backups.length === 0" class="empty">暂无备份，点「立即备份」创建</view>
+    <view v-else class="grp">
+      <view v-for="b in backups" :key="b.key" class="tile">
+        <view class="t-ic ic-green"><text class="mi ic-tx" style="color:#22c55e">&#xE86C;</text></view>
+        <view class="t-body"><text class="t-tx">{{ b.name_display || b.name }}</text><text class="t-sub">{{ b.size ? (b.size / 1024).toFixed(1) + ' KB' : '' }}</text></view>
+        <text class="t-op" @click="restore(b)">恢复</text>
       </view>
     </view>
+
+    <view class="foot-note">导出会把全部店铺、商品、出货、收款等数据保存为一个 JSON 文件；导入只新增备份里有而当前没有的记录，不会覆盖或删除现有数据。</view>
   </view>
 </template>
 
@@ -65,6 +80,7 @@ async function loadAuto() {
 }
 function onAutoTime(e: { detail: { value: string } }) {
   autoTime.value = e.detail.value;
+  saveAuto(); // 选完即保存（对齐 App：点击时间即 PUT）
 }
 async function saveAuto() {
   const keep = Math.max(1, Math.min(90, Number(autoKeep.value) || 7));
@@ -74,6 +90,25 @@ async function saveAuto() {
   } catch (e) {
     uni.showToast({ title: '保存失败', icon: 'none' });
   }
+}
+/// 保留份数：弹框输入（对齐 App dialog 输入 1-90）
+function pickAutoKeep() {
+  uni.showModal({
+    title: '自动备份保留份数',
+    editable: true,
+    content: String(autoKeep.value),
+    placeholderText: '1-90（默认 14）',
+    success: (r) => {
+      if (!r.confirm) return;
+      const keep = Number((r.content || '').trim());
+      if (!keep || keep < 1 || keep > 90) {
+        uni.showToast({ title: '请输入 1-90 的份数', icon: 'none' });
+        return;
+      }
+      autoKeep.value = String(keep);
+      saveAuto();
+    },
+  });
 }
 
 /// 导出备份：GET /backup 全库 JSON → 复制剪贴板（对齐小程序复制文本形态；超大提示走云端备份）
@@ -174,24 +209,22 @@ function restore(b: BackupItem) {
 
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
-.page { min-height: 100vh;  background: var(--page-bg); }
-.btn { background: var(--primary); color: #fff; border-radius: 14rpx; font-size: 30rpx; margin-bottom: 16rpx; }
-.btn-out { background: var(--card-bg); border: 1rpx solid var(--primary); color: var(--primary); border-radius: 14rpx; font-size: 28rpx; margin-bottom: 16rpx; }
-.tip { font-size: 22rpx; color: var(--text-sub); margin: 0 8rpx 28rpx; line-height: 1.6; }
-.auto-card { background: var(--card-bg); border-radius: 20rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 24rpx; }
-.auto-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16rpx; }
-.auto-label { font-size: 26rpx; color: var(--text-sub); }
-.auto-pick { background: var(--input-bg); border-radius: 12rpx; padding: 12rpx 24rpx; }
-.auto-value { font-size: 28rpx; color: var(--text-main); }
-.auto-input { width: 160rpx; background: var(--input-bg); border-radius: 12rpx; padding: 12rpx 24rpx; font-size: 28rpx; text-align: center; }
-.btn-save { background: var(--primary-soft); color: var(--primary); border-radius: 12rpx; font-size: 26rpx; margin-top: 8rpx; }
+.page { min-height: 100vh;  background: var(--page-bg); padding: 24rpx; box-sizing: border-box; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; display: flex; align-items: center; }
 .badge { display: inline-block; background: var(--primary-soft); color: var(--primary); border-radius: 999rpx; padding: 2rpx 14rpx; font-size: 20rpx; margin-left: 12rpx; }
-.empty { background: var(--card-bg); border-radius: 20rpx; text-align: center; color: var(--text-sub); padding: 60rpx 0; font-size: 26rpx; }
-.list { display: flex; flex-direction: column; gap: 16rpx; }
-.card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; display: flex; align-items: center; justify-content: space-between; }
-.info { display: flex; flex-direction: column; gap: 6rpx; }
-.b-name { font-size: 28rpx; font-weight: 600; color: var(--text-main); }
-.b-size { font-size: 22rpx; color: var(--text-sub); }
-.op { font-size: 26rpx; color: var(--primary); padding: 8rpx 20rpx; }
+/* 分组卡片 + tile 行（对齐 App backup_page 卡片布局） */
+.grp { background: var(--card-bg); border: var(--card-border); border-radius: 20rpx; margin-bottom: 24rpx; overflow: hidden; }
+.tile { display: flex; align-items: center; gap: 16rpx; padding: 24rpx; border-bottom: 1rpx solid var(--divider); }
+.tile:last-child { border-bottom: none; }
+.t-ic { width: 72rpx; height: 72rpx; border-radius: 18rpx; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ic-blue { background: var(--primary-soft); } .ic-green { background: var(--ok-bg); }
+.ic-tx { font-size: 34rpx; line-height: 1; color: var(--primary); }
+.t-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6rpx; }
+.t-tx { font-size: 29rpx; color: var(--text-main); }
+.t-sub { font-size: 23rpx; color: var(--text-sub); line-height: 1.5; }
+.t-value { font-size: 28rpx; color: var(--primary); font-weight: 600; flex-shrink: 0; }
+.t-arrow { font-size: 36rpx; color: var(--text-sub); flex-shrink: 0; }
+.t-op { font-size: 26rpx; color: #22c55e; padding: 8rpx 16rpx; flex-shrink: 0; }
+.empty { background: var(--card-bg); border-radius: 20rpx; text-align: center; color: var(--text-sub); padding: 60rpx 0; font-size: 26rpx; margin-bottom: 24rpx; }
+.foot-note { font-size: 22rpx; color: var(--text-sub); line-height: 1.6; padding: 0 8rpx; }
 </style>

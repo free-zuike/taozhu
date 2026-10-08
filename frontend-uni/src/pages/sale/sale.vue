@@ -18,9 +18,8 @@
       <button class="copy-btn" :disabled="loading" @click="copyLast">复制上一笔</button>
       <button class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
     </view>
-    <!-- 批量直编头：店铺（可切换，对齐 App 批量页显示当前店）+ 该日全部行统一改日期（批量改期），
-         店铺为该日记录不变；整单凭证=该日全部原单聚合查看；AI 记账批量模式同样可用 -->
-    <view v-if="isDateRows" class="head-row">
+    <!-- 批量直编头：竖排对齐 App（_infoCard=店铺/日期各一行，凭证卡+AI 操作行；不挤一排） -->
+    <view v-if="isDateRows" class="head-col">
       <picker class="field" mode="selector" :range="clientNames" @change="onClient">
         <view class="field-inner">
           <text class="label">饭店</text>
@@ -33,8 +32,10 @@
           <text class="value">{{ date }}</text>
         </view>
       </picker>
-      <view class="batch-voucher" @click="showBatchAttach"><text class="mi">&#xe3f4;</text>整单凭证</view>
-      <button class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
+      <view class="head-ops">
+        <view class="batch-voucher" @click="showBatchAttach"><text class="mi">&#xe3f4;</text>整单凭证</view>
+        <button class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
+      </view>
     </view>
     <text v-if="isDateRows" class="batch-hint">该日 {{ rows.length }} 行 · 保存按原单分组提交</text>
 
@@ -900,6 +901,10 @@ async function submit() {
 .page { min-height: 100vh;  background: var(--page-bg); }
 .head-row { display: flex; gap: 12rpx; align-items: flex-start; margin-bottom: 16rpx; }
 .head-row .field { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
+.head-col { display: flex; flex-direction: column; gap: 12rpx; margin-bottom: 12rpx; }
+.head-col .field { width: 100%; box-sizing: border-box; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
+.head-ops { display: flex; gap: 12rpx; align-items: center; }
+.head-ops .batch-voucher, .head-ops .ai-btn { flex: 1; text-align: center; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }
 .copy-btn { flex-shrink: 0; background: var(--card-bg); color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
 .batch-hint { flex-shrink: 0; align-self: center; background: var(--violet-bg); color: #7c4dff; border-radius: 12rpx; font-size: 24rpx; padding: 12rpx 20rpx; display: block; margin: 0 0 12rpx 8rpx; }
