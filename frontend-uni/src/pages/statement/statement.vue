@@ -32,6 +32,8 @@
         <view class="stat"><text>期末欠款（累计）</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ fmtAmount(debt) }}</text></view>
         <button class="btn-copy" @click="copy">复制对账文本</button>
         <button class="btn-copy" @click="copyCsv">复制 CSV（粘到 Excel）</button>
+        <button class="btn-copy" @click="share">分享对账单（生成链接）</button>
+        <button class="btn-copy" @click="manageShares">我的分享</button>
       </view>
     </view>
 
@@ -49,6 +51,24 @@
         <text class="lr-r green">¥{{ fmtAmount(Number(p.amount)) }}</text>
       </view>
       <view v-if="payments.length === 0" class="empty">周期内无收款</view>
+    </view>
+
+    <!-- 我的分享管理（对齐 App：列表 + 延期 + 删除） -->
+    <view v-if="shareDlg" class="mask" @click="shareDlg = false">
+      <view class="sheet" @click.stop>
+        <text class="s-title">我的分享</text>
+        <view v-if="shares.length === 0" class="empty">暂无分享</view>
+        <scroll-view scroll-y class="share-list">
+          <view v-for="s in shares" :key="s.token" class="share-row">
+            <view class="share-info">
+              <text class="share-url">{{ s.url }}</text>
+              <text class="share-exp">过期：{{ s.expires_at || '永久' }}</text>
+            </view>
+            <text class="share-op" @click="extendShare(s)">延期</text>
+            <text class="share-op del" @click="delShare(s)">删除</text>
+          </view>
+        </scroll-view>
+      </view>
     </view>
   </view>
 </template>
@@ -227,6 +247,105 @@ function copyCsv() {
   uni.showToast({ title: 'CSV 已复制（带表头）', icon: 'success' });
 }
 
+type ShareItem = { token: string; url?: string; expires_at?: string; created_at?: string };
+const shares = ref<ShareItem[]>([]);
+const shareDlg = ref(false);
+
+/// 分享对账单：选失效时间 → POST /share 生成链接 → 复制（对齐 App：对方浏览器打开即可查看）
+async function share() {
+  if (!loaded.value) {
+    uni.showToast({ title: '请先生成对账单', icon: 'none' });
+    return;
+  }
+  const ttlOptions: Array<[string, number]> = [['3 天', 72], ['7 天', 168], ['1 个月', 720], ['永久', 0]];
+  uni.showActionSheet({
+    itemList: ttlOptions.map((o) => o[0]),
+    success: async (r) => {
+      const ttl = ttlOptions[r.tapIndex]?.[1] ?? 0;
+      const payload = JSON.stringify({
+        client: clientName.value,
+        from: from.value,
+        to: to.value,
+        debt: debt.value,
+        sales: sales.value.map((s) => ({
+          date: s.happened_at,
+          name: s.client_name || clientName.value,
+          items: s.item_name
+            ? `${s.item_name}${s.quantity ?? ''}${s.unit ?? ''}`
+            : ((s.items || []).map((it: Record<string, any>) => `${it.item_name} ×${it.quantity}${it.unit}`).join('、')),
+          amount: Number((s.amount ?? s.total) || 0),
+        })),
+        payments: payments.value.map((p) => ({
+          date: p.happened_at,
+          method: p.method || '',
+          amount: Number(p.amount || 0),
+          waived: Number(p.waived || 0),
+        })),
+      });
+      uni.showLoading({ title: '生成分享链接…' });
+      try {
+        const d = await request<{ url?: string; expires_at?: string }>('/share', 'POST', { payload, ttl_hours: ttl });
+        uni.hideLoading();
+        const url = d?.url || '';
+        if (!url) throw new Error('empty url');
+        uni.showModal({
+          title: '分享链接已生成',
+          content: `对方用浏览器打开即可查看对账单：\n\n${url}\n\n链接在选定时间后自动失效。`,
+          confirmText: '复制链接',
+          cancelText: '好',
+          success: (m) => {
+            if (m.confirm) {
+              uni.setClipboardData({ data: url });
+              uni.showToast({ title: '链接已复制', icon: 'success' });
+            }
+          },
+        });
+      } catch (e) {
+        uni.hideLoading();
+        uni.showToast({ title: '生成分享失败', icon: 'none' });
+      }
+    },
+  });
+}
+
+/// 我的分享列表（admin 才可用；staff 被拒静默）
+async function manageShares() {
+  try {
+    const d = await request<{ shares?: ShareItem[] }>('/share', 'GET');
+    shares.value = d?.shares || [];
+  } catch (_) {
+    shares.value = [];
+  }
+  shareDlg.value = true;
+}
+
+async function extendShare(s: ShareItem) {
+  try {
+    await request(`/share/${s.token}`, 'PATCH', { ttl_hours: 720 });
+    uni.showToast({ title: '已延期 1 个月', icon: 'success' });
+    manageShares();
+  } catch (e) {
+    uni.showToast({ title: '延期失败', icon: 'none' });
+  }
+}
+
+async function delShare(s: ShareItem) {
+  uni.showModal({
+    title: '删除分享',
+    content: '删除后链接立即失效，确认？',
+    success: async (r) => {
+      if (!r.confirm) return;
+      try {
+        await request(`/share/${s.token}`, 'DELETE', {});
+        uni.showToast({ title: '已删除', icon: 'success' });
+        manageShares();
+      } catch (e) {
+        uni.showToast({ title: '删除失败', icon: 'none' });
+      }
+    },
+  });
+}
+
   onHide(() => { offWs('*', load); });
 </script>
 
@@ -256,4 +375,15 @@ function copyCsv() {
 .lr-l { color: var(--text-main); }
 .lr-r { font-weight: bold; }
 .empty { color: var(--text-sub); text-align: center; padding: 24rpx 0; font-size: 26rpx; }
+/* 我的分享弹层 */
+.mask { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); z-index: 100; display: flex; align-items: flex-end; }
+.sheet { width: 100%; background: var(--page-bg); border-radius: 28rpx 28rpx 0 0; padding: 28rpx 24rpx calc(28rpx + env(safe-area-inset-bottom)); max-height: 75vh; display: flex; flex-direction: column; }
+.s-title { font-size: 32rpx; font-weight: bold; text-align: center; margin-bottom: 20rpx; color: var(--text-main); }
+.share-list { flex: 1; min-height: 0; max-height: 50vh; }
+.share-row { display: flex; align-items: center; gap: 12rpx; padding: 16rpx 0; border-bottom: 1rpx solid var(--divider); }
+.share-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4rpx; }
+.share-url { font-size: 22rpx; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-exp { font-size: 20rpx; color: var(--text-sub); }
+.share-op { font-size: 24rpx; color: var(--primary); padding: 8rpx 16rpx; flex-shrink: 0; }
+.share-op.del { color: #f56c6c; }
 </style>
