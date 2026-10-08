@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:excel/excel.dart' hide Border;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -14,6 +15,7 @@ import '../utils/open_print.dart';
 import '../utils/statement_totals.dart';
 import '../theme.dart';
 import '../widgets/date_field.dart';
+import '../widgets/tpl_preview_table.dart';
 import '../statement_tmpl.dart';
 import 'router.dart';
 import 'statement_template_page.dart';
@@ -308,40 +310,18 @@ class _StatementPageState extends State<StatementPage> {
     return _previewTplRows(rows, fontSize: fontSize);
   }
 
-  /// 内置标准模板（标题 + 多栏月账单；渲染兜底用，保证预览有内容）
+  /// 内置标准模板（{月账单} 展开=标题+多栏月账单；渲染兜底用，保证预览有内容）
   XlsCfg _fallbackTpl() => XlsCfg()
     ..name = '标准'
     ..grid = [
-      [GridCell('{店铺}{年}年{月}月份账单', 'center', true)],
       [GridCell('{月账单}', '')],
     ];
 
-  /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃；加粗/底纹随行渲染）
+  /// 模板行集合 → 表格预览（公共渲染结果，组件/网格/正文/默认通吃；加粗/底纹/合并随格渲染）
   Widget _previewTplRows(List<List<GridCell>> rows, {double fontSize = 12}) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Table(
-        border: TableBorder.all(color: const Color(0xFFD9D9D9), width: 0.5),
-        defaultColumnWidth: const IntrinsicColumnWidth(),
-        children: [
-          for (final row in rows)
-            TableRow(children: [
-              for (final c in row)
-                Container(
-                  color: c.bg == 'grey' ? _c.primary.withOpacity(0.08) : null,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                  child: Text(c.text,
-                      textAlign: c.align == 'center'
-                          ? TextAlign.center
-                          : (c.align == 'right' ? TextAlign.right : TextAlign.left),
-                      style: TextStyle(
-                          fontSize: c.bold ? fontSize + 2 : fontSize,
-                          fontWeight: c.bold ? FontWeight.w700 : FontWeight.normal,
-                          color: c.bg == 'grey' ? _c.primary : null)),
-                ),
-            ]),
-        ],
-      ),
+    return SizedBox(
+      height: 420,
+      child: tplPreviewTable(rows, fontSize: fontSize, primary: _c.primary),
     );
   }
 
@@ -2024,7 +2004,11 @@ class _StatementPageState extends State<StatementPage> {
                 ChoiceChip(
                   label: Text(t.name, style: const TextStyle(fontSize: 12)),
                   selected: t.name == _selTplName,
-                  onSelected: (_) => setState(() => _selTplName = t.name),
+                  onSelected: (_) {
+                    setState(() => _selTplName = t.name);
+                    // 手动切换的样式在此持久化（下次进入沿用；与模板管理页选中名同键）
+                    SharedPreferences.getInstance().then((p) => p.setString('taozhu_stmt_xls_name', t.name));
+                  },
                 ),
             ]),
             // 排版工具条（可视化，无需写代码）：标题对齐 + 字号

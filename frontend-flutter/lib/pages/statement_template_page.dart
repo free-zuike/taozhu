@@ -10,6 +10,7 @@ import '../api.dart';
 import '../local_db.dart';
 import '../statement_tmpl.dart';
 import '../theme.dart';
+import '../widgets/tpl_preview_table.dart';
 
 class StatementTemplatePage extends StatefulWidget {
   const StatementTemplatePage({super.key});
@@ -214,10 +215,9 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       cur.content = '';
     }
     if (cur.grid.isEmpty) {
+      // 新建模板开箱即用户定稿形态：{月账单} 展开自带「店铺X月账单」标题+日期/营业额网格+小计+总计
       cur.grid = [
-        [GridCell('{店铺}{年}年{月}月份账单', 'center')],
         [GridCell('{月账单}', '')],
-        [GridCell('出货合计：{出货合计}　收款合计：{收款合计}　期末欠款：{期末欠款}', 'left')],
       ];
     }
     final rows = cur.grid.length;
@@ -591,7 +591,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     ]);
   }
 
-  /// 页内预览（所见即所得）：拉当月出货数据渲染当前模板（与导出/打印同源）
+  /// 页内预览（所见即所得）：拉当月出货数据渲染当前模板（与导出/打印同源，合并单元格同样可见）
   Widget _previewPane(TaozhuColors c) {
     return FutureBuilder<TemplateData?>(
       future: _previewData(),
@@ -602,33 +602,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
         }
         try {
           final rows = renderTemplateRows(_cur, td);
-          return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SingleChildScrollView(
-              child: Table(
-                border: TableBorder.all(color: const Color(0xFFD9D9D9), width: 0.5),
-                defaultColumnWidth: const IntrinsicColumnWidth(),
-                children: [
-                  for (final row in rows)
-                    TableRow(children: [
-                      for (final cell in row)
-                        Container(
-                          color: cell.bg == 'grey' ? c.primary.withOpacity(0.08) : null,
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                          child: Text(cell.text,
-                              textAlign: cell.align == 'center'
-                                  ? TextAlign.center
-                                  : (cell.align == 'right' ? TextAlign.right : TextAlign.left),
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal,
-                                  color: cell.bg == 'grey' ? c.primary : c.textMain)),
-                        ),
-                    ]),
-                ],
-              ),
-            ),
-          );
+          return tplPreviewTable(rows, primary: c.primary);
         } catch (_) {
           return const Center(child: Text('预览渲染失败', style: TextStyle(fontSize: 12)));
         }

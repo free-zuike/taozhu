@@ -435,6 +435,23 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
         .whereType<Map>()
         .map((e) => XlsCfg.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
+    // 内置模板内容演进迁移（2026-10-08）：旧「标准」=标题行+{月账单}、旧「按日汇总」=对账单头部+{月账单}
+    // → 都收敛为只留 {月账单}（标题由展开自带）；仍是内置名的旧结构才迁移，用户改过的自定义内容不碰
+    var migrated = false;
+    for (final t in list) {
+      if (t.comps.isNotEmpty || t.content.trim().isNotEmpty || t.grid.isEmpty) continue;
+      final first = t.grid[0].isNotEmpty ? t.grid[0][0].text : '';
+      if (t.name == '标准' && first.contains('月份账单')) {
+        t.grid = [[GridCell('{月账单}', '')]];
+        migrated = true;
+      } else if (t.name == '按日汇总' && first == '对账单') {
+        t.grid = [[GridCell('{月账单}', '')]];
+        migrated = true;
+      }
+    }
+    if (migrated) {
+      await p.setString('taozhu_stmt_templates', jsonEncode([for (final t in list) t.toJson()]));
+    }
     // 清洗空模板（旧版残留：grid/comps/content 全空 → 渲染出只有边框的空表格=预览灰色）。
     // 保留有效模板；全空时返回内置默认（标题+多栏月账单），保证列表第一条必有内容。
     final valid = list.where(_hasContent).toList();
@@ -462,21 +479,18 @@ bool _hasContent(XlsCfg t) {
   return false;
 }
 
-/// 内置默认模板（网格式，开箱即用）：标题 + 多栏月账单（对齐用户常见账单版式）
-/// 标题（店铺+年月账单，居中加粗）+ {月账单} 一键生成日期×营业额 4 栏 + 小计 + 总计
+/// 内置默认模板（网格式，开箱即用）：{月账单} 一键生成日期×营业额 4 栏 + 小计 + 总计，
+/// 标题（店铺+N月账单）由 {月账单} 展开自带，不再单独排头部行（2026-10-08 用户定稿：只要「前门X月账单」+表格）
 XlsCfg _defaultTemplate() => XlsCfg()
   ..name = '标准'
   ..grid = [
-    [GridCell('{店铺}{年}年{月}月份账单', 'center', true)],
     [GridCell('{月账单}', '')],
   ];
 
-/// 内置按日汇总模板（网格式）：标题 + 多栏月账单
+/// 内置按日汇总模板（网格式）：与标准同形态（标题由 {月账单} 展开自带）
 XlsCfg _periodTemplate() => XlsCfg()
   ..name = '按日汇总'
   ..grid = [
-    [GridCell('对账单', 'center', true)],
-    [GridCell('{店铺}　{账期}', 'center')],
     [GridCell('{月账单}', '')],
   ];
 
