@@ -351,6 +351,80 @@ class SyncService {
     } catch (_) {}
   }
 
+  /// 上传前过滤"实体已从本地库删除"的残留待传条目：行/单被删（删行重录/删单/他端删除已同步）后，
+  /// 其附件引用若无本地实体支撑，重传只会让服务器引用"删了又复活"（in-use 自愈再删=无限循环）。
+  /// 本地库是权威：本地没有该实体 = 不该再上传。仅返回仍有效的条目（并同步把失效条目清出队列）。
+  static Future<List<String>> _filterStalePendingUploads(List<String> entries) async {
+    if (kIsWeb) return entries;
+    try {
+      final saleIds = <String>{};
+      final saleLineIds = <String>{};
+      final purchaseIds = <String>{};
+      final purchaseLineIds = <String>{};
+      final payIds = <String>{};
+      try {
+        for (final s in await LocalDb.getAll('sale_items')) {
+          final oid = '${s['sale_id'] ?? ''}';
+          final rid = '${s['id'] ?? ''}';
+          if (oid.isNotEmpty) saleIds.add(oid);
+          if (rid.isNotEmpty) saleLineIds.add(rid);
+        }
+        for (final p in await LocalDb.getAll('purchase_items')) {
+          final oid = '${p['purchase_id'] ?? ''}';
+          final rid = '${p['id'] ?? ''}';
+          if (oid.isNotEmpty) purchaseIds.add(oid);
+          if (rid.isNotEmpty) purchaseLineIds.add(rid);
+        }
+        for (final p in await LocalDb.getAll('payments')) {
+          final pid = '${p['id'] ?? ''}';
+          if (pid.isNotEmpty) payIds.add(pid);
+        }
+      } catch (_) {}
+      // 本地库为空（从未同步/全新设备）→ 不做过滤（宁留勿丢：可能实体在服务器尚未拉回）
+      if (saleIds.isEmpty && saleLineIds.isEmpty && purchaseIds.isEmpty &&
+          purchaseLineIds.isEmpty && payIds.isEmpty) {
+        return entries;
+      }
+      final stale = <String>[];
+      final kept = <String>[];
+      for (final entry in entries) {
+        try {
+          final m = jsonDecode(entry) as Map<String, dynamic>;
+          final e = '${m['entity'] ?? ''}';
+          final i = '${m['id'] ?? ''}';
+          final exists = switch (e) {
+            'sale' => saleIds.contains(i),
+            'sale_item' => saleLineIds.contains(i),
+            'purchase' => purchaseIds.contains(i),
+            'purchase_item' => purchaseLineIds.contains(i),
+            'payment' => payIds.contains(i),
+            _ => true, // 未知实体类型：保留
+          };
+          if (exists) {
+            kept.add(entry);
+          } else {
+            stale.add(entry);
+            appLog('sync', '附件队列清理：实体已删除，移除待传 $e/$i/${'${m['fileName'] ?? ''}'.split('/').last}', level: 'info');
+            try {
+              await LocalDb.deleteOne('attachment_refs', '$e/$i/${'${m['fileName'] ?? ''}'.split('/').last}');
+            } catch (_) {}
+          }
+        } catch (_) {
+          kept.add(entry); // 脏条目保留让原有解析逻辑处理
+        }
+      }
+      if (stale.isNotEmpty) {
+        try {
+          final p = await SharedPreferences.getInstance();
+          await p.setStringList(kPendingUploadsKey, kept);
+        } catch (_) {}
+      }
+      return kept;
+    } catch (_) {
+      return entries; // 过滤失败时按原样上传（宁留勿丢）
+    }
+  }
+
   /// 同步编排第一步：上传待传附件（对齐参考 sync()：push 前先传附件，引用先写云端）。
   /// 并发 4 + 指数退避重试 3 次；单张失败静默保留队列，下次同步再传；不阻塞主流程。
   static Future<int> uploadPendingAttachments() async {
@@ -362,6 +436,10 @@ class SyncService {
     } catch (_) {
       return 0;
     }
+    if (entries.isEmpty) return 0;
+    // 实体存在性过滤：对应行/单已从本地库删除（删行重录/删单/他端删除同步后）的残留条目不重传——
+    // 否则每次 sync 上传又写回服务器引用，而服务器 in-use 自愈（实体已删引清）再删 = "一直重复推送"
+    entries = await _filterStalePendingUploads(entries);
     if (entries.isEmpty) return 0;
     var uploaded = 0;
     final failed = <String>[];
@@ -1160,8 +1238,10 @@ class SyncService {
     return null;
   }
 
-  /// 清理某实体的本地附件引用（删除单据/商品行时调用）：删本地附件引用表该实体条目；
-  /// 公共副本文件（attachments/{file}）**不删**——同图可能被其他商品行共享（宁留勿删，
+  /// 清理某实体的本地附件引用（删除单据/商品行时调用）：删本地附件引用表该实体条目 +
+  /// 待上传队列同步移除（否则残留队列条目每次同步重传 → 服务器引用复活，
+  /// 被 in-use 自愈再删 = "一直重复推送附件"循环）；
+  /// 公共副本文件（attachments/{file}）无其他引用时删（同图被其他行共享则保留，
   /// 孤儿文件由同步扫描/「重置本地附件副本」统一清理）。
   static Future<void> cleanupLocalAttachmentsOf(String entityType, String id) async {
     try {
@@ -1171,7 +1251,12 @@ class SyncService {
         if ('${r['entity'] ?? ''}' == entityType && '${r['entity_id'] ?? ''}' == id) {
           await LocalDb.deleteOne('attachment_refs', '${r['entity']}/${r['entity_id']}/${r['file']}');
           final f = '${r['file'] ?? ''}';
-          if (f.isNotEmpty) removedFiles.add(f);
+          if (f.isNotEmpty) {
+            removedFiles.add(f);
+            // 本地待上传队列同步移除（同实体同文件）：删除该实体后其附件不得再上传复活
+            await removePendingUpload(
+                entity: entityType, id: id, fileName: f.split('/').last);
+          }
         }
       }
       // 平铺副本（attachments/{file}，同图一份）：删引用后若该文件无其他引用 → 删本地副本
