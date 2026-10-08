@@ -214,10 +214,23 @@ class SyncService {
         // 待上传但服务器未回的行保留（上传中/失败的本地登记；宁留勿丢）
         for (final r in await LocalDb.getAll('attachment_refs')) {
           final id3 = '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${'${r['file'] ?? ''}'.split('/').last}';
-          if (!ids.contains(id3) && pendingUploads.isNotEmpty && pendingUploads.contains(id3)) {
+          if (ids.contains(id3)) continue;
+          if (pendingUploads.isNotEmpty && pendingUploads.contains(id3)) {
             merged.add(r);
             ids.add(id3);
+            continue;
           }
+          // 本地仍有物理副本的行也保留：识别即挂载草稿（提交前不入队，0.17.334 终局）靠副本
+          // 证明"用户添加过"，不能被服务器快照冲掉——否则提交后上传报"本地副本缺失"、
+          // 查看器看不到（用户反馈"添加之后单个交易看不到附件"的直接根因）
+          try {
+            final f = '${r['file'] ?? ''}'.split('/').last;
+            final root = await getApplicationDocumentsDirectory();
+            if (f.isNotEmpty && File('${root.path}/attachments/$f').existsSync()) {
+              merged.add(r);
+              ids.add(id3);
+            }
+          } catch (_) {}
         }
         await LocalDb.putAll('attachment_refs', merged);
       } catch (_) {}

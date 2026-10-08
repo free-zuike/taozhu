@@ -884,22 +884,32 @@ jobs:
           # --cleanup-tag：release 关联的 git tag 一并删除——否则 tag 残留导致版本守卫判占用，同版本无法复用
           [ -n "$VERSION" ] && gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
 
-  # ── 失败兜底清理：任一平台/发布/部署失败 → 无条件删除本次 release+tag（存在即删，零残留）──
+  # ── 失败兜底清理：任一平台/发布/部署失败 → 删除本次 run 创建的 release+tag ──
   # 注：新架构 release 只在 publish job（全部平台成功后）创建，发布/部署失败由各自失败步骤已删；
-  # 本 job 兜底覆盖发布后 deploy 失败等场景
+  # 本 job 兜底覆盖发布后 deploy 失败等场景。
+  # 关键约束：只删「tag 指向本次提交」的 release——若 tag 指向其他提交（版本守卫失败，
+  # 该版本 release 是之前成功 run 创建的），不得删除历史产物（误删 0.17.348 教训：
+  # e2a61d5 复用版本号失败，兜底 job 把 4820ef1 成功的 release+tag 清掉了）。
   cleanup-failed-release:
     needs: [apk, linux, windows, macos, miniprogram, publish, deploy]
     if: ${{ always() && failure() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || true)
           [ -n "$VERSION" ] || exit 0
           if gh release view "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # --cleanup-tag：关联 git tag 一并删除，版本守卫不再判占用，失败后可复用本版本号重推
-            gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
-            echo "已删除失败版本 release+tag（零残留，可复用本版本号重建）"
+            TAG_CMT=$(git rev-list -n 1 "taozhu-v${VERSION}" 2>/dev/null || true)
+            if [ "$TAG_CMT" = "$GITHUB_SHA" ]; then
+              # --cleanup-tag：关联 git tag 一并删除，版本守卫不再判占用，失败后可复用本版本号重推
+              gh release delete "taozhu-v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+              echo "已删除本次失败版本 release+tag（零残留，可复用本版本号重建）"
+            else
+              echo "跳过删除：taozhu-v${VERSION} 指向 $TAG_CMT ≠ 本次提交 $GITHUB_SHA（历史成功 run 的 release，不能删）"
+            fi
           else
             echo "本版本无 release（平台/发布失败时本来就不创建），无需清理"
           fi
