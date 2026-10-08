@@ -80,7 +80,7 @@
     <view class="bottom-bar">
       <view class="footer">
         <button class="btn-add" @click="addRow">+ 添加商品</button>
-        <button v-if="!isDateRows" class="btn-voucher" @click="pickVoucher">{{ pendingPhoto ? '✓ 凭证已选' : '📎 凭证' }}</button>
+        <button v-if="!isDateRows" class="btn-voucher" @click="pickVoucher">{{ pendingGroups.length > 0 ? `${pendingGroups.length} 张凭证已选` : (pendingPhoto ? '✓ 凭证已选' : '📎 凭证') }}</button>
         <text class="total">合计 <text class="total-num">¥{{ fmtAmount(total) }}</text></text>
         <button class="btn-submit" :disabled="saving" @click="submit">{{ saving ? '提交中…' : (isDateRows ? '保存该日修改' : (editId ? '保存修改' : '提交出货单')) }}</button>
       </view>
@@ -170,8 +170,12 @@ const editId = ref(''); // 非空 = 编辑已有出货单（账本进入，提�
 const isDateRows = ref(false); // 批量直编模式=账本某日进入（该日全部行平铺，按原单分组 PATCH，对齐 App dateRows）
 const aiBusy = ref(false);
 const aiTip = ref('');
-// 识别原图/手动凭证：暂存待提交后上传为本单凭证（服务器单据级 sale/{id}，账本行级入口查空回退单据级可见）
+// 识别原图/手动凭证：提交后上传（手动凭证=单据级；AI 识别=按批次行级"批对批"）
 const pendingPhoto = ref('');
+// AI 识别批次附件：每次拍照识别=一组 {fp, rowIds}（图挂到该次识别填充的商品行，提交后逐组逐行上传）
+const pendingGroups = ref<Array<{ fp: string; rowIds: string[] }>>([]);
+// 行级 id 预生成（提交带 id=服务端据此落行，行级附件不孤儿；与 insertRow 同款）
+const genRowId = () => `si${Date.now()}${Math.floor(Math.random() * 0x7fffffff)}`;
 
 // 新商品入库弹窗（两级分类联动，对齐 App：一级分类 → 二级分类）
 const newItemDlg = ref(false);
@@ -265,7 +269,7 @@ async function loadEdit() {
         quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
-        rowId: '', orderId: '',
+        rowId: String(it.id || ''), orderId: '',
       });
     }
     if (rows.value.length === 0) {
@@ -311,7 +315,7 @@ async function copyLast() {
         quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
-        rowId: '', orderId: '',
+        rowId: genRowId(), orderId: '',
       });
     }
     if (rows.value.length === 0) addRow();
@@ -356,8 +360,9 @@ function aiPhoto() {
       aiTip.value = 'AI 识别中…';
       try {
         const d = await uploadAi<{ items?: Array<Record<string, any>>; client?: string; date?: string }>(`/ai/parse-photo?purpose=sale`, 'photo', fp);
-        pendingPhoto.value = fp; // 识别原图：提交成功后才上传为本单凭证（对齐全量同步/账本单据级凭证）
-        fillFromDrafts(d.items || [], String(d.client ?? ''), String(d.date ?? ''));;
+        // AI 识别批次：记录本次填充的行 id（提交后逐行挂行级附件"批对批"，多页送货单各自对应）
+        const rowIds = fillFromDrafts(d.items || [], String(d.client ?? ''), String(d.date ?? ''));
+        if (rowIds.length > 0) pendingGroups.value.push({ fp, rowIds });
       } catch (e) {
         uni.showToast({ title: (e as Error).message || '识别失败', icon: 'none' });
       } finally {
@@ -432,8 +437,9 @@ function startVoiceRecord() {
   });
 }
 
-/// AI 识别结果 → 匹配已有商品填行（拍照/文字/语音共用）
-function fillFromDrafts(list: Array<Record<string, any>>, client = '', draftDate = '') {
+/// AI 识别结果 → 匹配已有商品填行（拍照/文字/语音共用）。
+/// 返回本次实际填充的商品行 id 列表（识别图按批次挂行=行级附件"批对批"；文字/语音无图可忽略返回值）
+function fillFromDrafts(list: Array<Record<string, any>>, client = '', draftDate = ''): string[] {
   // 店铺回填（识别出的购货单位/客户名匹配店铺列表，对齐 App：匹配失败只提示不自动建）
   if (client) {
     const c = clients.value.find((x) => x.name === client || x.name.includes(client) || client.includes(x.name));
@@ -444,10 +450,11 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', draftDate
   if (draftDate && /^\d{4}-\d{2}-\d{2}$/.test(draftDate)) date.value = draftDate;
   if (!list || list.length === 0) {
     uni.showToast({ title: '未识别到商品，请手动填写', icon: 'none' });
-    return;
+    return [];
   }
   let filled = 0;
   let unmatched = 0;
+  const rowIds: string[] = [];
   for (const raw of list) {
     const name = String(raw.name ?? '').trim();
     const qty = Number(raw.quantity) || 0;
@@ -456,9 +463,10 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', draftDate
     const match = items.value.find((it) => it.name === name || it.name.includes(name) || name.includes(it.name));
     let row = rows.value.find((r) => !r.itemId && !r.itemName);
     if (!row) {
-      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
+      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '' });
       row = rows.value[rows.value.length - 1];
     }
+    if (row.rowId) rowIds.push(row.rowId);
     if (match) {
       const pr = (unit ? match.prices.find((p) => p.unit === unit) : undefined) || match.prices[0];
       if (pr) {
@@ -484,13 +492,14 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', draftDate
     row.salePrice = price > 0 ? String(price) : '';
   }
   uni.showToast({ title: filled > 0 ? `已导入 ${filled} 项商品${unmatched > 0 ? `（${unmatched} 项不在商品库，名称已填入待确认）` : ''}，可修改后提交` : (unmatched > 0 ? `已填入 ${unmatched} 项商品名称（不在商品库），可修改后提交` : '识别结果未匹配到已有商品，请手动填写'), icon: 'none' });
+  return rowIds;
 }
 function onDate(e: { detail: { value: string } }) {
   date.value = e.detail.value;
 }
 
 function addRow() {
-  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: '', orderId: '' });
+  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '' });
 }
 
 /// 在该行上方插入一行（补识别漏行/调整顺序与图片一致；对齐 App 行内插入）。
@@ -790,6 +799,16 @@ async function doCreateNewItems() {
   }
 }
 
+/// AI 识别批次图提交后上传：逐组逐行挂行级附件（sale_item/{rowId}；内容同图幂等，失败不阻断）
+async function uploadPendingGroups() {
+  for (const g of pendingGroups.value) {
+    for (const rid of g.rowIds) {
+      try { await uploadAttachment('sale_item', rid, g.fp); } catch (_) {}
+    }
+  }
+  pendingGroups.value = [];
+}
+
 async function submit() {
   if (!clientId.value) return uni.showToast({ title: '请选择饭店', icon: 'none' });
   if (!(await ensureNewItems())) return;
@@ -850,9 +869,11 @@ async function submit() {
           client_id: clientId.value,
           happened_at: date.value,
           note: note.value.trim(),
-          items: newRows.map((r, i) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', sort: i })),
+          items: newRows.map((r, i) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', sort: i })),
         });
       }
+      // AI 识别批次图随该日保存逐组逐行上传（行级 sale_item/{rowId}，批对批；失败不阻断）
+      await uploadPendingGroups();
       // 被删行（原行在库但本次未提交）→ 行级 DELETE（DELETE /sales/items/:id 自动清空无行单据）
       for (const lid of origIds) {
         if (!submittedIds.has(lid)) {
@@ -881,13 +902,15 @@ async function submit() {
       rows.value = [];
       addRow();
     }
-    // 识别原图/手动凭证随单上传（单据级 sale/{savedId}；失败不阻断提交，可稍后在账本补传）
+    // 识别原图/手动凭证随单上传（手动凭证=单据级 sale/{savedId}；失败不阻断提交，可稍后在账本补传）
     if (pendingPhoto.value && savedId) {
       try {
         await uploadAttachment('sale', savedId, pendingPhoto.value);
         pendingPhoto.value = '';
       } catch (_) {}
     }
+    // AI 识别批次图：逐组逐行挂行级附件（sale_item/{rowId}，批对批；失败不阻断提交）
+    await uploadPendingGroups();
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '提交失败', icon: 'none' });
   } finally {

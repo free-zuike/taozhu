@@ -134,28 +134,36 @@ class _SalePageState extends State<SalePage> {
       r.countCtrl.dispose();
     }
     // 未提交退出（取消）：清理识别即挂载的原图（引用+上传队列+本地副本，不留垃圾）
-    if (!_submitted && _recognizedFile != null) {
+    if (!_submitted && _pendingGroups.isNotEmpty) {
       unawaited(_cleanupRecognizedOnCancel());
     }
     super.dispose();
   }
 
-  /// 取消退出时清理识别挂载：删引用行 + 删本地副本文件（识别挂载未入上传队列，
+  /// 取消退出时清理识别挂载：删各组行级引用行 + 本地副本文件（识别挂载未入上传队列，
   /// 纯本地清理，零网络同步）
   Future<void> _cleanupRecognizedOnCancel() async {
-    final file = _recognizedFile;
-    if (file == null) return;
-    final id = isDateRows && _orderIds.isNotEmpty ? _orderIds.first : _saleId;
-    try { await LocalDb.deleteOne('attachment_refs', 'sale/$id/$file'); } catch (_) {}
+    final groups = List<Map<String, dynamic>>.from(_pendingGroups);
+    if (groups.isEmpty) return;
     try {
-      final root = await getApplicationDocumentsDirectory();
-      final f = File('${root.path}/attachments/$file');
-      if (f.existsSync()) {
-        final refs = await LocalDb.getAll('attachment_refs');
-        if (!refs.any((r) => '${r['file'] ?? ''}' == file)) await f.delete();
+      for (final g in groups) {
+        final file = '${g['file'] ?? ''}';
+        for (final rid in (g['rowIds'] as List<dynamic>? ?? [])) {
+          if ('$rid'.isEmpty) continue;
+          await LocalDb.deleteOne('attachment_refs', 'sale_item/$rid/$file');
+        }
       }
+      final root = await getApplicationDocumentsDirectory();
+      final files = groups.map((g) => '${g['file']}').toSet();
+      final refs = await LocalDb.getAll('attachment_refs');
+      for (final f in files) {
+        if (f.isEmpty) continue;
+        final ff = File('${root.path}/attachments/$f');
+        if (ff.existsSync() && !refs.any((r) => '${r['file'] ?? ''}' == f)) await ff.delete();
+      }
+      _pendingGroups.clear();
     } catch (_) {}
-    appLog('sync', '识别取消清理：移除挂载 sale/$id/$file（零网络）', level: 'info');
+    appLog('sync', '识别取消清理：移除识别挂载 ${groups.length} 组（零网络）', level: 'info');
   }
 
   @override
@@ -192,20 +200,20 @@ class _SalePageState extends State<SalePage> {
     final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
     toast(context, '识别中…');
     final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=sale', bytes, 'photo.$ext', mime);
-    _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
+    final rowIds = _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
     if (kIsWeb) {
-      setState(() => _pendingPhoto = bytes); // Web 无本地库：保存成功后用服务端返回的单据 id 直传
+      setState(() => _pendingPhoto = bytes); // Web 无本地库：保存成功后直传（多批组含 bytes）
+      _pendingGroups.add({'file': '${md5.convert(bytes).toString()}.jpg', 'rowIds': rowIds, 'bytes': bytes});
     } else {
-      await _attachRecognized(bytes); // App 本地：立即挂载，取消时 dispose 清理
+      await _attachRecognized(bytes, rowIds); // App 本地：立即行级挂载，取消时 dispose 清理
     }
     toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
   }
 
-  /// 识别原图立即挂为本单凭证（App 本地优先）：写公共目录副本 + **本地引用表登记**
-  /// （提交前凭证查看器立即可见）；不立即上传/不入上传队列——提交成功后才入队上传
-  /// （_uploadPending），取消退出=纯本地清理零网络（不留垃圾、不产生同步）。
-  /// 批量直编挂真实原单 id（dateRows 无 _saleId 真实单）。
-  Future<void> _attachRecognized(Uint8List bytes) async {
+  /// 识别原图立即挂为本单凭证（App 本地优先）：写公共目录副本 + **按批次行级挂载**
+  /// （图挂到该次识别填充的每行=行级附件"批对批"，提交前行/整单查看器立即可见）；
+  /// 不立即上传——提交成功后才入队上传（_uploadPending），取消退出=纯本地清理零网络。
+  Future<void> _attachRecognized(Uint8List bytes, List<String> rowIds) async {
     try {
       final fileName = '${md5.convert(bytes).toString()}.jpg';
       final root = await getApplicationDocumentsDirectory();
@@ -213,22 +221,26 @@ class _SalePageState extends State<SalePage> {
       if (!adir.existsSync()) adir.createSync(recursive: true);
       final af = File('${adir.path}/$fileName');
       if (!af.existsSync()) await af.writeAsBytes(bytes);
-      _recognizedFile = fileName;
-      _pendingPhoto = bytes; // 提交成功后才入队上传（_uploadPending 读它）；此前只本地挂载可见
-      final id = isDateRows && _orderIds.isNotEmpty ? _orderIds.first : _saleId;
-      await LocalDb.upsertOne('attachment_refs', {
-        'id': 'sale/$id/$fileName',
-        'entity': 'sale',
-        'entity_id': id,
-        'file': fileName,
-        'key': 'taozhu/images/attachments/$fileName',
-      });
+      _pendingPhoto = bytes; // 兼容标记（log/UI 判断有识别图）
+      _pendingGroups.add({'file': fileName, 'rowIds': rowIds});
+      // 行级挂载：图挂到该次识别填充的每行（同图多行共享引用）；整单/批量查看器按 lineIds 聚合回全部批次图
+      for (final rid in rowIds) {
+        if (rid.isEmpty) continue;
+        await LocalDb.upsertOne('attachment_refs', {
+          'id': 'sale_item/$rid/$fileName',
+          'entity': 'sale_item',
+          'entity_id': rid,
+          'file': fileName,
+          'key': 'taozhu/images/attachments/$fileName',
+        });
+      }
       SyncService.version.notifyListeners();
     } catch (_) {}
   }
 
-  /// 识别挂载的文件名（dispose 取消时清理用）
-  String? _recognizedFile;
+  /// 识别批次附件：每次拍照/分享识别=一组 {file, rowIds}（图挂到该次识别填充的商品行，行级对应
+  /// "批对批"；提交后逐行入队上传；取消退出遍历清理）。AI 文字/语音无图不记录。
+  final List<Map<String, dynamic>> _pendingGroups = [];
 
   bool _submitted = false; // 已提交成功（取消退出时据此清理识别挂载）
 
@@ -862,26 +874,38 @@ class _SalePageState extends State<SalePage> {
   /// 本地/服务器计数与引用表一致）；挂载**单据级一份**（entity=sale/{saleId}，对齐参考实现
   /// =交易级单记录：一张识别图=一条附件记录，全商品行共享可见——账本/编辑页按单据级计数与回退）。
   /// 此前逐行挂 sale_item（每行一条引用）导致 9 行=9 条待上传/服务器计数虚高/删除一条复活其他。
+  /// 提交成功后上传识别批次图：逐组逐行挂行级附件（行级实体 sale_item/{rowId}，同内容同图一份物理文件）。
+  /// Web 直连逐组上传到单据级（无本地行 id 库，整单查看）。本地副本=云端 basename（下载覆盖不重复），
+  /// 本地/服务器计数与引用表一致；"批对批"=每张识别图只挂它识别出的那批商品行。
   Future<void> _uploadPending(String saleId, List<_Row> rows) async {
-    final img = _pendingPhoto;
-    if (img == null) return;
+    final groups = List<Map<String, dynamic>>.from(_pendingGroups);
+    if (groups.isEmpty) return;
     _pendingPhoto = null;
     try {
-      final fileName = '${md5.convert(img).toString()}.jpg';
       if (kIsWeb) {
-        await Api.instance.uploadPhoto('/attachments?entity=sale&id=$saleId', img, fileName);
+        for (final g in groups) {
+          final bytes = g['bytes'] as Uint8List?;
+          if (bytes == null) continue;
+          await Api.instance.uploadPhoto('/attachments?entity=sale&id=$saleId', bytes, '${g['file'] ?? 'photo.jpg'}');
+        }
         if (mounted) toast(context, '识别图片已存为本单凭证');
+        _pendingGroups.clear();
         return;
       }
-      final root = await getApplicationDocumentsDirectory();
-      // 本地副本按内容存公共目录 attachments/{file}（同图一份）；整单一条引用入队上传
-      final adir = Directory('${root.path}/attachments');
-      if (!adir.existsSync()) adir.createSync(recursive: true);
-      final af = File('${adir.path}/$fileName');
-      if (!af.existsSync()) await af.writeAsBytes(img);
-      await SyncService.enqueueAttachmentUpload(entity: 'sale', id: saleId, fileName: fileName);
-      if (mounted) toast(context, '识别图片已存为本单凭证（联网后自动上传）');
-    } catch (_) {}
+      for (final g in groups) {
+        final file = '${g['file'] ?? ''}';
+        if (file.isEmpty) continue;
+        for (final rid in (g['rowIds'] as List<dynamic>? ?? [])) {
+          if ('$rid'.isEmpty) continue;
+          // 行级上传入队：内容同图幂等；入队后同步编排批量上传（失败保留队列重试）
+          await SyncService.enqueueAttachmentUpload(entity: 'sale_item', id: '$rid', fileName: file);
+        }
+      }
+      _pendingGroups.clear();
+      if (mounted) toast(context, '识别图片已存为各行凭证（联网后自动上传）');
+    } catch (_) {
+      _pendingGroups.clear();
+    }
   }
 
   /// AI 文字记账：输入一句话（如"白菜50斤 3元一斤，土豆30斤 2元一斤"）→ 解析填行
@@ -933,8 +957,9 @@ class _SalePageState extends State<SalePage> {
     }
   }
 
-  /// 识别结果 → 填店铺/日期 + 匹配已有商品填行（拍照/文字/语音共用）
-  void _fillFromDrafts(List<dynamic> items, [String client = '', String date = '']) {
+  /// 识别结果 → 填店铺/日期 + 匹配已有商品填行（拍照/文字/语音共用）。
+  /// 返回本次实际填充的商品行 id 列表（识别图按批次挂行=行级附件"批对批"；文字/语音无图可忽略返回值）
+  List<String> _fillFromDrafts(List<dynamic> items, [String client = '', String date = '']) {
     // 购货单位：识别出的客户/店铺名匹配页面店铺列表（不自动新增——手写店铺名识别可能出错，避免污染店铺列表）
     if (client.isNotEmpty) {
       final m = _clients.where((cl) {
@@ -953,10 +978,11 @@ class _SalePageState extends State<SalePage> {
     }
     if (items.isEmpty) {
       toast(context, '未识别到商品，请手动填写');
-      return;
+      return <String>[];
     }
     var filled = 0;
     var unmatched = 0;
+    final rowIds = <String>[];
     for (final raw in items) {
       final name = '${raw['name'] ?? ''}'.trim();
       final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
@@ -978,6 +1004,7 @@ class _SalePageState extends State<SalePage> {
         final row = (_rows.length == 1 && _rows.first.itemId == null && _rows.first.nameCtrl.text.trim().isEmpty)
             ? _rows.first
             : (_rows..add(_newRow())).last;
+        if (row.rowId.isNotEmpty) rowIds.add(row.rowId);
         if (match != null && pr != null) {
           row.itemId = match.id;
           row.priceId = pr!['id'] as String?;
@@ -1004,6 +1031,7 @@ class _SalePageState extends State<SalePage> {
         filled > 0
             ? '${client.isEmpty ? '' : '识别店铺「$client」·'}已导入 $filled 项商品${unmatched > 0 ? '（$unmatched 项不在商品库，名称已填入待确认）' : ''}'
             : '识别结果未匹配到已有商品，请手动填写');
+    return rowIds;
   }
 
   Future<void> _submit() async {
@@ -1293,7 +1321,7 @@ class _SalePageState extends State<SalePage> {
     toast(context, _editing ? '已保存，正在同步' : '已提交，合计 ¥${fmtMoney(_total)}');
     // 关键事件实时落日志（日志页可即时查看，便于复现）＋通知账本/统计页刷新
     // （选择店铺弹层的笔数/欠款、顶部结余随本地镜像立即更新，不再等重启/同步）
-    appLog('sync', '本地保存出货 ${valid.length} 行（${_editing ? '编辑' : '新增'}），已入队待推送${_pendingPhoto != null ? '，识别原图待上传为附件' : ''}', level: 'info');
+    appLog('sync', '本地保存出货 ${valid.length} 行（${_editing ? '编辑' : '新增'}），已入队待推送${_pendingGroups.isNotEmpty ? '，识别图 ${_pendingGroups.length} 组待上传为行凭证' : ''}', level: 'info');
     SyncService.version.notifyListeners();
     // 提交成功后才上传识别原图附件（App 本地写完入队后）；
     // 批量直编挂真实原单 id（dateRows 无 _saleId 真实单，此前挂临时 id=账本查不到=附件不显示）
