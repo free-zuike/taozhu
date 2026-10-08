@@ -10,8 +10,11 @@
         </view>
       </picker>
       <input class="ipt" v-model="amount" type="digit" placeholder="实收金额（必填）" />
-      <view v-if="selDebtLabel" class="debt-tip">{{ selDebtLabel }}</view>
-      <input class="ipt" v-model="waived" type="digit" placeholder="平账减免（可选，实收+减免=账面已收）" />
+      <view v-if="selDebtLabel" class="debt-tip">
+        <text class="debt-tx">{{ selDebtLabel }}</text>
+        <text class="fill-btn" @click="fillAmount">填入应收</text>
+      </view>
+      <input class="ipt" v-model="waived" type="digit" :placeholder="`平账减免（自动 ¥${fmt(autoWaived)}，实收+减免=账面已收）`" @input="waivedAutoTouched = true" />
       <input class="ipt" v-model="date" placeholder="日期 YYYY-MM-DD（默认今天）" />
       <picker class="field" mode="selector" :range="accounts" :value="methodIdx" @change="onMethod">
         <view class="field-inner">
@@ -100,7 +103,7 @@ import { onWs, offWs } from '../../ws';
 
 import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
@@ -113,6 +116,20 @@ const clients = ref<Array<{ id: string; name: string; debt: number }>>([]);
 const amount = ref('');
 const waived = ref('');
 const selDebtLabel = ref('');
+// 当前选中店铺应收（欠款=按该店舍入方式累计的抹零值）：自动平账减免 + 「填入应收」用
+const selDebt = ref(0);
+const waivedAutoTouched = ref(false); // 用户手动改过减免=放弃自动
+const autoWaived = computed(() => Math.max(0, selDebt.value - (Number(amount.value) || 0)));
+// 实收变化 → 未手改减免时自动算平账（对齐 App：减免=应收−实收，尾数自动抹平结清）
+watch(amount, () => {
+  if (!waivedAutoTouched.value) waived.value = autoWaived.value > 0 ? String(autoWaived.value) : '';
+});
+function fillAmount() {
+  if (selDebt.value > 0) {
+    amount.value = String(selDebt.value);
+    waived.value = autoWaived.value > 0 ? String(autoWaived.value) : '';
+  }
+}
 const date = ref('');
 const method = ref('');
 const note = ref('');
@@ -274,7 +291,11 @@ function onClient(e: { detail: { value: number } }) {
   if (c) {
     clientId.value = c.id;
     clientName.value = `${c.name}（欠 ¥${fmt(c.debt)}）`;
-    selDebtLabel.value = `应收 ¥${fmt(c.debt)}（实收 + 减免 = 账面已收）`;
+    selDebt.value = Number(c.debt || 0);
+    selDebtLabel.value = `应收 ¥${fmt(selDebt.value)}（按该店舍入方式累计 · 实收+减免=账面已收）`;
+    waivedAutoTouched.value = false;
+    amount.value = '';
+    waived.value = ''; // 减免由 watch(amount) 自动算（应收−实收），用户手填则用手动值
   }
 }
 
@@ -383,7 +404,9 @@ async function remove(id: string) {
 .value { color: var(--text-main); }
 .placeholder { color: var(--text-sub); }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.debt-tip { color: #f56c6c; font-size: 24rpx; margin: -8rpx 0 16rpx; }
+.debt-tip { color: #f56c6c; font-size: 24rpx; margin: -8rpx 0 16rpx; display: flex; align-items: center; justify-content: space-between; gap: 12rpx; }
+.debt-tx { flex: 1; }
+.fill-btn { color: var(--primary); font-size: 26rpx; padding: 4rpx 8rpx; flex-shrink: 0; border: 1rpx solid var(--primary); border-radius: 8rpx; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .pay-row { display: flex; align-items: center; padding: 16rpx 0; border-bottom: 1rpx solid var(--divider); }
 .pay-left { flex: 1; min-width: 0; }

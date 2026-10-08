@@ -306,37 +306,24 @@ class _CleanupPageState extends State<CleanupPage> {
         var localAttachAll = 0;
         var localAttachOrphan = 0;
         var localAttachInUse = 0;
-        // 扫描整个 attachments/ 目录所有文件（参考实现：先 list 目录全部文件，再逐个 basename 比对引用集合）。
+        // 扫描整个 attachments/ 目录（同图一份平铺存储 attachments/{file}，file=md5 文件名）：
         // 本地引用表非空即可判定（无论在线/离线）；表空且在线拉取也失败才保守跳过（宁可不清理不误删）。
         if (await att.exists() && (localRefs.isNotEmpty || localHasData || serverHasData)) {
-          await for (final entity in att.list(followLinks: false)) {
-            if (entity is! Directory) continue;
-            final entityName = entity.uri.pathSegments.last;
-            if (entityName.isEmpty) continue;
-            await for (final id in entity.list(followLinks: false)) {
-              if (id is! Directory) continue;
-              final idName = id.uri.pathSegments.last;
-              if (idName.isEmpty) continue;
-              await for (final f in id.list(followLinks: false)) {
-                if (f is! File) continue;
-                final fileName = f.uri.pathSegments.last;
-                final rel = '$entityName/$idName/$fileName';
-                localAttachAll++;
-                // 在用判定（对齐参考实现 scanFileOrphanAttachments：本地引用表集合判定）：
-                // 引用表非空时——三元组精确（表内=在用，不在=孤儿可清理；同目录部分孤儿正确区分）；
-                // 引用表空（未同步/在线拉取失败）——全部归在用，不列出孤儿（宁可不清理不误删；
-                // 统计行"引用表 0 条"让差异可见，同步/重进后再扫）。
-                final refTableReady = localRefs.isNotEmpty || localRefsFull.isNotEmpty;
-                final fileInUse = !refTableReady
-                    ? true
-                    : localRefsFull.contains(rel) || localRefs.contains(fileName);
-                if (fileInUse) {
-                  localAttachInUse++;
-                } else {
-                  files.add(_CacheFile(rel, await f.length(), f.path));
-                  localAttachOrphan++;
-                }
-              }
+          await for (final f in att.list(followLinks: false)) {
+            if (f is! File) continue;
+            final fileName = f.uri.pathSegments.last;
+            if (fileName.isEmpty) continue;
+            localAttachAll++;
+            // 在用判定（对齐参考实现 scanFileOrphanAttachments：本地引用表 basename 集合判定）。
+            final refTableReady = localRefs.isNotEmpty || localRefsFull.isNotEmpty;
+            final fileInUse = !refTableReady
+                ? true
+                : localRefsFull.contains(fileName) || localRefs.contains(fileName);
+            if (fileInUse) {
+              localAttachInUse++;
+            } else {
+              files.add(_CacheFile(fileName, await f.length(), f.path));
+              localAttachOrphan++;
             }
           }
         }

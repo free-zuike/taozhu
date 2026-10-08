@@ -1301,6 +1301,7 @@ class _SalePageState extends State<SalePage> {
     if (_editing || isDateRows) {
       final removedIds = _origItemIds.difference(keptIds);
       for (final rid in removedIds) {
+        await SyncService.cleanupLocalAttachmentsOf('sale_item', rid); // 删行附件引用+本地副本（不残留）
         await LocalDb.deleteOne('sale_items', rid);
         await SyncService.enqueueChange(
           entityType: 'sale_item', entitySyncId: rid, action: 'delete',

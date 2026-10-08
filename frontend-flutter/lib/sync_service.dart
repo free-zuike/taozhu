@@ -1166,9 +1166,26 @@ class SyncService {
   static Future<void> cleanupLocalAttachmentsOf(String entityType, String id) async {
     try {
       final refs = await LocalDb.getAll('attachment_refs');
+      final removedFiles = <String>{};
       for (final r in refs) {
         if ('${r['entity'] ?? ''}' == entityType && '${r['entity_id'] ?? ''}' == id) {
           await LocalDb.deleteOne('attachment_refs', '${r['entity']}/${r['entity_id']}/${r['file']}');
+          final f = '${r['file'] ?? ''}';
+          if (f.isNotEmpty) removedFiles.add(f);
+        }
+      }
+      // 平铺副本（attachments/{file}，同图一份）：删引用后若该文件无其他引用 → 删本地副本
+      // （此前只删引用行不删文件=删行后副本残留，同步面板"物理副本本地多"根因）
+      if (removedFiles.isNotEmpty) {
+        final remaining = await LocalDb.getAll('attachment_refs');
+        final still = remaining.map((r) => '${r['file'] ?? ''}').toSet();
+        final root = await getApplicationDocumentsDirectory();
+        for (final f in removedFiles) {
+          if (still.contains(f)) continue;
+          try {
+            final ff = File('${root.path}/attachments/$f');
+            if (ff.existsSync()) await ff.delete();
+          } catch (_) {}
         }
       }
     } catch (_) {}
@@ -1235,25 +1252,15 @@ class SyncService {
       var scanned = 0;
       var removed = 0;
       final removedList = <String>[];
-      // 扫描 attachments/ 全部文件：三元组+basename 双重不匹配 = 孤儿 → 删文件（对齐参考实现 cleaner 只删文件）
-      await for (final eDir in base.list(followLinks: false)) {
-        if (eDir is! Directory) continue;
-        final entity = eDir.uri.pathSegments.last;
-        await for (final idDir in eDir.list(followLinks: false)) {
-          if (idDir is! Directory) continue;
-          final id = idDir.uri.pathSegments.last;
-          await for (final f in idDir.list(followLinks: false)) {
-            if (f is! File) continue;
-            scanned++;
-            final fileName = f.uri.pathSegments.last;
-            final rel = '$entity/$id/$fileName';
-            if (!refs.contains(rel) && !refNames.contains(fileName)) {
-              try { f.deleteSync(); removed++; removedList.add(rel); } catch (_) {}
-            }
-          }
-          try { if (idDir.listSync().isEmpty) idDir.deleteSync(); } catch (_) {}
+      // 扫描附件公共目录 attachments/{file}（file=md5 文件名，同图一份平铺存储）：
+      // basename 不在引用表 = 孤儿 → 删文件（对齐参考实现 cleaner 只删文件；宁留勿误删）
+      await for (final f in base.list(followLinks: false)) {
+        if (f is! File) continue;
+        final fileName = f.uri.pathSegments.last;
+        scanned++;
+        if (!refNames.contains(fileName)) {
+          try { f.deleteSync(); removed++; removedList.add(fileName); } catch (_) {}
         }
-        try { if (eDir.listSync().isEmpty) eDir.deleteSync(); } catch (_) {}
       }
       appLog('sync', '本地孤儿附件清理：引用表 ${refs.length} 条，扫描 $scanned 文件，删除 $removed 个${removedList.isEmpty ? '' : '（' + removedList.take(5).join(', ') + '…）'}', level: 'info');
     } catch (_) {}

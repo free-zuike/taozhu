@@ -385,8 +385,20 @@ class _PaymentsPageState extends State<PaymentsPage> {
                           if (_clientId != null)
                             Padding(
                               padding: const EdgeInsets.only(top: 6, bottom: 4),
-                              child: Text('应收 ¥${fmtMoney(_selDebt)}',
-                                  style: TextStyle(color: _c.danger, fontSize: 13)),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text('应收 ¥${fmtMoney(_selDebt)}（按该店舍入方式累计）',
+                                        style: TextStyle(color: _c.danger, fontSize: 13)),
+                                  ),
+                                  if (_selDebt > 0)
+                                    TextButton(
+                                      onPressed: () => setState(
+                                          () => _amountCtrl.text = _selDebt.toStringAsFixed(2)),
+                                      child: const Text('填入应收', style: TextStyle(fontSize: 12)),
+                                    ),
+                                ],
+                              ),
                             ),
                           const SizedBox(height: 8),
                           NumberPadField(

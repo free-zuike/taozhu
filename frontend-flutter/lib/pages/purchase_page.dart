@@ -1129,6 +1129,7 @@ class _PurchasePageState extends State<PurchasePage> {
     if (_editing || isDateRows) {
       final removedIds = _origItemIds.difference(keptIds);
       for (final rid in removedIds) {
+        await SyncService.cleanupLocalAttachmentsOf('purchase_item', rid); // 删行附件引用+本地副本（不残留）
         await LocalDb.deleteOne('purchase_items', rid);
         await SyncService.enqueueChange(
           entityType: 'purchase_item', entitySyncId: rid, action: 'delete',
