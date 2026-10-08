@@ -26,6 +26,11 @@ class SystemProxy {
     return 'DIRECT';
   }
 
+  /// 当前生效的代理地址（调试展示用；null=直连）
+  static String? get server => _server;
+
+  static bool get enabled => _enabled;
+
   /// 启动时 + 定时刷新系统代理缓存（跟随代理软件开关变化）
   static Future<void> refresh() async {
     try {
@@ -81,7 +86,7 @@ class SystemProxy {
     ]);
     if (r.exitCode != 0) return '';
     // 输出形如：    ProxyEnable    REG_DWORD    0x1
-    final re = RegExp('$value\\s+REG_[A-Z_]+\\s+(.+)$', multiLine: true);
+    final re = RegExp('${value}\\s+REG_[A-Z_]+\\s+(.+)\$', multiLine: true);
     final m = re.firstMatch('${r.stdout}');
     return m?.group(1)?.trim() ?? '';
   }
@@ -138,8 +143,4 @@ class _SystemProxyOverrides extends HttpOverrides {
     client.findProxy = SystemProxy.resolve;
     return client;
   }
-  /// 当前生效的代理地址（调试展示用；null=直连）
-  static String? get server => _server;
-
-  static bool get enabled => _enabled;
 }
