@@ -1526,8 +1526,8 @@ class _PurchasePageState extends State<PurchasePage> {
                 IconButton(
                   tooltip: '该行凭证附件',
                   icon: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF409EFF)),
-                  onPressed: () => showAttachmentViewer(context, 'purchase', _purchaseId,
-                      '进货明细行凭证', lineIds: [row.rowId], orderIds: _orderIds),
+                  onPressed: () => showAttachmentViewer(context, 'purchase_item', row.rowId,
+                      '进货明细行凭证', lineIds: [row.rowId], orderIds: [row.origPurchaseId]),
                 ),
               ],
               const SizedBox(width: 4),
