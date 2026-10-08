@@ -46,15 +46,7 @@ Widget tplPreviewTable(List<List<GridCell>> rows, {double fontSize = 12, Color? 
       final r = vicinity.row;
       final c = vicinity.column;
       if (r >= rows.length || c >= rows[r].length) {
-        return TableViewCell(
-          foregroundDecoration: TableSpanDecoration(
-            border: TableSpanBorder(
-              leading: BorderSide(color: borderC, width: 0.5),
-              top: BorderSide(color: borderC, width: 0.5),
-            ),
-          ),
-          child: const SizedBox.shrink(),
-        );
+        return TableViewCell(child: const SizedBox.shrink());
       }
       final o = owner(r, c);
       // 被合并覆盖的格：带相同 merge 信息占位（保证真合并渲染）
@@ -73,12 +65,6 @@ Widget tplPreviewTable(List<List<GridCell>> rows, {double fontSize = 12, Color? 
         rowMergeSpan: o?.rs ?? 1,
         columnMergeStart: o?.sc ?? c,
         columnMergeSpan: o?.cs ?? 1,
-        foregroundDecoration: TableSpanDecoration(
-          border: TableSpanBorder(
-            leading: BorderSide(color: borderC, width: 0.5),
-            top: BorderSide(color: borderC, width: 0.5),
-          ),
-        ),
         child: Container(
           color: cell.bg == 'grey' ? (primary ?? const Color(0xFFE8E8E8)).withOpacity(0.12) : null,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
