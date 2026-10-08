@@ -185,14 +185,14 @@ class SyncService {
           .toList();
       // 待上传队列中的本地登记（添加附件立即可见，还没传到服务器/已传但 in-use 未回）：
       // 合并刷新不能把它们冲掉，否则图标"添加后灭一次、上传成功才亮"——本地优先应始终亮。
-      // 队列清空时机=downloadInUseAttachments 确认 in-use 已含该引用后（见下方清理）。
+      final pendingUploads = <String>{};
       try {
         final p = await SharedPreferences.getInstance();
-        final pendingUploads = (p.getStringList(kPendingUploadsKey) ?? [])
+        pendingUploads.addAll((p.getStringList(kPendingUploadsKey) ?? [])
             .map((e) => jsonDecode(e))
             .whereType<Map<String, dynamic>>()
             .map((m) => '${m['entity'] ?? ''}/${m['id'] ?? ''}/${'${m['fileName'] ?? ''}'.split('/').last}')
-            .toSet();
+            .toSet());
         if (pendingUploads.isNotEmpty) {
           final locals = await LocalDb.getAll('attachment_refs');
           for (final r in locals) {
@@ -203,19 +203,20 @@ class SyncService {
           }
         }
       } catch (_) {}
-      // 本地引用表合并（对齐参考架构变更流驱动：**只增不删**——删除仅由变更流
-      // attachment delete 应用（pullChanges），in-use 快照不再覆盖本地表）：
-      // 服务器在用的新引用补进来（他端上传/首装兜底），本地已有的保留；
-      // 不删除本地已有行 = "删了又拉取"在机制上消失（配合墓碑挡本地删过但服务器未删的窗口）
+      // 本地引用表对齐（服务器在用的规范化三元组全量刷新）：
+      // - 服务器引用 = 权威在册（已由上传成功即清队列 + 变更流 upsert/delete 驱动）；
+      // - 本地已有但服务器已无的行随刷新消失（残留引用收敛，修"本地47/服务器32 对不上"）；
+      // - 删除方向安全：本地删过但服务器未删的行被墓碑剔除（不复活）；
+      // - 待上传队列中的本地登记（上传失败/未上传）由上方 pendingUploads 合并保护（不冲掉）
       try {
-        final locals = await LocalDb.getAll('attachment_refs');
-        final localIds = { for (final r in locals) '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${'${r['file'] ?? ''}'.split('/').last}' };
-        final merged = List<Map<String, dynamic>>.from(locals);
-        for (final r in refs) {
-          final id3 = '${r['entity']}/${r['entity_id']}/${r['file']}';
-          if (!localIds.contains(id3)) {
+        final merged = List<Map<String, dynamic>>.from(refs);
+        final ids = { for (final r in merged) '${r['entity']}/${r['entity_id']}/${r['file']}' };
+        // 待上传但服务器未回的行保留（上传中/失败的本地登记；宁留勿丢）
+        for (final r in await LocalDb.getAll('attachment_refs')) {
+          final id3 = '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${'${r['file'] ?? ''}'.split('/').last}';
+          if (!ids.contains(id3) && pendingUploads.isNotEmpty && pendingUploads.contains(id3)) {
             merged.add(r);
-            localIds.add(id3);
+            ids.add(id3);
           }
         }
         await LocalDb.putAll('attachment_refs', merged);
@@ -557,6 +558,11 @@ class SyncService {
                 .timeout(const Duration(seconds: 20));
             uploaded++;
             appLog('sync', '附件上传成功：$entity/$id/$fileName', level: 'info');
+            // 上传成功立即清队列（对齐参考架构：上传即成功，无 in-use 二次确认）：
+            // 服务器引用已落（POST 已写引用表+变更流），本端引用行已在入队时写本地，
+            // 不再等待 downloadInUseAttachments 确认——否则成功条目恒留队列，
+            // 每次同步重传（"同一条显示很多遍"+本地引用残留 47 vs 服务器 32 根因）
+            await removePendingUpload(entity: entity, id: id, fileName: fileName);
             return;
           } catch (e) {
             lastError = e;
