@@ -12,7 +12,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
 import java.io.File
-import java.net.Proxy
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -127,9 +126,11 @@ class MainActivity : FlutterActivity() {
         if (Build.VERSION.SDK_INT >= 23) {
             try {
                 val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                val p: Proxy? = cm.defaultProxy
-                if (p != null && p.type() != Proxy.Type.DIRECT && !p.host().isNullOrEmpty() && p.port() > 0) {
-                    return p.host() to p.port()
+                // defaultProxy 返回 android.net.ProxyInfo（API 23+），属性 host/port
+                val info = cm.defaultProxy
+                val host = info?.host
+                if (info != null && !host.isNullOrEmpty() && info.port > 0) {
+                    return host to info.port
                 }
             } catch (_: Exception) {}
         }
