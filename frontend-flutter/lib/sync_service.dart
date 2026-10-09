@@ -1414,17 +1414,18 @@ class SyncService {
         try {
           final refRows0 = await LocalDb.getAll('attachment_refs');
           if (refRows0.isNotEmpty) {
-            final saleIds = <String>{}; final saleLineIds = <String>{};
-            final payIds = <String>{}; final purchaseIds = <String>{}; final purchaseLineIds = <String>{};
-            for (final s in await LocalDb.getAll('sale_items')) { saleIds.add('${s['sale_id'] ?? ''}'); saleLineIds.add('${s['id'] ?? ''}'); }
-            for (final p in await LocalDb.getAll('payments')) payIds.add('${p['id'] ?? ''}');
-            for (final p in await LocalDb.getAll('purchase_items')) { purchaseIds.add('${p['purchase_id'] ?? ''}'); purchaseLineIds.add('${p['id'] ?? ''}'); }
+            final saleLineIds = <String>{}; final purchaseLineIds = <String>{};
+            for (final s in await LocalDb.getAll('sale_items')) saleLineIds.add('${s['id'] ?? ''}');
+            for (final p in await LocalDb.getAll('purchase_items')) purchaseLineIds.add('${p['id'] ?? ''}');
             bool valid(String e, String i) {
               switch (e) {
-                case 'sale': return saleIds.contains(i);
+                // 单据级引用豁免：识别图/凭证挂 sale|purchase|payment/{单id} 在未提交时也是合法挂载
+                // （本地单尚未落库=目标不存在，但用户还在编辑/未提交）——宁留勿删，防"清理僵尸把
+                // 识别图清了"（用户复现：新增商品触发同步→清理删掉未编辑完的识别图）
+                case 'sale': return true;
                 case 'sale_item': return saleLineIds.contains(i);
-                case 'payment': return payIds.contains(i);
-                case 'purchase': return purchaseIds.contains(i);
+                case 'payment': return true;
+                case 'purchase': return true;
                 case 'purchase_item': return purchaseLineIds.contains(i);
               }
               return true; // 未知实体宁留勿删

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
@@ -48,7 +49,20 @@ class _TaoZhuAppState extends State<TaoZhuApp> {
       builder: (context, _) {
         final mode = themeNotifier.value;
         final preset = ThemeConfig.instance.preset;
-        return MaterialApp(
+        // 状态栏/底部系统导航条跟随主题：statusBar 透明（去掉系统默认半透明 scrim=用户
+        // "上边一层半透明的蒙版看不清楚"根因，背景图案透出）、图标明暗跟随、底部系统导航条同主题深色
+        final dark = mode == ThemeMode.dark ||
+            (mode == ThemeMode.system &&
+                View.of(context).platformDispatcher.platformBrightness == Brightness.dark);
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+            statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+            systemNavigationBarColor: dark ? const Color(0xFF101216) : const Color(0xFFF6F7F9),
+            systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+          ),
+          child: MaterialApp(
           title: '陶朱',
           debugShowCheckedModeBanner: false,
           themeMode: mode,
@@ -71,6 +85,7 @@ class _TaoZhuAppState extends State<TaoZhuApp> {
               }
               return snap.data == true ? const BottomShell() : const LoginPage();
             },
+          ),
           ),
         );
       },
