@@ -152,9 +152,13 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
       ),
       bottomNavigationBar: Stack(
         children: [
-          // 底部整条=主题背景图案（渐变+皮肤纹理，与页面 body 一致——用户"跟随系统的背景图案"：
-          // 胶囊四周/下方不再露 Scaffold 纯白/纯黑底）
-          Positioned.fill(child: themePageBackground(context)),
+          // 底部区域=页面渐变底部同色（衔接 body，非 themePageBackground 渐变顶部白段——
+          // 底部仅 76px 高，铺全屏渐变只显示顶部白色段=用户"胶囊下方一条白渐变线"）
+          Positioned.fill(
+            child: Container(
+              color: dark ? const Color(0xFF101216) : Color.lerp(c.primary, Colors.white, 0.62),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Container(

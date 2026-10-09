@@ -707,7 +707,7 @@ const skippedRef = ref(0); // dateRows 加载被跳过的商品行数（商品�
 
 /// 商品名输入失焦：精确匹配到已有商品 → 关联并带出默认单位/价格（不覆盖已手填价格）；
 /// 未匹配=自定义新商品名（itemId 留空，提交时可入库，对齐 App 名称输入关联）
-function onItemInput(i: number) {
+async function onItemInput(i: number) {
   const row = rows.value[i];
   const name = (row.itemName || '').trim();
   const match = items.value.find((x) => x.name === name);
@@ -723,6 +723,19 @@ function onItemInput(i: number) {
       row.priceLabel = `${pr.unit}（¥${pr.sale_price}·库存${pr.stock ?? 0}）`;
       if (!row.salePrice) row.salePrice = String(pr.sale_price);
     }
+  }
+  // 店铺最近价：不同店铺单价不同——带出该店铺最近一次该商品的单位/单价（覆盖默认；无历史静默）
+  if (clientId.value && !row.salePrice) {
+    try {
+      const d = await request<{ unit?: string; sale_price?: number | null }>(`/sales/last-price?client_id=${clientId.value}&item_id=${match.id}`);
+      if (d && d.unit && Number(d.sale_price) > 0) {
+        const p2 = match.prices.find((p) => p.unit === d.unit) || match.prices[0];
+        row.priceId = p2 ? p2.id : '';
+        row.unit = d.unit;
+        row.priceLabel = `${d.unit}（¥${d.sale_price}·店铺最近价）`;
+        row.salePrice = String(d.sale_price);
+      }
+    } catch (_) {}
   }
 }
 

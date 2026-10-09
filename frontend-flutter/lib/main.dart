@@ -34,7 +34,8 @@ void main() async {
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
       statusBarBrightness: dark ? Brightness.dark : Brightness.light,
-      systemNavigationBarColor: dark ? const Color(0xFF101216) : const Color(0xFFF6F7F9),
+      // 底部系统导航条透明（沉浸式）：手势指示条融入 App 背景，不再是胶囊下方一条线（用户"下面一层是一条线"）
+      systemNavigationBarColor: Colors.transparent,
       systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark,
     ));
   }

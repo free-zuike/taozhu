@@ -200,6 +200,18 @@ salesRouter.get('/', async (c) => {
   });
 });
 
+// GET /sales/last-price?client_id=&item_id= — 该店铺最近一笔该商品的单位/售价（选商品默认带出：
+// 不同店铺单价不同，小程序无本地库直连查；App 本地查同语义）
+salesRouter.get('/last-price', async (c) => {
+  const clientId = c.req.query('client_id');
+  const itemId = c.req.query('item_id');
+  if (!clientId || !itemId) return c.json({ error: 'client_id/item_id 必填' }, 400);
+  const r = await c.env.DB.prepare(
+    'SELECT si.unit AS unit, si.sale_price AS sale_price FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.client_id = ? AND si.item_id = ? ORDER BY si.id DESC LIMIT 1',
+  ).bind(clientId, itemId).first<{ unit: string | null; sale_price: number | null }>();
+  return c.json({ unit: r?.unit ?? '', sale_price: r?.sale_price ?? null });
+});
+
 // POST /sales/items/date — 批量改明细行日期（出货流水「日期栏批量编辑」用；不改库存/金额/店铺）
 salesRouter.post('/items/date', async (c) => {
   const body = await c.req.json().catch(() => null) as { updates?: Array<{ item_id?: string; happened_at?: string }> } | null;

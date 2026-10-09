@@ -370,7 +370,10 @@ class _PurchasePageState extends State<PurchasePage> {
   /// lines 字段约定（进货记录展开行）：item_id=商品 id、row_id/id=明细行 id、
   /// quantity/unit/purchase_price/happened_at
   Future<void> _loadDateRows() async {
-    final lines = (widget.dateRows ?? []).cast<Map<String, dynamic>>();
+    // 按明细行 id（p{毫秒} 时间戳=创建序）排序：多次识别/分次提交的批次顺序重载时保持（对齐 App sale）
+    final lines = [...(widget.dateRows ?? []).cast<Map<String, dynamic>>()]
+      ..sort((a, b) => '${a['item_id'] ?? ''}'.compareTo('${b['item_id'] ?? ''}'));
+    if (lines.isEmpty) return;
     if (lines.isEmpty) return;
     setState(() {
       final hd = widget.initDate ?? _today();

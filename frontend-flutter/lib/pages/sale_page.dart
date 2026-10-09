@@ -415,7 +415,10 @@ class _SalePageState extends State<SalePage> {
   /// 日期栏批量直编：从账本某日进入，直接平铺该日全部商品行（行内直接改，保存走行级 diff）。
   /// lines 字段约定（账本展开行）：item_id=明细行 id、goods_id=商品 id、quantity/sale_price/unit/happened_at
   Future<void> _loadDateRows() async {
-    final lines = (widget.dateRows ?? []).cast<Map<String, dynamic>>();
+    // 按明细行 id（s{毫秒} 时间戳=创建序）排序：多次识别/分次提交的批次顺序在重载时保持
+    // （单分组/默认返回序会打乱识别录入顺序——用户"批次按顺序排下来方便对账"）
+    final lines = [...(widget.dateRows ?? []).cast<Map<String, dynamic>>()]
+      ..sort((a, b) => '${a['item_id'] ?? ''}'.compareTo('${b['item_id'] ?? ''}'));
     if (lines.isEmpty) return;
     final firstOrder = (lines.first['order'] as Map?) ?? const <String, dynamic>{};
     setState(() {
@@ -490,6 +493,39 @@ class _SalePageState extends State<SalePage> {
     }
   }
 
+  /// 选中商品带出「当前店铺最近一次」的单位/单价（不同店铺单价不同——用户需求）：
+  /// 本地 sale_items 该店铺该商品最近一笔的 unit/sale_price 优先；无历史才用商品库默认
+  Future<void> _selectItemRecent(_Row row, _ItemOption item) async {
+    try {
+      final rows = await LocalDb.getAll('sale_items');
+      final sales = await LocalDb.getAll('sales');
+      final clientOf = {for (final s in sales) '${s['id'] ?? ''}': '${s['client_id'] ?? ''}'};
+      final mine = rows.where((r) {
+        final cid = '${r['client_id'] ?? ''}'.isNotEmpty
+            ? '${r['client_id']}'
+            : (clientOf['${r['sale_id'] ?? ''}'] ?? '');
+        return cid == _clientId && '${r['item_id'] ?? ''}' == item.id;
+      }).toList()
+        ..sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+      if (mine.isNotEmpty) {
+        final last = mine.first;
+        final unit = '${last['unit'] ?? ''}';
+        final sp = (last['sale_price'] is num)
+            ? (last['sale_price'] as num).toDouble()
+            : double.tryParse('${last['sale_price']}') ?? 0;
+        if (unit.isNotEmpty && sp > 0) {
+          final pr = item.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
+          row.priceId = pr?['id'] as String?;
+          row.unitCtrl.text = unit;
+          row.salePrice = sp;
+          row.saleCtrl.text = sp.toStringAsFixed(2);
+          return;
+        }
+      }
+    } catch (_) {}
+    _selectItem(row, item);
+  }
+
   /// 名称输入变化：精确匹配到已有商品 → 关联（**不覆盖识别/手填的价格与单位**——
   /// AI 识别填行改错名时只关联商品，识别价保留）；否则视为新商品名（可点「新增」入库）
   void _onNameChanged(_Row row, String v) {
@@ -500,7 +536,7 @@ class _SalePageState extends State<SalePage> {
         // 行上还没有有效价格（全新行）→ 带出商品库默认价；已有识别/手填价 → 只关联商品与价格 id
         final hasPrice = (row.salePrice > 0) || row.saleCtrl.text.trim().isNotEmpty;
         if (!hasPrice) {
-          _selectItem(row, match);
+          unawaited(_selectItemRecent(row, match));
         } else {
           row.itemId = match.id;
           row.nameCtrl.text = match.name;
@@ -590,7 +626,7 @@ class _SalePageState extends State<SalePage> {
     );
     if (picked == null) return;
     final item = _items.where((x) => x.id == picked).firstOrNull;
-    if (item != null) _selectItem(row, item);
+    if (item != null) await _selectItemRecent(row, item);
     setState(() {});
   }
 
