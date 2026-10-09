@@ -425,43 +425,6 @@ class ThemeConfig extends ChangeNotifier {
   }
 }
 
-/// 全局背景包装：MaterialApp.builder 使用——Scaffold 透明，背景（渐变/图案皮肤）透出
-Widget themeBackgroundWrap(BuildContext context, Widget? child) {
-  if (child == null) return const SizedBox.shrink();
-  final cfg = ThemeConfig.instance;
-  final dark = Theme.of(context).brightness == Brightness.dark;
-  if (!cfg.bgEnabled) {
-    // 背景开关关闭也保留主题渐变（不显示纯白）：背景始终可见
-    final preset = cfg.preset;
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient,
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-      ),
-      child: child,
-    );
-  }
-  final preset = cfg.preset;
-  final skin = skinPatternById(cfg.skinId);
-  final colors = dark ? const [Color(0xFF17181C), Color(0xFF101216)] : preset.bgGradient;
-  if (skin == null) {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: colors, begin: Alignment.topCenter, end: Alignment.bottomCenter),
-      ),
-      child: child,
-    );
-  }
-  // 图案皮肤：渐变底 + 图案层（painter 内部画底）
-  return CustomPaint(
-    painter: skin.build(preset.lightPrimary, dark),
-    child: child,
-  );
-}
-
 /// 页面内部背景层：渐变或图案皮肤（Scaffold 已不透明，页面如需露出背景在 body 底部垫此层）
 Widget themePageBackground(BuildContext context) {
   final cfg = ThemeConfig.instance;

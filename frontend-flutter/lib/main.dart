@@ -84,7 +84,8 @@ class _TaoZhuAppState extends State<TaoZhuApp> {
           themeMode: mode,
           theme: buildLightTheme(preset.lightPrimary),
           darkTheme: buildDarkTheme(preset.darkPrimary),
-          builder: themeBackgroundWrap,
+          // 移除全局背景包装（MaterialApp.builder 渐变层=用户"4 tab 都看到像渐变的蒙版"根因：
+          // 页面 Scaffold 未覆盖处透出这层渐变）；每页 body 已自铺 themePageBackground
           // 中文化（DatePicker 等系统组件）+ i18n 基础（zh/en）
           localizationsDelegates: const [
             GlobalMaterialLocalizations.delegate,
