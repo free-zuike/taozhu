@@ -724,15 +724,18 @@ async function onItemInput(i: number) {
       if (!row.salePrice) row.salePrice = String(pr.sale_price);
     }
   }
-  // 店铺最近价：不同店铺单价不同——带出该店铺最近一次该商品的单位/单价（覆盖默认；无历史静默）
+  // 店铺最近价/等级价：不同店铺单价不同——带出该店铺最近一次该商品的单位/单价（覆盖默认；
+  // 无最近成交 → 服务端按店铺价格组返回等级价；无则静默走商品库价）
   if (clientId.value && !row.salePrice) {
     try {
-      const d = await request<{ unit?: string; sale_price?: number | null }>(`/sales/last-price?client_id=${clientId.value}&item_id=${match.id}`);
+      const d = await request<{ unit?: string; sale_price?: number | null; from_group?: boolean }>(`/sales/last-price?client_id=${clientId.value}&item_id=${match.id}`);
       if (d && d.unit && Number(d.sale_price) > 0) {
         const p2 = match.prices.find((p) => p.unit === d.unit) || match.prices[0];
         row.priceId = p2 ? p2.id : '';
         row.unit = d.unit;
-        row.priceLabel = `${d.unit}（¥${d.sale_price}·店铺最近价）`;
+        row.priceLabel = d.from_group
+            ? `${d.unit}（¥${d.sale_price}·店铺等级价）`
+            : `${d.unit}（¥${d.sale_price}·店铺最近价）`;
         row.salePrice = String(d.sale_price);
       }
     } catch (_) {}

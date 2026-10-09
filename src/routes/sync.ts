@@ -144,7 +144,7 @@ syncRouter.get('/full', async (c) => {
       id: r.id, name: r.name, contact: r.contact ?? '', phone: r.phone ?? '', note: r.note ?? '',
       start_date: r.start_date ?? '', end_date: r.end_date ?? '', month_start_day: r.month_start_day ?? 1,
       round_stage: r.round_stage ?? 'none', round_unit: r.round_unit ?? 'yuan',
-      category_id: r.category_id ?? '', deleted_at: r.deleted_at ?? null,
+      category_id: r.category_id ?? '', price_group_id: r.price_group_id ?? '', deleted_at: r.deleted_at ?? null,
     };
   });
 
@@ -156,13 +156,20 @@ syncRouter.get('/full', async (c) => {
     list.push(p);
     byItem.set((p as { item_id: string }).item_id, list);
   }
+  const groupPriceRows = await db.prepare('SELECT * FROM item_group_prices ORDER BY unit, group_id').all();
+  const byItemGroup = new Map<string, unknown[]>();
+  for (const p of groupPriceRows.results) {
+    const list = byItemGroup.get((p as { item_id: string }).item_id) ?? [];
+    list.push(p);
+    byItemGroup.set((p as { item_id: string }).item_id, list);
+  }
   const items = itemRows.results.map((x) => {
     const r = x as Record<string, unknown>;
     const prices = (byItem.get(String(r.id)) ?? []).map((q) => {
       const p = q as Record<string, unknown>;
       return isStaff ? { ...p, purchase_price: 0 } : p;
     });
-    return { id: r.id, name: r.name, category: r.category ?? '', category_id: r.category_id ?? '', deleted_at: r.deleted_at ?? null, prices };
+    return { id: r.id, name: r.name, category: r.category ?? '', category_id: r.category_id ?? '', deleted_at: r.deleted_at ?? null, prices, group_prices: byItemGroup.get(String(r.id)) ?? [] };
   });
 
   const catRows = await db.prepare('SELECT id, type, name, parent_id, sort FROM categories ORDER BY sort, name').all();
@@ -170,6 +177,9 @@ syncRouter.get('/full', async (c) => {
 
   const paRows = await db.prepare('SELECT id, name, bank_name, card_last_four, sort FROM payment_accounts ORDER BY sort, name').all();
   const payment_accounts = paRows.results.map((x) => ({ ...(x as Record<string, unknown>) }));
+
+  const pgRows = await db.prepare('SELECT id, name, sort FROM price_groups WHERE deleted_at IS NULL ORDER BY sort, name').all();
+  const price_groups = pgRows.results.map((x) => ({ ...(x as Record<string, unknown>) }));
 
   // 收支单据：行级下发（去单据化——每条商品即主记录，自带店铺/日期/备注）
   // 旧字段 sales/purchases（整单嵌套）仅作兼容，新客户端优先读 sale_items/purchase_items 行数组
@@ -261,7 +271,7 @@ syncRouter.get('/full', async (c) => {
     return isStaff ? { ...r, cost_price: 0 } : r;
   });
 
-  return c.json({ clients, items, categories, payment_accounts,
+  return c.json({ clients, items, categories, payment_accounts, price_groups,
     // 去单据化主结构：行级商品记录数组（前端 fullSync 主读数），sales/purchases 整单仅作兼容
     sale_items: saleItems.results, purchase_items: purchaseItems.results,
     sales, purchases, payments, stocks, server_cursor: await maxCursor(db) });

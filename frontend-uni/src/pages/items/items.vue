@@ -32,7 +32,14 @@
           <input class="ipt s" v-model="p.sale_price" type="digit" placeholder="售价" />
           <text class="del" @click="form.prices.splice(i, 1)">删</text>
         </view>
-        <button class="btn-sub" @click="form.prices.push({ id: '', unit: '', purchase_price: '', sale_price: '' })">+ 加价格行（同菜多单位）</button>
+        <button class="btn-sub" @click="form.prices.push({ id: '', unit: '', purchase_price: '', sale_price: '', group_prices: {} })">+ 加价格行（同菜多单位）</button>
+        <view v-if="priceGroups.length" class="gp-title">价格组售价（按店铺等级带出；留空=不设）</view>
+        <view v-for="(p, i) in form.prices" :key="'gp-' + i" class="gp-block">
+          <view v-if="priceGroups.length && form.prices[i].unit" class="gp-row" v-for="g in priceGroups" :key="'g' + g.id">
+            <text class="gp-label">{{ g.name }}</text>
+            <input class="ipt s" v-model="p.group_prices[g.id]" type="digit" placeholder="售价" />
+          </view>
+        </view>
         <button class="btn-save" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
       </view>
     </view>
@@ -56,6 +63,8 @@ interface Price {
   unit: string;
   purchase_price: string;
   sale_price: string;
+  /// 价格组售价：group_id → 售价字符串（同单位多组；保存时组装 item_group_prices）
+  group_prices: Record<string, string>;
 }
 interface Item {
   id: string;
@@ -64,14 +73,30 @@ interface Item {
   category_name?: string;
   prices: Price[];
 }
+interface GroupPrice {
+  id: string;
+  unit: string;
+  group_id: string;
+  sale_price: number;
+}
 
 const items = ref<Item[]>([]);
 const search = ref('');
 const showForm = ref(false);
 const saving = ref(false);
+const priceGroups = ref<Array<{ id: string; name: string }>>([]);
 const form = ref<{ id?: string; name: string; category: string; categoryId: string; topId: string; topName: string; subId: string; subName: string; prices: Price[] }>({
-  id: undefined, name: '', category: '', categoryId: '', topId: '', topName: '', subId: '', subName: '', prices: [{ id: '', unit: '', purchase_price: '', sale_price: '' }],
+  id: undefined, name: '', category: '', categoryId: '', topId: '', topName: '', subId: '', subName: '', prices: [{ id: '', unit: '', purchase_price: '', sale_price: '', group_prices: {} }],
 });
+
+async function loadPriceGroups() {
+  try {
+    const d = await request<{ price_groups: Array<{ id: string; name: string }> }>('/price-groups', 'GET').catch(() => null);
+    priceGroups.value = d?.price_groups || [];
+  } catch (e) {
+    // 价格组加载失败不阻塞（组价区域隐藏，商品仍可保存）
+  }
+}
 
 // 两级商品分类（对齐 App items_page：一级+二级级联选择，type=item）
 const itemsCats = ref<Array<{ id: string; name: string; parent_id: string | null }>>([]);
@@ -124,7 +149,7 @@ onShow(async () => {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
   }
-  await Promise.all([load(), loadCats()]);
+  await Promise.all([load(), loadCats(), loadPriceGroups()]);
 });
 
 async function load(q = '') {
@@ -145,7 +170,7 @@ function onSearch() {
 }
 
 function openAdd() {
-  form.value = { id: undefined, name: '', category: '', categoryId: '', topId: '', topName: '', subId: '', subName: '', prices: [{ id: '', unit: '', purchase_price: '', sale_price: '' }] };
+  form.value = { id: undefined, name: '', category: '', categoryId: '', topId: '', topName: '', subId: '', subName: '', prices: [{ id: '', unit: '', purchase_price: '', sale_price: '', group_prices: {} }] };
   subNames.value = [];
   showForm.value = true;
 }
@@ -157,11 +182,20 @@ function openEdit(it: Item) {
     category: it.category_name || it.category || '',
     categoryId: (it as any).category_id || '',
     topId: '', topName: '', subId: '', subName: '',
-    prices: (it.prices || []).map((p) => ({
-      id: p.id || '', unit: p.unit,
-      purchase_price: String(p.purchase_price ?? ''),
-      sale_price: String(p.sale_price ?? ''),
-    })),
+    prices: (it.prices || []).map((p) => {
+      // 组价回填：该单位全部 group_prices（group_id → 售价）
+      const gps: Record<string, string> = {};
+      const orig = ((it as any).group_prices || []) as GroupPrice[];
+      for (const g of orig) {
+        if (g.unit === p.unit) gps[g.group_id] = String(g.sale_price ?? '');
+      }
+      return {
+        id: p.id || '', unit: p.unit,
+        purchase_price: String(p.purchase_price ?? ''),
+        sale_price: String(p.sale_price ?? ''),
+        group_prices: gps,
+      };
+    }),
   };
   // 回填分类选择器（按 id 定位一级/二级）
   const cid = (it as any).category_id || '';
@@ -182,9 +216,19 @@ function openEdit(it: Item) {
     subNames.value = [];
   }
   if (form.value.prices.length === 0) {
-    form.value.prices = [{ id: '', unit: '', purchase_price: '', sale_price: '' }];
+    form.value.prices = [{ id: '', unit: '', purchase_price: '', sale_price: '', group_prices: {} }];
   }
   showForm.value = true;
+}
+
+/// 收集该单位的价格组售价：{unit, group_id, sale_price}（售价>0 才算有效）
+function groupRowsOf(p: Price) {
+  const out: Array<{ unit: string; group_id: string; sale_price: number }> = [];
+  for (const g of priceGroups.value) {
+    const v = Number(p.group_prices[g.id] || 0);
+    if (v > 0) out.push({ unit: p.unit.trim(), group_id: g.id, sale_price: v });
+  }
+  return out;
 }
 
 async function save() {
@@ -215,12 +259,33 @@ async function save() {
       for (const p of orig?.prices || []) {
         if (p.id && !nowIds.has(p.id)) await request(`/items/item-prices/${p.id}`, 'DELETE');
       }
+      // 价格组售价差量：新增/更新/删除（对齐 App：新增行 POST /items/:id/group-prices、已有 PATCH /item-group-prices/:id、被移除 DELETE）
+      const origGps = ((orig as any)?.group_prices || []) as GroupPrice[];
+      const wantGps: GroupPrice[] = [];
+      for (const p of rows) {
+        for (const g of groupRowsOf(p)) {
+          const existing = origGps.find((x) => x.unit === g.unit && x.group_id === g.group_id);
+          wantGps.push({ id: existing?.id || '', unit: g.unit, group_id: g.group_id, sale_price: g.sale_price });
+        }
+      }
+      for (const g of wantGps) {
+        const body = { unit: g.unit, group_id: g.group_id, sale_price: g.sale_price };
+        if (g.id) await request(`/items/item-group-prices/${g.id}`, 'PATCH', body);
+        else await request(`/items/${id}/group-prices`, 'POST', body);
+      }
+      const wantKeys = new Set(wantGps.filter((g) => g.id).map((g) => g.id));
+      for (const g of origGps) {
+        if (g.id && !wantKeys.has(g.id)) await request(`/items/item-group-prices/${g.id}`, 'DELETE');
+      }
     } else {
+      const gps: Array<{ unit: string; group_id: string; sale_price: number }> = [];
+      for (const p of rows) gps.push(...groupRowsOf(p));
       await request('/items', 'POST', {
         name: form.value.name.trim(),
         category: form.value.category.trim(),
         category_id: form.value.categoryId,
         prices: rows.map((p) => ({ unit: p.unit.trim(), purchase_price: num(p.purchase_price), sale_price: num(p.sale_price) })),
+        group_prices: gps,
       });
     }
     uni.showToast({ title: '已保存', icon: 'success' });
@@ -278,5 +343,9 @@ async function remove(id: string) {
 .price-row { display: flex; gap: 12rpx; align-items: center; }
 .price-row .s { flex: 1; min-width: 0; }
 .btn-sub { background: var(--card-bg); border: 1rpx solid var(--primary); color: var(--primary); border-radius: 10rpx; font-size: 26rpx; margin-bottom: 16rpx; }
+.gp-title { font-size: 26rpx; color: var(--text-sub); margin: 8rpx 0 4rpx; }
+.gp-block { margin-bottom: 12rpx; }
+.gp-row { display: flex; align-items: center; gap: 12rpx; margin-bottom: 8rpx; }
+.gp-label { font-size: 24rpx; color: var(--text-sub); width: 120rpx; flex-shrink: 0; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>

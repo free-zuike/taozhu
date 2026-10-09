@@ -67,6 +67,9 @@
       <view class="row" @click="go('/pages/categories/categories')">
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE892;</text></view><view class="r-body"><text class="r-tx">分类管理</text><text class="r-sub">商品分类 / 店铺分类（两级）</text></view><text class="r-arrow">›</text>
       </view>
+      <view class="row" @click="go('/pages/price-groups/price-groups')">
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE622;</text></view><view class="r-body"><text class="r-tx">价格组</text><text class="r-sub">店铺分级定价：零售/批发/VIP…</text></view><text class="r-arrow">›</text>
+      </view>
     </view>
 
     <view class="group-title">系统</view>

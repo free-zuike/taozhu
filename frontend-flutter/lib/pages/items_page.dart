@@ -365,8 +365,11 @@ class _ItemEditPageState extends State<_ItemEditPage> {
   final _nameCtrl = TextEditingController();
   late final List<Map<String, TextEditingController>> _priceRows;
   late final List<String?> _priceIds; // 与 _priceRows 平行：null=新增行（编辑模式下用于区分增/改/删）
+  /// 价格组售价：与 _priceRows 平行——每组 [{groupId, ctrl, id}]（ctrl=该价格组售价输入）
+  late final List<List<Map<String, dynamic>>> _groupPriceRows;
   final _countUnitCtrl = TextEditingController(); // 计数单位（袋/个…备货统计用；空=不折）
   List<Map<String, dynamic>> _cats = []; // 一级+二级全量（type=item）
+  List<Map<String, dynamic>> _priceGroups = []; // 价格组（店铺等级→取价档）
   String? _topId; // 一级分类
   String? _subId; // 二级分类（依赖一级，可选）
   String? _pendingCid; // 编辑回显：_loadCats 完成后按 parent_id 反推一级/二级
@@ -381,6 +384,12 @@ class _ItemEditPageState extends State<_ItemEditPage> {
         'sell': TextEditingController(text: sell),
         'per': TextEditingController(text: per),
       };
+
+  /// 该单位行的价格组售价输入列表（每价格组一个 controller + 对应组价行 id）
+  List<Map<String, dynamic>> _newGroupRow() => [
+        for (final g in _priceGroups)
+          {'groupId': '${g['id']}', 'ctrl': TextEditingController(), 'id': null},
+      ];
 
   @override
   void initState() {
@@ -412,7 +421,43 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       _priceRows = [_newRow()];
       _priceIds = [null];
     }
+    _groupPriceRows = [for (final _ in _priceRows) <Map<String, dynamic>>[]];
     _loadCats();
+    _loadPriceGroups();
+  }
+
+  /// 价格组加载：原生读本地镜像，Web 直连服务器（组价编辑依赖组列表）
+  Future<void> _loadPriceGroups() async {
+    var groups = <Map<String, dynamic>>[];
+    if (kIsWeb) {
+      try {
+        final d = await Api.instance.get('/price-groups');
+        groups = ((d['price_groups'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } catch (_) {}
+    } else {
+      groups = await LocalDb.getAll('price_groups');
+    }
+    if (!mounted) return;
+    setState(() {
+      _priceGroups = groups..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
+      // 按组列表重建每行的组价输入（编辑回显：item.group_prices 按 unit+group_id 匹配填入）
+      final item = widget.item;
+      final orig = ((item?['group_prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+      for (int i = 0; i < _groupPriceRows.length; i++) {
+        final unit = _priceRows[i]['unit']!.text.trim();
+        _groupPriceRows[i] = [
+          for (final g in _priceGroups)
+            () {
+              final match = orig.where((x) => '${x['unit']}' == unit && '${x['group_id']}' == '${g['id']}').firstOrNull;
+              return {
+                'groupId': '${g['id']}',
+                'ctrl': TextEditingController(text: match != null ? '${match['sale_price'] ?? ''}' : ''),
+                'id': match != null ? '${match['id']}' : null,
+              };
+            }(),
+        ];
+      }
+    });
   }
 
   Future<void> _loadCats() async {
@@ -462,6 +507,11 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       r['sell']?.dispose();
       r['per']?.dispose();
     }
+    for (final gs in _groupPriceRows) {
+      for (final g in gs) {
+        (g['ctrl'] as TextEditingController?)?.dispose();
+      }
+    }
     super.dispose();
   }
 
@@ -484,6 +534,23 @@ class _ItemEditPageState extends State<_ItemEditPage> {
     if (rows.isEmpty) {
       toast(context, '请至少填写一个单位价格');
       return;
+    }
+    // 收集价格组售价：{unit, group_id, sale_price, id?}（单位行 × 每价格组；售价>0 才算有效）
+    final groupRows = <Map<String, dynamic>>[];
+    for (int i = 0; i < _priceRows.length; i++) {
+      final unit = _priceRows[i]['unit']!.text.trim();
+      if (unit.isEmpty) continue;
+      final gs = i < _groupPriceRows.length ? _groupPriceRows[i] : const <Map<String, dynamic>>[];
+      for (final g in gs) {
+        final price = double.tryParse((g['ctrl'] as TextEditingController).text) ?? 0;
+        if (price <= 0) continue;
+        groupRows.add({
+          'unit': unit,
+          'group_id': '${g['groupId']}',
+          'sale_price': price,
+          'id': g['id'] as String?,
+        });
+      }
     }
     final countUnit = _countUnitCtrl.text.trim();
     setState(() => _busy = true);
@@ -518,12 +585,35 @@ class _ItemEditPageState extends State<_ItemEditPage> {
           for (final pid in origIds.difference(kept)) {
             await Api.instance.delete('/item-prices/$pid');
           }
+          // 价格组售价差量：新增/更新/删除
+          final origGroupIds = ((widget.item!['group_prices'] as List?) ?? [])
+              .map((p) => '${(p as Map)['id'] ?? ''}').where((x) => x.isNotEmpty).toSet();
+          final keptGroupIds = groupRows.map((g) => g['id'] as String?).whereType<String>().toSet();
+          for (final g in groupRows) {
+            final gid = g['id'] as String?;
+            if (gid == null || gid.isEmpty) {
+              await Api.instance.post('/items/$itemId/group-prices', {
+                'unit': g['unit'], 'group_id': g['group_id'], 'sale_price': g['sale_price'],
+              });
+            } else {
+              await Api.instance.patch('/item-group-prices/$gid', {
+                'unit': g['unit'], 'group_id': g['group_id'], 'sale_price': g['sale_price'],
+              });
+            }
+          }
+          for (final gid in origGroupIds.difference(keptGroupIds)) {
+            await Api.instance.delete('/item-group-prices/$gid');
+          }
         } else {
           await Api.instance.post('/items', {
             'name': name, 'category': catName, 'category_id': selId ?? '', 'count_unit': countUnit,
             'prices': [
               for (final r in rows)
                 {'unit': r['unit'], 'purchase_price': r['buy'], 'sale_price': r['sell'], 'per': r['per']},
+            ],
+            'group_prices': [
+              for (final g in groupRows)
+                {'unit': g['unit'], 'group_id': g['group_id'], 'sale_price': g['sale_price']},
             ],
           });
         }
@@ -536,7 +626,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
       }
       return;
     }
-    // 原生：写本地优先：构建完整 item payload（含 prices）→ 落本地库 → 入队列 → debounce push
+    // 原生：写本地优先：构建完整 item payload（含 prices + group_prices）→ 落本地库 → 入队列 → debounce push
     final itemId = _editing ? '${widget.item!['id']}' : 'i${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
     final pricesPayload = <Map<String, dynamic>>[];
     for (final r in rows) {
@@ -546,10 +636,19 @@ class _ItemEditPageState extends State<_ItemEditPage> {
         'purchase_price': r['buy'], 'sale_price': r['sell'], 'per': r['per'], 'active': 1,
       });
     }
+    final groupPricesPayload = <Map<String, dynamic>>[];
+    for (final g in groupRows) {
+      final gid = (g['id'] as String?) ?? 'gpr${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+      groupPricesPayload.add({
+        'id': gid, 'item_id': itemId, 'unit': g['unit'],
+        'group_id': g['group_id'], 'sale_price': g['sale_price'],
+      });
+    }
     final payload = {
       'id': itemId, 'name': name, 'category': catName,
       'category_id': selId ?? '', 'count_unit': countUnit, 'deleted_at': null,
       'prices': pricesPayload,
+      'group_prices': groupPricesPayload,
     };
     await LocalDb.upsertOne('items', payload);
     await SyncService.enqueueChange(entityType: 'item', entitySyncId: itemId, payload: payload);
@@ -642,6 +741,12 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                               ? () => setState(() {
                                     _priceRows.removeAt(i);
                                     _priceIds.removeAt(i);
+                                    if (i < _groupPriceRows.length) {
+                                      for (final g in _groupPriceRows[i]) {
+                                        (g['ctrl'] as TextEditingController).dispose();
+                                      }
+                                      _groupPriceRows.removeAt(i);
+                                    }
                                   })
                               : null,
                         ),
@@ -653,6 +758,22 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                       label: '每单位折合计数单位数（可选）',
                       helperText: '1 箱=40 袋就填 40；记单时会自动带出、也可改；用于库存备货折算与比价',
                     ),
+                    if (_priceGroups.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      const Divider(height: 1),
+                      const SizedBox(height: 6),
+                      Text('价格组售价（按店铺等级带出；留空=不设）',
+                          style: TextStyle(fontSize: 12, color: _c.textSub)),
+                      const SizedBox(height: 6),
+                      for (int gi = 0; gi < (i < _groupPriceRows.length ? _groupPriceRows[i].length : 0); gi++)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: NumberPadField(
+                            controller: _groupPriceRows[i][gi]['ctrl'] as TextEditingController,
+                            label: '${_priceGroups[gi]['name']}',
+                          ),
+                        ),
+                    ],
                   ],
                 ),
               ),
@@ -663,6 +784,7 @@ class _ItemEditPageState extends State<_ItemEditPage> {
               onPressed: () => setState(() {
                 _priceRows.add(_newRow());
                 _priceIds.add(null);
+                _groupPriceRows.add(_newGroupRow());
               }),
               icon: const Icon(Icons.add),
               label: const Text('添加价格组'),

@@ -143,6 +143,12 @@
 			"style": {
 				"navigationBarTitleText": "收款账户"
 			}
+		},
+		{
+			"path": "pages/price-groups/price-groups",
+			"style": {
+				"navigationBarTitleText": "价格组"
+			}
 		}
 	],
 	"tabBar": {

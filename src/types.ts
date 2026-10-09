@@ -44,6 +44,7 @@ export interface ClientRow {
   round_stage: string | null;
   round_unit: string | null;
   category_id: string | null;
+  price_group_id?: string | null;
   deleted_at: string | null;
 }
 

@@ -13,7 +13,7 @@ import { getRoundingConfig, roundMoney } from './money';
 import { recordAudit } from '../routes/audit';
 import type { Env } from '../types';
 
-export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item'] as const;
+export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'price_group', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item'] as const;
 export type SyncEntityType = (typeof SYNC_ENTITIES)[number];
 
 export interface SyncChangeInput {
@@ -70,17 +70,23 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
         id: r.id, name: r.name, contact: r.contact ?? '', phone: r.phone ?? '', note: r.note ?? '',
         start_date: r.start_date ?? '', end_date: r.end_date ?? '', month_start_day: r.month_start_day ?? 1,
         round_stage: r.round_stage ?? 'none', round_unit: r.round_unit ?? 'yuan',
-        category_id: r.category_id ?? '', deleted_at: r.deleted_at ?? null,
+        category_id: r.category_id ?? '', price_group_id: r.price_group_id ?? '', deleted_at: r.deleted_at ?? null,
       };
     }
     case 'item': {
       const r = await db.prepare('SELECT * FROM items WHERE id = ?').bind(id).first<Record<string, unknown>>();
       if (!r) return null;
       const prices = await db.prepare('SELECT * FROM item_prices WHERE item_id = ? ORDER BY unit').bind(id).all();
+      const groupPrices = await db.prepare('SELECT * FROM item_group_prices WHERE item_id = ? ORDER BY unit, group_id').bind(id).all();
       return {
         id: r.id, name: r.name, category: r.category ?? '', category_id: r.category_id ?? '',
-        deleted_at: r.deleted_at ?? null, prices: prices.results,
+        deleted_at: r.deleted_at ?? null, prices: prices.results, group_prices: groupPrices.results,
       };
+    }
+    case 'price_group': {
+      const r = await db.prepare('SELECT * FROM price_groups WHERE id = ?').bind(id).first<Record<string, unknown>>();
+      if (!r) return null;
+      return { id: r.id, name: r.name, sort: r.sort ?? 0, deleted_at: r.deleted_at ?? null };
     }
     case 'category': {
       const r = await db.prepare('SELECT * FROM categories WHERE id = ?').bind(id).first<Record<string, unknown>>();
@@ -345,16 +351,16 @@ export async function applyChange(
       case 'client':
         if (action === 'delete') break; // 店铺为软删（deleted_at），不做物理删除
         await db.prepare(
-          `INSERT INTO clients (id, name, contact, phone, note, start_date, end_date, month_start_day, round_stage, round_unit, category_id, deleted_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO clients (id, name, contact, phone, note, start_date, end_date, month_start_day, round_stage, round_unit, category_id, price_group_id, deleted_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET name = excluded.name, contact = excluded.contact, phone = excluded.phone,
              note = excluded.note, start_date = excluded.start_date, end_date = excluded.end_date,
              month_start_day = excluded.month_start_day, round_stage = excluded.round_stage, round_unit = excluded.round_unit,
-             category_id = excluded.category_id, deleted_at = excluded.deleted_at`,
+             category_id = excluded.category_id, price_group_id = excluded.price_group_id, deleted_at = excluded.deleted_at`,
         ).bind(id, p.name ?? '', p.contact ?? '', p.phone ?? '', p.note ?? '',
           p.start_date ?? null, p.end_date ?? null, Number(p.month_start_day) || 1,
           p.round_stage ?? 'none', p.round_unit ?? 'yuan',
-          p.category_id ?? null, p.deleted_at ?? null).run();
+          p.category_id ?? null, p.price_group_id ?? null, p.deleted_at ?? null).run();
         break;
       case 'item': {
         if (action === 'delete') break; // 商品为软删（deleted_at），不做物理删除
@@ -374,8 +380,26 @@ export async function applyChange(
                purchase_price = excluded.purchase_price, sale_price = excluded.sale_price, active = 1`,
           ).bind(pid, id, price.unit ?? '', Number(price.purchase_price) || 0, Number(price.sale_price) || 0).run();
         }
+        // v0.17.368.0 价格组售价：整体替换 item_group_prices（先删后插，保留原 id）
+        await db.prepare('DELETE FROM item_group_prices WHERE item_id = ?').bind(id).run();
+        for (const gp of ((p.group_prices as Record<string, any>[]) ?? [])) {
+          const gid = String(gp?.id ?? '');
+          if (!gid) continue;
+          await db.prepare(
+            `INSERT INTO item_group_prices (id, item_id, unit, group_id, sale_price) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET item_id = excluded.item_id, unit = excluded.unit,
+               group_id = excluded.group_id, sale_price = excluded.sale_price`,
+          ).bind(gid, id, gp.unit ?? '', gp.group_id ?? '', Number(gp.sale_price) || 0).run();
+        }
         break;
       }
+      case 'price_group':
+        if (action === 'delete') break; // 价格组为软删（deleted_at），不做物理删除
+        await db.prepare(
+          `INSERT INTO price_groups (id, name, sort, deleted_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort = excluded.sort, deleted_at = excluded.deleted_at`,
+        ).bind(id, p.name ?? '', Number(p.sort) || 0, p.deleted_at ?? null).run();
+        break;
       case 'category':
         if (action === 'delete') {
           await db.prepare('UPDATE clients SET category_id = NULL WHERE category_id = ?').bind(id).run();

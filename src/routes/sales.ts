@@ -202,14 +202,25 @@ salesRouter.get('/', async (c) => {
 
 // GET /sales/last-price?client_id=&item_id= — 该店铺最近一笔该商品的单位/售价（选商品默认带出：
 // 不同店铺单价不同，小程序无本地库直连查；App 本地查同语义）
+// 优先级：最近成交 → 店铺价格组等级价 → 无（返回 null 由前端商品库兜底）
 salesRouter.get('/last-price', async (c) => {
   const clientId = c.req.query('client_id');
   const itemId = c.req.query('item_id');
   if (!clientId || !itemId) return c.json({ error: 'client_id/item_id 必填' }, 400);
   const r = await c.env.DB.prepare(
-    'SELECT si.unit AS unit, si.sale_price AS sale_price FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.client_id = ? AND si.item_id = ? ORDER BY si.id DESC LIMIT 1',
+    'SELECT si.unit AS unit, si.sale_price AS sale_price FROM sale_items si WHERE si.client_id = ? AND si.item_id = ? ORDER BY si.id DESC LIMIT 1',
   ).bind(clientId, itemId).first<{ unit: string | null; sale_price: number | null }>();
-  return c.json({ unit: r?.unit ?? '', sale_price: r?.sale_price ?? null });
+  if (r) return c.json({ unit: r.unit ?? '', sale_price: r.sale_price ?? null });
+  // 无该店铺最近成交 → 店铺价格组等级价（item_group_prices 该商品第一条组价）
+  const client = await c.env.DB.prepare('SELECT price_group_id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first<{ price_group_id: string | null }>();
+  const groupId = client?.price_group_id ?? '';
+  if (groupId) {
+    const gp = await c.env.DB.prepare(
+      'SELECT unit, sale_price FROM item_group_prices WHERE item_id = ? AND group_id = ? ORDER BY unit LIMIT 1',
+    ).bind(itemId, groupId).first<{ unit: string; sale_price: number }>();
+    if (gp) return c.json({ unit: gp.unit ?? '', sale_price: gp.sale_price ?? null, from_group: true });
+  }
+  return c.json({ unit: '', sale_price: null });
 });
 
 // POST /sales/items/date — 批量改明细行日期（出货流水「日期栏批量编辑」用；不改库存/金额/店铺）

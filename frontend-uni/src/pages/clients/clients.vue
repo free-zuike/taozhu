@@ -61,6 +61,12 @@
             <text class="value">{{ unitLabel(form.roundUnit) }}</text>
           </view>
         </picker>
+        <picker class="field" mode="selector" :range="groupNames" @change="onGroupChange">
+          <view class="field-inner">
+            <text class="label">价格组（等级）</text>
+            <text :class="['value', { placeholder: !form.priceGroupId }]">{{ form.priceGroupName || '不设=按默认价' }}</text>
+          </view>
+        </picker>
         <button class="btn-save" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
       </view>
     </view>
@@ -92,12 +98,13 @@ interface Client {
   month_start_day?: number;
   round_stage?: string;
   round_unit?: string;
+  price_group_id?: string;
 }
 
 const clients = ref<Client[]>([]);
 const showForm = ref(false);
 const saving = ref(false);
-const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan' });
+const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', priceGroupId: '', priceGroupName: '' });
 // 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
 const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
@@ -115,6 +122,27 @@ function onStageChange(e: { detail: { value: number } }) {
 
 function onUnitChange(e: { detail: { value: number } }) {
   form.value.roundUnit = unitValues[e.detail.value] || 'yuan';
+}
+
+// 价格组（店铺等级→取价档；记单按等级带出该商品组价）
+const priceGroups = ref<Array<{ id: string; name: string }>>([]);
+const groupNames = ref<string[]>(['不设']);
+const groupIds = ref<string[]>(['']);
+
+async function loadPriceGroups() {
+  try {
+    const d = await request<{ price_groups: Array<{ id: string; name: string }> }>('/price-groups', 'GET').catch(() => null);
+    priceGroups.value = d?.price_groups || [];
+    groupNames.value = ['不设', ...priceGroups.value.map((g) => g.name)];
+    groupIds.value = ['', ...priceGroups.value.map((g) => g.id)];
+  } catch (e) {
+    // 价格组加载失败不阻塞（未分级保存）
+  }
+}
+
+function onGroupChange(e: { detail: { value: number } }) {
+  form.value.priceGroupId = groupIds.value[e.detail.value] || '';
+  form.value.priceGroupName = groupNames.value[e.detail.value] || '';
 }
 
 /// 记账天数：首记日 → 今天（含当天，对齐 App _bookDays）
@@ -164,7 +192,7 @@ onShow(async () => {
     uni.reLaunch({ url: '/pages/login/login' });
     return;
   }
-  await Promise.all([load(), loadCats()]);
+  await Promise.all([load(), loadCats(), loadPriceGroups()]);
 });
 
 async function load() {
@@ -177,7 +205,7 @@ async function load() {
 }
 
 function openAdd() {
-  form.value = { name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan' };
+  form.value = { name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', priceGroupId: '', priceGroupName: '' };
   showForm.value = true;
 }
 
@@ -192,6 +220,8 @@ function openEdit(c: Client) {
     categoryName: (c.category_id ? (c.category_name || '') : ''),
     roundStage: c.round_stage || 'none',
     roundUnit: c.round_unit || 'yuan',
+    priceGroupId: c.price_group_id || '',
+    priceGroupName: (c.price_group_id ? priceGroups.value.find((g) => g.id === c.price_group_id)?.name || '' : ''),
   };
   showForm.value = true;
 }
@@ -211,6 +241,7 @@ async function save() {
       category_id: form.value.categoryId,
       round_stage: form.value.roundStage,
       round_unit: form.value.roundUnit,
+      price_group_id: form.value.priceGroupId,
     };
     if (form.value.editId) {
       await request(`/clients/${form.value.editId}`, 'PATCH', body);

@@ -1,4 +1,4 @@
-/** 商品管理：items + item_prices（单位+双价组合） */
+/** 商品管理：items + item_prices（单位+双价组合）+ item_group_prices（价格组售价） */
 import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
@@ -19,8 +19,8 @@ async function noteItemChange(db: D1Database, itemId: string, username: string):
 
 const nowIso = () => new Date().toISOString();
 
-function serialize(item: ItemRow & { category?: string | null; category_name?: string | null }, prices: unknown[], canSeeCost: boolean) {
-  // 员工不可见进价（purchase_price 打码，防泄露采购成本）
+function serialize(item: ItemRow & { category?: string | null; category_name?: string | null }, prices: unknown[], groupPrices: unknown[], canSeeCost: boolean) {
+  // 员工不可见进价（purchase_price 打码，防泄露采购成本）；价格组售价非成本可全见
   const list = canSeeCost
     ? prices
     : (prices as Record<string, unknown>[]).map((p) => ({ ...p, purchase_price: 0 }));
@@ -31,6 +31,7 @@ function serialize(item: ItemRow & { category?: string | null; category_name?: s
     category_name: item.category_name ?? '',
     count_unit: item.count_unit ?? '',
     prices: list,
+    group_prices: groupPrices,
   };
 }
 
@@ -51,7 +52,15 @@ itemsRouter.get('/', async (c) => {
     list.push(p);
     byItem.set((p as { item_id: string }).item_id, list);
   }
-  return c.json({ items: rows.results.map((r) => serialize(r, byItem.get(r.id) ?? [], canSeeCost)) });
+  const groupPriceRows = await c.env.DB.prepare(
+    'SELECT * FROM item_group_prices WHERE item_id IN (SELECT id FROM items WHERE deleted_at IS NULL) ORDER BY unit, group_id').all();
+  const byItemGroup = new Map<string, unknown[]>();
+  for (const p of groupPriceRows.results) {
+    const list = byItemGroup.get((p as { item_id: string }).item_id) ?? [];
+    list.push(p);
+    byItemGroup.set((p as { item_id: string }).item_id, list);
+  }
+  return c.json({ items: rows.results.map((r) => serialize(r, byItem.get(r.id) ?? [], byItemGroup.get(r.id) ?? [], canSeeCost)) });
 });
 
 // GET /items/summary — 记单用的简化目录（id/名称/价格组合/当前库存），全员可读、不含管理字段
@@ -61,14 +70,19 @@ itemsRouter.get('/summary', async (c) => {
     `SELECT i.id, i.name, i.category, i.count_unit,
             (SELECT json_group_array(json_object('id', p.id, 'unit', p.unit, 'sale_price', p.sale_price, 'purchase_price', p.purchase_price, 'per', p.per,
               'stock', COALESCE((SELECT CASE WHEN st.quantity < 0 THEN 0 ELSE st.quantity END FROM stocks st WHERE st.item_id = i.id AND st.unit = p.unit), 0)))
-             FROM item_prices p WHERE p.item_id = i.id AND p.active = 1) AS prices
+             FROM item_prices p WHERE p.item_id = i.id AND p.active = 1) AS prices,
+            (SELECT json_group_array(json_object('id', gp.id, 'unit', gp.unit, 'group_id', gp.group_id, 'sale_price', gp.sale_price))
+             FROM item_group_prices gp WHERE gp.item_id = i.id) AS group_prices
      FROM items i WHERE i.deleted_at IS NULL ORDER BY i.name`).all();
   const items = rows.results.map((r) => {
     const pr = (r as { prices: string | null }).prices;
     const list = pr ? (JSON.parse(pr) as Record<string, unknown>[]) : [];
+    const gp = (r as { group_prices: string | null }).group_prices;
+    const glist = gp ? (JSON.parse(gp) as Record<string, unknown>[]) : [];
     return {
       id: r.id, name: r.name, category: r.category ?? '', count_unit: (r as { count_unit: string | null }).count_unit ?? '',
       prices: canSeeCost ? list : list.map((p) => ({ ...p, purchase_price: 0 })),
+      group_prices: glist,
     };
   });
   return c.json({ items });
@@ -84,14 +98,17 @@ itemsRouter.get('/:id', async (c) => {
   if (!row) return c.json({ error: '商品不存在' }, 404);
   const prices = await c.env.DB.prepare(
     'SELECT * FROM item_prices WHERE item_id = ? AND active = 1 ORDER BY unit').bind(id).all();
-  return c.json({ item: serialize(row as never, prices.results, canSeeCost) });
+  const groupPrices = await c.env.DB.prepare(
+    'SELECT * FROM item_group_prices WHERE item_id = ? ORDER BY unit, group_id').bind(id).all();
+  return c.json({ item: serialize(row as never, prices.results, groupPrices.results, canSeeCost) });
 });
 
-// POST /items — 新建商品（body: {name, category?, category_id?, count_unit?, prices:[{unit,purchase_price,sale_price,per?}]}）
+// POST /items — 新建商品（body: {name, category?, category_id?, count_unit?, prices:[{unit,purchase_price,sale_price,per?}], group_prices?:[{unit,group_id,sale_price}]}）
 itemsRouter.post('/', adminOnly(), async (c) => {
   const body = await c.req.json().catch(() => null) as {
     name?: string; category?: string; category_id?: string; count_unit?: string;
     prices?: Array<{ unit: string; purchase_price: number; sale_price: number; per?: number }>;
+    group_prices?: Array<{ unit: string; group_id: string; sale_price: number }>;
   } | null;
   const name = body?.name?.trim();
   if (!name) return c.json({ error: '商品名称必填' }, 400);
@@ -112,6 +129,13 @@ itemsRouter.post('/', adminOnly(), async (c) => {
       'INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price, per) VALUES (?, ?, ?, ?, ?, ?)')
       .bind(pid, id, unit, Number(p.purchase_price) || 0, Number(p.sale_price) || 0, per > 0 ? per : null).run();
     priceIds.push(pid);
+  }
+  for (const gp of body?.group_prices ?? []) {
+    const unit = gp.unit?.trim();
+    if (!unit || !gp.group_id) continue;
+    await c.env.DB.prepare(
+      'INSERT INTO item_group_prices (id, item_id, unit, group_id, sale_price) VALUES (?, ?, ?, ?, ?)')
+      .bind(randomId(), id, unit, gp.group_id, Number(gp.sale_price) || 0).run();
   }
   await noteItemChange(c.env.DB, id, c.get('user').username);
   return c.json({ id, name, category: body?.category?.trim() ?? '', category_id: body?.category_id ?? '', count_unit: body?.count_unit?.trim() ?? '', prices: priceIds }, 201);
@@ -196,6 +220,55 @@ itemsRouter.delete('/item-prices/:id', adminOnly(), async (c) => {
   if (price) {
     await c.env.DB.prepare('UPDATE item_prices SET active = 0 WHERE id = ?').bind(id).run();
     await noteItemChange(c.env.DB, price.item_id, c.get('user').username);
+  }
+  return c.body(null, 204);
+});
+
+// POST /items/:id/group-prices — 新增该商品某价格组某单位售价（body: {unit, group_id, sale_price}）
+itemsRouter.post('/:id/group-prices', adminOnly(), async (c) => {
+  const itemId = c.req.param('id');
+  const body = await c.req.json().catch(() => null) as { unit?: string; group_id?: string; sale_price?: number } | null;
+  const unit = body?.unit?.trim();
+  const groupId = body?.group_id?.trim();
+  if (!unit || !groupId) return c.json({ error: '单位与价格组必填' }, 400);
+  const group = await c.env.DB.prepare('SELECT id FROM price_groups WHERE id = ? AND deleted_at IS NULL').bind(groupId).first();
+  if (!group) return c.json({ error: '价格组不存在' }, 400);
+  const id = randomId();
+  await c.env.DB.prepare(
+    'INSERT INTO item_group_prices (id, item_id, unit, group_id, sale_price) VALUES (?, ?, ?, ?, ?)')
+    .bind(id, itemId, unit, groupId, Number(body?.sale_price) || 0).run();
+  await noteItemChange(c.env.DB, itemId, c.get('user').username);
+  return c.json({ id, item_id: itemId, unit, group_id: groupId, sale_price: Number(body?.sale_price) || 0 }, 201);
+});
+
+// PATCH /item-group-prices/:id — 改该价格组售价
+itemsRouter.patch('/item-group-prices/:id', adminOnly(), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => null) as { unit?: string; group_id?: string; sale_price?: number } | null;
+  const gp = await c.env.DB.prepare('SELECT * FROM item_group_prices WHERE id = ?').bind(id).first<{ item_id: string; unit: string; group_id: string }>();
+  if (!gp) return c.json({ error: '价格不存在' }, 404);
+  if (body?.group_id) {
+    const group = await c.env.DB.prepare('SELECT id FROM price_groups WHERE id = ? AND deleted_at IS NULL').bind(body.group_id).first();
+    if (!group) return c.json({ error: '价格组不存在' }, 400);
+  }
+  await c.env.DB.prepare('UPDATE item_group_prices SET unit = ?, group_id = ?, sale_price = ? WHERE id = ?')
+    .bind(
+      body?.unit?.trim() || gp.unit,
+      body?.group_id?.trim() || gp.group_id,
+      body?.sale_price !== undefined ? Number(body.sale_price) : (await c.env.DB.prepare('SELECT sale_price FROM item_group_prices WHERE id = ?').bind(id).first<{ sale_price: number }>())?.sale_price ?? 0,
+      id,
+    ).run();
+  await noteItemChange(c.env.DB, gp.item_id, c.get('user').username);
+  return c.json({ ok: true });
+});
+
+// DELETE /item-group-prices/:id — 删除该价格组售价
+itemsRouter.delete('/item-group-prices/:id', adminOnly(), async (c) => {
+  const id = c.req.param('id');
+  const gp = await c.env.DB.prepare('SELECT item_id FROM item_group_prices WHERE id = ?').bind(id).first<{ item_id: string }>();
+  if (gp) {
+    await c.env.DB.prepare('DELETE FROM item_group_prices WHERE id = ?').bind(id).run();
+    await noteItemChange(c.env.DB, gp.item_id, c.get('user').username);
   }
   return c.body(null, 204);
 });

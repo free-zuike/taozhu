@@ -21,6 +21,13 @@ async function categoryErr(db: D1Database, categoryId: string | null | undefined
   return cat ? null : '店铺分类不存在';
 }
 
+/** 校验价格组（可选）：必须存在且未删 */
+async function priceGroupErr(db: D1Database, groupId: string | null | undefined): Promise<string | null> {
+  if (!groupId) return null;
+  const g = await db.prepare('SELECT id FROM price_groups WHERE id = ? AND deleted_at IS NULL').bind(groupId).first();
+  return g ? null : '价格组不存在';
+}
+
 // GET /clients?q= — 列表（含欠款余额、分类名）
 const SALES_TOTAL_SUB = '(SELECT client_id, SUM(amount) AS total FROM sale_items GROUP BY client_id)';
 clientsRouter.get('/', async (c) => {
@@ -66,6 +73,7 @@ clientsRouter.get('/', async (c) => {
       round_stage: row.round_stage ?? 'none', round_unit: row.round_unit ?? 'yuan',
       first_book_date: row.first_book_date ?? '',
       category_id: row.category_id ?? '', category_name: row.category_name ?? '',
+      price_group_id: row.price_group_id ?? '',
       sales_total: row.sales_total, paid_total: row.paid_total,
       sale_count: row.sale_count ?? 0, payment_count: row.payment_count ?? 0,
       // 欠款=每笔先舍入再累加的差（与统计/账本口径一致；勿 SQL SUM 原始后一次舍入——尾数进位放大，427.8 vs 428 实证）
@@ -74,38 +82,58 @@ clientsRouter.get('/', async (c) => {
   }) });
 });
 
+// GET /clients/:id — 单店铺详情（编辑回显/记单取等级价用；已软删返回 404）
+clientsRouter.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const row = await c.env.DB.prepare('SELECT * FROM clients WHERE id = ? AND deleted_at IS NULL').bind(id).first<ClientRow>();
+  if (!row) return c.json({ error: '店铺不存在' }, 404);
+  return c.json({
+    client: {
+      id: row.id, name: row.name, contact: row.contact ?? '', phone: row.phone ?? '', note: row.note ?? '',
+      start_date: row.start_date ?? '', end_date: row.end_date ?? '',
+      month_start_day: row.month_start_day ?? 1,
+      round_stage: row.round_stage ?? 'none', round_unit: row.round_unit ?? 'yuan',
+      category_id: row.category_id ?? '', price_group_id: row.price_group_id ?? '',
+    },
+  });
+});
+
 // POST /clients — 新建店铺
 clientsRouter.post('/', adminOnly(), async (c) => {
-  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string; start_date?: string; end_date?: string; month_start_day?: number; round_stage?: string; round_unit?: string } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string; start_date?: string; end_date?: string; month_start_day?: number; round_stage?: string; round_unit?: string; price_group_id?: string } | null;
   const name = body?.name?.trim();
   if (!name) return c.json({ error: '店铺名称必填' }, 400);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
   if (catErr) return c.json({ error: catErr }, 400);
+  const pgErr = await priceGroupErr(c.env.DB, body?.price_group_id);
+  if (pgErr) return c.json({ error: pgErr }, 400);
   const msd = normalizeStartDay(body?.month_start_day);
   if (msd === null) return c.json({ error: '每月起始日须为 1-28 的整数' }, 400);
   const rc = normalizeRoundConfig(body?.round_stage, body?.round_unit);
   const id = randomId();
-  await c.env.DB.prepare('INSERT INTO clients (id, name, contact, phone, note, category_id, start_date, end_date, month_start_day, round_stage, round_unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, name, body?.contact?.trim() ?? '', body?.phone?.trim() ?? '', body?.note?.trim() ?? '', body?.category_id ?? null, body?.start_date?.trim() ?? null, body?.end_date?.trim() ?? null, msd, rc.stage, rc.unit).run();
+  await c.env.DB.prepare('INSERT INTO clients (id, name, contact, phone, note, category_id, start_date, end_date, month_start_day, round_stage, round_unit, price_group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, name, body?.contact?.trim() ?? '', body?.phone?.trim() ?? '', body?.note?.trim() ?? '', body?.category_id ?? null, body?.start_date?.trim() ?? null, body?.end_date?.trim() ?? null, msd, rc.stage, rc.unit, body?.price_group_id?.trim() ?? null).run();
   await recordChange(c.env.DB, { entity_type: 'client', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'client', id), updated_by_username: c.get('user').username });
-  return c.json({ id, name, contact: body?.contact?.trim() ?? '', phone: body?.phone?.trim() ?? '', note: body?.note?.trim() ?? '', category_id: body?.category_id ?? '', start_date: body?.start_date?.trim() ?? '', end_date: body?.end_date?.trim() ?? '', month_start_day: msd, round_stage: rc.stage, round_unit: rc.unit, debt: 0 }, 201);
+  return c.json({ id, name, contact: body?.contact?.trim() ?? '', phone: body?.phone?.trim() ?? '', note: body?.note?.trim() ?? '', category_id: body?.category_id ?? '', start_date: body?.start_date?.trim() ?? '', end_date: body?.end_date?.trim() ?? '', month_start_day: msd, round_stage: rc.stage, round_unit: rc.unit, price_group_id: body?.price_group_id?.trim() ?? '', debt: 0 }, 201);
 });
 
 // PATCH /clients/:id
 clientsRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string | null; start_date?: string | null; end_date?: string | null; month_start_day?: number; round_stage?: string; round_unit?: string } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string | null; start_date?: string | null; end_date?: string | null; month_start_day?: number; round_stage?: string; round_unit?: string; price_group_id?: string | null } | null;
   const client = await c.env.DB.prepare('SELECT * FROM clients WHERE id = ? AND deleted_at IS NULL').bind(id).first<ClientRow>();
   if (!client) return c.json({ error: '店铺不存在' }, 404);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
   if (catErr) return c.json({ error: catErr }, 400);
+  const pgErr = await priceGroupErr(c.env.DB, body?.price_group_id);
+  if (pgErr) return c.json({ error: pgErr }, 400);
   const msd = body?.month_start_day !== undefined ? normalizeStartDay(body.month_start_day) : client.month_start_day;
   if (msd === null) return c.json({ error: '每月起始日须为 1-28 的整数' }, 400);
   const rc = normalizeRoundConfig(
     body?.round_stage !== undefined ? body.round_stage : client.round_stage,
     body?.round_unit !== undefined ? body.round_unit : client.round_unit,
   );
-  await c.env.DB.prepare('UPDATE clients SET name = ?, contact = ?, phone = ?, note = ?, category_id = ?, start_date = ?, end_date = ?, month_start_day = ?, round_stage = ?, round_unit = ? WHERE id = ?')
+  await c.env.DB.prepare('UPDATE clients SET name = ?, contact = ?, phone = ?, note = ?, category_id = ?, start_date = ?, end_date = ?, month_start_day = ?, round_stage = ?, round_unit = ?, price_group_id = ? WHERE id = ?')
     .bind(
       body?.name?.trim() || client.name,
       body?.contact?.trim() ?? client.contact ?? '',
@@ -117,6 +145,7 @@ clientsRouter.patch('/:id', adminOnly(), async (c) => {
       msd,
       rc.stage,
       rc.unit,
+      body?.price_group_id !== undefined ? (body.price_group_id?.trim() ?? null) : (client as ClientRow & { price_group_id?: string | null }).price_group_id,
       id,
     ).run();
   await recordChange(c.env.DB, { entity_type: 'client', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'client', id), updated_by_username: c.get('user').username });

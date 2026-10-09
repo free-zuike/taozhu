@@ -830,6 +830,7 @@ class _PurchasePageState extends State<PurchasePage> {
   /// 返回本次实际填充的商品行 id 列表（识别图按批次挂行=行级附件"批对批"；文字/语音无图可忽略返回值）
   List<String> _fillFromDrafts(List<dynamic> items, [String date = '']) {
     _recognitionFilling = true; // 填行期间 unitCtrl 赋值触发 onUnitChanged 时不覆盖识别进价
+    final recentNeeded = <_PRow>[]; // 识别无价的行：循环后异步带出最近进价（try 外声明=finally 可见）
     try {
     // 日期：识别出的单据日期（YYYY-MM-DD）
     if (date.isNotEmpty && RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) {
@@ -842,7 +843,6 @@ class _PurchasePageState extends State<PurchasePage> {
     var filled = 0;
     var unmatched = 0;
     final rowIds = <String>[];
-    final recentNeeded = <_PRow>[]; // 识别无价的行：循环后异步带出店铺最近进价
     for (final raw in items) {
       final name = '${raw['name'] ?? ''}'.trim();
       final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;

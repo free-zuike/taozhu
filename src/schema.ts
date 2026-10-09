@@ -48,6 +48,24 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_item_prices_item ON item_prices (item_id)`,
+  // v0.17.368.0：价格组（店铺等级→取价档；商品×单位×组 售价存 item_group_prices）
+  `CREATE TABLE IF NOT EXISTS price_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS item_group_prices (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES items(id),
+    unit TEXT NOT NULL,
+    group_id TEXT NOT NULL REFERENCES price_groups(id),
+    sale_price REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_item_group_prices_item ON item_group_prices (item_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_item_group_prices_group ON item_group_prices (group_id)`,
   `CREATE TABLE IF NOT EXISTS purchase_items (
     id TEXT PRIMARY KEY,
     purchase_id TEXT NOT NULL,
@@ -315,6 +333,21 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS payment_accounts'));
       await db.batch([db.prepare(DDL[i])]);
     }
+    // v0.17.368.0：价格组（店铺等级→取价档）+ 商品×单位×组 售价（默认预置 零售/批发/VIP）
+    const pgTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'price_groups'",
+    ).first<{ name: string }>();
+    if (!pgTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS price_groups'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1]), db.prepare(DDL[i + 2]), db.prepare(DDL[i + 3])]);
+    }
+    await ensureColumn(db, 'clients', 'price_group_id', 'TEXT');
+    // 价格组空表自动写入默认三组（零售/批发/VIP），用户可增删改
+    const pgCount = await db.prepare('SELECT COUNT(*) AS n FROM price_groups').first<{ n: number }>();
+    if (!pgCount || (pgCount.n ?? 0) === 0) {
+      await db.prepare('INSERT OR IGNORE INTO price_groups (id, name, sort) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)')
+        .bind('pg_retail', '零售', 0, 'pg_wholesale', '批发', 1, 'pg_vip', 'VIP', 2).run();
+    }
     // v0.17.90.0：payment_accounts 加开户行 bank_name + 卡号后四位 card_last_four
     // （多张同类型卡靠卡号区分；老表无列 → ALTER 补齐，新表 DDL 已含；ensureColumn 并发幂等）
     await ensureColumn(db, 'payment_accounts', 'bank_name', "TEXT DEFAULT ''");
@@ -506,7 +539,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '8')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '9')",
     ).run();
     schemaReady = true;
     } catch (err) {

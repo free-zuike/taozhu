@@ -20,6 +20,7 @@ import 'ai_settings_page.dart';
 import 'rounding_settings_page.dart';
 import 'theme_settings_page.dart';
 import 'categories_page.dart';
+import 'price_groups_page.dart';
 import 'clients_page.dart';
 import 'devices_page.dart';
 import 'payments_page.dart';
@@ -1136,6 +1137,8 @@ class _MyPageState extends State<MyPage> {
             _item(Icons.sell_outlined, c.primary, '商品管理', '商品与多单位价格', () => goPage(context, const ItemsPage())),
             _item(Icons.label_outline, c.primary, '分类管理', '商品分类 / 店铺分类（两级）',
                 () => goPage(context, const CategoriesPage())),
+            _item(Icons.local_offer_outlined, c.primary, '价格组', '店铺分级定价：零售/批发/VIP…（记单按等级带价）',
+                () => goPage(context, const PriceGroupsPage())),
           ]),
           const SizedBox(height: 18),
           _groupTitle('系统'),

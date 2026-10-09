@@ -704,6 +704,7 @@ class SyncService {
       final items = (d['items'] as List?) ?? [];
       final categories = (d['categories'] as List?) ?? [];
       final accounts = (d['payment_accounts'] as List?) ?? [];
+      final priceGroups = (d['price_groups'] as List?) ?? [];
       final sales = (d['sales'] as List?) ?? [];
       final purchases = (d['purchases'] as List?) ?? [];
       final payments = (d['payments'] as List?) ?? [];
@@ -715,6 +716,7 @@ class SyncService {
       await LocalDb.putAll('items', items.cast<Map<String, dynamic>>());
       await LocalDb.putAll('categories', categories.cast<Map<String, dynamic>>());
       await LocalDb.putAll('payment_accounts', accounts.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('price_groups', priceGroups.cast<Map<String, dynamic>>());
       // 整单镜像仍写（历史/展示兼容），行级主记录另存，页面按行读取
       await LocalDb.putAll('sales', sales.cast<Map<String, dynamic>>());
       await LocalDb.putAll('purchases', purchases.cast<Map<String, dynamic>>());
@@ -735,7 +737,7 @@ class SyncService {
       // 在用附件本地副本补齐已统一在 sync() 编排末尾执行（全量/增量同一入口）
       // 全量同步数量含全部实体（含行级商品记录与库存）——与同步面板各 store 合计口径一致，
       // 此前漏 sale_items/purchase_items/stocks 导致"同步日志拉取 N 条"与面板数字对不上
-      return clients.length + items.length + categories.length + accounts.length +
+      return clients.length + items.length + categories.length + accounts.length + priceGroups.length +
           sales.length + purchases.length + payments.length +
           saleItemRows.length + purchaseItemRows.length + stockRows.length;
     } catch (e) {
@@ -1333,6 +1335,7 @@ class SyncService {
       case 'item': return 'items';
       case 'category': return 'categories';
       case 'payment_account': return 'payment_accounts';
+      case 'price_group': return 'price_groups';
       case 'sale': return 'sales';
       case 'purchase': return 'purchases';
       case 'payment': return 'payments';

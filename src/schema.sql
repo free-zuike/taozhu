@@ -59,6 +59,25 @@ CREATE TABLE IF NOT EXISTS item_prices (
 );
 CREATE INDEX IF NOT EXISTS idx_item_prices_item ON item_prices (item_id);
 
+-- 价格组（店铺等级→取价档；商品×单位×组 售价存 item_group_prices；默认预置 零售/批发/VIP）
+CREATE TABLE IF NOT EXISTS price_groups (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS item_group_prices (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES items(id),
+  unit TEXT NOT NULL,
+  group_id TEXT NOT NULL REFERENCES price_groups(id),
+  sale_price REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_item_group_prices_item ON item_group_prices (item_id);
+CREATE INDEX IF NOT EXISTS idx_item_group_prices_group ON item_group_prices (group_id);
+
 -- 进货（去单据化：每条商品=独立主记录，无进货单头表——批次仅以 purchase_id 关联；sync_key = 客户端幂等键）
 CREATE TABLE IF NOT EXISTS purchase_items (
   id TEXT PRIMARY KEY,

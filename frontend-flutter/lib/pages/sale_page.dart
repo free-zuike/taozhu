@@ -45,7 +45,11 @@ class _ItemOption {
   final String category;
   final String countUnit; // 商品计数单位（袋/个…，空=不折）
   final List<Map<String, dynamic>> prices;
-  _ItemOption(this.id, this.name, this.category, this.prices, {this.countUnit = ''});
+  /// 价格组售价（店铺等级→取价档；取价优先级 识别→最近成交→等级价→商品库）
+  final List<Map<String, dynamic>> groupPrices;
+  _ItemOption(this.id, this.name, this.category, this.prices,
+      {this.countUnit = '', List<Map<String, dynamic>>? groupPrices})
+      : groupPrices = groupPrices ?? const [];
 }
 
 class _Row {
@@ -265,6 +269,7 @@ class _SalePageState extends State<SalePage> {
                   '${e['category'] ?? ''}',
                   ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
                   countUnit: '${e['count_unit'] ?? ''}',
+                  groupPrices: ((e['group_prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
                 ))
             .toList()
           ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
@@ -299,6 +304,7 @@ class _SalePageState extends State<SalePage> {
               '${e['category'] ?? ''}',
               ((e['prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
               countUnit: '${e['count_unit'] ?? ''}',
+              groupPrices: ((e['group_prices'] as List?) ?? []).cast<Map<String, dynamic>>(),
             ))
         .toList()
       ..sort((a, b) => _freqOf(b, freq) - _freqOf(a, freq));
@@ -496,6 +502,52 @@ class _SalePageState extends State<SalePage> {
 
   /// 选中商品带出「当前店铺最近一次」的单位/单价（不同店铺单价不同——用户需求）：
   /// 本地 sale_items 该店铺该商品最近一笔的 unit/sale_price 优先；无历史才用商品库默认
+  /// 店铺价格组 id（本地镜像/Web 直连；无等级返回空）
+  Future<String> _clientPriceGroupId() async {
+    if (_clientId == null) return '';
+    if (kIsWeb) {
+      try {
+        final d = await Api.instance.get('/clients/${_clientId!}');
+        return '${(d['client'] as Map?)?['price_group_id'] ?? ''}';
+      } catch (_) {
+        return '';
+      }
+    }
+    try {
+      final c = await LocalDb.getOne('clients', _clientId!);
+      return '${c?['price_group_id'] ?? ''}';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// 等级价（优先级 识别→最近成交→等级价→商品库）：该店铺价格组对应该商品该单位的售价。
+  /// 返回是否带出（单位匹配行内当前单位；无等级/未设组价返回 false 走商品库兜底）
+  Future<bool> _applyGroupPrice(_Row row, _ItemOption item, {String? unit}) async {
+    try {
+      if (_clientId == null) return false;
+      final groupId = await _clientPriceGroupId();
+      if (groupId.isEmpty) return false;
+      final targetUnit = (unit ?? row.unitCtrl.text.trim());
+      final gp = item.groupPrices
+          .where((x) => '${x['group_id'] ?? ''}' == groupId && '${x['unit'] ?? ''}' == targetUnit)
+          .firstOrNull;
+      if (gp == null) return false;
+      final sp = (gp['sale_price'] is num)
+          ? (gp['sale_price'] as num).toDouble()
+          : double.tryParse('${gp['sale_price']}') ?? 0;
+      if (sp <= 0) return false;
+      final pr = item.prices.where((p) => '${p['unit']}' == targetUnit).firstOrNull;
+      row.priceId = pr?['id'] as String?;
+      row.unitCtrl.text = targetUnit;
+      row.salePrice = sp;
+      row.saleCtrl.text = sp.toStringAsFixed(2);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _selectItemRecent(_Row row, _ItemOption item) async {
     try {
       final rows = await LocalDb.getAll('sale_items');
@@ -524,6 +576,8 @@ class _SalePageState extends State<SalePage> {
         }
       }
     } catch (_) {}
+    // 无该店铺最近成交（或价格无效）→ 等级价（该店铺价格组对应该商品售价）
+    if (await _applyGroupPrice(row, item)) return;
     _selectItem(row, item);
   }
 
@@ -769,7 +823,8 @@ class _SalePageState extends State<SalePage> {
       final idx = _items.indexWhere((x) => x.id == itemId);
       if (idx >= 0) {
         final it = _items[idx];
-        _items[idx] = _ItemOption(it.id, it.name, catName, it.prices);
+        _items[idx] = _ItemOption(it.id, it.name, catName, it.prices,
+            countUnit: it.countUnit, groupPrices: it.groupPrices);
       }
       setState(() {});
       toast(context, '已更新分类');
@@ -995,6 +1050,7 @@ class _SalePageState extends State<SalePage> {
   /// 返回本次实际填充的商品行 id 列表（识别图按批次挂行=行级附件"批对批"；文字/语音无图可忽略返回值）
   List<String> _fillFromDrafts(List<dynamic> items, [String client = '', String date = '']) {
     _recognitionFilling = true; // 填行期间 unitCtrl 赋值触发 onUnitChanged 时不覆盖识别单价
+    final recentNeeded = <_Row>[]; // 识别无价的行：循环后异步带出店铺最近价（try 外声明=finally 可见）
     try {
     // 购货单位：识别出的客户/店铺名匹配页面店铺列表（不自动新增——手写店铺名识别可能出错，避免污染店铺列表）
     if (client.isNotEmpty) {
@@ -1019,7 +1075,6 @@ class _SalePageState extends State<SalePage> {
     var filled = 0;
     var unmatched = 0;
     final rowIds = <String>[];
-    final recentNeeded = <_Row>[]; // 识别无价的行：循环后异步带出店铺最近价（优先级 识别>店铺最近>商品库）
     for (final raw in items) {
       final name = '${raw['name'] ?? ''}'.trim();
       final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
@@ -1084,6 +1139,7 @@ class _SalePageState extends State<SalePage> {
       final sales = await LocalDb.getAll('sales');
       final clientOf = {for (final s in sales) '${s['id'] ?? ''}': '${s['client_id'] ?? ''}'};
       final all = await LocalDb.getAll('sale_items');
+      final items = _items;
       var changed = false;
       for (final row in rows) {
         if (row.itemId == null) continue;
@@ -1094,7 +1150,12 @@ class _SalePageState extends State<SalePage> {
           return cid == _clientId && '${r['item_id'] ?? ''}' == row.itemId;
         }).toList()
           ..sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
-        if (mine.isEmpty) continue;
+        if (mine.isEmpty) {
+          // 无该店铺最近成交 → 等级价（该店铺价格组对应该商品售价）
+          final item = items.where((x) => x.id == row.itemId).firstOrNull;
+          if (item != null && await _applyGroupPrice(row, item)) changed = true;
+          continue;
+        }
         final sp = (mine.first['sale_price'] is num)
             ? (mine.first['sale_price'] as num).toDouble()
             : double.tryParse('${mine.first['sale_price']}') ?? 0;

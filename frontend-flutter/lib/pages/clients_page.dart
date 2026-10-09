@@ -20,6 +20,7 @@ class _ClientsPageState extends State<ClientsPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>> _clients = [];
   List<Map<String, dynamic>> _cats = [];
+  List<Map<String, dynamic>> _priceGroups = []; // 价格组（店铺等级→取价档）
   Map<String, String> _catNameById = {}; // 本地分类 id → 名称（列表行显示分类用）
   bool _loading = true;
   Timer? _searchTimer;
@@ -30,6 +31,7 @@ class _ClientsPageState extends State<ClientsPage> {
     SyncService.version.addListener(_onSync);
     _load();
     _loadCats();
+    _loadPriceGroups();
   }
 
   @override
@@ -43,7 +45,26 @@ class _ClientsPageState extends State<ClientsPage> {
     if (mounted) {
       _load();
       _loadCats(); // 同步完成后刷新分类（本地库补全后，无网时店铺分类也不空白）
+      _loadPriceGroups();
     }
+  }
+
+  /// 价格组加载：原生本地镜像（同步驱动），Web 直连服务器
+  Future<void> _loadPriceGroups() async {
+    var rows = <Map<String, dynamic>>[];
+    if (kIsWeb) {
+      try {
+        final d = await Api.instance.get('/price-groups');
+        rows = ((d['price_groups'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } catch (_) {
+        return;
+      }
+    } else {
+      rows = await LocalDb.getAll('price_groups');
+    }
+    if (mounted) setState(() {
+      _priceGroups = rows..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
+    });
   }
 
   Future<void> _loadCats() async {
@@ -202,6 +223,8 @@ class _ClientsPageState extends State<ClientsPage> {
     // 店铺结账抹零配置（round_stage/round_unit；编辑时取当前值，新增默认不抹零）
     String selStage = c?['round_stage'] as String? ?? 'none';
     String selUnit = c?['round_unit'] as String? ?? 'yuan';
+    // 价格组（店铺等级→取价档；记单按等级带出该商品组价）
+    String selGroup = c?['price_group_id'] as String? ?? '';
     // 编辑时按当前分类反推一级/二级
     final curId = c?['category_id'] as String? ?? '';
     if (curId.isNotEmpty) {
@@ -288,6 +311,17 @@ class _ClientsPageState extends State<ClientsPage> {
                 ],
                 onChanged: (v) => setDlg(() => selUnit = v ?? 'yuan'),
               ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: selGroup.isEmpty ? null : selGroup,
+                decoration: const InputDecoration(labelText: '价格组（等级，可选）'),
+                hint: const Text('不设=按默认价'),
+                items: [
+                  for (final g in _priceGroups)
+                    DropdownMenuItem(value: '${g['id']}', child: Text('${g['name']}')),
+                ],
+                onChanged: (v) => setDlg(() => selGroup = v ?? ''),
+              ),
             ],
           ),
         ),
@@ -315,12 +349,12 @@ class _ClientsPageState extends State<ClientsPage> {
         if (c == null) {
           await Api.instance.post('/clients', {
             'name': name, 'month_start_day': msd, 'category_id': categoryId ?? '',
-            'round_stage': selStage, 'round_unit': selUnit,
+            'round_stage': selStage, 'round_unit': selUnit, 'price_group_id': selGroup,
           });
         } else {
           await Api.instance.patch('/clients/${c['id']}', {
             'name': name, 'month_start_day': msd, 'category_id': categoryId ?? '',
-            'round_stage': selStage, 'round_unit': selUnit,
+            'round_stage': selStage, 'round_unit': selUnit, 'price_group_id': selGroup,
           });
         }
         toast(context, '已保存');
@@ -338,7 +372,7 @@ class _ClientsPageState extends State<ClientsPage> {
         'id': id, 'name': name, 'contact': '', 'phone': '', 'note': '',
         'start_date': '', 'end_date': '', 'month_start_day': msd,
         'round_stage': selStage, 'round_unit': selUnit,
-        'category_id': categoryId ?? '', 'deleted_at': null,
+        'category_id': categoryId ?? '', 'price_group_id': selGroup, 'deleted_at': null,
       };
       await LocalDb.upsertOne('clients', payload);
       await SyncService.enqueueChange(entityType: 'client', entitySyncId: id, payload: payload);
@@ -349,6 +383,7 @@ class _ClientsPageState extends State<ClientsPage> {
       payload['category_id'] = categoryId ?? '';
       payload['round_stage'] = selStage;
       payload['round_unit'] = selUnit;
+      payload['price_group_id'] = selGroup;
       await LocalDb.upsertOne('clients', payload);
       await SyncService.enqueueChange(entityType: 'client', entitySyncId: '${c['id']}', payload: payload);
     }
