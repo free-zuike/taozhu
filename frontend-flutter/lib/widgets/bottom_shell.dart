@@ -134,13 +134,14 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final c = Theme.of(context).extension<TaozhuColors>()!;
-    // 悬浮胶囊下方露出的 Scaffold 底部区域（padding 16/12 之外）跟随主题色——
-    // 用户"再往下一层的那一条"：原固定 0xFF17181C 死黑（亮 0xFFF6F7F9 白），应同胶囊同源主题色
+    // 悬浮胶囊四周/下方露出的 Scaffold 底部区域跟随主题——用户"胶囊下方白色边框长条"：
+    // 亮色默认 0xFFF6F7F9 纯白平板与页面渐变不衔接、暗色固定 0xFF17181C 死黑；
+    // 统一用页面背景同源色（亮=渐变顶部 lerp(primary,white,0.84)、暗=主题深调非死黑）
     final navColor = dark
         ? Color.lerp(c.primary, Colors.black, 0.45)
-        : Colors.white.withOpacity(0.96);
+        : Color.lerp(c.primary, Colors.white, 0.84);
     return Scaffold(
-      backgroundColor: dark ? navColor : null,
+      backgroundColor: navColor,
       body: IndexedStack(
         index: _index,
         // 懒构建：未切到的 tab 先不放（占位），切到时才实例化——避免启动时全部页面并发 initState 发请求
@@ -158,7 +159,7 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
             // 底部导航栏背景应与页面背景同源（主题色系），白天半透明白、夜晚主题色掺黑
             color: dark
                 ? navColor
-                : Colors.white.withOpacity(0.96),
+                : Color.lerp(c.primary, Colors.white, 0.96),
             borderRadius: BorderRadius.circular(28),
             boxShadow: [
               BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.08), blurRadius: 16, offset: const Offset(0, 4)),
