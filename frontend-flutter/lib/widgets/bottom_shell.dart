@@ -137,7 +137,7 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     // 悬浮胶囊下方露出的 Scaffold 底部区域（padding 16/12 之外）跟随主题色——
     // 用户"再往下一层的那一条"：原固定 0xFF17181C 死黑（亮 0xFFF6F7F9 白），应同胶囊同源主题色
     final navColor = dark
-        ? Color.lerp(c.primary, Colors.black, 0.6)
+        ? Color.lerp(c.primary, Colors.black, 0.45)
         : Colors.white.withOpacity(0.96);
     return Scaffold(
       backgroundColor: dark ? navColor : null,
@@ -157,7 +157,7 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
             // 夜晚跟随主题色深调（非固定纯黑 0xFF1E1E1E）：用户"最下方也变成大黑条"——
             // 底部导航栏背景应与页面背景同源（主题色系），白天半透明白、夜晚主题色掺黑
             color: dark
-                ? Color.lerp(Theme.of(context).colorScheme.primary, Colors.black, 0.6)
+                ? navColor
                 : Colors.white.withOpacity(0.96),
             borderRadius: BorderRadius.circular(28),
             boxShadow: [

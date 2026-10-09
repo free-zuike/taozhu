@@ -174,13 +174,17 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       for (final r in refs) {
         if (_bulk) {
           // 批量模式合并展示：单据级引用（orderIds 集合或 widget.id；识别记账/编辑页凭证
-          // 挂单据级一份）+ 各明细行级引用——只查行级会漏掉单据级附件（"批量编辑暂无附件"根因）
+          // 挂单据级一份）+ 各明细行级引用——只查行级会漏掉单据级附件（"批量编辑暂无附件"根因）；
+          // 行级入口（entity=sale_item）也要聚合单据级实体（entity=sale）的 orderIds 引用（识别图）
+          final orderEntity = _lineEntity == 'sale_item' ? 'sale' : 'purchase';
+          final orderOk = widget.orderIds.isNotEmpty
+              ? widget.orderIds.contains('${r['entity_id'] ?? ''}')
+              : '${r['entity_id'] ?? ''}' == widget.id;
           if (('${r['entity'] ?? ''}' == _lineEntity &&
                   widget.lineIds.contains('${r['entity_id'] ?? ''}')) ||
-              ('${r['entity'] ?? ''}' == widget.entity &&
-                  (widget.orderIds.isNotEmpty
-                      ? widget.orderIds.contains('${r['entity_id'] ?? ''}')
-                      : '${r['entity_id'] ?? ''}' == widget.id))) {
+              (('${r['entity'] ?? ''}' == widget.entity ||
+                      '${r['entity'] ?? ''}' == orderEntity) &&
+                  orderOk)) {
             myFiles.add('${r['file'] ?? ''}');
           }
         } else if ('${r['entity'] ?? ''}' == widget.entity &&

@@ -1421,6 +1421,10 @@ class _SalePageState extends State<SalePage> {
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
+    // 底部提交栏背景跟随主题（暗色非固定 0xFF1C1C1E 死黑=用户"最下边那一条"）
+    final navColor = Theme.of(context).brightness == Brightness.dark
+        ? Color.lerp(c.primary, Colors.black, 0.45)
+        : c.card;
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
@@ -1480,7 +1484,7 @@ class _SalePageState extends State<SalePage> {
         child: Container(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
           decoration: BoxDecoration(
-            color: c.card,
+            color: navColor,
             border: Border(top: BorderSide(color: c.divider)),
           ),
           child: Row(
