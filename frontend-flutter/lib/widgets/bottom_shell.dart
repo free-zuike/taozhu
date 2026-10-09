@@ -150,32 +150,38 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
             _built[i] ? _pages[i] : const SizedBox.shrink(),
         ],
       ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        child: Container(
-          height: 64,
-          decoration: BoxDecoration(
-            // 夜晚跟随主题色深调（非固定纯黑 0xFF1E1E1E）：用户"最下方也变成大黑条"——
-            // 底部导航栏背景应与页面背景同源（主题色系），白天半透明白、夜晚主题色掺黑
-            color: dark
-                ? navColor
-                : Color.lerp(c.primary, Colors.white, 0.96),
-            borderRadius: BorderRadius.circular(28),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.08), blurRadius: 16, offset: const Offset(0, 4)),
-            ],
+      bottomNavigationBar: Stack(
+        children: [
+          // 底部整条=主题背景图案（渐变+皮肤纹理，与页面 body 一致——用户"跟随系统的背景图案"：
+          // 胶囊四周/下方不再露 Scaffold 纯白/纯黑底）
+          Positioned.fill(child: themePageBackground(context)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Container(
+              height: 64,
+              decoration: BoxDecoration(
+                // 胶囊半透明深调：图案透出与背景融合（原固定纯色="白色/黑色边框感"）
+                color: dark
+                    ? Color.lerp(c.primary, Colors.black, 0.45)!.withValues(alpha: 0.85)
+                    : Color.lerp(c.primary, Colors.white, 0.96).withValues(alpha: 0.9),
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.08), blurRadius: 16, offset: const Offset(0, 4)),
+                ],
+              ),
+              child: Row(
+                children: [
+                  _navItem(0, Icons.receipt_long_outlined, '交易'),
+                  if (!_isStaff) _navItem(1, Icons.bar_chart_outlined, '统计'),
+                  _centerButton(),
+                  // 进货/我的固定指向页数组索引 2/3（staff 时统计 tab 隐藏但索引不变）
+                  _navItem(2, Icons.shopping_cart_outlined, '进货'),
+                  _navItem(3, Icons.person_outline, '我的'),
+                ],
+              ),
+            ),
           ),
-          child: Row(
-            children: [
-              _navItem(0, Icons.receipt_long_outlined, '交易'),
-              if (!_isStaff) _navItem(1, Icons.bar_chart_outlined, '统计'),
-              _centerButton(),
-              // 进货/我的固定指向页数组索引 2/3（staff 时统计 tab 隐藏但索引不变）
-              _navItem(2, Icons.shopping_cart_outlined, '进货'),
-              _navItem(3, Icons.person_outline, '我的'),
-            ],
-          ),
-        ),
+        ],
       ),
     );
   }
