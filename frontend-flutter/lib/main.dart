@@ -24,6 +24,22 @@ void main() async {
   final p = await SharedPreferences.getInstance();
   themeNotifier.value = restoreThemeMode(p.getString('theme_mode'));
   await ThemeConfig.instance.init();
+  // App 显式设置状态栏/底部导航条样式（否则系统按默认叠加半透明 scrim=页面顶部"蒙版"）；
+  // 无 AppBar 页面由这里兜底，有 AppBar 页面由 AppBarTheme.systemOverlayStyle 覆盖
+  void applySystemUi(ThemeMode mode) {
+    final dark = mode == ThemeMode.dark ||
+        (mode == ThemeMode.system &&
+            WidgetsBinding.instance.platformDispatcher.platformBrightness == Brightness.dark);
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor: dark ? const Color(0xFF101216) : const Color(0xFFF6F7F9),
+      systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+    ));
+  }
+  applySystemUi(themeNotifier.value);
+  themeNotifier.addListener(() => applySystemUi(themeNotifier.value));
   // 本地优先：启动即读本地缓存设置金额舍入口径（已登录用户重启不经过登录页，
   // 此前 ensure 只在登录时调用 → 静态值恒为默认 2 位——"显示默认 2 位"根因）。
   // 只读缓存不拉网络（不跳动）；联网后由实时 WS rounding 事件刷新。
