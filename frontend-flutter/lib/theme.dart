@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
@@ -135,12 +136,18 @@ ThemeData buildLightTheme(Color primary) {
     focusColor: Colors.transparent,
     scaffoldBackgroundColor: const Color(0xFFF6F7F9), // 不透明：防止手势返回时透出下层页面（背景图案由页面内部层展示）
     // AppBar 透明：顶部状态栏+标题区透出背景图案（对齐"头部皮肤"形态，列表在 AppBar 之下滚动不穿透）
+    // App 显式设置状态栏透明（否则系统按默认叠加半透明 scrim=页面顶部"蒙版"）：亮色图标深色
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       centerTitle: true,
       foregroundColor: primary,
+      systemOverlayStyle: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+      ),
     ),
     inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
     cardTheme: CardThemeData(
@@ -168,6 +175,12 @@ ThemeData buildDarkTheme(Color primary) {
       elevation: 0,
       centerTitle: true,
       foregroundColor: primary,
+      // 暗色：状态栏透明 + 图标浅色（App 显式设置，去掉系统默认 scrim 蒙版）
+      systemOverlayStyle: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ),
     ),
     inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
     cardTheme: CardThemeData(

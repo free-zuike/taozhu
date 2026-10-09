@@ -1249,6 +1249,12 @@ class _LedgerPageState extends State<LedgerPage> {
     return DefaultTabController(
       length: 2,
       child: Scaffold(
+      systemOverlayStyle: SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Theme.of(context).brightness == Brightness.dark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: Theme.of(context).brightness == Brightness.dark ? Brightness.dark : Brightness.light,
+    ),
+    
         // 去掉空 AppBar（统计卡直接顶到安全区下，对齐小程序：不再有统计栏上方的空背景条）
         body: Stack(
           children: [

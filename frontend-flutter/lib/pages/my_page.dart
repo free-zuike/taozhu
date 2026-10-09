@@ -1084,6 +1084,12 @@ class _MyPageState extends State<MyPage> {
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
     return Scaffold(
+      systemOverlayStyle: SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Theme.of(context).brightness == Brightness.dark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: Theme.of(context).brightness == Brightness.dark ? Brightness.dark : Brightness.light,
+    ),
+    
       // 无 AppBar：顶部整块露出主题背景（SafeArea 避让状态栏）
       body: Stack(
         children: [
