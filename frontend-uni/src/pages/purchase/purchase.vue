@@ -37,7 +37,7 @@
         <view class="head-row">
           <text class="idx">{{ i + 1 }}</text>
           <input class="goods-field" :class="{ ph: !row.itemName }" v-model="row.itemName" placeholder="选商品（可输入或选择）" @blur="onItemInput(i)" />
-          <text v-if="row.rowId" class="att-btn" @click.stop="showAttach('purchase_item', row.rowId, 'purchase', row.orderId)"><text class="mi">&#xe3f4;</text></text>
+          <text v-if="row.rowId" class="att-btn" @click.stop="showRowAttach(row)"><text class="mi">&#xe3f4;</text></text>
           <text class="del mi" @click="rows.splice(i, 1)">&#xe872;</text>
         </view>
         <input class="unit-field" :class="{ ph: !row.unit }" v-model="row.unit" placeholder="单位（可手动填写）" @blur="onUnitBlur(i)" />
@@ -340,7 +340,19 @@ async function showBatchAttach() {
   attach.value.list = list;
 }
 
-async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') {
+/// 行级凭证：单页模式回退本行所属单；批量直编聚合页内全部原单（识别图挂新单，
+/// 提交回填后含新单 id=任意行行级可见——对齐 App dateRows 行级聚合）
+function showRowAttach(row: Row) {
+  if (!row.rowId) return;
+  if (isDateRows.value) {
+    const oids = Array.from(new Set(rows.value.map((r) => r.orderId).filter(Boolean)));
+    showAttach('purchase_item', row.rowId, 'purchase', oids.join(','));
+  } else {
+    showAttach('purchase_item', row.rowId, 'purchase', row.orderId);
+  }
+}
+
+async function showAttach(entity: string, id: string, fbEntity = '', fbIds = '') {
   attach.value = { show: true, entity, id, list: [], index: 0, canEdit: true };
   let list: Array<{ key: string }> = [];
   try {
@@ -350,11 +362,13 @@ async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') 
     uni.showToast({ title: (e as Error).message || '加载凭证失败', icon: 'none' });
     return;
   }
-  if (list.length === 0 && fbEntity && fbId) {
-    try {
-      const d = await getAttachments(fbEntity, fbId);
-      list = d.attachments || [];
-    } catch (_) {}
+  if (list.length === 0 && fbEntity && fbIds) {
+    for (const fid of String(fbIds).split(',').filter(Boolean)) {
+      try {
+        const d = await getAttachments(fbEntity, fid);
+        list.push(...(d.attachments || []));
+      } catch (_) {}
+    }
   }
   attach.value.list = list;
 }
