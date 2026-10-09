@@ -96,9 +96,11 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     await _load();
   }
 
-  /// 批量模式下对应的行级实体名（sale→sale_item / purchase→purchase_item）
-  String get _lineEntity =>
-      widget.entity == 'sale' ? 'sale_item' : 'purchase_item';
+  /// 批量模式对应的行级实体名（sale/sale_item→sale_item、purchase/purchase_item→purchase_item）：
+  /// 单据级入口（顶部整单）用 sale→sale_item 聚合行级；行级入口（entity 已是 sale_item）也要保持
+  /// sale_item——此前 `entity == 'sale' ? 'sale_item' : 'purchase_item'` 把行级入口（sale_item）
+  /// 错判成 purchase_item → orderEntity 反推成 purchase → 单据级 sale 引用匹配不上（"单级有行级没有"根因）
+  String get _lineEntity => widget.entity.startsWith('sale') ? 'sale_item' : 'purchase_item';
 
   /// 批量模式（单据级入口传入该单明细行列表）
   bool get _bulk => widget.lineIds.isNotEmpty;
