@@ -240,6 +240,7 @@ class _SalePageState extends State<SalePage> {
   final List<Map<String, dynamic>> _pendingGroups = [];
 
   bool _submitted = false; // 已提交成功（取消退出时据此清理识别挂载）
+  bool _recognitionFilling = false; // 识别填行中：单位回调不覆盖识别单价（商品库单位触发 onUnitChanged 的防护）
 
   Future<void> _load() async {
     // Web（无本地库）：直连网络刷新；原生：只读本地库镜像（同步由「我的」页/进应用驱动，页面不访问网络）
@@ -558,14 +559,18 @@ class _SalePageState extends State<SalePage> {
 
   /// 单位输入变化：匹配到该商品的价格组合 → 带出默认售价；否则保持手动售价
   void _onUnitChanged(_Row row, String v) {
+    if (_recognitionFilling) return; // 识别填行中（商品库单位赋值触发）：不覆盖识别单价
     final unit = v.trim();
     final item = _items.where((x) => x.id == row.itemId).firstOrNull;
     final price = item?.prices.where((p) => '${p['unit']}' == unit).firstOrNull;
     row.unitCtrl.text = unit; // 保持用户输入（含非预设单位）
     if (price != null) {
       row.priceId = price['id'] as String?;
-      row.salePrice = (price['sale_price'] as num?)?.toDouble() ?? 0;
-      row.saleCtrl.text = row.salePrice > 0 ? row.salePrice.toStringAsFixed(2) : '';
+      // 行已有售价（识别/手填）不覆盖：改单位只换价格组合 id，单价保留原值（手写识别场景）
+      if (row.salePrice <= 0 && row.saleCtrl.text.trim().isEmpty) {
+        row.salePrice = (price['sale_price'] as num?)?.toDouble() ?? 0;
+        row.saleCtrl.text = row.salePrice > 0 ? row.salePrice.toStringAsFixed(2) : '';
+      }
     } else {
       row.priceId = null; // 自定义单位：价格手动填
     }
@@ -989,6 +994,8 @@ class _SalePageState extends State<SalePage> {
   /// 识别结果 → 填店铺/日期 + 匹配已有商品填行（拍照/文字/语音共用）。
   /// 返回本次实际填充的商品行 id 列表（识别图按批次挂行=行级附件"批对批"；文字/语音无图可忽略返回值）
   List<String> _fillFromDrafts(List<dynamic> items, [String client = '', String date = '']) {
+    _recognitionFilling = true; // 填行期间 unitCtrl 赋值触发 onUnitChanged 时不覆盖识别单价
+    try {
     // 购货单位：识别出的客户/店铺名匹配页面店铺列表（不自动新增——手写店铺名识别可能出错，避免污染店铺列表）
     if (client.isNotEmpty) {
       final m = _clients.where((cl) {
@@ -1012,6 +1019,7 @@ class _SalePageState extends State<SalePage> {
     var filled = 0;
     var unmatched = 0;
     final rowIds = <String>[];
+    final recentNeeded = <_Row>[]; // 识别无价的行：循环后异步带出店铺最近价（优先级 识别>店铺最近>商品库）
     for (final raw in items) {
       final name = '${raw['name'] ?? ''}'.trim();
       final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
@@ -1040,8 +1048,9 @@ class _SalePageState extends State<SalePage> {
           row.quantity = qty;
           row.salePrice = price > 0 ? price : (pr!['sale_price'] as num).toDouble();
           row.nameCtrl.text = match.name; // 识别命中商品库：名称也回填（否则输入框空白）
-          row.unitCtrl.text = unit;
+          row.unitCtrl.text = '${pr!['unit'] ?? unit}'; // 单位按商品管理（手写识别单位不可信，仅无商品库单位时兜底）
           row.qtyCtrl.text = qty.toString();
+          if (price <= 0) recentNeeded.add(row); // 识别无价：待店铺最近价覆盖
           row.saleCtrl.text = (price > 0 ? price : (pr!['sale_price'] as num).toDouble()).toStringAsFixed(2);
         } else {
           // 识别出但商品库没有：名称/单位/数量/单价照填（提交时老板自动入库/店员提示添加）
@@ -1061,6 +1070,42 @@ class _SalePageState extends State<SalePage> {
             ? '${client.isEmpty ? '' : '识别店铺「$client」·'}已导入 $filled 项商品${unmatched > 0 ? '（$unmatched 项不在商品库，名称已填入待确认）' : ''}'
             : '识别结果未匹配到已有商品，请手动填写');
     return rowIds;
+    } finally {
+      _recognitionFilling = false;
+      if (recentNeeded.isNotEmpty) unawaited(_applyRecentPrices(recentNeeded));
+    }
+  }
+
+  /// 识别无价的行：异步带出当前店铺最近一次该商品的单价（用户定案优先级 识别>店铺最近>商品库兜底；
+  /// 覆盖只改价，单位保持商品库单位）
+  Future<void> _applyRecentPrices(List<_Row> rows) async {
+    try {
+      if (rows.isEmpty || _clientId == null) return;
+      final sales = await LocalDb.getAll('sales');
+      final clientOf = {for (final s in sales) '${s['id'] ?? ''}': '${s['client_id'] ?? ''}'};
+      final all = await LocalDb.getAll('sale_items');
+      var changed = false;
+      for (final row in rows) {
+        if (row.itemId == null) continue;
+        final mine = all.where((r) {
+          final cid = '${r['client_id'] ?? ''}'.isNotEmpty
+              ? '${r['client_id']}'
+              : (clientOf['${r['sale_id'] ?? ''}'] ?? '');
+          return cid == _clientId && '${r['item_id'] ?? ''}' == row.itemId;
+        }).toList()
+          ..sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+        if (mine.isEmpty) continue;
+        final sp = (mine.first['sale_price'] is num)
+            ? (mine.first['sale_price'] as num).toDouble()
+            : double.tryParse('${mine.first['sale_price']}') ?? 0;
+        if (sp > 0) {
+          row.salePrice = sp;
+          row.saleCtrl.text = sp.toStringAsFixed(2);
+          changed = true;
+        }
+      }
+      if (changed && mounted) setState(() {});
+    } catch (_) {}
   }
 
   Future<void> _submit() async {

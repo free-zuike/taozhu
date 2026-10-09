@@ -228,6 +228,7 @@ class _PurchasePageState extends State<PurchasePage> {
   final List<Map<String, dynamic>> _pendingGroups = [];
 
   bool _submitted = false; // 已提交成功（取消退出时据此清理识别挂载）
+  bool _recognitionFilling = false; // 识别填行中：单位回调不覆盖识别进价（商品库单位触发 onUnitChanged 的防护）
 
   Future<void> _load() async {
     // Web（无本地库）：直连网络刷新；原生：只读本地库镜像（同步由「我的」页/进应用驱动，页面不访问网络）
@@ -484,6 +485,7 @@ class _PurchasePageState extends State<PurchasePage> {
 
   /// 单位输入变化：匹配到该商品的价格组合 → 带出默认进价；否则保持手动进价
   void _onUnitChanged(_PRow row, String v) {
+    if (_recognitionFilling) return; // 识别填行中（商品库单位赋值触发）：不覆盖识别进价
     final unit = v.trim();
     final item = _items.where((x) => x['id'] == row.itemId).firstOrNull;
     final prices = ((item?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -491,8 +493,11 @@ class _PurchasePageState extends State<PurchasePage> {
     row.unitCtrl.text = unit; // 保持用户输入（含非预设单位）
     if (price != null) {
       row.priceId = price['id'] as String?;
-      row.purchasePrice = (price['purchase_price'] as num?)?.toDouble() ?? 0;
-      row.priceCtrl.text = row.purchasePrice > 0 ? row.purchasePrice.toStringAsFixed(2) : '';
+      // 行已有进价（识别/手填）不覆盖：改单位只换价格组合 id，进价保留原值（手写识别场景）
+      if (row.purchasePrice <= 0 && row.priceCtrl.text.trim().isEmpty) {
+        row.purchasePrice = (price['purchase_price'] as num?)?.toDouble() ?? 0;
+        row.priceCtrl.text = row.purchasePrice > 0 ? row.purchasePrice.toStringAsFixed(2) : '';
+      }
     } else {
       row.priceId = null; // 自定义单位：进价手动填
     }
@@ -824,6 +829,8 @@ class _PurchasePageState extends State<PurchasePage> {
   /// 识别结果 → 填日期 + 匹配已有商品填行（拍照/文字/语音共用；进货无购货单位字段）。
   /// 返回本次实际填充的商品行 id 列表（识别图按批次挂行=行级附件"批对批"；文字/语音无图可忽略返回值）
   List<String> _fillFromDrafts(List<dynamic> items, [String date = '']) {
+    _recognitionFilling = true; // 填行期间 unitCtrl 赋值触发 onUnitChanged 时不覆盖识别进价
+    try {
     // 日期：识别出的单据日期（YYYY-MM-DD）
     if (date.isNotEmpty && RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) {
       _dateCtrl.text = date;
@@ -835,6 +842,7 @@ class _PurchasePageState extends State<PurchasePage> {
     var filled = 0;
     var unmatched = 0;
     final rowIds = <String>[];
+    final recentNeeded = <_PRow>[]; // 识别无价的行：循环后异步带出店铺最近进价
     for (final raw in items) {
       final name = '${raw['name'] ?? ''}'.trim();
       final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
@@ -864,8 +872,9 @@ class _PurchasePageState extends State<PurchasePage> {
           row.quantity = qty;
           row.purchasePrice = price > 0 ? price : (pr!['purchase_price'] as num).toDouble();
           row.nameCtrl.text = '${match['name']}'; // 识别命中商品库：名称也回填（否则输入框空白）
-          row.unitCtrl.text = unit;
+          row.unitCtrl.text = '${pr!['unit'] ?? unit}'; // 单位按商品管理（手写识别单位不可信，仅无商品库单位时兜底）
           row.qtyCtrl.text = qty.toString();
+          if (price <= 0) recentNeeded.add(row); // 识别无价：待店铺最近进价覆盖
           row.priceCtrl.text = (price > 0 ? price : (pr!['purchase_price'] as num).toDouble()).toStringAsFixed(2);
         } else {
           // 识别出但商品库没有：名称/单位/数量/单价照填（提交时老板自动入库/店员提示添加）
@@ -885,6 +894,34 @@ class _PurchasePageState extends State<PurchasePage> {
             ? (unmatched > 0 ? '已导入 $filled 项（$unmatched 项不在商品库，已填入名称待确认）' : '已导入 $filled 项商品')
             : '识别结果未匹配到已有商品，请手动填写');
     return rowIds;
+    } finally {
+      _recognitionFilling = false;
+      if (recentNeeded.isNotEmpty) unawaited(_applyRecentPrices(recentNeeded));
+    }
+  }
+
+  /// 识别无价的行：异步带出该商品最近一次进价（次优；商品库已兜底填）
+  Future<void> _applyRecentPrices(List<_PRow> rows) async {
+    try {
+      if (rows.isEmpty) return;
+      final all = await LocalDb.getAll('purchase_items');
+      var changed = false;
+      for (final row in rows) {
+        if (row.itemId == null) continue;
+        final mine = all.where((r) => '${r['item_id'] ?? ''}' == row.itemId).toList()
+          ..sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+        if (mine.isEmpty) continue;
+        final pp = (mine.first['purchase_price'] is num)
+            ? (mine.first['purchase_price'] as num).toDouble()
+            : double.tryParse('${mine.first['purchase_price']}') ?? 0;
+        if (pp > 0) {
+          row.purchasePrice = pp;
+          row.priceCtrl.text = pp.toStringAsFixed(2);
+          changed = true;
+        }
+      }
+      if (changed && mounted) setState(() {});
+    } catch (_) {}
   }
 
   Future<void> _submit() async {
