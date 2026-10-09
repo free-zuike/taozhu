@@ -1426,8 +1426,8 @@ class _SalePageState extends State<SalePage> {
         ? Color.lerp(c.primary, Colors.black, 0.45)
         : c.card;
     return Scaffold(
+      extendBodyBehindAppBar: true, // body 背景延伸到 AppBar 后：顶部单层背景（对齐统计页；两层叠加=半透明渐变条）
       appBar: AppBar(
-        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(
             tooltip: '复制上一单',
@@ -1453,9 +1453,11 @@ class _SalePageState extends State<SalePage> {
       body: Stack(
         children: [
           Positioned.fill(child: themePageBackground(context)),
-          ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        children: [
+          SafeArea(
+            bottom: false,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 56, 16, 16), // top=AppBar 内容区高，防被透明 AppBar 盖
+              children: [
           _infoCard(),
           const SizedBox(height: 10),
           for (int i = 0; i < _rows.length; i++) ...[
@@ -1476,7 +1478,8 @@ class _SalePageState extends State<SalePage> {
             ),
           ),
         ],
-      ),
+        ),
+          ),
         ],
       ),
       // 底部悬浮栏：合计 + 提交 固定可见，长单无需滚到底

@@ -160,9 +160,10 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
             child: Container(
               height: 64,
               decoration: BoxDecoration(
-                // 胶囊半透明深调：图案透出与背景融合（原固定纯色="白色/黑色边框感"）
+                // 胶囊：夜晚=中性深色半透明（透出背景图案，不用主题色调=用户"悬浮导航为什么是设置的颜色"）；
+                // 白天=浅色半透明
                 color: dark
-                    ? Color.lerp(c.primary, Colors.black, 0.45)!.withValues(alpha: 0.85)
+                    ? Colors.black.withValues(alpha: 0.65)
                     : Color.lerp(c.primary, Colors.white, 0.96)!.withValues(alpha: 0.9),
                 borderRadius: BorderRadius.circular(28),
                 boxShadow: [

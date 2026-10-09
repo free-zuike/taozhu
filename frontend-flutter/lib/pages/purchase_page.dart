@@ -1211,8 +1211,9 @@ class _PurchasePageState extends State<PurchasePage> {
         ? Color.lerp(c.primary, Colors.black, 0.45)
         : c.card;
     return Scaffold(
+      extendBodyBehindAppBar: true, // body 背景延伸到 AppBar 后：顶部=单层图案/渐变（对齐统计页；
+      // 原 AppBar flexibleSpace 图案层 + body 背景层两层叠加=用户"半透明/像渐变的模板看不清"）
       appBar: AppBar(
-        flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(
             tooltip: '复制上一单',
@@ -1238,30 +1239,33 @@ class _PurchasePageState extends State<PurchasePage> {
       body: Stack(
         children: [
           Positioned.fill(child: themePageBackground(context)),
-          ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: [
-          _infoCard(),
-          const SizedBox(height: 10),
-          for (int i = 0; i < _rows.length; i++) ...[
-            _insertBar(i),
-            _buildRow(i),
-          ],
-          const SizedBox(height: 10),
-          // 添加商品（提交栏固定在底部悬浮）
-          OutlinedButton.icon(
-            onPressed: () => setState(
-                () => _rows.add(_newPRow()..happenedAt = _dateCtrl.text.trim())),
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('添加商品'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: c.success,
-              side: BorderSide(color: c.success.withOpacity(0.5)),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          SafeArea(
+            bottom: false,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 56, 16, 24), // top=AppBar 内容区高，防被透明 AppBar 盖
+              children: [
+                _infoCard(),
+                const SizedBox(height: 10),
+                for (int i = 0; i < _rows.length; i++) ...[
+                  _insertBar(i),
+                  _buildRow(i),
+                ],
+                const SizedBox(height: 10),
+                // 添加商品（提交栏固定在底部悬浮）
+                OutlinedButton.icon(
+                  onPressed: () => setState(
+                      () => _rows.add(_newPRow()..happenedAt = _dateCtrl.text.trim())),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('添加商品'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: c.success,
+                    side: BorderSide(color: c.success.withOpacity(0.5)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
         ],
       ),
       // 底部悬浮栏：合计 + 提交 固定可见，长单无需滚到底
