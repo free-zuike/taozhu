@@ -163,7 +163,7 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
                 // 胶囊半透明深调：图案透出与背景融合（原固定纯色="白色/黑色边框感"）
                 color: dark
                     ? Color.lerp(c.primary, Colors.black, 0.45)!.withValues(alpha: 0.85)
-                    : Color.lerp(c.primary, Colors.white, 0.96).withValues(alpha: 0.9),
+                    : Color.lerp(c.primary, Colors.white, 0.96)!.withValues(alpha: 0.9),
                 borderRadius: BorderRadius.circular(28),
                 boxShadow: [
                   BoxShadow(color: Colors.black.withOpacity(dark ? 0.25 : 0.08), blurRadius: 16, offset: const Offset(0, 4)),

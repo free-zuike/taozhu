@@ -1528,7 +1528,12 @@ class _PurchasePageState extends State<PurchasePage> {
                   tooltip: '该行凭证附件',
                   icon: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF409EFF)),
                   onPressed: () => showAttachmentViewer(context, 'purchase_item', row.rowId,
-                      '进货明细行凭证', lineIds: [row.rowId], orderIds: [row.origPurchaseId.isNotEmpty ? row.origPurchaseId : _purchaseId]),
+                      '进货明细行凭证', lineIds: [row.rowId],
+                      // 批量直编（dateRows）：页内全部原单+本页新单一起聚合——识别图挂新单
+                      // （purchase/{_purchaseId}）在其他原单的行上也能看到；单页模式按行所属单聚合
+                      orderIds: isDateRows
+                          ? [..._orderIds, if (_purchaseId.isNotEmpty) _purchaseId]
+                          : [row.origPurchaseId.isNotEmpty ? row.origPurchaseId : _purchaseId]),
                 ),
               ],
               const SizedBox(width: 4),

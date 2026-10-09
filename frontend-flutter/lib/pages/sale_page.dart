@@ -1735,7 +1735,12 @@ class _SalePageState extends State<SalePage> {
                   tooltip: '该行凭证附件',
                   icon: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF409EFF)),
                   onPressed: () => showAttachmentViewer(context, 'sale_item', row.rowId,
-                      '出货明细行凭证', lineIds: [row.rowId], orderIds: [row.origSaleId.isNotEmpty ? row.origSaleId : _saleId]),
+                      '出货明细行凭证', lineIds: [row.rowId],
+                      // 批量直编（dateRows）：页内全部原单+本页新单一起聚合——识别图挂新单
+                      // （sale/{_saleId}）在其他原单的行上也能看到；单页模式按行所属单聚合
+                      orderIds: isDateRows
+                          ? [..._orderIds, if (_saleId.isNotEmpty) _saleId]
+                          : [row.origSaleId.isNotEmpty ? row.origSaleId : _saleId]),
                 ),
               ],
               const SizedBox(width: 4),
