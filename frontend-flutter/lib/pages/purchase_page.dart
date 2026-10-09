@@ -127,17 +127,15 @@ class _PurchasePageState extends State<PurchasePage> {
     super.dispose();
   }
 
-  /// 取消退出时清理识别挂载：删各组行级引用行 + 本地副本文件（识别挂载未入上传队列，零网络）
+  /// 取消退出时清理识别挂载：删单据级引用行 + 本地副本文件（识别挂载未入上传队列，零网络）
   Future<void> _cleanupRecognizedOnCancel() async {
     final groups = List<Map<String, dynamic>>.from(_pendingGroups);
     if (groups.isEmpty) return;
     try {
       for (final g in groups) {
         final file = '${g['file'] ?? ''}';
-        for (final rid in (g['rowIds'] as List<dynamic>? ?? [])) {
-          if ('$rid'.isEmpty) continue;
-          await LocalDb.deleteOne('attachment_refs', 'purchase_item/$rid/$file');
-        }
+        if (file.isEmpty) continue;
+        await LocalDb.deleteOne('attachment_refs', 'purchase/$_purchaseId/$file');
       }
       final root = await getApplicationDocumentsDirectory();
       final files = groups.map((g) => '${g['file']}').toSet();
@@ -194,15 +192,16 @@ class _PurchasePageState extends State<PurchasePage> {
       setState(() => _pendingPhoto = bytes); // Web 无本地库：保存成功后直传（多批组含 bytes）
       _pendingGroups.add({'file': '${md5.convert(bytes).toString()}.jpg', 'rowIds': rowIds, 'bytes': bytes});
     } else {
-      await _attachRecognized(bytes, rowIds); // App 本地：立即行级挂载，取消时 dispose 清理
+      await _attachRecognized(bytes); // App 本地：立即挂单据级，取消时 dispose 清理
     }
     toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
   }
 
-  /// 识别原图立即挂为本单凭证（App 本地优先）：写公共目录副本 + **按批次行级挂载**
-  /// （图挂到该次识别填充的每行=行级附件"批对批"，提交前行/整单查看器立即可见）；
+  /// 识别原图立即挂为本单凭证（App 本地优先）：写公共目录副本 + **挂单据级一份**
+  /// （entity=purchase/{_purchaseId}，对齐 Web 直传与"单据级一份全商品行共享可见"——
+  /// 顶部整单凭证与行级入口（orderIds 聚合单据级）都能看到，计数一份不虚高）；
   /// 不立即上传——提交成功后才入队上传（_uploadPending），取消退出=纯本地清理零网络。
-  Future<void> _attachRecognized(Uint8List bytes, List<String> rowIds) async {
+  Future<void> _attachRecognized(Uint8List bytes) async {
     try {
       final fileName = '${md5.convert(bytes).toString()}.jpg';
       final root = await getApplicationDocumentsDirectory();
@@ -211,20 +210,16 @@ class _PurchasePageState extends State<PurchasePage> {
       final af = File('${adir.path}/$fileName');
       if (!af.existsSync()) await af.writeAsBytes(bytes);
       _pendingPhoto = bytes; // 兼容标记（log/UI 判断有识别图）
-      _pendingGroups.add({'file': fileName, 'rowIds': rowIds});
-      // 行级挂载：图挂到该次识别填充的每行（同图多行共享引用）；整单/批量查看器按 lineIds 聚合回全部批次图
-      for (final rid in rowIds) {
-        if (rid.isEmpty) continue;
-        // 用户删过该行该图又再次识别同图：删除墓碑作废（重新挂载生效）
-        await SyncService.clearTombstone(entity: 'purchase_item', id: rid, file: fileName);
-        await LocalDb.upsertOne('attachment_refs', {
-          'id': 'purchase_item/$rid/$fileName',
-          'entity': 'purchase_item',
-          'entity_id': rid,
-          'file': fileName,
-          'key': 'taozhu/images/attachments/$fileName',
-        });
-      }
+      _pendingGroups.add({'file': fileName, 'rowIds': <String>[]});
+      // 单据级挂载一份（_purchaseId=客户端生成正式 id，提交前后不变）
+      await SyncService.clearTombstone(entity: 'purchase', id: _purchaseId, file: fileName);
+      await LocalDb.upsertOne('attachment_refs', {
+        'id': 'purchase/$_purchaseId/$fileName',
+        'entity': 'purchase',
+        'entity_id': _purchaseId,
+        'file': fileName,
+        'key': 'taozhu/images/attachments/$fileName',
+      });
       SyncService.version.notifyListeners();
     } catch (_) {}
   }
@@ -742,8 +737,9 @@ class _PurchasePageState extends State<PurchasePage> {
     }
   }
 
-  /// 提交成功后上传识别批次图：逐组逐行挂行级附件（行级实体 purchase_item/{rowId}，同内容同图一份物理文件）。
-  /// Web 直连逐组上传到单据级（无本地行 id 库，整单查看）。"批对批"=每张识别图只挂它识别出的那批商品行。
+  /// 提交成功后上传识别原图为本单凭证（失败静默，可稍后在凭证处手动添加）。
+  /// 挂载**单据级一份**（entity=purchase/{purchaseId}，全商品行共享可见）；
+  /// 多页扫描多次识别=同单多张单据级图，行级/整单查看器均可见（0.17.353 回归单据级）。
   Future<void> _uploadPending(String purchaseId, List<_PRow> rows) async {
     final groups = List<Map<String, dynamic>>.from(_pendingGroups);
     if (groups.isEmpty) return;
@@ -762,14 +758,12 @@ class _PurchasePageState extends State<PurchasePage> {
       for (final g in groups) {
         final file = '${g['file'] ?? ''}';
         if (file.isEmpty) continue;
-        for (final rid in (g['rowIds'] as List<dynamic>? ?? [])) {
-          if ('$rid'.isEmpty) continue;
-          // 行级上传入队：内容同图幂等；入队后同步编排批量上传（失败保留队列重试）
-          await SyncService.enqueueAttachmentUpload(entity: 'purchase_item', id: '$rid', fileName: file);
-        }
+        // 单据级一份（purchase/{purchaseId}，全商品行共享可见=对齐 Web 直传/用户"全行可见"诉求；
+        // 多页扫描多次识别=同单多张单据级图，行级/整单查看器均可见）
+        await SyncService.enqueueAttachmentUpload(entity: 'purchase', id: purchaseId, fileName: file);
       }
       _pendingGroups.clear();
-      if (mounted) toast(context, '识别图片已存为各行凭证（联网后自动上传）');
+      if (mounted) toast(context, '识别图片已存为本单凭证（联网后自动上传）');
     } catch (_) {
       _pendingGroups.clear();
     }
@@ -1408,7 +1402,10 @@ class _PurchasePageState extends State<PurchasePage> {
                     for (final r in _rows)
                       if (r.rowId.isNotEmpty) r.rowId,
                   ],
-                  orderIds: _orderIds),
+                  orderIds: [
+                    ..._orderIds,
+                    if (_purchaseId.isNotEmpty && !_orderIds.contains(_purchaseId)) _purchaseId,
+                  ]),
             ),
           ),
         ],
@@ -1527,7 +1524,7 @@ class _PurchasePageState extends State<PurchasePage> {
                   tooltip: '该行凭证附件',
                   icon: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF409EFF)),
                   onPressed: () => showAttachmentViewer(context, 'purchase_item', row.rowId,
-                      '进货明细行凭证', lineIds: [row.rowId], orderIds: [row.origPurchaseId]),
+                      '进货明细行凭证', lineIds: [row.rowId], orderIds: [row.origPurchaseId.isNotEmpty ? row.origPurchaseId : _purchaseId]),
                 ),
               ],
               const SizedBox(width: 4),

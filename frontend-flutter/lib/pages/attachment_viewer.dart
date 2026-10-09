@@ -105,6 +105,7 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
 
   /// 云端某实体的附件 key 列表（Web 直连）
   Future<List<String>> _cloudKeys(String entity, String id) async {
+    if (entity.isEmpty || id.isEmpty) return []; // 空 id 不请求（后端 400"缺少 id"）
     final d = await Api.instance.get('/attachments?entity=$entity&id=$id');
     return ((d['attachments'] as List?) ?? [])
         .cast<Map<String, dynamic>>()
@@ -122,10 +123,12 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         if (_bulk) {
           // 批量模式：合并单据级引用（orderIds 集合或单据 id；历史存量/识别图）+ 各行前缀
           for (final oid
-              in widget.orderIds.isNotEmpty ? widget.orderIds : [widget.id]) {
+              in widget.orderIds.isNotEmpty
+                  ? widget.orderIds.where((o) => o.isNotEmpty)
+                  : [widget.id]) {
             keys.addAll(await _cloudKeys(widget.entity, oid));
           }
-          for (final lid in widget.lineIds) {
+          for (final lid in widget.lineIds.where((l) => l.isNotEmpty)) {
             keys.addAll(await _cloudKeys(_lineEntity, lid));
           }
         } else {
@@ -225,12 +228,15 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     try {
       final jobs = <(String, String)>[
         if (_bulk)
-          for (final oid in widget.orderIds.isNotEmpty ? widget.orderIds : [widget.id])
+          for (final oid in widget.orderIds.isNotEmpty
+              ? widget.orderIds.where((o) => o.isNotEmpty)
+              : [widget.id])
             (widget.entity, oid)
         else
           (widget.entity, widget.id),
         if (_bulk)
-          for (final lid in widget.lineIds) (_lineEntity, lid),
+          for (final lid in widget.lineIds.where((l) => l.isNotEmpty))
+            (_lineEntity, lid),
       ];
       final groups = await Future.wait(jobs.map((j) async {
         return <(String, String, String)>[
@@ -369,7 +375,7 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       if (kIsWeb) {
         if (_bulk) {
           // Web 批量：一张凭证图批量存入该单每个明细行（行级），无独立单据级份
-          for (final lid in widget.lineIds) {
+          for (final lid in widget.lineIds.where((l) => l.isNotEmpty)) {
             await Api.instance.uploadPhoto(
               '/attachments?entity=$_lineEntity&id=$lid',
               bytes,

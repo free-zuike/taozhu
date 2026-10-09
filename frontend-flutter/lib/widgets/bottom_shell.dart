@@ -133,7 +133,14 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = Theme.of(context).extension<TaozhuColors>()!;
+    // 悬浮胶囊下方露出的 Scaffold 底部区域（padding 16/12 之外）跟随主题色——
+    // 用户"再往下一层的那一条"：原固定 0xFF17181C 死黑（亮 0xFFF6F7F9 白），应同胶囊同源主题色
+    final navColor = dark
+        ? Color.lerp(c.primary, Colors.black, 0.6)
+        : Colors.white.withOpacity(0.96);
     return Scaffold(
+      backgroundColor: dark ? navColor : null,
       body: IndexedStack(
         index: _index,
         // 懒构建：未切到的 tab 先不放（占位），切到时才实例化——避免启动时全部页面并发 initState 发请求

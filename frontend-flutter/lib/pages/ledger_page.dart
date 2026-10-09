@@ -1724,7 +1724,8 @@ class _LedgerPageState extends State<LedgerPage> {
                                       : [
                                           for (final it
                                               in ((order['items'] as List?) ?? []))
-                                            if (it is Map)
+                                            if (it is Map &&
+                                                '${it['id'] ?? ''}'.isNotEmpty)
                                               '${it['id'] ?? ''}'
                                         ],
                                 );

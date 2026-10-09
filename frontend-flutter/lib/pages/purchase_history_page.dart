@@ -587,7 +587,9 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
                                   : [
                                       for (final it
                                           in ((order['items'] as List?) ?? []))
-                                        if (it is Map) '${it['id'] ?? ''}'
+                                        if (it is Map &&
+                                            '${it['id'] ?? ''}'.isNotEmpty)
+                                          '${it['id'] ?? ''}'
                                     ],
                             );
                           _loadAttachCounts();

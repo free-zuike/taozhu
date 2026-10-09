@@ -237,7 +237,7 @@ async function loadEdit() {
         quantity: String(it.quantity), purchasePrice: String(it.purchase_price), countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
-        rowId: String(it.id || ''), orderId: '',
+        rowId: String(it.id || ''), orderId: editId.value || '',
       });
     }
     if (rows.value.length === 0) {
@@ -755,12 +755,12 @@ async function doCreateNewItems() {
   }
 }
 
-/// AI 识别批次图提交后上传：逐组逐行挂行级附件（purchase_item/{rowId}；内容同图幂等，失败不阻断）
-async function uploadPendingGroups() {
+/// AI 识别批次图提交后上传：逐组挂单据级一份（purchase/{savedId}，全商品行共享可见——
+/// 对齐 App/Web 与"单据级一份"定稿；多页扫描多次识别=同单多张图，行级/整单查看器均可见；失败不阻断）
+async function uploadPendingGroups(savedId: string) {
   for (const g of pendingGroups.value) {
-    for (const rid of g.rowIds) {
-      try { await uploadAttachment('purchase_item', rid, g.fp); } catch (_) {}
-    }
+    if (!savedId) continue;
+    try { await uploadAttachment('purchase', savedId, g.fp); } catch (_) {}
   }
   pendingGroups.value = [];
 }
@@ -808,15 +808,18 @@ async function submit() {
         });
       }
       const newRows = valid.filter((r) => !r.orderId);
+      let newOrderId = '';
       if (newRows.length > 0) {
-        await request('/purchases', 'POST', {
+        const d = await request<{ id: string }>('/purchases', 'POST', {
           happened_at: date.value,
           note: note.value.trim(),
           items: newRows.map((r, i) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', sort: i })),
         });
+        newOrderId = d.id;
+        for (const r of newRows) r.orderId = newOrderId; // 回填：行级凭证回退单据级查询命中
       }
-      // AI 识别批次图随该日保存逐组逐行上传（行级 purchase_item/{rowId}，批对批；失败不阻断）
-      await uploadPendingGroups();
+      // AI 识别批次图随该日保存逐组上传单据级（挂新单/首原单；失败不阻断）
+      await uploadPendingGroups(newOrderId || [...byOrder.keys()][0] || '');
       for (const lid of origIds) {
         if (!submittedIds.has(lid)) {
           try { await request(`/purchases/items/${lid}`, 'DELETE'); } catch (_) {}
@@ -850,8 +853,8 @@ async function submit() {
         pendingPhoto.value = '';
       } catch (_) {}
     }
-    // AI 识别批次图：逐组逐行挂行级附件（purchase_item/{rowId}，批对批；失败不阻断提交）
-    await uploadPendingGroups();
+    // AI 识别批次图：逐组挂单据级一份（purchase/{savedId}，全行可见；失败不阻断提交）
+    await uploadPendingGroups(savedId);
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '提交失败', icon: 'none' });
   } finally {
