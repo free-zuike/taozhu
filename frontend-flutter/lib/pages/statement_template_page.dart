@@ -246,7 +246,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       cur.content = '';
     }
     if (cur.grid.isEmpty) {
-      cur.grid = _defaultTemplateGrid();
+      cur.grid = defaultTemplateGrid();
     }
     final rows = cur.grid.length;
     final cols = cur.grid[0].length;
