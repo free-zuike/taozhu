@@ -207,6 +207,37 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
     );
   }
 
+  /// 单元格某侧边框是否开启（key: bt/br/bb/bl）
+  bool _cellBorderOn(GridCell cell, String key) {
+    switch (key) {
+      case 'bt':
+        return cell.borderTop;
+      case 'br':
+        return cell.borderRight;
+      case 'bb':
+        return cell.borderBottom;
+      default:
+        return cell.borderLeft;
+    }
+  }
+
+  /// 切换单元格某侧边框（Excel 式逐格设置线）
+  void _toggleCellBorder(GridCell cell, String key) {
+    switch (key) {
+      case 'bt':
+        cell.borderTop = !cell.borderTop;
+        break;
+      case 'br':
+        cell.borderRight = !cell.borderRight;
+        break;
+      case 'bb':
+        cell.borderBottom = !cell.borderBottom;
+        break;
+      default:
+        cell.borderLeft = !cell.borderLeft;
+    }
+  }
+
   Widget _gridEditor(TaozhuColors c) {
     final cur = _cur;
     // 网格为唯一编辑形态：旧组件/正文模板进入编辑转为网格；空模板用默认多栏账单网格（避免空白边框）
@@ -215,10 +246,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       cur.content = '';
     }
     if (cur.grid.isEmpty) {
-      // 新建模板开箱即用户定稿形态：{月账单} 展开自带「店铺X月账单」标题+日期/营业额网格+小计+总计
-      cur.grid = [
-        [GridCell('{月账单}', '')],
-      ];
+      cur.grid = _defaultTemplateGrid();
     }
     final rows = cur.grid.length;
     final cols = cur.grid[0].length;
@@ -414,6 +442,40 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                     ),
                 ]),
                 const Divider(height: 20),
+                // 行：边框（单元格级四侧独立开关，Excel 式逐格设置线）
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text('边框（逐格四侧开关）', style: TextStyle(fontSize: 12, color: c.textSub)),
+                ),
+                Row(children: [
+                  for (final (key, label, ic) in [
+                    ('bt', '上', Icons.border_top),
+                    ('br', '右', Icons.border_right),
+                    ('bb', '下', Icons.border_bottom),
+                    ('bl', '左', Icons.border_left),
+                  ])
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 3),
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _cellBorderOn(cell, key) ? c.primary : c.textSub,
+                            side: BorderSide(
+                                color: _cellBorderOn(cell, key)
+                                    ? c.primary.withOpacity(0.5)
+                                    : c.divider),
+                          ),
+                          icon: Icon(ic, size: 15),
+                          label: Text(label, style: const TextStyle(fontSize: 12)),
+                          onPressed: () {
+                            _toggleCellBorder(cell, key);
+                            setState(() {});
+                          },
+                        ),
+                      ),
+                    ),
+                ]),
+                const Divider(height: 16),
                 // 行：合并 / 取消合并
                 OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
@@ -504,6 +566,23 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
           _showCellMenu(r, col);
         },
         child: Container(
+          // 单元格级边框（GridCell.borderTop/Right/Bottom/Left 每侧独立开关，Excel 式逐格设置线）
+          decoration: BoxDecoration(
+            border: Border(
+              top: cell.borderTop
+                  ? BorderSide(color: c.divider.withOpacity(0.6), width: 0.5)
+                  : BorderSide.none,
+              right: cell.borderRight
+                  ? BorderSide(color: c.divider.withOpacity(0.6), width: 0.5)
+                  : BorderSide.none,
+              bottom: cell.borderBottom
+                  ? BorderSide(color: c.divider.withOpacity(0.6), width: 0.5)
+                  : BorderSide.none,
+              left: cell.borderLeft
+                  ? BorderSide(color: c.divider.withOpacity(0.6), width: 0.5)
+                  : BorderSide.none,
+            ),
+          ),
           alignment: a == 'center'
               ? Alignment.center
               : (a == 'right' ? Alignment.centerRight : Alignment.centerLeft),
@@ -521,22 +600,14 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
         ),
       );
     }
-    // 列/行 span（TableSpan）
+    // 列/行 span（TableSpan）：统一边框改在单元格内绘制（单元格级四边开关），span 不再画 trailing 线
     TableSpan colSpan(int i) => TableSpan(
           extent: const FixedTableSpanExtent(120),
-          foregroundDecoration: TableSpanDecoration(
-            border: TableSpanBorder(
-              trailing: BorderSide(color: c.divider.withOpacity(0.6), width: 0.5),
-            ),
-          ),
+          foregroundDecoration: const TableSpanDecoration(border: TableSpanBorder()),
         );
     TableSpan rowSpan(int i) => TableSpan(
           extent: const FixedTableSpanExtent(42),
-          foregroundDecoration: TableSpanDecoration(
-            border: TableSpanBorder(
-              trailing: BorderSide(color: c.divider.withOpacity(0.6), width: 0.5),
-            ),
-          ),
+          foregroundDecoration: const TableSpanDecoration(border: TableSpanBorder()),
         );
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(

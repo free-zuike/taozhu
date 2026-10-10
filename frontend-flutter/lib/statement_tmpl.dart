@@ -5,22 +5,35 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 网格单元格：文本（可含 {变量} 占位）+ 对齐（left/center/right）+ 样式（bold 加粗 / bg 底纹色名）
 /// + 合并（rowSpan/colSpan：>1 表示该格为合并区起点，向右/向下覆盖；被覆盖的格子 text 置空）
+/// + 边框（top/right/bottom/left：每一侧可独立开关——Excel 式逐格设置线）
 class GridCell {
-  GridCell([this.text = '', this.align = 'left', this.bold = false, this.bg = '', this.rowSpan = 1, this.colSpan = 1]);
+  GridCell([this.text = '', this.align = 'left', this.bold = false, this.bg = '', this.rowSpan = 1, this.colSpan = 1,
+      this.borderTop = true, this.borderRight = true, this.borderBottom = true, this.borderLeft = true]);
   String text;
   String align;
   bool bold;
   String bg; // 底纹色名：'grey'=浅灰（表头用）；空=无底纹
   int rowSpan; // 跨行数（1=不跨）
   int colSpan; // 跨列数（1=不跨）
-  Map<String, dynamic> toJson() => {'t': text, 'a': align, 'b': bold, 'g': bg, 'rs': rowSpan, 'cs': colSpan};
+  bool borderTop; // 上边框（true=有线）
+  bool borderRight; // 右边框
+  bool borderBottom; // 下边框
+  bool borderLeft; // 左边框
+  Map<String, dynamic> toJson() => {
+        't': text, 'a': align, 'b': bold, 'g': bg, 'rs': rowSpan, 'cs': colSpan,
+        'bt': borderTop, 'br': borderRight, 'bb': borderBottom, 'bl': borderLeft,
+      };
   GridCell.fromJson(Map<String, dynamic> j)
       : text = '${j['t'] ?? ''}',
         align = '${j['a'] ?? 'left'}',
         bold = j['b'] == true,
         bg = '${j['g'] ?? ''}',
         rowSpan = (j['rs'] as num?)?.toInt() ?? 1,
-        colSpan = (j['cs'] as num?)?.toInt() ?? 1;
+        colSpan = (j['cs'] as num?)?.toInt() ?? 1,
+        borderTop = j['bt'] != false,
+        borderRight = j['br'] != false,
+        borderBottom = j['bb'] != false,
+        borderLeft = j['bl'] != false;
 }
 
 /// 模板组件（组件式设计器）：按顺序渲染成表格块
@@ -134,6 +147,7 @@ class TemplateData {
     required this.to,
     required this.clientName,
     this.debtEnd = 0,
+    this.roundMode = false,
   });
   final List<Map<String, dynamic>> sales;
   final List<Map<String, dynamic>> payments;
@@ -141,6 +155,9 @@ class TemplateData {
   final String to;
   final String clientName;
   final double debtEnd;
+  /// true=逐步舍入（每笔先按分舍入再累加，与账本/欠款口径一致）；false=原始金额直接累加。
+  /// 合计/每日销售额/明细金额都跟随此口径（用户"合计口径切换逐步舍入或者原始金额，下边显示也要跟随"）
+  final bool roundMode;
 }
 
 // ── 渲染（纯函数，无 Flutter 依赖，可测试）─────────────────────────────
@@ -185,7 +202,14 @@ List<List<String>> _detailLines(TemplateData d) {
   return out;
 }
 
+/// 按 TemplateData.roundMode 舍入（逐步舍入=每笔先按分舍入；原始金额直接取值）
+double _roundVal(TemplateData d, double v) {
+  if (d.roundMode) return ((v * 100).round()) / 100;
+  return v;
+}
+
 /// 出货按日聚合（from 所在月 1..月末，无数据日=0）——({days: List<double>, total: double})
+/// 金额口径跟随 d.roundMode（逐步舍入 vs 原始金额，用户联动要求）
 ({List<double> days, double total}) _dailyOf(TemplateData d) {
   final y = int.tryParse(d.from.length >= 7 ? d.from.substring(0, 4) : '') ?? DateTime.now().year;
   final m = int.tryParse(d.from.length >= 7 ? d.from.substring(5, 7) : '') ?? DateTime.now().month;
@@ -203,7 +227,7 @@ List<List<String>> _detailLines(TemplateData d) {
       if (dy != y || dm != m) continue;
       final day = int.tryParse(dd.substring(8, 10)) ?? 1;
       if (day < 1 || day > daysInMonth) continue;
-      final v = _num(it['amount']);
+      final v = _roundVal(d, _num(it['amount']));
       arr[day - 1] += v;
       total += v;
     }
@@ -213,28 +237,36 @@ List<List<String>> _detailLines(TemplateData d) {
 
 String _fmtMoney(double v) => '¥${((v * 100).round()) / 100}';
 
-/// 单文本变量替换（{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数} + {N日}）
+/// 单文本变量替换（{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{月合计} + {N日}/{N日销售额}）
+/// 函数式变量（自动计算）：出货合计/收款合计/期末欠款/月合计/出货笔数；每日销售额 {1日}…{31日} 与可读别名 {1日销售额}…
 String _replaceVars(String text, TemplateData d) {
   final now = DateTime.now();
   final today = '${now.year}年${now.month}月${now.day}日';
+  // 账单月份 = 数据区间 from 的月份（用户"店铺 x月份账单"标题跟随所选账期的年月，非当前自然月）
+  final fromY = int.tryParse(d.from.length >= 4 ? d.from.substring(0, 4) : '') ?? now.year;
+  final fromM = int.tryParse(d.from.length >= 7 ? d.from.substring(5, 7) : '') ?? now.month;
   double saleTotal = 0;
   for (final s in d.sales) {
-    saleTotal += _num(s['total']);
+    saleTotal += _roundVal(d, _num(s['total']));
   }
+  final daily = _dailyOf(d);
+  final payTotal = d.payments.fold<double>(0, (a, p) => a + _roundVal(d, _num(p['amount']) + _num(p['waived'])));
   var line = text
       .replaceAll('{店铺}', d.clientName)
       .replaceAll('{账期}', '${d.from} 至 ${d.to}')
-      .replaceAll('{年}', '${now.year}')
-      .replaceAll('{月}', '${now.month}')
+      .replaceAll('{年}', '${fromY}')
+      .replaceAll('{月}', '${fromM}')
       .replaceAll('{日}', '${now.day}')
       .replaceAll('{日期}', today)
       .replaceAll('{出货合计}', _fmtMoney(saleTotal))
-      .replaceAll('{收款合计}', _fmtMoney(d.payments.fold<double>(0, (a, p) => a + _num(p['amount']) + _num(p['waived']))))
+      .replaceAll('{收款合计}', _fmtMoney(payTotal))
       .replaceAll('{期末欠款}', _fmtMoney(d.debtEnd))
-      .replaceAll('{出货笔数}', '${d.sales.length}');
-  final daily = _dailyOf(d).days;
-  for (var dd = 1; dd <= daily.length; dd++) {
-    line = line.replaceAll('{$dd日}', _fmtMoney(daily[dd - 1]));
+      .replaceAll('{出货笔数}', '${d.sales.length}')
+      .replaceAll('{月合计}', _fmtMoney(daily.total));
+  for (var dd = 1; dd <= daily.days.length; dd++) {
+    line = line
+        .replaceAll('{$dd日}', _fmtMoney(daily.days[dd - 1]))
+        .replaceAll('{$dd日销售额}', _fmtMoney(daily.days[dd - 1]));
   }
   return line;
 }
@@ -286,15 +318,18 @@ String _replaceContentLine(String raw, TemplateData d, ({List<double> days, doub
 
 /// 多栏月账单（寻牛记式）：一个自然月按每栏 N 天分栏（默认 10 天/栏，31 天→4 栏），
 /// 每栏两列「日期 营业额」逐日平铺、栏底小计、底部总计。日期格式 2026.8.1，金额纯数字两位。
-List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10}) {
+/// [withTitle] 是否自带标题行——{月账单} 位于模板首行时自带「店铺 x月份账单」；
+/// 模板已在 {月账单} 上方放了标题行（对账单头）时不重复，由模板行提供标题。
+List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10, bool withTitle = true}) {
   final daily = _dailyOf(d).days;
   final n = daily.length;
   final cols = (n + perCol - 1) ~/ perCol;
   final y = int.tryParse(d.from.length >= 4 ? d.from.substring(0, 4) : '') ?? DateTime.now().year;
   final m = int.tryParse(d.from.length >= 7 ? d.from.substring(5, 7) : '') ?? DateTime.now().month;
   final rows = <List<GridCell>>[
-    // 标题（店铺 + N月账单，居中加粗）
-    [GridCell('${d.clientName}${m}月账单', 'center', true)],
+    if (withTitle)
+      // 标题（店铺 + N月份账单，居中加粗）
+      [GridCell('${d.clientName}${m}月份账单', 'center', true)],
     // 表头：每栏「日期 营业额」加粗底纹
     [
       for (var cc = 0; cc < cols; cc++) ...[
@@ -330,9 +365,9 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10}) {
     subtotal.add(GridCell(s.toStringAsFixed(2), 'right', true));
   }
   rows.add(subtotal);
-  // 底部总计（跨栏，示例「总计 41349.81」尾部对齐；加粗）
+  // 底部总计（跨栏，示例「总计 41349.81」尾部对齐；加粗；「总计」标签居中美观）
   rows.add([
-    GridCell('总计', 'right', true),
+    GridCell('总计', 'center', true),
     for (var cc = 0; cc < cols * 2 - 2; cc++) GridCell('', ''),
     GridCell(grand.toStringAsFixed(2), 'right', true),
   ]);
@@ -341,10 +376,14 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10}) {
 
 List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
   final out = <List<GridCell>>[];
-  for (final row in cfg.grid) {
+  for (var ri = 0; ri < cfg.grid.length; ri++) {
+    final row = cfg.grid[ri];
     // {月账单} 单元格 → 整行展开为多栏月账单
     if (row.any((c) => c.text.contains('{月账单}'))) {
-      out.addAll(_multiColBill(d));
+      // {月账单} 在模板首行（全模板仅此一行内容）→ 自带标题行「店铺 x月份账单」；
+      // 模板已在 {月账单} 上方放标题行（对账单头）→ 不重复，标题由模板行提供（用户"头部一行"）
+      final onlyRow = cfg.grid.length <= 1;
+      out.addAll(_multiColBill(d, withTitle: onlyRow));
       continue;
     }
     out.add([
@@ -366,9 +405,9 @@ List<List<GridCell>> _renderComps(XlsCfg cfg, TemplateData d) {
   final rows = <List<GridCell>>[];
   double saleTotal = 0;
   for (final s in d.sales) {
-    saleTotal += _num(s['total']);
+    saleTotal += _roundVal(d, _num(s['total']));
   }
-  final payTotal = d.payments.fold<double>(0, (a, p) => a + _num(p['amount']) + _num(p['waived']));
+  final payTotal = d.payments.fold<double>(0, (a, p) => a + _roundVal(d, _num(p['amount']) + _num(p['waived'])));
   final daily = _dailyOf(d);
   for (final c in cfg.comps) {
     switch (c.type) {
@@ -436,25 +475,42 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
         .map((e) => XlsCfg.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
     // 内置模板内容演进迁移（2026-10-08）：旧「标准」=标题行+{月账单}、旧「按日汇总」=对账单头部+{月账单}
-    // → 都收敛为只留 {月账单}（标题由展开自带）；仍是内置名的旧结构才迁移，用户改过的自定义内容不碰
+    // 2026-10-10 用户定稿：头部只要一行「店铺X月份账单」+表格，不要重复标题行——内置模板统一为
+    // 两行结构（标题行 + {月账单}，标题由模板行提供，{月账单} 非首行不输出自身标题）。
+    // 仍是内置名的旧结构才迁移，用户改过的自定义内容不碰；旧「按日汇总」与「标准」同形 → 移除（用户"去掉重复"）
     var migrated = false;
+    final kept = <XlsCfg>[];
     for (final t in list) {
-      if (t.comps.isNotEmpty || t.content.trim().isNotEmpty || t.grid.isEmpty) continue;
+      if (t.name == '按日汇总' && t.comps.isEmpty && t.content.trim().isEmpty) {
+        migrated = true; // 内置按日汇总已与标准合并，跳过（用户自定义过的按日汇总保留）
+        continue;
+      }
+      if (t.comps.isNotEmpty || t.content.trim().isNotEmpty || t.grid.isEmpty) {
+        kept.add(t);
+        continue;
+      }
       final first = t.grid[0].isNotEmpty ? t.grid[0][0].text : '';
       if (t.name == '标准' && first.contains('月份账单')) {
-        t.grid = [[GridCell('{月账单}', '')]];
+        t.grid = _defaultTemplate().grid;
         migrated = true;
-      } else if (t.name == '按日汇总' && first == '对账单') {
-        t.grid = [[GridCell('{月账单}', '')]];
+      } else if (t.name == '标准' && t.grid.length <= 1 && first.contains('{月账单}')) {
+        t.grid = _defaultTemplate().grid;
+        migrated = true;
+      } else if (t.name == '标准' && first.contains('对账单') &&
+          t.grid.length > 1 && t.grid[1].any((c) => c.text.contains('{月账单}'))) {
+        // 旧「标准」=店铺名+对账单 头部行 + {月账单}（用户实存"寻牛 对账单 / {月账单}"双标题）
+        // → 展开为内置标准网格（标题用变量，去掉写死的店名头部=只留一行头部）
+        t.grid = _defaultTemplate().grid;
         migrated = true;
       }
+      kept.add(t);
     }
     if (migrated) {
-      await p.setString('taozhu_stmt_templates', jsonEncode([for (final t in list) t.toJson()]));
+      await p.setString('taozhu_stmt_templates', jsonEncode([for (final t in kept) t.toJson()]));
     }
     // 清洗空模板（旧版残留：grid/comps/content 全空 → 渲染出只有边框的空表格=预览灰色）。
     // 保留有效模板；全空时返回内置默认（标题+多栏月账单），保证列表第一条必有内容。
-    final valid = list.where(_hasContent).toList();
+    final valid = kept.where(_hasContent).toList();
     if (valid.isNotEmpty) return valid;
   }
   // 兼容旧单模板存储
@@ -462,10 +518,15 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
   if (old != null && old.isNotEmpty) {
     try {
       final cfg = XlsCfg.fromJson(jsonDecode(old) as Map<String, dynamic>);
-      if (_hasContent(cfg)) return [cfg..name = '标准', _periodTemplate()];
+      if (_hasContent(cfg)) {
+        final upgraded = cfg.copy()
+          ..name = '标准'
+          ..grid = _defaultTemplate().grid;
+        return [upgraded, _multiColTemplate()];
+      }
     } catch (_) {}
   }
-  return [_defaultTemplate(), _periodTemplate()];
+  return [_defaultTemplate(), _multiColTemplate()];
 }
 
 /// 模板是否含可渲染内容（grid 有非空文本 或 comps 非空 或 content 非空）
@@ -479,19 +540,45 @@ bool _hasContent(XlsCfg t) {
   return false;
 }
 
-/// 内置默认模板（网格式，开箱即用）：{月账单} 一键生成日期×营业额 4 栏 + 小计 + 总计，
-/// 标题（店铺+N月账单）由 {月账单} 展开自带，不再单独排头部行（2026-10-08 用户定稿：只要「前门X月账单」+表格）
+/// 公开访问：内置「标准」模板的展开网格（模板编辑器新建空模板时开箱即用）
+List<List<GridCell>> defaultTemplateGrid() => _defaultTemplate().grid;
+
+/// 内置模板（网格式，所见即所得）：不再用 {月账单} 宏占位——直接存展开的完整网格
+/// （标题行 + 表头 + 每日行 + 合计行），编辑时看到的就是实际表格，每格可改/可设边框，方便自定义其他模板。
+/// 「标准」= 单栏逐日表：标题「{店铺} {月}月份账单」+ 日期/营业额表头 + 1..31 日逐行 + 合计行。
 XlsCfg _defaultTemplate() => XlsCfg()
   ..name = '标准'
   ..grid = [
-    [GridCell('{月账单}', '')],
+    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey')],
+    [GridCell('日期', 'center', true, 'grey'), GridCell('营业额', 'center', true, 'grey')],
+    for (var d = 1; d <= 31; d++)
+      [GridCell('{月}月{d}日', 'center'), GridCell('{$d日销售额}', 'right')],
+    [GridCell('合计', 'right', true, 'grey'), GridCell('{月合计}', 'right', true, 'grey')],
   ];
 
-/// 内置按日汇总模板（网格式）：与标准同形态（标题由 {月账单} 展开自带）
-XlsCfg _periodTemplate() => XlsCfg()
-  ..name = '按日汇总'
+/// 「多栏」= 多栏月账单（寻牛记式：每栏 10 天 × 4 栏），同样展开为可编辑网格。
+XlsCfg _multiColTemplate() => XlsCfg()
+  ..name = '多栏'
   ..grid = [
-    [GridCell('{月账单}', '')],
+    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey')],
+    [
+      for (var cc = 0; cc < 4; cc++) ...[
+        GridCell('日期', 'center', true, 'grey'),
+        GridCell('营业额', 'center', true, 'grey'),
+      ],
+    ],
+    for (var r = 0; r < 10; r++)
+      [
+        for (var cc = 0; cc < 4; cc++) ...[
+          GridCell('{月}月${cc * 10 + r + 1}日', 'center'),
+          GridCell('{${cc * 10 + r + 1}日销售额}', 'right'),
+        ],
+      ],
+    [
+      GridCell('总计', 'center', true, 'grey'),
+      for (var i = 0; i < 6; i++) GridCell('', ''),
+      GridCell('{月合计}', 'right', true, 'grey'),
+    ],
   ];
 
 Future<void> saveTemplates(List<XlsCfg> templates, String currentName) async {

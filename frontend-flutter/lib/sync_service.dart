@@ -1474,7 +1474,11 @@ class SyncService {
           try { f.deleteSync(); removed++; removedList.add(fileName); } catch (_) {}
         }
       }
-      appLog('sync', '本地孤儿附件清理：引用表 ${refs.length} 条，扫描 $scanned 文件，删除 $removed 个${removedList.isEmpty ? '' : '（' + removedList.take(5).join(', ') + '…）'}', level: 'info');
+      // 仅实际删除时才记日志（无事发生静默——用户"孤儿清理日志动不动连续几条"根因：
+      // 每次同步都记一条删 0 个的日志，同步被 WS/回前台频繁触发=刷屏）
+      if (removed > 0) {
+        appLog('sync', '本地孤儿附件清理：引用表 ${refs.length} 条，扫描 $scanned 文件，删除 $removed 个${removedList.isEmpty ? '' : '（' + removedList.take(5).join(', ') + '…）'}', level: 'info');
+      }
     } catch (_) {}
   }
 

@@ -735,21 +735,9 @@ class _ItemEditPageState extends State<_ItemEditPage> {
                             label: '售价',
                           ),
                         ),
-                        IconButton(
-                          icon: Icon(Icons.close, color: _c.textSub),
-                          onPressed: _priceRows.length > 1
-                              ? () => setState(() {
-                                    _priceRows.removeAt(i);
-                                    _priceIds.removeAt(i);
-                                    if (i < _groupPriceRows.length) {
-                                      for (final g in _groupPriceRows[i]) {
-                                        (g['ctrl'] as TextEditingController).dispose();
-                                      }
-                                      _groupPriceRows.removeAt(i);
-                                    }
-                                  })
-                              : null,
-                        ),
+                        // 单位|进价|售价 后不再放删除图标（窄屏挤压输入框显示不全，用户要求去掉）；
+                        // 删除该价格行改为长按卡片触发
+                        const SizedBox(width: 36),
                       ],
                     ),
                     const SizedBox(height: 4),

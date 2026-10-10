@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
 import '../sync_service.dart';
 import '../local_db.dart';
+import '../local_stats.dart';
 import '../log.dart';
 import '../utils/download.dart';
 import '../utils/money.dart';
@@ -174,12 +175,74 @@ class _StatementPageState extends State<StatementPage> {
     final cid = _clientId ?? '';
     setState(() => _loading = true);
     try {
+      // 对账单是纯本地可算的数据（账本/统计同源）：先构建设备数据函数，网络失败自动本地兜底
+      // 本地兜底组装成整单结构（按 sale_id 分组，对齐 /sales 返回形态——saleTotalOf 取 s['items']）
+      final localSalesRows = () async {
+        if (kIsWeb) return <Map<String, dynamic>>[];
+        final rows = await LocalDb.getAll('sale_items');
+        final cq = cid.isEmpty ? '' : cid;
+        return rows
+            .where((r) {
+              final inSel = cq.isEmpty || '${r['client_id'] ?? ''}' == cq;
+              final d = '${r['happened_at'] ?? ''}';
+              return inSel && d.isNotEmpty && d.compareTo(from) >= 0 && d.compareTo(to) <= 0;
+            })
+            .toList();
+      };
+      final fromSales = () async {
+        final rows = await localSalesRows();
+        final byOrder = <String, List<Map<String, dynamic>>>{};
+        for (final r in rows) {
+          final oid = '${r['sale_id'] ?? ''}';
+          if (oid.isEmpty) continue;
+          (byOrder[oid] ??= []).add(r);
+        }
+        return byOrder.entries.map((e) {
+          final items = e.value..sort((a, b) => '${a['id'] ?? ''}'.compareTo('${b['id'] ?? ''}'));
+          final total = items.fold<double>(0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
+          return {
+            'id': e.key,
+            'client_id': '${items.first['client_id'] ?? ''}',
+            'client_name': '${items.first['client_name'] ?? ''}',
+            'happened_at': items.map((it) => '${it['happened_at'] ?? ''}').reduce((a, b) => a.compareTo(b) >= 0 ? a : b),
+            'note': '${items.first['note'] ?? ''}',
+            'total': total,
+            'items': items,
+          };
+        }).toList();
+      };
+      final fromPays = () async {
+        if (kIsWeb) return <Map<String, dynamic>>[];
+        final rows = await LocalDb.getAll('payments');
+        final cq = cid.isEmpty ? '' : cid;
+        return rows
+            .where((r) {
+              final inSel = cq.isEmpty || '${r['client_id'] ?? ''}' == cq;
+              final d = '${r['happened_at'] ?? ''}';
+              return inSel && d.isNotEmpty && d.compareTo(from) >= 0 && d.compareTo(to) <= 0;
+            })
+            .toList();
+      };
+      List<Map<String, dynamic>> sales;
+      List<Map<String, dynamic>> payments;
+      double debtEnd;
       // 并行拉数据 + 加载公共模板（成品预览/导出/打印同源）
-      final results = await Future.wait([
-        Api.instance.get('/sales?client_id=$cid&date_from=$from&date_to=$to&limit=1000'),
-        Api.instance.get('/payments?client_id=$cid&date_from=$from&date_to=$to&limit=1000'),
-        Api.instance.get('/stats/summary?start=$from&end=$to&client_id=$cid'),
-      ]);
+      try {
+        final results = await Future.wait([
+          Api.instance.get('/sales?client_id=$cid&date_from=$from&date_to=$to&limit=1000'),
+          Api.instance.get('/payments?client_id=$cid&date_from=$from&date_to=$to&limit=1000'),
+          Api.instance.get('/stats/summary?start=$from&end=$to&client_id=$cid'),
+        ]);
+        sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
+        payments = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
+        debtEnd = ((results[2]['debt'] as num?)?.toDouble() ?? 0);
+      } catch (_) {
+        // 网络失败/离线：本地镜像兜底（对账单数据账本/统计页本地可全量算出——本地优先铁律）
+        final local = await localSummary(from, to, cid.isEmpty ? null : cid);
+        sales = await fromSales();
+        payments = await fromPays();
+        debtEnd = local?['debt'] as double? ?? 0;
+      }
       List<XlsCfg> tpls;
       try {
         tpls = await loadTemplates();
@@ -189,9 +252,9 @@ class _StatementPageState extends State<StatementPage> {
       }
       if (!mounted) return;
       setState(() {
-        _sales = ((results[0]['sales'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _payments = ((results[1]['payments'] as List?) ?? []).cast<Map<String, dynamic>>();
-        _debtEnd = ((results[2]['debt'] as num?)?.toDouble() ?? 0);
+        _sales = sales;
+        _payments = payments;
+        _debtEnd = debtEnd;
         _pubTpls = tpls;
         // 首次选中「标准」（多栏月账单开箱即用）；用户之后手动切换则在 chips 中持久化
         if (!tpls.any((t) => t.name == _selTplName)) _selTplName = tpls.first.name;
@@ -244,7 +307,7 @@ class _StatementPageState extends State<StatementPage> {
     return buf.toString();
   }
 
-  /// 对账单数据快照（公共渲染库输入）
+  /// 对账单数据快照（公共渲染库输入）；金额口径跟随合计口径开关（逐步舍入/原始金额）
   TemplateData _td(String clientName) => TemplateData(
         sales: _sales,
         payments: _payments,
@@ -252,6 +315,7 @@ class _StatementPageState extends State<StatementPage> {
         to: _toCtrl.text.trim(),
         clientName: clientName,
         debtEnd: _debtEnd,
+        roundMode: _roundTotals,
       );
 
   /// 当前选中成品样式（公共库模板；缺省第一条），应用排版工具条（标题对齐/字号）

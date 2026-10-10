@@ -1673,10 +1673,14 @@ class _LedgerPageState extends State<LedgerPage> {
     if (isDirtyLine) {
       priceLine.write('（无明细 · 长按删除该脏行）');
     } else {
-      if (!_isStaff && costPrice != null) priceLine.write('进价 ¥${fmtPrice(costPrice.toDouble())} · ');
-      if (qty.isNotEmpty) priceLine.write('×$qty$unit');
-      if (priceLine.length > 0 && salePrice != null) priceLine.write(' · ');
-      priceLine.write('售价 ¥${fmtPrice(salePrice?.toDouble() ?? 0)}');
+      // 进价仅 >0 才显示（未设置进价不显示）
+      if (!_isStaff && costPrice != null && costPrice > 0) priceLine.write('进价 ¥${fmtPrice(costPrice.toDouble())} · ');
+      // 用户定稿：重量在前（带字面「重量」标签），× 连接售价在后
+      if (qty.isNotEmpty) {
+        priceLine.write('重量$qty$unit × 售价 ¥${fmtPrice(salePrice?.toDouble() ?? 0)}');
+      } else {
+        priceLine.write('售价 ¥${fmtPrice(salePrice?.toDouble() ?? 0)}');
+      }
     }
     return InkWell(
       borderRadius: BorderRadius.circular(10),
