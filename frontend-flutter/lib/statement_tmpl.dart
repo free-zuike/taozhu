@@ -582,7 +582,7 @@ XlsCfg _defaultTemplate() => XlsCfg()
     [GridCell('合计', 'right', true, 'grey'), GridCell('{月合计}', 'right', true, 'grey')],
   ];
 
-/// 「多栏」= 多栏月账单（寻牛记式：每栏 10 天 × 4 栏），同样展开为可编辑网格。
+/// 「多栏」= 多栏月账单（寻牛记式：每栏 10 天，31 天 → 4 栏，最后一栏 1 天），展开为可编辑网格。
 XlsCfg _multiColTemplate() => XlsCfg()
   ..name = '多栏'
   ..grid = [
@@ -594,12 +594,15 @@ XlsCfg _multiColTemplate() => XlsCfg()
         GridCell('营业额', 'center', true, 'grey'),
       ],
     ],
+    // 31 天内分 4 栏（每栏 10 天：1-10 / 11-20 / 21-30 / 31）；第 4 栏仅 1 天，
+    // 超出 31 的格子不生成（此前 4×10=40 天 bug——用户"多出10月32到40日"）
     for (var r = 0; r < 10; r++)
       [
-        for (var cc = 0; cc < 4; cc++) ...[
-          GridCell('{月}月${cc * 10 + r + 1}日', 'center'),
-          GridCell('{${cc * 10 + r + 1}日销售额}', 'right'),
-        ],
+        for (var cc = 0; cc < 4; cc++)
+          if (cc * 10 + r + 1 <= 31) ...[
+            GridCell('{月}月${cc * 10 + r + 1}日', 'center'),
+            GridCell('{${cc * 10 + r + 1}日销售额}', 'right'),
+          ],
       ],
     [
       GridCell('总计', 'center', true, 'grey'),
