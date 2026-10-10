@@ -330,11 +330,21 @@ class _MyPageState extends State<MyPage> {
       final selId = await SyncService.selectedClientId();
       await Money.refresh(); // 同步服务器舍入配置（与交易页/服务器口径一致，避免本地旧 digits 算错）
       // 本店交易数量 = 商品数量（当前店铺出货明细行数，一张单多商品=多行——用户"应该是商品的数量"）
-      final curCount = (selId == null || selId.isEmpty)
-          ? 0
-          : sales
-              .where((s) => '${s['client_id']}' == selId)
-              .fold<int>(0, (sum, s) => sum + (((s['items'] as List?) ?? []).length));
+      // 直读行级 sale_items（去单据化主记录，账本/统计/对账同源）：整单镜像 items 是派生缓存，
+      // 批量直编等路径漏更新会导致"删了行笔数还在"——行级删即收敛，不依赖镜像一致性
+      int curCount = 0;
+      if (selId == null || selId.isEmpty) {
+        curCount = 0;
+      } else if (kIsWeb) {
+        curCount = sales
+            .where((s) => '${s['client_id']}' == selId)
+            .fold<int>(0, (sum, s) => sum + (((s['items'] as List?) ?? []).length));
+      } else {
+        try {
+          final si = await LocalDb.getAll('sale_items');
+          curCount = si.where((r) => '${r['client_id'] ?? ''}' == selId).length;
+        } catch (_) {}
+      }
       // 毛利 = Σ(售出单价 − 成本单价) × 数量（行级 sale_items，与交易页本地聚合同源）；
       // Web 无本地库 → 服务器 /sales 行级 sale_items 分支兜底
       // 毛利 = Σ(售出单价 − 成本单价) × 数量（行级 sale_items，与交易页本地聚合同源）；

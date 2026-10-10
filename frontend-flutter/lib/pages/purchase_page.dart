@@ -1167,9 +1167,25 @@ class _PurchasePageState extends State<PurchasePage> {
       for (final rid in removedIds) {
         await SyncService.cleanupLocalAttachmentsOf('purchase_item', rid); // 删行附件引用+本地副本（不残留）
         await LocalDb.deleteOne('purchase_items', rid);
+        // 同步更新整单镜像 items（进货历史/同步面板按整单镜像 items 算笔数——
+        // 只删行级会导致镜像残留旧行，"删了笔数还在"；批量直编每行保留各自原单号）
+        final orderId = _rowPurchaseId[rid] ?? purchaseId;
+        if (orderId.isNotEmpty) {
+          final order = await LocalDb.getOne('purchases', orderId);
+          if (order != null) {
+            final oldItems = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+            final updated = oldItems.where((it) => '${it['id'] ?? ''}' != rid).toList();
+            if (updated.isEmpty) {
+              await LocalDb.deleteOne('purchases', orderId);
+            } else {
+              await LocalDb.upsertOne('purchases',
+                  Map<String, dynamic>.from(order)..['items'] = updated);
+            }
+          }
+        }
         await SyncService.enqueueChange(
           entityType: 'purchase_item', entitySyncId: rid, action: 'delete',
-          payload: {'id': rid, 'purchase_id': _rowPurchaseId[rid] ?? purchaseId},
+          payload: {'id': rid, 'purchase_id': orderId},
         );
       }
     }

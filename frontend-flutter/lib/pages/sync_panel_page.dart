@@ -125,10 +125,10 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       // 收款账户
       local['payment_accounts'] = (await LocalDb.getAll('payment_accounts')).length;
       // 出货/进货按商品明细行数计算（一张单多商品 = 多行；不是单据数）
-      local['sale_items'] = allSales.fold<int>(
-          0, (s, x) => s + ((x['items'] as List?)?.length ?? 0));
-      local['purchase_items'] = allPurchases.fold<int>(
-          0, (s, x) => s + ((x['items'] as List?)?.length ?? 0));
+      // 直读行级主记录（sale_items/purchase_items）：同步本体即行级（去单据化），
+      // 账本/统计同源；整单镜像 items 是派生缓存，批量直编漏更新会导致"删了行笔数还在"
+      local['sale_items'] = (await LocalDb.getAll('sale_items')).length;
+      local['purchase_items'] = (await LocalDb.getAll('purchase_items')).length;
       // 收款单数
       local['payments'] = allPayments.length;
       pending = await SyncService.pendingCount();
@@ -159,12 +159,10 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
                 .map((c) => '${c['name']}')
                 .firstOrNull ??
             '';
-        // 当前店铺本地出货/收款的商品明细行数（按 client_id 过滤本地镜像后 items 聚合；一张单多商品=多行）
-        final sales = await LocalDb.getAll('sales');
+        // 当前店铺本地出货/收款的商品明细行数（按 client_id 过滤本地行级主记录；一张单多商品=多行）
+        final saleRows = await LocalDb.getAll('sale_items');
         final payments = await LocalDb.getAll('payments');
-        final selSales = sales.where((s) => '${s['client_id']}' == selectedId);
-        clientLocalSales =
-            selSales.fold<int>(0, (sum, s) => sum + ((s['items'] as List?)?.length ?? 0));
+        clientLocalSales = saleRows.where((r) => '${r['client_id'] ?? ''}' == selectedId).length;
         clientLocalPayments = payments.where((p) => '${p['client_id']}' == selectedId).length;
       }
     } catch (e) {

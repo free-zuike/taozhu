@@ -1438,11 +1438,27 @@ class _SalePageState extends State<SalePage> {
       for (final rid in removedIds) {
         await SyncService.cleanupLocalAttachmentsOf('sale_item', rid); // 删行附件引用+本地副本（不残留）
         await LocalDb.deleteOne('sale_items', rid);
+        // 同步更新整单镜像 items（我的页统计卡/同步面板的"本店笔数"按整单镜像 items 算——
+        // 只删行级会导致镜像残留旧行，"删了笔数还在"；批量直编每行保留各自原单号）
+        final orderId = _rowSaleId[rid] ?? saleId;
+        if (orderId.isNotEmpty) {
+          final order = await LocalDb.getOne('sales', orderId);
+          if (order != null) {
+            final oldItems = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+            final updated = oldItems.where((it) => '${it['id'] ?? ''}' != rid).toList();
+            if (updated.isEmpty) {
+              await LocalDb.deleteOne('sales', orderId);
+            } else {
+              await LocalDb.upsertOne('sales',
+                  Map<String, dynamic>.from(order)..['items'] = updated);
+            }
+          }
+        }
         await SyncService.enqueueChange(
           entityType: 'sale_item', entitySyncId: rid, action: 'delete',
           payload: {
             'id': rid,
-            'sale_id': _rowSaleId[rid] ?? saleId,
+            'sale_id': orderId,
             'client_id': _clientId ?? '',
           },
         );
