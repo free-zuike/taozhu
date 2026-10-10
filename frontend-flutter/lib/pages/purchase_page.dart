@@ -378,12 +378,16 @@ class _PurchasePageState extends State<PurchasePage> {
   /// lines 字段约定（进货记录展开行）：item_id=商品 id、row_id/id=明细行 id、
   /// quantity/unit/purchase_price/happened_at
   Future<void> _loadDateRows() async {
-    // 行序 = 保存写入的 sort（识别批次/插入顺序，服务端按 sort 展开），优先用它还原；
-    // 无 sort 的旧行回退按明细行 id（pi{微秒}{随机数}）数字段比较——随机数位数不定，
-    // 字符串比较在微秒相近时会乱序（如 …0999 vs …1012，'9'>'1' 把旧行排后），
-    // 必须拆数字段按数值比较才等价于创建序（对齐 App sale：批次按顺序方便对账）
+    // 行序 = 订单创建序（order id 数字段）→ 单内 sort（识别批次/插入序）→ 行 id 数字段：
+    // 与账本展开行排序完全同 key 序——同日多单时每单 sort 从 0 起，只按 sort 排会把不同单
+    // 的行交错（"交易页对了批量编辑乱了"根因）；id 形如 pi{微秒}{随机数} 随机数位数不定，
+    // 字符串比较在微秒相近时会乱序（…0999 vs …1012），必须拆数字段按数值比较（=创建序）
     final lines = [...(widget.dateRows ?? []).cast<Map<String, dynamic>>()]
       ..sort((a, b) {
+        final oa = _rowIdNumeric('${(a['order'] as Map?)?['id'] ?? ''}');
+        final ob = _rowIdNumeric('${(b['order'] as Map?)?['id'] ?? ''}');
+        final zo = oa.compareTo(ob);
+        if (zo != 0) return zo;
         final sa = (a['sort'] as num?)?.toInt() ?? 0;
         final sb = (b['sort'] as num?)?.toInt() ?? 0;
         if (sa != sb) return sa.compareTo(sb);

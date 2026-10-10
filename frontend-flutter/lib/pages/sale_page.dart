@@ -429,12 +429,17 @@ class _SalePageState extends State<SalePage> {
   /// 日期栏批量直编：从账本某日进入，直接平铺该日全部商品行（行内直接改，保存走行级 diff）。
   /// lines 字段约定（账本展开行）：item_id=明细行 id、goods_id=商品 id、quantity/sale_price/unit/happened_at
   Future<void> _loadDateRows() async {
-    // 行序 = 保存写入的 sort（识别批次/插入顺序，服务端按 sort 展开），优先用它还原；
-    // 无 sort 的旧行（sort=0 全部）回退按明细行 id 数字段比较——id 形如 si{微秒}{随机数}，
-    // 随机数位数不定，字符串比较在微秒相近时会乱序（如 …0999 vs …1012，'9'>'1' 把旧行排后），
-    // 必须拆数字段按数值比较才等价于创建序（用户"批次按顺序排下来方便对账"）
+    // 行序 = 订单创建序（order id 数字段）→ 单内 sort（识别批次/插入序）→ 行 id 数字段。
+    // 用户"第一批的第一个、第二批的第一个、第三批的第一个，然后第一批的第二…"= 列优先交错
+    // 根因：同日多单时每单 sort 都从 0 起，只按 sort 排会把不同单的第 0 行排一起 → 必须订单键在前
+    // （与账本展开行排序全同 key 序；id 形如 si{微秒}{随机数} 随机数位数不定，字符串比较乱序
+    // → 拆数字段按数值比较=创建序）
     final lines = [...(widget.dateRows ?? []).cast<Map<String, dynamic>>()]
       ..sort((a, b) {
+        final oa = _rowIdNumeric('${(a['order'] as Map?)?['id'] ?? ''}');
+        final ob = _rowIdNumeric('${(b['order'] as Map?)?['id'] ?? ''}');
+        final zo = oa.compareTo(ob);
+        if (zo != 0) return zo;
         final sa = (a['sort'] as num?)?.toInt() ?? 0;
         final sb = (b['sort'] as num?)?.toInt() ?? 0;
         if (sa != sb) return sa.compareTo(sb);
