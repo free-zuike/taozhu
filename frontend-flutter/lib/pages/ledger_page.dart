@@ -14,6 +14,7 @@ import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../utils/download.dart';
 import '../widgets/date_field.dart';
 import '../widgets/center_sheet.dart';
 import '../widgets/number_pad_field.dart';
@@ -35,6 +36,9 @@ class _LedgerPageState extends State<LedgerPage> {
   List<Map<String, dynamic>> _sales = [];
   List<Map<String, dynamic>> _payments = [];
   List<Map<String, dynamic>> _clients = [];
+  /// 搜索关键词（按 商品名/店铺名/备注 过滤出货+收款；本地行级过滤零网络）
+  String _query = '';
+  final TextEditingController _searchCtrl = TextEditingController();
   /// 分类 id → 名称（本地镜像 clients 无 category_name，按 category_id 反查 categories store 归组）
   Map<String, String> _clientCatName = {};
   String? _clientId; // 店铺维度：必选，默认第一个；无店铺时自动建「默认店铺」
@@ -86,6 +90,7 @@ class _LedgerPageState extends State<LedgerPage> {
   void dispose() {
     _syncDebounce?.cancel();
     _flowCtrl?.dispose();
+    _searchCtrl.dispose();
     SyncService.version.removeListener(_onSync);
     super.dispose();
   }
@@ -1222,6 +1227,146 @@ class _LedgerPageState extends State<LedgerPage> {
     return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
   }
 
+  /// 导入交易 CSV（与导出同格式：类型,日期,店铺,商品,数量,单位,单价,金额,备注）。
+  /// 出货行 → 该店 sale_item 本地入队同步；收款行 → payment 入队。匹配商品库名称带出价格组合。
+  /// 参考 beecount 导入理念：CSV 批量录入历史交易，字段清晰可编辑。
+  Future<void> _importCsv() async {
+    if (_clientId == null) {
+      toast(context, '请先选择店铺再导入');
+      return;
+    }
+    final text = await pickTextFile();
+    if (text == null || text.trim().isEmpty) {
+      if (!kIsWeb) toast(context, '当前平台暂不支持导入，请用 Web 端导入');
+      return;
+    }
+    final lines = text.trim().split('\n');
+    if (lines.length < 2) {
+      toast(context, 'CSV 至少需要表头 + 一行数据');
+      return;
+    }
+    final rows = <Map<String, String>>[];
+    final head = lines.first.split(',');
+    for (var i = 1; i < lines.length; i++) {
+      final cells = _splitCsvLine(lines[i]);
+      if (cells.length < 8) continue;
+      rows.add({
+        'type': cells[0].trim(),
+        'date': cells[1].trim(),
+        'client': cells[2].trim(),
+        'item': cells[3].trim(),
+        'qty': cells[4].trim(),
+        'unit': cells[5].trim(),
+        'price': cells[6].trim(),
+        'amount': cells[7].trim(),
+        'note': cells.length > 8 ? cells[8].trim() : '',
+      });
+    }
+    if (rows.isEmpty) {
+      toast(context, '没有有效的数据行');
+      return;
+    }
+    // 按行构建 sale_item/payment 本地入队（与记单提交同链路：行级镜像 + pending 队列）
+    var okCount = 0;
+    var skipCount = 0;
+    final items = await LocalDb.getAllByName('items');
+    for (final r in rows) {
+      final qty = double.tryParse(r['qty']);
+      final price = double.tryParse(r['price']);
+      final amount = double.tryParse(r['amount']);
+      if (qty == null || qty <= 0) {
+        skipCount++;
+        continue;
+      }
+      final h = r['date'].length >= 10 ? r['date'].substring(0, 10) : r['date'];
+      if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(h)) {
+        skipCount++;
+        continue;
+      }
+      if (r['type'] == '出货' || r['type'] == 'sale') {
+        final match = items.where((it) => '${it['name']}' == r['item'] ||
+            '${it['name']}'.contains(r['item']) || r['item'].contains('${it['name']}')).firstOrNull;
+        if (match == null) {
+          skipCount++;
+          continue;
+        }
+        final unit = r['unit'].isNotEmpty ? r['unit'] : '${(match['prices'] as List? ?? []).cast<Map<String, dynamic>>().firstOrNull?['unit'] ?? ''}';
+        final prices = ((match['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+        final pr = prices.where((p) => '${p['unit']}' == unit).firstOrNull ?? prices.firstOrNull;
+        final salePrice = price ?? ((pr?['sale_price'] as num?)?.toDouble() ?? 0);
+        final rid = 'si${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+        final saleId = 's${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+        final rowPayload = {
+          'id': rid, 'sale_id': saleId, 'client_id': _clientId,
+          'item_id': '${match['id']}', 'item_name': '${match['name']}',
+          'unit': unit, 'quantity': qty,
+          'sale_price': salePrice, 'cost_price': (pr?['purchase_price'] as num?)?.toDouble() ?? 0,
+          'amount': amount ?? qty * salePrice,
+          'happened_at': h, 'note': r['note'], 'sort': 0,
+        };
+        await LocalDb.upsertOne('sale_items', rowPayload);
+        await SyncService.enqueueChange(
+            entityType: 'sale_item', entitySyncId: rid, action: 'upsert', payload: rowPayload);
+        // 整单镜像占位（批量直编/编辑模式按 sale_id 组装）
+        await LocalDb.upsertOne('sales', {
+          'id': saleId, 'client_id': _clientId, 'client_name': '${match['name']}',
+          'happened_at': h, 'note': r['note'], 'total': qty * salePrice, 'items': [rowPayload],
+        });
+        okCount++;
+      } else if (r['type'] == '收款' || r['type'] == 'payment') {
+        final pid = 'pay${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+        await LocalDb.upsertOne('payments', {
+          'id': pid, 'client_id': _clientId, 'happened_at': h,
+          'amount': amount ?? 0, 'waived': 0, 'method': '', 'note': r['note'],
+        });
+        await SyncService.enqueueChange(
+            entityType: 'payment', entitySyncId: pid, action: 'upsert',
+            payload: {
+              'id': pid, 'client_id': _clientId, 'happened_at': h,
+              'amount': amount ?? 0, 'waived': 0, 'method': '', 'note': r['note'],
+            });
+        okCount++;
+      } else {
+        skipCount++;
+      }
+    }
+    unawaited(SyncService.pushPending());
+    SyncService.version.notifyListeners();
+    toast(context, '导入完成：新增 $okCount 条，跳过 $skipCount 条');
+    _load();
+  }
+
+  /// CSV 行按逗号拆分（支持引号包裹含逗号的字段）
+  List<String> _splitCsvLine(String line) {
+    final out = <String>[];
+    var cur = StringBuffer();
+    var inQuote = false;
+    for (var i = 0; i < line.length; i++) {
+      final ch = line[i];
+      if (inQuote) {
+        if (ch == '"') {
+          if (i + 1 < line.length && line[i + 1] == '"') {
+            cur.write('"');
+            i++;
+          } else {
+            inQuote = false;
+          }
+        } else {
+          cur.write(ch);
+        }
+      } else if (ch == '"') {
+        inQuote = true;
+      } else if (ch == ',') {
+        out.add(cur.toString());
+        cur = StringBuffer();
+      } else {
+        cur.write(ch);
+      }
+    }
+    out.add(cur.toString());
+    return out;
+  }
+
   /// 导出当前筛选 CSV（出货/收款，按店铺+范围）
   Future<void> _exportCsv() async {
     final buf = StringBuffer('\uFEFF');
@@ -1298,6 +1443,36 @@ class _LedgerPageState extends State<LedgerPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // 全局搜索：按商品名/店铺名/备注过滤出货+收款（本地行级，零网络）
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _searchCtrl,
+                          style: TextStyle(color: c.textMain),
+                          decoration: InputDecoration(
+                            prefixIcon: const Icon(Icons.search, size: 20),
+                            hintText: '搜索交易：商品名 / 店铺 / 备注',
+                            hintStyle: TextStyle(color: c.textSub, fontSize: 13),
+                            isDense: true,
+                          ),
+                          onChanged: (v) => setState(() => _query = v.trim()),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // 店铺交易 导出/导入 CSV（与账本筛选同维度：按店铺+范围）
+                      IconButton(
+                        tooltip: '导出交易 CSV',
+                        icon: Icon(Icons.download_outlined, color: c.primary, size: 22),
+                        onPressed: _exportCsv,
+                      ),
+                      IconButton(
+                        tooltip: '导入交易 CSV',
+                        icon: Icon(Icons.upload_outlined, color: c.primary, size: 22),
+                        onPressed: _importCsv,
+                      ),
+                    ],
+                  ),
                   // 店铺选择：点击弹出全部店铺弹层（名称+交易笔数+欠款+新增）
                   if (_clients.isNotEmpty)
                     Material(
@@ -1373,7 +1548,7 @@ class _LedgerPageState extends State<LedgerPage> {
                         ]
                       : [
                           _buildSaleFlow('暂无偿付记录'),
-                          _buildList('暂无收款记录', _payments, _paymentCard,
+                          _buildList('暂无收款记录', _filteredPayments, _paymentCard,
                               (p) => ((p['amount'] as num?)?.toDouble() ?? 0),
                               emptyActionLabel: '＋ 去收款',
                               onEmptyAction: () => Navigator.of(context)
@@ -1388,6 +1563,18 @@ class _LedgerPageState extends State<LedgerPage> {
       ),
       ),
     );
+  }
+
+  /// 收款列表按搜索关键词过滤（店铺名/备注/收款方式）
+  List<Map<String, dynamic>> get _filteredPayments {
+    if (_query.isEmpty) return _payments;
+    final q = _query.toLowerCase();
+    return _payments.where((p) {
+      final hit = '${p['client_name'] ?? ''}'.toLowerCase().contains(q) ||
+          '${p['note'] ?? ''}'.toLowerCase().contains(q) ||
+          '${p['method'] ?? ''}'.toLowerCase().contains(q);
+      return hit;
+    }).toList();
   }
 
   Widget _buildList(
@@ -1531,6 +1718,16 @@ class _LedgerPageState extends State<LedgerPage> {
           'happened_at': id.isEmpty ? '${s['happened_at'] ?? orderDate}' : id,
         });
       }
+    }
+    // 搜索过滤：按商品名/店铺名/备注（本地行级）
+    if (_query.isNotEmpty) {
+      final q = _query.toLowerCase();
+      lines.removeWhere((l) {
+        final hit = '${l['item_name'] ?? ''}'.toLowerCase().contains(q) ||
+            '${l['client_name'] ?? ''}'.toLowerCase().contains(q) ||
+            '${l['note'] ?? ''}'.toLowerCase().contains(q);
+        return !hit;
+      });
     }
     if (lines.isEmpty) {
       return RefreshIndicator(

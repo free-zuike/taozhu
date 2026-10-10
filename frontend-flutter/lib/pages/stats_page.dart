@@ -467,6 +467,21 @@ class _StatsPageState extends State<StatsPage> {
                     // 分类排行只显示出货/进货金额：不同分类下商品计数单位不同（斤/盒/件），数量跨分类合计无意义
                     _rankCard(i + 1, _c.warning, '${c['category']}', '', '¥${fmtMoney(_num(c['amount']))}'),
                   if (_cats.isEmpty) _empty('该区间暂无分类数据', Icons.category_outlined),
+                  if (!_isBuy) ...[
+                    const SizedBox(height: 20),
+                    _sectionTitle('商品出货排行（数量 · 金额）'),
+                    const SizedBox(height: 8),
+                    // 商品出货重量排行：按 商品+单位 聚合数量降序（用户"添加实际商品出货重量的排行"）
+                    for (final (i, it) in _itemRank().indexed)
+                      _rankCard(
+                        i + 1,
+                        _c.warning,
+                        '${it['name'] ?? ''}',
+                        '${(it['quantity'] as double).toStringAsFixed(2)}${it['unit'] ?? ''}',
+                        '¥${fmtMoney(_num(it['amount']))}',
+                      ),
+                    if (_itemRank().isEmpty) _empty('该区间暂无商品出货数据', Icons.inventory_2_outlined),
+                  ],
                   if (!_isBuy && _clientId == null && _mode != 'year') ...[
                     const SizedBox(height: 20),
                     _sectionTitle('按店结账（元）'),
@@ -495,6 +510,30 @@ class _StatsPageState extends State<StatsPage> {
         ],
       ),
     );
+  }
+
+  /// 商品出货排行：按 商品+单位 聚合（同商品同单位数量相加），数量降序——
+  /// 用户"实际商品出货重量的排行"（不同单位分开，避免斤/盒混算）
+  List<Map<String, dynamic>> _itemRank() {
+    final agg = <String, Map<String, dynamic>>{};
+    for (final d in _saleDetail) {
+      final key = '${d['name'] ?? ''}\u0000${d['unit'] ?? ''}';
+      final prev = agg[key];
+      if (prev == null) {
+        agg[key] = {
+          'name': d['name'] ?? '',
+          'unit': d['unit'] ?? '',
+          'quantity': _num(d['quantity']),
+          'amount': _num(d['amount']),
+        };
+      } else {
+        prev['quantity'] = (prev['quantity'] as double) + _num(d['quantity']);
+        prev['amount'] = (prev['amount'] as double) + _num(d['amount']);
+      }
+    }
+    final list = agg.values.toList()
+      ..sort((a, b) => (b['quantity'] as double).compareTo(a['quantity'] as double));
+    return list.take(20).toList();
   }
 
   /// 出货明细（商品级）：按日期分组的商品行——不再只是店铺/日期/笔数/总额

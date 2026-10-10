@@ -2038,75 +2038,8 @@ class _StatementPageState extends State<StatementPage> {
             _statCard('期末欠款（累计）', '¥${fmtMoney(_debtEnd)}',
                 _debtEnd > 0 ? c.danger : c.success),
             const SizedBox(height: 12),
-            // 出货明细（折叠，默认收起——页面聚焦成品预览，明细点开查看）
-            Card(
-              elevation: 0,
-              color: c.card,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side: BorderSide(color: c.divider),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: ExpansionTile(
-                tilePadding: const EdgeInsets.symmetric(horizontal: 14),
-                title: Text('出货明细（${_sales.length} 单）',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                children: [
-                  if (_sales.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Text('周期内无出货', style: TextStyle(color: c.textSub)),
-                    ),
-                  for (final s in _sales)
-                    for (final it in ((s['items'] as List?) ?? []).cast<Map<String, dynamic>>())
-                      ListTile(
-                        dense: true,
-                        leading: Icon(Icons.sell_outlined, size: 20, color: _c.primary),
-                        title: Text('${it['item_name'] ?? ''}'),
-                        subtitle: Text(
-                          '${_date(s['happened_at'])}'
-                          '${_clientId == null && '${s['client_name'] ?? ''}'.isNotEmpty ? ' · ${s['client_name']}' : ''}'
-                          ' · ${it['quantity'] ?? ''}${it['unit'] ?? ''} × ¥${(it['sale_price'] as num?)?.toStringAsFixed(2) ?? '-'}',
-                        ),
-                        trailing: Text('¥${(it['amount'] as num?)?.toStringAsFixed(2) ?? '-'}',
-                            style: TextStyle(fontWeight: FontWeight.w700, color: c.danger)),
-                      ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            // 收款明细（折叠）
-            Card(
-              elevation: 0,
-              color: c.card,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side: BorderSide(color: c.divider),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: ExpansionTile(
-                tilePadding: const EdgeInsets.symmetric(horizontal: 14),
-                title: Text('收款明细（${_payments.length} 笔）',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                children: [
-                  if (_payments.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Text('周期内无收款', style: TextStyle(color: c.textSub)),
-                    ),
-                  for (final p in _payments)
-                    ListTile(
-                      dense: true,
-                      leading: Icon(Icons.check_circle_outline, size: 20, color: c.success),
-                      title: Text('${p['client_name'] ?? ''}'),
-                      subtitle: Text(
-                          '${_date(p['happened_at'])}${(p['method'] as String? ?? '').isNotEmpty ? ' · ${p['method']}' : ''}'),
-                      trailing: Text('¥${(p['amount'] as num?)?.toStringAsFixed(2) ?? '-'}',
-                          style: TextStyle(fontWeight: FontWeight.w700, color: c.success)),
-                    ),
-                ],
-              ),
-            ),
+            // 出货/收款明细已移除：对账单聚焦统计 + 成品预览，逐笔明细通过模板 {明细} 变量/导出查看
+            // （用户"有必要显示出货明细和收款明细吗"——不需要，删掉主视图两栏）
             const SizedBox(height: 8),
             // 导出 Excel（选模板 → 预览 → 导出；模板自定义在「模板设置」）
             OutlinedButton.icon(
