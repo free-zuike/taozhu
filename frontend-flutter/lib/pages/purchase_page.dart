@@ -316,7 +316,14 @@ class _PurchasePageState extends State<PurchasePage> {
       final hd = '${data['happened_at'] ?? ''}';
       _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
       _noteCtrl.text = '${data['note'] ?? ''}';
-      final items = ((data['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final items = ((data['items'] as List?) ?? []).cast<Map<String, dynamic>>()
+        ..sort((a, b) {
+          // 行序=保存写入的 sort（识别批次/插入顺序）；无 sort 旧行回退 id 数字段比较
+          final sa = (a['sort'] as num?)?.toInt() ?? 0;
+          final sb = (b['sort'] as num?)?.toInt() ?? 0;
+          if (sa != sb) return sa.compareTo(sb);
+          return _rowIdNumeric('${a['id'] ?? ''}').compareTo(_rowIdNumeric('${b['id'] ?? ''}'));
+        });
       _rows.clear();
       _origItemIds = items.map((it) => '${it['id'] ?? ''}').where((x) => x.isNotEmpty).toSet();
       var skipped = 0;
@@ -371,10 +378,18 @@ class _PurchasePageState extends State<PurchasePage> {
   /// lines 字段约定（进货记录展开行）：item_id=商品 id、row_id/id=明细行 id、
   /// quantity/unit/purchase_price/happened_at
   Future<void> _loadDateRows() async {
-    // 按明细行 id（p{毫秒} 时间戳=创建序）排序：多次识别/分次提交的批次顺序重载时保持（对齐 App sale）
+    // 行序 = 保存写入的 sort（识别批次/插入顺序，服务端按 sort 展开），优先用它还原；
+    // 无 sort 的旧行回退按明细行 id（pi{微秒}{随机数}）数字段比较——随机数位数不定，
+    // 字符串比较在微秒相近时会乱序（如 …0999 vs …1012，'9'>'1' 把旧行排后），
+    // 必须拆数字段按数值比较才等价于创建序（对齐 App sale：批次按顺序方便对账）
     final lines = [...(widget.dateRows ?? []).cast<Map<String, dynamic>>()]
-      ..sort((a, b) => '${a['item_id'] ?? ''}'.compareTo('${b['item_id'] ?? ''}'));
-    if (lines.isEmpty) return;
+      ..sort((a, b) {
+        final sa = (a['sort'] as num?)?.toInt() ?? 0;
+        final sb = (b['sort'] as num?)?.toInt() ?? 0;
+        if (sa != sb) return sa.compareTo(sb);
+        return _rowIdNumeric('${a['row_id'] ?? a['id'] ?? ''}')
+            .compareTo(_rowIdNumeric('${b['row_id'] ?? b['id'] ?? ''}'));
+      });
     if (lines.isEmpty) return;
     setState(() {
       final hd = widget.initDate ?? _today();
@@ -1209,6 +1224,17 @@ class _PurchasePageState extends State<PurchasePage> {
   /// 顶栏整单凭证批量挂行依赖它与保存入库的明细行一致）
   _PRow _newPRow() => _PRow()
     ..rowId = 'pi${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+
+  /// 明细行 id（pi{微秒}{随机数}）→ 数值比较键（对齐 App sale _rowIdNumeric）：
+  /// 字符串比较在随机数位数不一时失真（同微秒 '9' vs '10' 把旧行排后=批次乱序）
+  static Comparable _rowIdNumeric(String id) {
+    final m = RegExp(r'^(?:si|pi)?(\d+)$').firstMatch(id.trim());
+    if (m != null) {
+      final n = BigInt.tryParse(m.group(1)!);
+      if (n != null) return n;
+    }
+    return id;
+  }
 
   /// 复制上一笔进货单：预填明细，可修改后提交。
   /// Web 直连 /purchases?limit=1；原生零网络——读本地镜像按 happened_at 取最近一笔

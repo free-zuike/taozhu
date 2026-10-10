@@ -369,7 +369,14 @@ class _SalePageState extends State<SalePage> {
       _noteCtrl.text = '${data['note'] ?? ''}';
       final hd = '${data['happened_at'] ?? ''}';
       _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
-      final items = ((data['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final items = ((data['items'] as List?) ?? []).cast<Map<String, dynamic>>()
+        ..sort((a, b) {
+          // 行序=保存写入的 sort（识别批次/插入顺序）；无 sort 旧行回退 id 数字段比较
+          final sa = (a['sort'] as num?)?.toInt() ?? 0;
+          final sb = (b['sort'] as num?)?.toInt() ?? 0;
+          if (sa != sb) return sa.compareTo(sb);
+          return _rowIdNumeric('${a['id'] ?? ''}').compareTo(_rowIdNumeric('${b['id'] ?? ''}'));
+        });
       _rows.clear();
       _origItemIds = items.map((it) => '${it['id'] ?? ''}').where((x) => x.isNotEmpty).toSet();
       var skipped = 0;
@@ -422,10 +429,17 @@ class _SalePageState extends State<SalePage> {
   /// 日期栏批量直编：从账本某日进入，直接平铺该日全部商品行（行内直接改，保存走行级 diff）。
   /// lines 字段约定（账本展开行）：item_id=明细行 id、goods_id=商品 id、quantity/sale_price/unit/happened_at
   Future<void> _loadDateRows() async {
-    // 按明细行 id（s{毫秒} 时间戳=创建序）排序：多次识别/分次提交的批次顺序在重载时保持
-    // （单分组/默认返回序会打乱识别录入顺序——用户"批次按顺序排下来方便对账"）
+    // 行序 = 保存写入的 sort（识别批次/插入顺序，服务端按 sort 展开），优先用它还原；
+    // 无 sort 的旧行（sort=0 全部）回退按明细行 id 数字段比较——id 形如 si{微秒}{随机数}，
+    // 随机数位数不定，字符串比较在微秒相近时会乱序（如 …0999 vs …1012，'9'>'1' 把旧行排后），
+    // 必须拆数字段按数值比较才等价于创建序（用户"批次按顺序排下来方便对账"）
     final lines = [...(widget.dateRows ?? []).cast<Map<String, dynamic>>()]
-      ..sort((a, b) => '${a['item_id'] ?? ''}'.compareTo('${b['item_id'] ?? ''}'));
+      ..sort((a, b) {
+        final sa = (a['sort'] as num?)?.toInt() ?? 0;
+        final sb = (b['sort'] as num?)?.toInt() ?? 0;
+        if (sa != sb) return sa.compareTo(sb);
+        return _rowIdNumeric('${a['item_id'] ?? ''}').compareTo(_rowIdNumeric('${b['item_id'] ?? ''}'));
+      });
     if (lines.isEmpty) return;
     final firstOrder = (lines.first['order'] as Map?) ?? const <String, dynamic>{};
     setState(() {
@@ -1486,6 +1500,18 @@ class _SalePageState extends State<SalePage> {
   /// 顶栏整单凭证批量挂行依赖它与保存入库的明细行一致）
   _Row _newRow() => _Row()
     ..rowId = 'si${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
+
+  /// 明细行 id（si{微秒}{随机数}）→ 数值比较键：微秒段固定高位+随机数低位，
+  /// BigInt 数值比较即创建序——字符串比较在随机数位数不一时失真（同微秒 '9' vs '10'
+  /// 时 '9'>'10' 把旧行排后=批次乱序）；非 si/pi 前缀 id 回退原串比较
+  static Comparable _rowIdNumeric(String id) {
+    final m = RegExp(r'^(?:si|pi)?(\d+)$').firstMatch(id.trim());
+    if (m != null) {
+      final n = BigInt.tryParse(m.group(1)!);
+      if (n != null) return n;
+    }
+    return id;
+  }
 
   /// 复制上一笔出货单：预填店铺与明细，可修改后提交。
   /// Web 直连 /sales?limit=1；原生零网络——读本地镜像按 happened_at 取最近一笔

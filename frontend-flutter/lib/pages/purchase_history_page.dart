@@ -263,17 +263,29 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       };
     }
     return byOrder.entries.map((e) {
-      // 行序=提交/插入顺序（sort 字段，服务端 PATCH 按数组序写索引）；旧数据无 sort=0 回退 id（时间）序
+      // 行序=提交/插入顺序（sort 字段，服务端 PATCH 按数组序写索引）；旧数据无 sort=0 回退 id 数字段
+      // （pi{微秒}{随机数} 随机数位数不定，字符串比较在微秒相近时乱序 → 数字段比较=创建序）
       final items = e.value..sort((a, b) {
         final sa = (a['sort'] as num?)?.toInt() ?? 0;
         final sb = (b['sort'] as num?)?.toInt() ?? 0;
         if (sa != sb) return sa.compareTo(sb);
-        return '${a['id'] ?? ''}'.compareTo('${b['id'] ?? ''}');
+        return _rowIdNumeric('${a['id'] ?? ''}').compareTo(_rowIdNumeric('${b['id'] ?? ''}'));
       });
       final m = meta[e.key]!;
       final total = items.fold<double>(0, (s, it) => s + ((it['amount'] as num?)?.toDouble() ?? 0));
       return {...m, 'total': total, 'items': items};
     }).toList();
+  }
+
+  /// 明细行 id（pi{微秒}{随机数}）→ 数值比较键：字符串比较在随机数位数不一时失真
+  /// （同微秒 '9' vs '10' 时 '9'>'10' 把旧行排后=批次乱序）；非 si/pi 前缀 id 回退原串
+  static Comparable _rowIdNumeric(String id) {
+    final m = RegExp(r'^(?:si|pi)?(\d+)$').firstMatch(id.trim());
+    if (m != null) {
+      final n = BigInt.tryParse(m.group(1)!);
+      if (n != null) return n;
+    }
+    return id;
   }
 
   /// 默认月份 = 最后一条有记录的月份：用户未手动切月时，加载后跳到最新记录所在月份
@@ -830,14 +842,30 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
           'amount': ((it['amount'] as num?)?.toDouble() ?? 0),
           'id': '${it['id'] ?? ''}',       // 明细行 id（行级附件/编辑用）
           'row_id': '${it['id'] ?? ''}',   // 同 id，行级附件回退判断用
+          'sort': (it['sort'] as num?)?.toInt() ?? 0, // 行序（识别批次/插入序；批量直编按它还原顺序）
           'purchase_price': (it['purchase_price'] as num?)?.toDouble() ?? 0,
           'happened_at': '${it['happened_at'] ?? p['happened_at'] ?? orderDate}',
         });
       }
     }
-    // 按行日期分组（按日期降序：最新日期在最上方，向下滚动看更早）
+    // 按行日期分组（按日期降序：最新日期在最上方，向下滚动看更早）。
+    // 同日期必须保持识别/录入批次序：仅按日期比较在同日返回 0，Dart List.sort 不稳定
+    // 会把展开行的识别顺序打乱（对齐 App 账本修复）——次级键=订单创建序（p{毫秒}{随机} 数字段），
+    // 三级键=行 sort（单内录入序），四级=行 id 数字段
     final sortedLines = lines.toList()
-      ..sort((a, b) => '${b['date']}'.compareTo('${a['date']}'));
+      ..sort((a, b) {
+        final x = '${b['date']}'.compareTo('${a['date']}');
+        if (x != 0) return x;
+        final oa = _rowIdNumeric('${(a['order'] as Map?)?['id'] ?? ''}');
+        final ob = _rowIdNumeric('${(b['order'] as Map?)?['id'] ?? ''}');
+        final zo = oa.compareTo(ob);
+        if (zo != 0) return zo;
+        final sa = (a['sort'] as num?)?.toInt() ?? 0;
+        final sb = (b['sort'] as num?)?.toInt() ?? 0;
+        final zs = sa.compareTo(sb);
+        if (zs != 0) return zs;
+        return _rowIdNumeric('${a['id'] ?? ''}').compareTo(_rowIdNumeric('${b['id'] ?? ''}'));
+      });
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final l in sortedLines) {
       (grouped['${l['date']}'] ??= []).add(l);
