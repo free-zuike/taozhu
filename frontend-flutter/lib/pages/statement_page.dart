@@ -529,7 +529,10 @@ class _StatementPageState extends State<StatementPage> {
       return;
     }
     final clientName = _clients.where((c) => '${c['id']}' == _clientId).map((c) => '${c['name']}').firstOrNull ?? '全部店铺';
-    var cfg = _xls.copy();
+    // 用公共库模板（_pubTpls，与成品预览/打印同源——用户"模板设置恢复默认了外面还是旧的/打印旧的"：
+    // 旧 _XlsCfg 系统与公共库脱节，导出必须切到公共库模板渲染）
+    final base = _curPubTpl.copy();
+    var cfg = base;
     final nameCtrl = TextEditingController(text: cfg.name);
     final titleCtrl = TextEditingController(text: cfg.title);
     final contentCtrl = TextEditingController(text: cfg.content);
@@ -546,12 +549,12 @@ class _StatementPageState extends State<StatementPage> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 模板列表：点选即载入该模板排版
+                // 模板列表：点选即载入该模板排版（公共库 _pubTpls，与预览/打印/模板设置一致）
                 Wrap(
                   spacing: 6,
                   runSpacing: 4,
                   children: [
-                    for (final t in _templates)
+                    for (final t in _pubTpls.isEmpty ? [XlsCfg()..name = '标准'] : _pubTpls)
                       ChoiceChip(
                         label: Text(t.name, style: const TextStyle(fontSize: 12)),
                         selected: t.name == cfg.name,
@@ -716,8 +719,14 @@ class _StatementPageState extends State<StatementPage> {
                         setDlg(() {
                           cfg.name = newName;
                           nameCtrl.text = newName;
-                          _upsertTemplate(cfg);
-                          _saveTemplates();
+                          // 公共库另存：不存在则追加，存在则覆盖（与模板设置页同源）
+                          final i = _pubTpls.indexWhere((t) => t.name == newName);
+                          if (i >= 0) {
+                            _pubTpls[i] = cfg;
+                          } else {
+                            _pubTpls.add(cfg);
+                          }
+                          saveTemplates(_pubTpls, cfg.name);
                         });
                       },
                     ),
@@ -725,14 +734,14 @@ class _StatementPageState extends State<StatementPage> {
                       icon: const Icon(Icons.delete_outline, size: 16),
                       label: const Text('删除'),
                       onPressed: () {
-                        final wasBuiltin = cfg.name == '标准' || cfg.name == '旬段汇总';
+                        final wasBuiltin = cfg.name == '标准' || cfg.name == '多栏';
                         setDlg(() {
                           if (wasBuiltin) {
                             toast(ctx, '内置模板不可删除');
                           } else {
-                            _deleteTemplate(cfg.name);
-                            _saveTemplates();
-                            cfg = _templates.first.copy();
+                            _pubTpls.removeWhere((t) => t.name == cfg.name);
+                            saveTemplates(_pubTpls, _pubTpls.isNotEmpty ? _pubTpls.first.name : '标准');
+                            cfg = _pubTpls.isNotEmpty ? _pubTpls.first.copy() : (XlsCfg()..name = '标准');
                             nameCtrl.text = cfg.name;
                             titleCtrl.text = cfg.title;
                             contentCtrl.text = cfg.content;
@@ -744,25 +753,14 @@ class _StatementPageState extends State<StatementPage> {
                       icon: const Icon(Icons.visibility_outlined, size: 16),
                       label: const Text('预览'),
                       onPressed: () {
-                        // 网格模板优先（Excel 式：变量替换+对齐）；否则正文文本/结构化表格
-                        final useGrid = _templateRows(cfg, clientName) != null; // 组件/网格模板优先
-                        final contentLines = !useGrid && cfg.content.trim().isNotEmpty
-                            ? _renderContentLines(cfg.content, clientName)
-                            : null;
+                        // 公共库渲染（与成品预览/打印同源）：所见即所得
                         showDialog<void>(
                           context: ctx,
                           builder: (c2) => AlertDialog(
                             title: Text('预览：${cfg.name}'),
                             content: SizedBox(
-                              width: 460,
-                              child: useGrid
-                                  ? _gridPreview(cfg, clientName)
-                                  : contentLines != null
-                                      ? SingleChildScrollView(
-                                          child: Text(contentLines.join('\n'),
-                                              style: const TextStyle(fontSize: 12, height: 1.7)),
-                                        )
-                                      : _previewTable(cfg, clientName),
+                              width: 560,
+                              child: _previewTplRows(renderTemplateRows(cfg, _td(clientName)), fontSize: 12),
                             ),
                             actions: [
                               TextButton(onPressed: () => Navigator.pop(c2), child: const Text('关闭')),
@@ -772,17 +770,8 @@ class _StatementPageState extends State<StatementPage> {
                       },
                     ),
                     const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.grid_on_outlined, size: 16),
-                      label: const Text('网格模板'),
-                      onPressed: () => _gridEditorDialog(ctx, cfg, clientName),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.widgets_outlined, size: 16),
-                      label: const Text('组件模板'),
-                      onPressed: () => _compEditorDialog(ctx, cfg, clientName),
-                    ),
+                    Text('逐格编辑/边框/合并请到「模板设置」',
+                        style: TextStyle(fontSize: 11, color: c.textSub)),
                   ],
                 ),
               ],
@@ -797,25 +786,28 @@ class _StatementPageState extends State<StatementPage> {
     );
     if (ok != true || !mounted) return;
     cfg.title = titleCtrl.text.trim().isEmpty ? '对账单' : titleCtrl.text.trim();
-    _xls = cfg;
-    _upsertTemplate(cfg);
-    await _saveTemplates();
+    // 公共库模板保存（用户改过的模板与模板设置页同源）
+    final idx = _pubTpls.indexWhere((t) => t.name == cfg.name);
+    if (idx >= 0) {
+      _pubTpls[idx] = cfg;
+    } else {
+      _pubTpls.add(cfg);
+    }
+    await saveTemplates(_pubTpls, cfg.name);
     final excel = _buildExcel(cfg, clientName);
     final bytes = excel.encode();
     if (bytes == null) {
       toast(context, '导出失败，请重试');
       return;
     }
-    // 导出前版式预览确认（网格模板优先，所见即所得）
+    // 导出前版式预览确认（公共库渲染，所见即所得）
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('导出预览'),
         content: SizedBox(
-          width: 460,
-          child: _templateRows(cfg, clientName) != null
-              ? _gridPreview(cfg, clientName)
-              : _previewTable(cfg, clientName),
+          width: 560,
+          child: _previewTplRows(renderTemplateRows(cfg, _td(clientName)), fontSize: 12),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
@@ -831,61 +823,16 @@ class _StatementPageState extends State<StatementPage> {
     if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
   }
 
-  /// 按排版配置生成 Excel：网格模板优先（每格变量替换后逐行写入），否则标题 + 可选表头信息行 + 明细（三种粒度）
-  Excel _buildExcel(_XlsCfg cfg, String clientName) {
+  /// 按排版配置生成 Excel：公共库模板渲染（renderTemplateRows，与成品预览/打印同源）逐行写入
+  Excel _buildExcel(XlsCfg cfg, String clientName) {
     final excel = Excel.createExcel();
     // 复用默认空 sheet 并改名，避免多余的 Sheet1（v0.17.142：导出只留一个"对账单"页）
     excel.rename('Sheet1', '对账单'); // excel 4.x rename 直接改名（返回 void），默认 sheet 恒存在
     final sheet = excel['对账单'];
-    // 组件/网格模板：统一渲染入口，每格变量替换后逐行写入（内容与预览/打印同源；对齐样式后续补 cellStyle）
-    final trows = _templateRows(cfg, clientName);
-    if (trows != null) {
-      for (final row in trows) {
-        sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
-      }
-      return excel;
-    }
-    sheet.setColumnWidth(0, 14);
-    sheet.setColumnWidth(1, 32);
-    sheet.setColumnWidth(2, 14);
-    sheet.setColumnWidth(3, 14);
-    sheet.setColumnWidth(4, 14);
-    sheet.appendRow([TextCellValue(cfg.title)]);
-    if (cfg.headClient) sheet.appendRow([TextCellValue('客户'), TextCellValue(clientName)]);
-    if (cfg.headPeriod) {
-      sheet.appendRow([
-        TextCellValue('账期'),
-        TextCellValue('${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}'),
-      ]);
-    }
-    if (cfg.headSaleTotal) {
-      sheet.appendRow([
-        TextCellValue('出货合计'),
-        TextCellValue('¥${_saleTotal.toStringAsFixed(2)}（${_sales.length} 笔）'),
-      ]);
-    }
-    if (cfg.headPayTotal) {
-      sheet.appendRow([
-        TextCellValue('收款合计'),
-        TextCellValue('¥${_payTotal.toStringAsFixed(2)}（${_payments.length} 笔）'),
-      ]);
-    }
-    if (cfg.headDebt) {
-      sheet.appendRow([TextCellValue('期末欠款'), TextCellValue('¥${_debtEnd.toStringAsFixed(2)}')]);
-    }
-    sheet.appendRow([TextCellValue('')]);
-    switch (cfg.mode) {
-      case 'daily':
-        _sheetDaily(sheet, cfg);
-        break;
-      case 'item':
-        _sheetItems(sheet, cfg);
-        break;
-      case 'period':
-        _sheetPeriod(sheet, cfg);
-        break;
-      default:
-        _sheetDetail(sheet, cfg);
+    // 公共库渲染：每格变量替换后逐行写入（内容与预览/打印同源；用户"打印显示的还是之前的"→统一模板源）
+    final trows = renderTemplateRows(cfg, _td(clientName));
+    for (final row in trows) {
+      sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
     }
     return excel;
   }
@@ -997,65 +944,16 @@ class _StatementPageState extends State<StatementPage> {
     ]);
   }
 
-  /// 读取本机模板列表（含上次选中的模板）；无记录时用内置模板兜底（标准 + 旬段汇总）
+  /// 读取公共库模板列表到 _pubTpls（与模板设置页同源；无记录时内置标准/多栏兜底）。
+  /// 此前旧 _XlsCfg 独立解析同一缓存=两套模板不一致（用户"模板设置恢复默认了外面还是旧的"）。
+  /// 直接赋值：_load() 生成对账单时会再次 loadTemplates 覆盖，initState 早期 setState 不必要
   Future<void> _loadTemplates() async {
     try {
-      final p = await SharedPreferences.getInstance();
-      final raw = p.getString('taozhu_stmt_templates');
-      if (raw != null && raw.isNotEmpty) {
-        final list = (jsonDecode(raw) as List? ?? [])
-            .whereType<Map<String, dynamic>>()
-            .map(_XlsCfg.fromJson)
-            .toList();
-        if (list.isNotEmpty) {
-          _templates = list;
-          final last = p.getString('taozhu_stmt_xls_name') ?? '';
-          _xls = _templates.where((t) => t.name == last).firstOrNull?.copy() ?? _templates.first.copy();
-          return;
-        }
-      }
-    } catch (_) {}
-    // 兼容旧版单模板存储（v0.17.140 之前：taozhu_stmt_xls_cfg）
-    try {
-      final p = await SharedPreferences.getInstance();
-      final raw = p.getString('taozhu_stmt_xls_cfg');
-      if (raw != null && raw.isNotEmpty) {
-        _xls = _XlsCfg.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-      }
-    } catch (_) {}
-    // 内置兜底模板
-    _templates = [_xls.copy()..name = '标准', _periodTemplate()];
-  }
-
-  /// 内置旬段汇总模板（1-10 / 11-20 / 21-30 / 31 日 8 列 + 总计）
-  _XlsCfg _periodTemplate() => _XlsCfg()
-    ..name = '旬段汇总'
-    ..title = '销售月报'
-    ..mode = 'period';
-
-  /// 当前模板合并回列表（修改/另存共用）：同名覆盖，否则追加
-  void _upsertTemplate(_XlsCfg cfg) {
-    final i = _templates.indexWhere((t) => t.name == cfg.name);
-    if (i >= 0) {
-      _templates[i] = cfg.copy();
-    } else {
-      _templates.add(cfg.copy());
+      final tpls = await loadTemplates();
+      _pubTpls = tpls;
+    } catch (_) {
+      _pubTpls = [XlsCfg()..name = '标准'];
     }
-  }
-
-  /// 删除模板（内置不可删）
-  void _deleteTemplate(String name) {
-    if (name == '标准' || name == '旬段汇总') return;
-    _templates.removeWhere((t) => t.name == name);
-  }
-
-  /// 保存模板列表 + 当前选中模板名到本机
-  Future<void> _saveTemplates() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      await p.setString('taozhu_stmt_templates', jsonEncode([for (final t in _templates) t.toJson()]));
-      await p.setString('taozhu_stmt_xls_name', _xls.name);
-    } catch (_) {}
   }
 
   /// 出货按日聚合（按明细行日期；行日期缺省回退单据日期）——金额口径跟随 _roundTotals
@@ -2227,8 +2125,16 @@ class _StatementPageState extends State<StatementPage> {
                 minimumSize: const Size.fromHeight(46),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: () => Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => const StatementTemplatePage())),
+              onPressed: () async {
+                // 从模板设置返回后重载模板列表（用户"模板设置恢复默认了外面还是旧的"——
+                // 此前 push 不 await，返回后 _pubTpls 未刷新）
+                await Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const StatementTemplatePage()));
+                if (!mounted) return;
+                final tpls = await loadTemplates();
+                setState(() => _pubTpls = tpls);
+                _load();
+              },
               icon: const Icon(Icons.widgets_outlined, size: 18),
               label: const Text('模板设置'),
             ),

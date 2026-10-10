@@ -1300,6 +1300,10 @@ class SyncService {
       // ⑦ 僵尸附件引用清理：引用目标实体不存在（识别取消残留等）→ 删引用行+对应副本文件；
       // 在用副本不清（孤儿文件仍由存储清理页扫描）——0.17.330 曾只加逻辑未挂调用点=从未执行
       await cleanupOrphanLocalAttachments();
+      // ⑧ 库存镜像刷新：stocks 不在同步实体里（服务端随进/出货实时维护 stocks 表），
+      // 本地镜像只在 fullSync 写一次 → 增量同步后不更新=库存页"每次点进去没数据/旧数据"（用户反馈）。
+      // 每次同步完成拉一次 /stocks 写本地镜像（行数=商品×单位，量级小；失败静默保留旧镜像）
+      await _syncStocksLocal();
     } catch (e) {
       _lastSyncFailed = true;
       appLog('sync', '同步失败: ${e.toString().split('\n').first}', level: 'error');
@@ -1307,6 +1311,17 @@ class SyncService {
     } finally {
       _setStatus(_lastSyncFailed ? 'error' : 'idle');
     }
+  }
+
+  /// 库存镜像刷新（同步完成调用）：拉 /stocks 写本地 + 缓存，页面秒开用最新值。
+  /// 失败静默（保留旧镜像离线可看），日志不刷屏
+  static Future<void> _syncStocksLocal() async {
+    try {
+      final d = await Api.instance.get('/stocks').timeout(const Duration(seconds: 8));
+      final rows = ((d['stocks'] as List?) ?? []).cast<Map<String, dynamic>>();
+      await LocalDb.putAll('stocks', rows);
+      await Api.instance.setCache('/stocks', d);
+    } catch (_) {}
   }
 
   /// 主题配置随同步上传/拉取：本地有未同步修改（dirty）→ 上传服务器并清标记；

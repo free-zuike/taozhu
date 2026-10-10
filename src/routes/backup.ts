@@ -94,11 +94,33 @@ backupRouter.put('/auto', async (c) => {
 });
 
 /// 导出全部业务表数据（手动导出与每日定时自动备份共用）
-export async function exportAllData(db: D1Database): Promise<Record<string, unknown[]>> {
+/// 附件本体（R2/存储端文件）随备份内嵌（base64）：attachment_refs 只是引用元数据，
+/// 不含文件内容——旧版只导表导致恢复后附件丢失（用户"附件无法正常处理"）。
+export async function exportAllData(db: D1Database, env?: Env): Promise<Record<string, unknown[]>> {
   const data: Record<string, unknown[]> = {};
   for (const t of TABLES) {
     const r = await db.prepare(`SELECT * FROM ${t}`).all();
     data[t] = r.results;
+  }
+  if (env) {
+    try {
+      const refs = await db.prepare('SELECT file_key FROM attachment_refs').all<{ file_key: string }>();
+      const files: unknown[] = [];
+      const seen = new Set<string>();
+      const store = createStorage(env);
+      for (const r of refs.results) {
+        const key = r.file_key;
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        try {
+          const obj = await store.get(key);
+          if (!obj) continue;
+          const buf = await new Response(obj.body).arrayBuffer();
+          files.push({ key, data: btoa(String.fromCharCode(...new Uint8Array(buf))) });
+        } catch (_) {}
+      }
+      if (files.length > 0) data['__attachments'] = files;
+    } catch (_) {}
   }
   return data;
 }
@@ -111,9 +133,11 @@ function bjStamp(d: Date): string {
 }
 
 /// 合并导入备份数据（逐表逐行 INSERT OR IGNORE；POST /import 与 R2 恢复共用）
+/// 附件文件随备份内嵌：env 提供时写回存储端（恢复后附件本体在，不再是空引用）
 export async function importBackupData(
   db: D1Database,
   data: Record<string, Record<string, unknown>[]>,
+  env?: Env,
 ): Promise<{ report: Record<string, { inserted: number; skipped: number }>; total_inserted: number }> {
   const report: Record<string, { inserted: number; skipped: number }> = {};
   let totalInserted = 0;
@@ -147,6 +171,26 @@ export async function importBackupData(
     }
     report[t] = { inserted, skipped };
   }
+  // 附件本体写回存储端（备份内嵌的 __attachments 数组：{key, data(base64)}）
+  if (env) {
+    const files = data['__attachments'];
+    if (Array.isArray(files)) {
+      const store = createStorage(env);
+      let restored = 0;
+      for (const f of files as Array<{ key?: string; data?: string }>) {
+        const key = f?.key;
+        if (!key || !f.data) continue;
+        try {
+          const bin = atob(f.data);
+          const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+          await store.put(key, bytes, 'application/octet-stream');
+          restored++;
+        } catch (_) {}
+      }
+      report['__attachments'] = { inserted: restored, skipped: files.length - restored };
+      totalInserted += restored;
+    }
+  }
   return { report, total_inserted: totalInserted };
 }
 
@@ -154,7 +198,7 @@ export async function importBackupData(
 /// 导出全库 → 走 createStorage 工厂写入存储端（STORAGE_DRIVER 可换备份端，不写死 R2）→ 清理超保留份数。
 export async function performBackup(env: Env, username?: string): Promise<{ key: string; size: number }> {
   const keep = await getBackupKeep(env.DB);
-  const data = await exportAllData(env.DB);
+  const data = await exportAllData(env.DB, env);
   const store = createStorage(env);
   const key = `${BACKUP_PREFIX}${bjStamp(new Date())}.json`;
   const body = JSON.stringify({ exported_at: new Date().toISOString(), data });
@@ -172,9 +216,9 @@ export async function performBackup(env: Env, username?: string): Promise<{ key:
   return { key, size: body.length };
 }
 
-// GET /backup — 全部数据 JSON
+// GET /backup — 全部数据 JSON（含附件本体 base64，随备份可完整恢复）
 backupRouter.get('/', async (c) => {
-  const data = await exportAllData(c.env.DB);
+  const data = await exportAllData(c.env.DB, c.env);
   await recordAudit(c.env.DB, { username: c.get('user').username, action: 'export', entity_type: 'backup', detail: `导出全库备份（${Object.keys(data).length} 张表）` });
   return c.json({ exported_at: new Date().toISOString(), data });
 });
@@ -190,7 +234,7 @@ backupRouter.post('/import', async (c) => {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return c.json({ error: '备份数据格式不正确（缺少 data 对象）' }, 400);
   }
-  const { report, total_inserted } = await importBackupData(c.env.DB, data);
+  const { report, total_inserted } = await importBackupData(c.env.DB, data, c.env);
   await recordAudit(c.env.DB, { username: c.get('user').username, action: 'import', entity_type: 'backup', detail: `导入备份：共新增 ${total_inserted} 条记录` });
   return c.json({ ok: true, report, total_inserted });
 });
@@ -249,7 +293,7 @@ backupRouter.post('/files/:key/restore', async (c) => {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return c.json({ error: '备份文件内容损坏' }, 400);
   }
-  const { report, total_inserted } = await importBackupData(c.env.DB, data);
+  const { report, total_inserted } = await importBackupData(c.env.DB, data, c.env);
   await recordAudit(c.env.DB, {
     username: c.get('user').username,
     action: 'import', entity_type: 'backup', entity_id: key,

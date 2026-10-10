@@ -29,9 +29,12 @@ class _StocksPageState extends State<StocksPage> {
   void initState() {
     super.initState();
     // 本地优先：页面加载只读本地库镜像（零网络）；同步完成后（version 通知）再刷新。
-    // 库存以服务端为准（盘点/多端变动），但本地有 fullSync 写入的 stocks 镜像，先秒开再静默校准
+    // 库存以服务端为准（盘点/多端变动），但本地有 fullSync 写入的 stocks 镜像，先秒开再静默校准。
+    // 每次进入主动校准一次（不等 version 通知）——否则本地镜像陈旧=用户"每次点进去没数据/旧数据"。
+    // 校准拉 /stocks 写本地镜像，页面即刻显示最新库存（此请求轻量，库存行数=商品×单位）
     SyncService.version.addListener(_onSync);
     _load();
+    _load(network: true);
   }
 
   @override
