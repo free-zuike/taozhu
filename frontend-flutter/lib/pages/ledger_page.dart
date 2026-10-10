@@ -1271,26 +1271,31 @@ class _LedgerPageState extends State<LedgerPage> {
     var skipCount = 0;
     final items = await LocalDb.getAllByName('items');
     for (final r in rows) {
-      final qty = double.tryParse(r['qty']);
-      final price = double.tryParse(r['price']);
-      final amount = double.tryParse(r['amount']);
+      final type = r['type'] ?? '';
+      final date = r['date'] ?? '';
+      final itemName = r['item'] ?? '';
+      final unitIn = r['unit'] ?? '';
+      final noteIn = r['note'] ?? '';
+      final qty = double.tryParse(r['qty'] ?? '');
+      final price = double.tryParse(r['price'] ?? '');
+      final amount = double.tryParse(r['amount'] ?? '');
       if (qty == null || qty <= 0) {
         skipCount++;
         continue;
       }
-      final h = r['date'].length >= 10 ? r['date'].substring(0, 10) : r['date'];
+      final h = date.length >= 10 ? date.substring(0, 10) : date;
       if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(h)) {
         skipCount++;
         continue;
       }
-      if (r['type'] == '出货' || r['type'] == 'sale') {
-        final match = items.where((it) => '${it['name']}' == r['item'] ||
-            '${it['name']}'.contains(r['item']) || r['item'].contains('${it['name']}')).firstOrNull;
+      if (type == '出货' || type == 'sale') {
+        final match = items.where((it) => '${it['name']}' == itemName ||
+            '${it['name']}'.contains(itemName) || itemName.contains('${it['name']}')).firstOrNull;
         if (match == null) {
           skipCount++;
           continue;
         }
-        final unit = r['unit'].isNotEmpty ? r['unit'] : '${(match['prices'] as List? ?? []).cast<Map<String, dynamic>>().firstOrNull?['unit'] ?? ''}';
+        final unit = unitIn.isNotEmpty ? unitIn : '${(match['prices'] as List? ?? []).cast<Map<String, dynamic>>().firstOrNull?['unit'] ?? ''}';
         final prices = ((match['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
         final pr = prices.where((p) => '${p['unit']}' == unit).firstOrNull ?? prices.firstOrNull;
         final salePrice = price ?? ((pr?['sale_price'] as num?)?.toDouble() ?? 0);
@@ -1302,7 +1307,7 @@ class _LedgerPageState extends State<LedgerPage> {
           'unit': unit, 'quantity': qty,
           'sale_price': salePrice, 'cost_price': (pr?['purchase_price'] as num?)?.toDouble() ?? 0,
           'amount': amount ?? qty * salePrice,
-          'happened_at': h, 'note': r['note'], 'sort': 0,
+          'happened_at': h, 'note': noteIn, 'sort': 0,
         };
         await LocalDb.upsertOne('sale_items', rowPayload);
         await SyncService.enqueueChange(
@@ -1310,20 +1315,20 @@ class _LedgerPageState extends State<LedgerPage> {
         // 整单镜像占位（批量直编/编辑模式按 sale_id 组装）
         await LocalDb.upsertOne('sales', {
           'id': saleId, 'client_id': _clientId, 'client_name': '${match['name']}',
-          'happened_at': h, 'note': r['note'], 'total': qty * salePrice, 'items': [rowPayload],
+          'happened_at': h, 'note': noteIn, 'total': qty * salePrice, 'items': [rowPayload],
         });
         okCount++;
-      } else if (r['type'] == '收款' || r['type'] == 'payment') {
+      } else if (type == '收款' || type == 'payment') {
         final pid = 'pay${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
         await LocalDb.upsertOne('payments', {
           'id': pid, 'client_id': _clientId, 'happened_at': h,
-          'amount': amount ?? 0, 'waived': 0, 'method': '', 'note': r['note'],
+          'amount': amount ?? 0, 'waived': 0, 'method': '', 'note': noteIn,
         });
         await SyncService.enqueueChange(
             entityType: 'payment', entitySyncId: pid, action: 'upsert',
             payload: {
               'id': pid, 'client_id': _clientId, 'happened_at': h,
-              'amount': amount ?? 0, 'waived': 0, 'method': '', 'note': r['note'],
+              'amount': amount ?? 0, 'waived': 0, 'method': '', 'note': noteIn,
             });
         okCount++;
       } else {
