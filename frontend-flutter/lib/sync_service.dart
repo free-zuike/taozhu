@@ -1280,7 +1280,11 @@ class SyncService {
       }
       // 推送 0 条时标注原因（队列空 = 离线录入已由自动同步推送；避免误读为"没推送"）
       final pendingNow = await LocalDb.getPendingChanges();
-      appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条、上传附件 $uploadedAttach 张${pushed == 0 && pendingNow.isEmpty ? '（无待推变更，此前已推送）' : ''}', level: 'info');
+      // 仅实际有动作才记（拉/推/传附件任一 >0）——全 0 的例行同步（WS 通知/回前台触发）静默，
+      // 否则"同步完成：拉取0条、推送0条"每次同步都刷屏（用户日志页大部分都是这条）
+      if (pulled > 0 || pushed > 0 || uploadedAttach > 0) {
+        appLog('sync', '同步完成：拉取 $pulled 条、推送 $pushed 条、上传附件 $uploadedAttach 张${pushed == 0 && pendingNow.isEmpty ? '（无待推变更，此前已推送）' : ''}', level: 'info');
+      }
       // ④ 在用附件本地副本补齐（附件不走同步流；本地副本被清理后离线不可见——违背本地优先）：
       // **await 等待附件下载完，同步中的动画/状态行才消失**（完全同步之后再消失）；
       // 单张失败内部静默跳过，下次同步自动重补，不阻塞主流程

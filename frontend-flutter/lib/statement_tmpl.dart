@@ -263,10 +263,13 @@ String _replaceVars(String text, TemplateData d) {
       .replaceAll('{期末欠款}', _fmtMoney(d.debtEnd))
       .replaceAll('{出货笔数}', '${d.sales.length}')
       .replaceAll('{月合计}', _fmtMoney(daily.total));
-  for (var dd = 1; dd <= daily.days.length; dd++) {
+  for (var dd = 1; dd <= 31; dd++) {
+    // 超出当月天数（如 9 月 30 天时 31 日）→ 替换为空串，杜绝字面 {31日销售额} 残留
+    // （用户"9月直接显示文字"——31日替换不到；按实际月份不显示）
+    final val = dd <= daily.days.length ? _fmtMoney(daily.days[dd - 1]) : '';
     line = line
-        .replaceAll('{$dd日}', _fmtMoney(daily.days[dd - 1]))
-        .replaceAll('{$dd日销售额}', _fmtMoney(daily.days[dd - 1]));
+        .replaceAll('{$dd日}', val)
+        .replaceAll('{$dd日销售额}', val);
   }
   return line;
 }
@@ -376,6 +379,7 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10, bool withTi
 
 List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
   final out = <List<GridCell>>[];
+  final daily = _dailyOf(d);
   for (var ri = 0; ri < cfg.grid.length; ri++) {
     final row = cfg.grid[ri];
     // {月账单} 单元格 → 整行展开为多栏月账单
@@ -386,6 +390,15 @@ List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
       out.addAll(_multiColBill(d, withTitle: onlyRow));
       continue;
     }
+    // 每日行按实际月份裁剪：行内 {N日销售额} 的 N 全部超出当月天数（如 9 月 30 天 → 31 日行）→ 整行不渲染
+    // （用户"9月直接显示文字"/按实际月份不显示——否则 {31日销售额} 替换为空后日期格还在=多一行空表）
+    final dayNs = <int>[];
+    for (final c in row) {
+      for (final m in RegExp(r'\{(\d{1,2})日销售额\}').allMatches(c.text)) {
+        dayNs.add(int.tryParse(m.group(1)!) ?? 0);
+      }
+    }
+    if (dayNs.isNotEmpty && dayNs.every((n) => n > daily.days.length)) continue;
     out.add([
       for (var cc = 0; cc < row.length; cc++)
         GridCell(
@@ -476,8 +489,8 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
         .toList();
     // 内置模板内容演进迁移（2026-10-08）：旧「标准」=标题行+{月账单}、旧「按日汇总」=对账单头部+{月账单}
     // 2026-10-10 用户定稿：头部只要一行「店铺X月份账单」+表格，不要重复标题行——内置模板统一为
-    // 两行结构（标题行 + {月账单}，标题由模板行提供，{月账单} 非首行不输出自身标题）。
-    // 仍是内置名的旧结构才迁移，用户改过的自定义内容不碰；旧「按日汇总」与「标准」同形 → 移除（用户"去掉重复"）
+    // 展开网格（标题行 + 每日/多栏 + 合计），不再用 {月账单} 宏。仍是内置名的旧结构才迁移，
+    // 用户改过的自定义内容不碰；旧「按日汇总」与「标准」同形 → 移除（用户"去掉重复"）。
     var migrated = false;
     final kept = <XlsCfg>[];
     for (final t in list) {
@@ -504,6 +517,17 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
         migrated = true;
       }
       kept.add(t);
+    }
+    // 内置模板始终合并进列表（用户旧缓存缺「标准」/「多栏」时补回——否则新模板不显示）：
+    // 已存在同名内置模板（含用户编辑过的）不覆盖，用户自定义模板保留
+    final names = kept.map((t) => t.name).toSet();
+    if (!names.contains('标准')) {
+      kept.insert(0, _defaultTemplate());
+      migrated = true;
+    }
+    if (!names.contains('多栏')) {
+      kept.add(_multiColTemplate());
+      migrated = true;
     }
     if (migrated) {
       await p.setString('taozhu_stmt_templates', jsonEncode([for (final t in kept) t.toJson()]));
@@ -549,10 +573,12 @@ List<List<GridCell>> defaultTemplateGrid() => _defaultTemplate().grid;
 XlsCfg _defaultTemplate() => XlsCfg()
   ..name = '标准'
   ..grid = [
-    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey')],
+    // 标题行：colSpan=2 合并整行居中（用户"合并居中就是标题行"——否则只占首列宽度看似偏左）
+    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey', 1, 2)],
     [GridCell('日期', 'center', true, 'grey'), GridCell('营业额', 'center', true, 'grey')],
+    // 日期格用 $d 构建时插值（{月} 是渲染时替换的模板变量；$d = 1日/2日… 固定数字，不是变量）
     for (var d = 1; d <= 31; d++)
-      [GridCell('{月}月{d}日', 'center'), GridCell('{$d日销售额}', 'right')],
+      [GridCell('{月}月$d日', 'center'), GridCell('{$d日销售额}', 'right')],
     [GridCell('合计', 'right', true, 'grey'), GridCell('{月合计}', 'right', true, 'grey')],
   ];
 
@@ -560,7 +586,8 @@ XlsCfg _defaultTemplate() => XlsCfg()
 XlsCfg _multiColTemplate() => XlsCfg()
   ..name = '多栏'
   ..grid = [
-    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey')],
+    // 标题行：colSpan=8 跨全部 4 栏×2 列合并居中（用户"合并居中就是标题行"）
+    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey', 1, 8)],
     [
       for (var cc = 0; cc < 4; cc++) ...[
         GridCell('日期', 'center', true, 'grey'),
@@ -586,4 +613,14 @@ Future<void> saveTemplates(List<XlsCfg> templates, String currentName) async {
   await p.setString('taozhu_stmt_templates',
       jsonEncode([for (final t in templates) t.toJson()]));
   await p.setString('taozhu_stmt_xls_name', currentName);
+}
+
+/// 恢复出厂：清除全部用户模板缓存，回到内置「标准」「多栏」两个展开模板。
+/// 用户之前改过/新建的模板全部丢弃（页面已弹确认）。
+Future<List<XlsCfg>> resetTemplates() async {
+  final p = await SharedPreferences.getInstance();
+  await p.remove('taozhu_stmt_templates');
+  await p.remove('taozhu_stmt_xls_cfg');
+  await p.setString('taozhu_stmt_xls_name', '标准');
+  return [_defaultTemplate(), _multiColTemplate()];
 }

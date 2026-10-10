@@ -19,17 +19,43 @@ Border _cellBorder(GridCell cell, {Color borderC = const Color(0xFFD9D9D9), doub
 /// [primary] 用于底纹（bg='grey' 的表头浅色底）。
 Widget tplPreviewTable(List<List<GridCell>> rows, {double fontSize = 12, Color? primary}) {
   const borderC = Color(0xFFD9D9D9);
-  final cols = rows.fold<int>(0, (m, r) => r.length > m ? r.length : m);
+  // 列数 = colSpan 展开宽度（合并起点占多列，物理格子数会漏列）
+  int rowWidth(List<GridCell> row) {
+    var w = 0;
+    for (final c in row) {
+      w += c.colSpan < 1 ? 1 : c.colSpan;
+    }
+    return w;
+  }
+  final cols = rows.fold<int>(0, (m, r) => rowWidth(r) > m ? rowWidth(r) : m);
 
-  // 查找覆盖 (r,c) 的合并起点（含自身），与模板编辑页 owner 同逻辑
+  // 展开列坐标 → 该行实际格子索引
+  ({int idx, GridCell cell}) cellAt(int r, int c) {
+    final row = rows[r];
+    var acc = 0;
+    for (var i = 0; i < row.length; i++) {
+      final span = row[i].colSpan < 1 ? 1 : row[i].colSpan;
+      if (c < acc + span) return (idx: i, cell: row[i]);
+      acc += span;
+    }
+    return (idx: row.length - 1, cell: row.isEmpty ? GridCell() : row.last);
+  }
+
+  // 查找覆盖 (r,c) 的合并起点（含自身），与模板编辑页 owner 同逻辑。
+  // 按 colSpan 展开列坐标遍历（合并起点 colSpan>1 占多列，其后格子索引后移——物理索引遍历会漏合并）
   ({int sr, int sc, int rs, int cs})? owner(int r, int c) {
     for (var sr = 0; sr <= r && sr < rows.length; sr++) {
       final row = rows[sr];
-      for (var sc = 0; sc <= c && sc < row.length; sc++) {
-        final cell = row[sc];
-        if ((cell.rowSpan > 1 || cell.colSpan > 1) && r < sr + cell.rowSpan && c < sc + cell.colSpan) {
-          return (sr: sr, sc: sc, rs: cell.rowSpan, cs: cell.colSpan);
+      var acc = 0;
+      for (var i = 0; i < row.length; i++) {
+        final cell = row[i];
+        final span = cell.colSpan < 1 ? 1 : cell.colSpan;
+        if (c < acc + span &&
+            (cell.rowSpan > 1 || cell.colSpan > 1) &&
+            r < sr + cell.rowSpan) {
+          return (sr: sr, sc: acc, rs: cell.rowSpan, cs: cell.colSpan);
         }
+        acc += span;
       }
     }
     return null;
@@ -53,7 +79,7 @@ Widget tplPreviewTable(List<List<GridCell>> rows, {double fontSize = 12, Color? 
     cellBuilder: (context, vicinity) {
       final r = vicinity.row;
       final c = vicinity.column;
-      if (r >= rows.length || c >= rows[r].length) {
+      if (r >= rows.length) {
         return TableViewCell(child: const SizedBox.shrink());
       }
       final o = owner(r, c);
@@ -67,7 +93,8 @@ Widget tplPreviewTable(List<List<GridCell>> rows, {double fontSize = 12, Color? 
           child: const SizedBox.shrink(),
         );
       }
-      final cell = rows[r][c];
+      final at = cellAt(r, c);
+      final cell = at.cell;
       return TableViewCell(
         rowMergeStart: o?.sr ?? r,
         rowMergeSpan: o?.rs ?? 1,

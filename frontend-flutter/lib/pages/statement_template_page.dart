@@ -46,10 +46,15 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
 
   Future<void> _init() async {
     final t = await loadTemplates();
+    // 恢复上次选中模板（saveTemplates 已持久化 taozhu_stmt_xls_name）——否则每次重进都回"标准"
+    var sel = '';
+    try {
+      sel = (await SharedPreferences.getInstance()).getString('taozhu_stmt_xls_name') ?? '';
+    } catch (_) {}
     if (mounted) {
       setState(() {
         _templates = t;
-        _selName = t.first.name;
+        _selName = (sel.isNotEmpty && t.any((x) => x.name == sel)) ? sel : t.first.name;
         _loading = false;
       });
     }
@@ -90,7 +95,7 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
 
   Future<void> _deleteTemplate() async {
     final cur = _cur;
-    if (cur.name == '标准' || cur.name == '按日汇总') {
+    if (cur.name == '标准' || cur.name == '多栏') {
       _pageToast(context, '内置模板不可删除');
       return;
     }
@@ -115,6 +120,37 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       _selName = _templates.first.name;
     });
     await _save();
+  }
+
+  /// 恢复默认内置模板（清空用户改过/新建的全部模板，回到「标准」「多栏」）——
+  /// 用户"之前修改过了，现在不显示新模板了"：旧缓存盖住内置新模板，需一键初始化
+  Future<void> _resetToDefault() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('恢复默认模板'),
+        content: const Text('将清除您修改过/新建的全部模板，恢复出厂「标准」「多栏」两个模板。确定继续？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('恢复'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final t = await resetTemplates();
+    if (mounted) {
+      setState(() {
+        _templates = t;
+        _selName = '标准';
+        _loading = false;
+        _view = 'edit';
+      });
+      _pageToast(context, '已恢复默认模板');
+    }
   }
 
   /// 预览数据：本地优先（原生读本地镜像，离线可用）；Web（无本地库）回退请求服务器当月出货
@@ -196,6 +232,10 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                 child: Wrap(spacing: 8, children: [
                   OutlinedButton.icon(icon: const Icon(Icons.add, size: 16), label: const Text('新建模板'), onPressed: _addTemplate),
                   OutlinedButton.icon(icon: const Icon(Icons.delete_outline, size: 16), label: const Text('删除'), onPressed: _deleteTemplate),
+                  OutlinedButton.icon(
+                      icon: const Icon(Icons.restore, size: 16),
+                      label: const Text('恢复默认'),
+                      onPressed: _resetToDefault),
                   Text('下方「编辑/预览」切换实时预览效果', style: TextStyle(fontSize: 11, color: c.textSub)),
                 ]),
               ),
@@ -249,18 +289,27 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       cur.grid = defaultTemplateGrid();
     }
     final rows = cur.grid.length;
-    final cols = cur.grid[0].length;
+    // 列数 = colSpan 展开后的实际宽度（每行 Σ colSpan 取最大）——不能用第一行格子数：
+    // 标题行 colSpan=2 只有 1 个格子但占 2 列，按格子数会把 2 列模板错算成 1 列再强推 3 列=多出空白列
+    int rowWidth(List<GridCell> row) {
+      var w = 0;
+      for (final c in row) {
+        w += c.colSpan < 1 ? 1 : c.colSpan;
+      }
+      return w;
+    }
+    final cols = cur.grid.fold<int>(0, (m, r) => rowWidth(r) > m ? rowWidth(r) : m);
     final rowCount = rows < 4 ? 4 : rows; // 最少展示 4 行，便于加内容
-    final colCount = cols < 3 ? 3 : cols; // 最少 3 列
+    final colCount = cols < 2 ? 2 : cols; // 最少 2 列（标题合并需 ≥2 列支撑）
     // 扩展网格到最小行列（不落库，仅编辑视图展示）
     for (var r = 0; r < rowCount; r++) {
       if (r >= cur.grid.length) cur.grid.add([for (var cc = 0; cc < colCount; cc++) GridCell()]);
-      while (cur.grid[r].length < colCount) cur.grid[r].add(GridCell());
+      while (rowWidth(cur.grid[r]) < colCount) cur.grid[r].add(GridCell());
     }
     void rebuild() => setState(() {});
     // 在指定位置插入/删除行、列（操作面板用；调用前要 flush 不做——TableView 直接改 cur.grid）
     void insertRowAt(int r) {
-      final w = cur.grid[0].length;
+      final w = rowWidth(cur.grid[0]);
       cur.grid.insert(r, [for (var cc = 0; cc < w; cc++) GridCell()]);
       rebuild();
     }
@@ -277,31 +326,68 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
       rebuild();
     }
     void removeColAt(int cc) {
-      if (cur.grid[0].length <= 1) return;
+      // 按 colSpan 展开列坐标删除：行内若该列被合并起点覆盖（colSpan>1）→ 收缩 colSpan；
+      // 否则普通格 removeAt。最少保留 1 列（用户"删除列不行最少3列"——放开到 1 列可删）
       for (var r = 0; r < cur.grid.length; r++) {
-        cur.grid[r].removeAt(cc);
+        final row = cur.grid[r];
+        // 找到覆盖 cc 的格子：从行首累加 colSpan，命中即操作
+        var acc = 0;
+        var done = false;
+        for (var i = 0; i < row.length && !done; i++) {
+          final c = row[i];
+          final span = c.colSpan < 1 ? 1 : c.colSpan;
+          if (cc >= acc && cc < acc + span) {
+            if (span > 1) {
+              // 合并格被删列覆盖：收缩 span（删掉一列）
+              c.colSpan = span - 1 < 1 ? 1 : span - 1;
+            } else {
+              row.removeAt(i);
+            }
+            done = true;
+          }
+          acc += span;
+        }
       }
       if (cc < cur.colAligns.length) cur.colAligns.removeAt(cc);
       rebuild();
     }
-    // 查找覆盖 (r,c) 的合并起点（含自身）
+    // 查找覆盖 (r,c) 的合并起点（含自身）。按 colSpan 展开列坐标遍历——
+    // 合并起点 colSpan>1 占多列，其后格子索引后移，物理索引遍历会漏合并（用户"编辑显示合并预览没合并"）
     ({int sr, int sc, int rs, int cs})? owner(int r, int c) {
       for (var sr = 0; sr <= r && sr < cur.grid.length; sr++) {
-        for (var sc = 0; sc <= c && sc < cur.grid[sr].length; sc++) {
-          final cell = cur.grid[sr][sc];
-          if ((cell.rowSpan > 1 || cell.colSpan > 1) &&
-              r < sr + cell.rowSpan && c < sc + cell.colSpan) {
-            return (sr: sr, sc: sc, rs: cell.rowSpan, cs: cell.colSpan);
+        final row = cur.grid[sr];
+        var acc = 0;
+        for (var i = 0; i < row.length; i++) {
+          final cell = row[i];
+          final span = cell.colSpan < 1 ? 1 : cell.colSpan;
+          if (c < acc + span &&
+              (cell.rowSpan > 1 || cell.colSpan > 1) &&
+              r < sr + cell.rowSpan) {
+            return (sr: sr, sc: acc, rs: cell.rowSpan, cs: cell.colSpan);
           }
+          acc += span;
         }
       }
       return null;
     }
     // 单元格操作面板（Excel 式，一个入口收纳编辑/对齐/加粗/插入行列/合并/删除）：
     // 点单元格弹出，不再顶部加一排按钮
+    // 展开列坐标 → 实际格子索引（合并起点 colSpan>1 占多列，其后格子索引后移）
+    int cellIndexAt(int r, int col) {
+      if (r >= cur.grid.length) return 0;
+      final row = cur.grid[r];
+      var acc = 0;
+      for (var i = 0; i < row.length; i++) {
+        final span = row[i].colSpan < 1 ? 1 : row[i].colSpan;
+        if (col < acc + span) return i;
+        acc += span;
+      }
+      return row.isEmpty ? 0 : row.length - 1;
+    }
     Future<void> _showCellMenu(int r, int col) async {
       setState(() => _selCell = (r: r, c: col));
-      final cell = cur.grid[r][col];
+      final idx = cellIndexAt(r, col);
+      final cell = (r < cur.grid.length && idx < cur.grid[r].length) ? cur.grid[r][idx] : GridCell();
       await showModalBottomSheet<void>(
         context: context,
         showDragHandle: true,
@@ -519,8 +605,11 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
 
     // 单元格内容 widget：点击=合并模式两步 / 否则弹出操作面板（Excel 式：编辑/对齐/加粗/插入行列/合并一体）
     Widget cellWidget(int r, int col) {
-      final cell = (r < cur.grid.length && col < cur.grid[r].length) ? cur.grid[r][col] : GridCell();
-      final a = _cellAlign(cur, col, cell.align);
+      // 展开列坐标 → 实际格子索引（cellIndexAt；合并起点 colSpan>1 占多列，其后格子索引后移）
+      final idx = cellIndexAt(r, col);
+      final rowCells = (r < cur.grid.length) ? cur.grid[r] : const <GridCell>[];
+      final cell = idx < rowCells.length ? rowCells[idx] : GridCell();
+      final a = _cellAlign(cur, idx, cell.align);
       final isSel = _selCell != null && _selCell!.r == r && _selCell!.c == col;
       return InkWell(
         onTap: () {
@@ -609,6 +698,9 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
           extent: const FixedTableSpanExtent(42),
           foregroundDecoration: const TableSpanDecoration(border: TableSpanBorder()),
         );
+    // 展开列宽（colSpan 合并格占多列）：TableView columnCount 必须用它——
+    // 否则标题行 colSpan=2 只有 1 格导致 columnCount 算成 1/被强推 3=空白列+合并错位
+    final gridCols = cur.grid.fold<int>(0, (m, r) => rowWidth(r) > m ? rowWidth(r) : m);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -634,25 +726,23 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
         child: _view == 'preview'
             ? _previewPane(c)
             : TableView.builder(
-                columnCount: cur.grid[0].length,
+                columnCount: gridCols,
                 rowCount: cur.grid.length,
                 columnBuilder: colSpan,
                 rowBuilder: rowSpan,
                 cellBuilder: (context, vicinity) {
                   final r = vicinity.row;
                   final cc = vicinity.column;
-                  if (r >= cur.grid.length || cc >= cur.grid[r].length) {
-                    return TableViewCell(child: cellWidget(r, cc));
-                  }
                   final o = owner(r, cc);
+                  // 合并区：起点返回内容，被覆盖格返回占位（带相同 merge 信息保证真合并渲染）
                   if (o != null) {
-                    // 合并区：起点返回内容，被覆盖格返回占位（带相同 merge 信息保证真合并渲染）
                     return TableViewCell(
                       rowMergeStart: o.sr,
                       rowMergeSpan: o.rs,
                       columnMergeStart: o.sc,
                       columnMergeSpan: o.cs,
-                      child: (o.sr == r && o.sc == cc) ? cellWidget(r, cc) : const SizedBox.shrink(),
+                      // 合并起点格：格子实际索引是展开前的 o.sc（cc 是展开列坐标，可能被 colSpan 后移）
+                      child: (o.sr == r && o.sc == cc) ? cellWidget(r, o.sc) : const SizedBox.shrink(),
                     );
                   }
                   return TableViewCell(child: cellWidget(r, cc));
