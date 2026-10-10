@@ -51,6 +51,10 @@ function connect() {
     });
     socket.onOpen(() => {
       failCount = 0;
+      // 连接建立（首连/断线重连）：通知页面重拉——否则断线期间服务端变更不会在重连后自动刷新，
+      // 页面停留旧数据直到手动刷新（对齐 App RealtimeSync onOpen → autoSync 语义）
+      fire('sync');
+      fire('*');
     });
     socket.onMessage((res) => {
       try {

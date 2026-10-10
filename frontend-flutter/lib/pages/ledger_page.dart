@@ -1509,7 +1509,8 @@ class _LedgerPageState extends State<LedgerPage> {
         // 明细行自带快照（后端 join 时旧值）仅作本地目录缺该商品时的兜底
         final dirCat = _itemCategory['${it['item_id'] ?? ''}'] ?? '';
         final catInline = '${it['item_category'] ?? it['category'] ?? ''}'.trim();
-        // 备注：行级 note 优先，空则回退单据 note（仅首行显示，避免每行重复）
+        // 备注：有明细的行只显示行级 note（对齐小程序/Web 直显行备注——用户"商品备注删除后保存
+        // 删除不掉"=行备注清空后回退显示整单备注的假象）；无明细（备注占位行）单独显示整单 note
         final lineNote = '${it['note'] ?? ''}'.trim();
         lines.add({
           'date': id.length >= 10 ? id.substring(0, 10) : orderDate,
@@ -1526,7 +1527,7 @@ class _LedgerPageState extends State<LedgerPage> {
           'cost_price': (it['cost_price'] as num?)?.toDouble(),
           'qty_num': (it['quantity'] as num?)?.toDouble() ?? 0,
           'sort': (it['sort'] as num?)?.toInt() ?? 0, // 行序（识别批次/插入序；批量直编按它还原顺序）
-          'note': lineNote.isNotEmpty ? lineNote : (it == items.first ? orderNote : ''),
+          'note': lineNote,
           'happened_at': id.isEmpty ? '${s['happened_at'] ?? orderDate}' : id,
         });
       }
@@ -1664,7 +1665,8 @@ class _LedgerPageState extends State<LedgerPage> {
         : (profit >= 0 ? c.success.withOpacity(0.4) : c.danger.withOpacity(0.4));
     // 背景折线方向：盈利=从左下角到右上角（上升），亏损=从右上角到左下角（下降）；无盈亏=平线
     final trendUp = profit == null ? null : profit >= 0;
-    // 第三行：进价 · 售价 · 数量单位（老板看进价；店员无进价数据只显示售价·数量）
+    // 第三行：进价 · 重量 · 售价（用户"售价和重量修改一下顺序"：重量在前售价在后；老板看进价，
+    // 店员无进价数据只显示重量·售价）
     // 无明细坏行（服务端 item_id 空 JOIN 失败）：不显示"售价¥0.00"，给清晰标记且可长按删除
     final isDirtyLine = itemName.trim().isEmpty;
     final priceLine = StringBuffer();
@@ -1672,8 +1674,9 @@ class _LedgerPageState extends State<LedgerPage> {
       priceLine.write('（无明细 · 长按删除该脏行）');
     } else {
       if (!_isStaff && costPrice != null) priceLine.write('进价 ¥${fmtPrice(costPrice.toDouble())} · ');
+      if (qty.isNotEmpty) priceLine.write('×$qty$unit');
+      if (priceLine.length > 0 && salePrice != null) priceLine.write(' · ');
       priceLine.write('售价 ¥${fmtPrice(salePrice?.toDouble() ?? 0)}');
-      if (qty.isNotEmpty) priceLine.write(' · ×$qty$unit');
     }
     return InkWell(
       borderRadius: BorderRadius.circular(10),
