@@ -5,6 +5,7 @@
 /// 组件/正文旧模板仍可被导出渲染（renderTemplateRows 兼容），但编辑入口收敛为网格。
 /// 预览取本地镜像（原生）；Web 无本地库回退请求服务器。
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:two_dimensional_scrollables/two_dimensional_scrollables.dart';
 import '../api.dart';
 import '../local_db.dart';
