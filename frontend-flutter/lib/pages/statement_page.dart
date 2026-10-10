@@ -771,7 +771,7 @@ class _StatementPageState extends State<StatementPage> {
                     ),
                     const SizedBox(width: 8),
                     Text('逐格编辑/边框/合并请到「模板设置」',
-                        style: TextStyle(fontSize: 11, color: c.textSub)),
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF909399))),
                   ],
                 ),
               ],
