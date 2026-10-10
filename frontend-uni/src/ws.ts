@@ -25,8 +25,15 @@ export function offWs(type: string, fn: WsHandler) {
 
 /** 登录后启动 WS（全局只连一条；页面通过 onWs 订阅） */
 export function startWs() {
-  if (!closed && socket) return;
   closed = false;
+  // 立即重连（不等退避）：onShow/回前台时调用——退避在 8/20/60s 大间隔时跨端刷新
+  // 要等很多秒（用户"备注修改跨端很多秒才刷新"）；已连接时重复调用无副作用（connect 幂等 close 旧连）
+  if (socket) {
+    try { socket.close({}); } catch (_) {}
+    socket = null;
+  }
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  failCount = 0;
   connect();
 }
 

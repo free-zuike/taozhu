@@ -1089,13 +1089,15 @@ class SyncService {
         if (d == null) return totalAccepted;
         final accepted = d['accepted'] as int? ?? 0;
         totalAccepted += accepted;
-        // 推送明细日志：逐条记录（用户要一条变更一条日志，不聚合——"推送 N 条"看不出具体推了什么）
+        // 推送明细日志：按实体类型聚合条数（逐条记录在批量添加 16 单=数百行 sale_item 时会刷爆
+        // 300 条日志上限，用户"16 个交易弄出 300 多条日志"——聚合保留可读性，不再逐行刷屏）
+        final byType = <String, int>{};
         for (final ch in batch) {
           final t = '${ch['entity_type'] ?? ''}';
-          final sid = '${ch['entity_sync_id'] ?? ''}';
-          final act = '${ch['action'] ?? 'upsert'}';
-          appLog('sync', '推送 $t $sid（$act）', level: 'info');
+          byType[t] = (byType[t] ?? 0) + 1;
         }
+        final detail = byType.entries.map((e) => '${e.key} ${e.value} 条').join('、');
+        appLog('sync', '推送 ${batch.length} 条：$detail（本批）', level: 'info');
         appLog('sync', '本轮第 ${bi + 1}/${batches.length} 批推送 ${batch.length} 条，服务器接受 $accepted 条', level: 'info');
         if (isExtraBatch) {
           // 持久删除集合：仅清除"本地库已确实删掉/软删落库"的条目；

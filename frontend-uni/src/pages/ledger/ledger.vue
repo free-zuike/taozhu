@@ -58,10 +58,11 @@
             </view>
             <text class="amt">¥{{ fmtNum(l.amount) }}</text>
           </view>
-          <!-- ③ 进价 · 售价 · 数量（老板看进价；盈亏着色） -->
+          <!-- ③ 进价 · 重量 · 售价（用户"售价和重量修改一下顺序"：重量在前售价在后；老板看进价；盈亏着色） -->
           <view class="line-bottom">
             <text v-if="isAdmin && l.cost_price > 0" class="l2-tx">进价 ¥{{ fmtPrice(l.cost_price) }} · </text>
-            <text class="l2-tx">售价 ¥{{ fmtPrice(l.sale_price || 0) }}<template v-if="l.quantity !== ''"> · ×{{ l.quantity }}{{ l.unit }}</template></text>
+            <text v-if="l.quantity !== ''" class="l2-tx">×{{ l.quantity }}{{ l.unit }} · </text>
+            <text class="l2-tx">售价 ¥{{ fmtPrice(l.sale_price || 0) }}</text>
             <text v-if="isAdmin && l.cost_price > 0" class="l2-profit" :class="profitText(l)">{{ profitText(l) }}</text>
           </view>
         </view>

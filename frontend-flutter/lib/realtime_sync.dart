@@ -150,4 +150,17 @@ class RealtimeSync {
     final delay = [1, 3, 8, 20, 60][min(_failCount, 5) - 1];
     _retry = Timer(Duration(seconds: delay), _connect);
   }
+
+  /// 回前台立即重连（不等退避）：断线期间服务端变更需尽快拉回——否则退避在 8/20/60s 大间隔时
+  /// 跨端刷新要等很多秒（用户"备注修改跨端很多秒才刷新"）
+  void reconnectNow() {
+    if (_closed) return;
+    _retry?.cancel();
+    _failCount = 0;
+    try {
+      _channel?.sink.close();
+    } catch (_) {}
+    _channel = null;
+    _connect();
+  }
 }

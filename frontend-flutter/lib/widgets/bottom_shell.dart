@@ -123,11 +123,13 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  /// 回到前台：不主动触发同步（对齐参考实现：同步由 连接建立 autoSync + WS 事件 驱动，
-  /// 回前台时 WS 重连自动补一次全量，避免每次回前台都全量拉取导致日志刷屏/耗时变长）
+  /// 回到前台：立即重连 WS 并触发一次同步（不等退避——退避在 8/20/60s 大间隔时跨端刷新
+  /// 要等很多秒，用户"备注修改跨端很多秒才刷新"）；同步时机其余由 WS 事件驱动
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 保持 WidgetsBindingObserver 以便 dispose 时移除监听；同步时机由 RealtimeSync 统一管理
+    if (state == AppLifecycleState.resumed) {
+      RealtimeSync.instance.reconnectNow();
+    }
   }
 
   @override
