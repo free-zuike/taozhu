@@ -455,6 +455,7 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
           await LocalDb.deleteOne('purchases', '${order['id']}');
           await SyncService.enqueueChange(
               entityType: 'purchase', entitySyncId: '${order['id']}', action: 'delete', payload: {});
+          unawaited(SyncService.pushPending()); // 立即推送：删除即时生效，服务端笔数/库存收敛
           toast(context, '已删除该商品（本条记录已无商品）');
           _load();
           return;

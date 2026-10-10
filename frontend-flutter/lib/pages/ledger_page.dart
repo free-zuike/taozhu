@@ -583,8 +583,12 @@ class _LedgerPageState extends State<LedgerPage> {
     };
   }
 
-  /// 店铺选择弹层的商品数量（= 出货明细行数；与「我的」页本店交易口径一致）
+  /// 店铺选择弹层的商品数量（= 出货明细行数；与「我的」页本店交易口径一致）。
+  /// 原生优先本地实时聚合（删除/修改出货后立即收敛）；服务端 sale_count（clients 镜像快照字段）
+  /// 仅 Web 无本地聚合时兜底——否则删除出货后镜像行已删但快照字段旧值不变，"删了笔数还在"
   String _statCount(Map<String, dynamic> c) {
+    final local = _clientStat['${c['id']}']?.count;
+    if (local != null) return '$local';
     final v = (c['sale_count'] as num?)?.toInt();
     if (v != null) return '$v';
     return '${_clientStat['${c['id']}']?.count ?? 0}';
@@ -985,6 +989,7 @@ class _LedgerPageState extends State<LedgerPage> {
           await LocalDb.deleteOne('sales', '${order['id']}');
           await SyncService.enqueueChange(
               entityType: 'sale', entitySyncId: '${order['id']}', action: 'delete', payload: {});
+          unawaited(SyncService.pushPending()); // 立即推送：删除即时生效，服务端笔数/库存收敛
           toast(context, '已删除该商品（本条记录已无商品）');
           appLog('op', '出货 删除商品行：该条出货记录最后一行，整单一并删除');
           SyncService.version.notifyListeners();
@@ -1015,6 +1020,7 @@ class _LedgerPageState extends State<LedgerPage> {
             entityType: 'sale_item', entitySyncId: itemId, action: 'delete', payload: {
           'id': itemId, 'sale_id': '${order['id']}', 'client_id': '${order['client_id'] ?? ''}',
         });
+        unawaited(SyncService.pushPending()); // 立即推送：删除即时生效，服务端笔数/库存收敛
       }
       toast(context, '已删除该商品');
       appLog('op', '出货 删除商品行：$name（${order['client_name'] ?? ''} ${_date(order['happened_at'])}）');
@@ -1051,6 +1057,7 @@ class _LedgerPageState extends State<LedgerPage> {
         await LocalDb.deleteOne('sales', orderId);
         await SyncService.enqueueChange(
             entityType: 'sale', entitySyncId: orderId, action: 'delete', payload: {});
+        unawaited(SyncService.pushPending()); // 立即推送：删除即时生效，服务端笔数/库存收敛
       }
       toast(context, '已删除该记录');
       appLog('op', '出货 删除记录：${order['client_name'] ?? ''} ${_date(order['happened_at'])}');
