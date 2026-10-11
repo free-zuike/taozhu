@@ -194,8 +194,8 @@ jobs:
           BUILD_NUM=$(echo "$VERSION" | awk -F. '{print ($1*1000000)+($2*10000)+($3*100)}')
           # ② 包名统一 com.taozhu.app（与「陶朱」一致：避免两个应用并存、可覆盖升级）
           sed -i 's|namespace = ".*"|namespace = "com.taozhu.app"|; s|applicationId = ".*"|applicationId = "com.taozhu.app"|' android/app/build.gradle.kts
-          # ②a 插件（image_picker/record/shared_preferences/url_launcher/file_picker 及传递依赖）要求 compileSdk 36：
-          # 用 python 强制改写（sed 对 flutter.compileSdkVersion 写法可能不匹配；python 正则+打印确认）
+          # ②a 插件（image_picker/record/shared_preferences/url_launcher 传递依赖）要求 compileSdk 36：
+          # 强制 compileSdk = 36 满足所有插件；file_picker 已降 6.x 减少硬要求源
           python3 - <<'PY'
 import re
 p = 'android/app/build.gradle.kts'

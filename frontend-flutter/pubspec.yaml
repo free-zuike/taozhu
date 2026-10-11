@@ -13,7 +13,9 @@ dependencies:
   shared_preferences: ^2.2.0
   intl: ^0.20.3
   image_picker: ^1.1.2
-  file_picker: ^8.1.2
+  # file_picker 6.x（非 8.x）：8.x 的 androidx 传递依赖要求 compileSdk 36+，CI Android 构建
+  # checkReleaseAarMetadata 失败（file_picker compiled against android-34 需 36）；6.x 兼容 34/35
+  file_picker: ^6.1.1
   share_plus: ^10.1.2
   path_provider: ^2.1.0
   crypto: ^3.0.3
