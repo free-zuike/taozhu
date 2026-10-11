@@ -197,13 +197,13 @@ jobs:
           # ②a 插件（image_picker/record/shared_preferences/url_launcher 传递依赖）要求 compileSdk 36：
           # 强制 compileSdk = 36 满足所有插件；file_picker 已降 6.x 减少硬要求源
           python3 - <<'PY'
-import re
-p = 'android/app/build.gradle.kts'
-s = open(p, encoding='utf-8').read()
-s = re.sub(r'compileSdk\s*=.*', 'compileSdk = 36', s)
-open(p, 'w', encoding='utf-8').write(s)
-print('compileSdk 已强制 = 36')
-PY
+          import re
+          p = 'android/app/build.gradle.kts'
+          s = open(p, encoding='utf-8').read()
+          s = re.sub(r'compileSdk\s*=.*', 'compileSdk = 36', s)
+          open(p, 'w', encoding='utf-8').write(s)
+          print('compileSdk 已强制 = 36')
+          PY
           grep -n "compileSdk" android/app/build.gradle.kts || true
           # ②b MainActivity 类包与 applicationId 对齐——只改 namespace 不改类路径会 ClassNotFoundException 启动即崩
           if [ -f android/app/src/main/kotlin/com/taozhu/taozhu_app/MainActivity.kt ]; then
