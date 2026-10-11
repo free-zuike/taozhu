@@ -31,6 +31,10 @@
           <text class="stat-label">周期</text>
         </view>
       </view>
+      <view class="trade-ops">
+        <text class="op" @click="exportClientTrades(c)">导出该店交易</text>
+        <text class="op" @click="importClientTrades(c)">导入该店交易</text>
+      </view>
       <text v-if="c.first_book_date" class="stat-start">记账起始 {{ c.first_book_date }}</text>
     </view>
     <view v-if="clients.length === 0" class="empty">暂无饭店，点上方新增</view>
@@ -268,6 +272,123 @@ async function remove(id: string) {
   }
 }
 
+// ── 店铺级交易导入/导出（对齐 App：按店铺，不是全部；CSV 格式 类型,日期,店铺,商品,数量,单位,单价,金额,备注）──
+
+function csvField(v: unknown): string {
+  const s = String(v ?? '');
+  return /[,"\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/// 导出该店交易：拉该店出货+收款 → 组装 CSV → 复制剪贴板
+async function exportClientTrades(c: Client) {
+  uni.showLoading({ title: '生成中…' });
+  try {
+    const cq = `&client_id=${c.id}`;
+    const results = await Promise.all([
+      request<{ sale_items?: Array<Record<string, any>>; sales?: Array<Record<string, any>> }>(`/sales?limit=1000${cq}`, 'GET'),
+      request<{ payments: Array<Record<string, any>> }>(`/payments?limit=1000${cq}`, 'GET'),
+    ]);
+    const saleItems = results[0].sale_items && results[0].sale_items.length > 0 ? results[0].sale_items : [];
+    const payments = results[1].payments;
+    const lines = ['\uFEFF类型,日期,店铺,商品,数量,单位,单价,金额,备注'];
+    for (const it of saleItems) {
+      lines.push(['出货', csvField(String(it.happened_at || '').slice(0, 10)), csvField(c.name),
+        csvField(it.item_name), csvField(it.quantity), csvField(it.unit), csvField(it.sale_price), csvField(it.amount), csvField(it.note)].join(','));
+    }
+    for (const p of payments) {
+      lines.push(['收款', csvField(String(p.happened_at || '').slice(0, 10)), csvField(c.name),
+        '', '', '', '', csvField(p.amount), csvField(p.method)].join(','));
+    }
+    uni.hideLoading();
+    uni.setClipboardData({
+      data: lines.join('\n'),
+      success: () => uni.showToast({ title: `「${c.name}」交易 CSV 已复制`, icon: 'success' }),
+    });
+  } catch (e) {
+    uni.hideLoading();
+    uni.showToast({ title: (e as Error).message || '导出失败', icon: 'none' });
+  }
+}
+
+/// 导入该店交易：粘贴 CSV（App 导出格式）→ 出货走 /sales 行创建（匹配商品库带价格）、收款走 /payments
+async function importClientTrades(c: Client) {
+  const r = await new Promise<boolean>((resolve) => {
+    uni.showModal({
+      title: `导入交易到「${c.name}」`,
+      content: '请先复制 CSV 到剪贴板（格式：类型,日期,店铺,商品,数量,单位,单价,金额,备注），然后点确定读取剪贴板导入。',
+      editable: true,
+      placeholderText: '粘贴 CSV 文本…',
+      success: (m) => resolve(m.confirm),
+    });
+  });
+  if (!r) return;
+  uni.showLoading({ title: '导入中…' });
+  try {
+    const data = await new Promise<string>((resolve2) => {
+      uni.getClipboardData({ success: (d) => resolve2(String(d.data || '')), fail: () => resolve2('') });
+    });
+    const lines = data.trim().split('\n').filter((l) => l.trim());
+    if (lines.length < 2) {
+      uni.hideLoading();
+      uni.showToast({ title: '剪贴板没有 CSV 数据', icon: 'none' });
+      return;
+    }
+    // 匹配商品库（出货行需 item_id/price_id 才能建行）
+    const items = await request<{ items: Array<{ id: string; name: string; prices: Array<{ id: string; unit: string; sale_price: number; purchase_price: number }> }> }>('/items', 'GET');
+    let ok = 0;
+    let skip = 0;
+    const BOM = '\uFEFF';
+    for (const raw of lines.slice(1)) {
+      const line = raw.replace(BOM, '');
+      // 简易 CSV 解析（支持引号包裹字段）
+      const cells: string[] = [];
+      let cur = ''; let inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQ) {
+          if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+          else cur += ch;
+        } else if (ch === '"') inQ = true;
+        else if (ch === ',') { cells.push(cur); cur = ''; }
+        else cur += ch;
+      }
+      cells.push(cur);
+      if (cells.length < 5) { skip++; continue; }
+      const type = cells[0].trim();
+      const date = (cells[1] || '').trim();
+      const itemName = (cells[3] || '').trim();
+      const qty = Number(cells[4]);
+      if (!qty || qty <= 0) { skip++; continue; }
+      if (type === '收款' || type === 'payment') {
+        await request('/payments', 'POST', {
+          client_id: c.id, happened_at: date, amount: Number(cells[7] || cells[6] || 0),
+          method: (cells[8] || '').trim(), note: '',
+        }).catch(() => null);
+        ok++;
+        continue;
+      }
+      // 出货：匹配商品库名称
+      const match = items.items.find((it) => it.name === itemName || it.name.includes(itemName) || itemName.includes(it.name));
+      if (!match) { skip++; continue; }
+      const unit = (cells[5] || '').trim() || match.prices[0]?.unit || '';
+      const price = match.prices.find((p) => p.unit === unit) || match.prices[0];
+      if (!price) { skip++; continue; }
+      const salePrice = Number(cells[6]) || price.sale_price;
+      await request('/sales', 'POST', {
+        client_id: c.id, happened_at: date, note: (cells[8] || '').trim(),
+        items: [{ price_id: price.id, quantity: qty, sale_price: salePrice }],
+      }).catch(() => null);
+      ok++;
+    }
+    uni.hideLoading();
+    uni.showToast({ title: `已导入到「${c.name}」：新增 ${ok} 条，跳过 ${skip} 条`, icon: 'none', duration: 2500 });
+    await load();
+  } catch (e) {
+    uni.hideLoading();
+    uni.showToast({ title: (e as Error).message || '导入失败', icon: 'none' });
+  }
+}
+
   onHide(() => { offWs('*', load); });
 </script>
 
@@ -299,6 +420,9 @@ async function remove(id: string) {
 .stat-label { font-size: 22rpx; color: var(--text-sub); }
 .stat-divider { width: 1rpx; height: 36rpx; background: var(--divider); }
 .stat-start { display: block; margin-top: 12rpx; font-size: 22rpx; color: var(--text-sub); }
+/* 店铺级交易导入/导出（对齐 App：每店 导出该店交易/导入该店交易） */
+.trade-ops { display: flex; gap: 24rpx; margin-top: 14rpx; }
+.trade-ops .op { font-size: 24rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 10rpx; padding: 8rpx 20rpx; flex-shrink: 0; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }

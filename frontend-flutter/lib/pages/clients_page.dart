@@ -435,19 +435,6 @@ class _ClientsPageState extends State<ClientsPage> {
     _load();
   }
 
-  /// 导出全部店铺交易 CSV（店铺管理页入口，用户"交易导入导出放在店铺管理中"）
-  Future<void> _exportAllTrades() async {
-    try {
-      final data = await loadTradesLocal();
-      final csv = buildTradesCsv(data.sales, data.payments);
-      final bytes = Uint8List.fromList(utf8.encode(csv));
-      await saveBytes(bytes, 'taozhu-all-trades.csv', 'text/csv', '陶朱交易导出');
-      if (kIsWeb) toast(context, '已导出全部店铺交易 CSV');
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
-    }
-  }
-
   /// 导出单店铺交易 CSV（该店全部出货+收款）
   Future<void> _exportClientTrades(Map<String, dynamic> c) async {
     try {
@@ -459,6 +446,19 @@ class _ClientsPageState extends State<ClientsPage> {
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
+  }
+
+  /// 导入交易 CSV（店铺级）：[client] 指定目标店铺，解析行直接归入该店（行带店铺列忽略，强制当前店）
+  Future<void> _importClientTrades(Map<String, dynamic> client) async {
+    final text = await pickTradesCsv();
+    if (text == null || text.trim().isEmpty) {
+      if (!kIsWeb) toast(context, '当前平台暂不支持导入，请用 Web 端导入');
+      return;
+    }
+    final r = await importTradesCsv(text, '${client['id']}', '${client['name']}');
+    unawaited(SyncService.pushPending());
+    SyncService.version.notifyListeners();
+    toast(context, '已导入到「${client['name']}」：新增 ${r.ok} 条，跳过 ${r.skip} 条');
   }
 
   /// 导入交易 CSV：先选目标店铺，解析行归入该店（行带店铺列忽略，强制当前店）
@@ -497,15 +497,8 @@ class _ClientsPageState extends State<ClientsPage> {
     if (storeId == null) return;
     final client = _clients.where((c) => '${c['id']}' == storeId).firstOrNull;
     if (client == null) return;
-    final text = await pickTradesCsv();
-    if (text == null || text.trim().isEmpty) {
-      if (!kIsWeb) toast(context, '当前平台暂不支持导入，请用 Web 端导入');
-      return;
-    }
-    final r = await importTradesCsv(text, storeId, '${client['name']}');
-    unawaited(SyncService.pushPending());
-    SyncService.version.notifyListeners();
-    toast(context, '导入完成：新增 ${r.ok} 条，跳过 ${r.skip} 条');
+    // 复用店铺级导入（解析+归入该店+同步）
+    await _importClientTrades(client);
   }
 
   @override
@@ -514,14 +507,11 @@ class _ClientsPageState extends State<ClientsPage> {
       appBar: AppBar(
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
-          // 店铺交易 导入/导出（用户"交易导入导出放在店铺管理中，不要在主界面"）
+          // 店铺交易 导入/导出（用户"交易导入导出放在店铺管理中，不要在主界面"+"按店铺级别，不是全部"）
+          // 导出全部已移除——导出/导入均以店铺为单位：每店行 导出该店交易/导入该店交易；
+          // AppBar 保留"导入交易"（选目标店铺后归入该店）作为全局入口
           IconButton(
-            tooltip: '导出全部交易 CSV',
-            icon: const Icon(Icons.download_outlined),
-            onPressed: _exportAllTrades,
-          ),
-          IconButton(
-            tooltip: '导入交易 CSV（按行店铺）',
+            tooltip: '导入交易 CSV（选择目标店铺）',
             icon: const Icon(Icons.upload_outlined),
             onPressed: _importTradesFromCsv,
           ),
@@ -602,6 +592,11 @@ class _ClientsPageState extends State<ClientsPage> {
                                 tooltip: '导出该店交易',
                                 icon: Icon(Icons.download_outlined, size: 20, color: _c.textSub),
                                 onPressed: () => _exportClientTrades(c),
+                              ),
+                              IconButton(
+                                tooltip: '导入该店交易',
+                                icon: Icon(Icons.upload_outlined, size: 20, color: _c.textSub),
+                                onPressed: () => _importClientTrades(c),
                               ),
                               IconButton(
                                 icon: Icon(Icons.delete_outline, size: 20, color: _c.danger),
