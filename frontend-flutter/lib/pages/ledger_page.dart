@@ -1569,19 +1569,20 @@ class _LedgerPageState extends State<LedgerPage> {
       );
     }
     // 按行日期分组（日期降序：最新日期在最上方；同日按批次，第一批在最上方——用户定稿）。
-    // 批次序=订单创建序（s{毫秒}{随机} 数字段）→ 批内=行 sort（扫描/录入序）→ 行 id 数字段。
-    // 注意：不再按店名排序（店名键会把同日多店的批次顺序打散=用户"3号4号批次乱"根因）。
+    // 批内/批次序 = 行 sort **全局录入序优先**（sort 即扫描/录入顺序，跨单连续递增；
+    // 同日多单时按录入先后交错展示=用户"每批顺序=扫描时实际顺序"）。
+    // sort 缺失/重复时才用订单 id 数字段兜底（同 sort → 订单创建序 → 行 id 数字段）。
+    // 不按店名排序（店名键会把同日多店批次打散）。
     lines.sort((a, b) {
       final x = '${b['date']}'.compareTo('${a['date']}');
       if (x != 0) return x;
+      final sa = (a['sort'] as num?)?.toInt() ?? 0;
+      final sb = (b['sort'] as num?)?.toInt() ?? 0;
+      if (sa != sb) return sa.compareTo(sb);
       final oa = _rowIdNumeric('${(a['order'] as Map?)?['id'] ?? ''}');
       final ob = _rowIdNumeric('${(b['order'] as Map?)?['id'] ?? ''}');
       final zo = oa.compareTo(ob);
       if (zo != 0) return zo;
-      final sa = (a['sort'] as num?)?.toInt() ?? 0;
-      final sb = (b['sort'] as num?)?.toInt() ?? 0;
-      final zs = sa.compareTo(sb);
-      if (zs != 0) return zs;
       return _rowIdNumeric('${a['item_id'] ?? ''}').compareTo(_rowIdNumeric('${b['item_id'] ?? ''}'));
     });
     final grouped = <String, List<Map<String, dynamic>>>{};

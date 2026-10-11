@@ -484,16 +484,16 @@ const saleGroups = computed<SaleGroup[]>(() => {
       });
     }
   }
-  // 批次级排序（对齐 App _buildSaleFlow 多级键）：日期降序 → 订单创建序（id 数字段）→
-  // 行 sort（批内扫描/录入序）→ 行 id 数字段。不再按店名排序——店名键会把同日多店批次
-  // 顺序打散（用户"3号4号批次乱"根因）。"第一批在最上方"=订单 id 数字段升序。
+  // 批次/批内排序（对齐 App _buildSaleFlow）：日期降序 → 行 sort **全局录入序优先**
+  // （sort 即扫描/录入顺序，跨单连续递增；同日多单按录入先后交错展示=用户"每批顺序=扫描实际顺序"）
+  // → sort 缺失/重复时订单 id 数字段兜底（同 sort → 订单创建序 → 行 id）。
   allLines.sort((a, b) => {
     const x = String(b.date).localeCompare(String(a.date));
     if (x !== 0) return x;
-    const z = idNum(String((a.order as any)?.id || '')).localeCompare(idNum(String((b.order as any)?.id || '')));
-    if (z !== 0) return z;
     const s2 = a.sort - b.sort;
     if (s2 !== 0) return s2;
+    const z = idNum(String((a.order as any)?.id || '')).localeCompare(idNum(String((b.order as any)?.id || '')));
+    if (z !== 0) return z;
     return idNum(a.itemId).localeCompare(idNum(b.itemId));
   });
   const map = new Map<string, SaleGroup>();

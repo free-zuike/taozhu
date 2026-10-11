@@ -240,6 +240,79 @@ describe('记单与欠款联动（核心业务）', () => {
     const noItems = await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, items: [] });
     expect(noItems.status).toBe(400);
   });
+
+  it('行级数组批次序：订单 id 数字段（s{毫秒}{随机}）→ sort 全局序，批次不交错', async () => {
+    // 用 App 风格单据 id（s{毫秒}{随机}）直接造两单同日各 2 行——服务端真实 id 是 hex，
+    // 但 App 上传/同步链路保留客户端 id（s 前缀），行级数组排序须按 App id 数字段排
+    await call(env, 'POST', '/api/v1/items', token, { name: '土豆', prices: [{ unit: '斤', purchase_price: 1.0, sale_price: 2.0 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string }> };
+    const itemId = items.items[0].id;
+    await env.DB.prepare('INSERT INTO clients (id, name) VALUES (?, ?)').bind('sort-client', '测试店').run();
+    const mk = async (saleId: string, qty: number, sort: number) => {
+      await env.DB.prepare(
+        `INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, 'sort-client', ?, '斤', ?, 2.5, 2.0, ?, '2026-09-06', '', 'u', ?)`,
+      ).bind(randomId(), saleId, itemId, qty, qty * 2.5, sort).run();
+    };
+    const saleA = `s${Date.now()}00000001`; // 先创建 → 数字段小
+    const saleB = `s${Date.now() + 1}00000002`;
+    await mk(saleA, 1, 0); await mk(saleA, 2, 2);
+    await mk(saleB, 3, 1); await mk(saleB, 4, 3);
+    const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sale_items: Array<{ quantity: number; sort: number }>;
+    };
+    // 跨单全局录入序：批A行1(sort0)、批B行3(sort1)、批A行2(sort2)、批B行4(sort3)
+    expect(list.sale_items.map((x) => x.quantity)).toEqual([1, 3, 2, 4]);
+  });
+
+  it('PATCH 重建明细：sort 沿用客户端值（不重置为数组索引）', async () => {
+    const created = (await (await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clientId, happened_at: '2026-09-06',
+      items: [
+        { price_id: priceId, quantity: 1, sort: 0 },
+        { price_id: priceId, quantity: 2, sort: 1 },
+      ],
+    })).json()) as { id: string };
+    // 编辑时客户端把 sort 颠倒提交（模拟批量直编调整行序）
+    const upd = await call(env, 'PATCH', `/api/v1/sales/${created.id}`, token, {
+      happened_at: '2026-09-06',
+      items: [
+        { id: undefined, price_id: priceId, quantity: 2, sort: 0 },
+        { id: undefined, price_id: priceId, quantity: 1, sort: 1 },
+      ],
+    });
+    expect(upd.status).toBe(200);
+    const detail = (await (await call(env, 'GET', `/api/v1/sales/${created.id}`, token)).json()) as {
+      items: Array<{ quantity: number; sort: number }>;
+    };
+    // 服务端须保留客户端传入的 sort 顺序（2 在前 1 在后），不得回退数组索引
+    expect(detail.items.map((x) => [x.quantity, x.sort])).toEqual([[2, 0], [1, 1]]);
+  });
+
+  it('fix-sort：存量错乱 sort 按创建序重排（每单内 0,1,2…）', async () => {
+    await call(env, 'POST', '/api/v1/items', token, { name: '土豆', prices: [{ unit: '斤', purchase_price: 1.0, sale_price: 2.0 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string }> };
+    const itemId = items.items[0].id;
+    await env.DB.prepare('INSERT INTO clients (id, name) VALUES (?, ?)').bind('fix-sort-client', '测试店').run();
+    const saleA = randomId();
+    const saleB = randomId();
+    const mk = async (saleId: string, qty: number, sort: number) => {
+      await env.DB.prepare(
+        `INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by, sort)
+         VALUES (?, ?, 'fix-sort-client', ?, '斤', ?, 2.5, 2.0, ?, '2026-09-06', '', 'u', ?)`,
+      ).bind(randomId(), saleId, itemId, qty, qty * 2.5, sort).run();
+    };
+    await mk(saleA, 1, 3); await mk(saleA, 2, 1); await mk(saleA, 3, 2);
+    await mk(saleB, 4, 5); await mk(saleB, 5, 0); await mk(saleB, 6, 4);
+    const fix = await call(env, 'POST', '/api/v1/sales/fix-sort', token);
+    expect(fix.status).toBe(200);
+    // 直接按两单 id 查（避开 client_id 条件），验证每单内 sort 已按创建序重排
+    const rows = await env.DB.prepare(
+      'SELECT sale_id, quantity, sort FROM sale_items WHERE sale_id IN (?, ?) ORDER BY sale_id, sort',
+    ).bind(saleA, saleB).all<{ sale_id: string; quantity: number; sort: number }>();
+    // 每单内按创建序重排：A 单 1,2,3；B 单 4,5,6；批次（单）顺序在前
+    expect(rows.results.map((r) => r.quantity)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(rows.results.map((r) => r.sort)).toEqual([0, 1, 2, 0, 1, 2]);
+  });
 });
 
 describe('出货明细行级操作（改期 / 单行删除，交易页流水行用）', () => {

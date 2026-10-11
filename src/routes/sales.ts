@@ -184,20 +184,21 @@ salesRouter.get('/', async (c) => {
      WHERE si.sale_id IN (${chunk.map(() => '?').join(',')})
      ORDER BY si.created_at`,
     ).bind(...chunk).all().then((r) => r.results));
-  // 批次级排序（与 App _rowIdNumeric 同口径）：订单 id 数字段（s{毫秒}{随机}，补零=数值序）→
-  // 单内 sort（扫描/录入序）→ 行 id 数字段。SQL 无法按 id 数字段排序（字符串比较位数失真），
-  // 在 JS 层排——小程序批量直编/账本行级组装按此顺序拿到正确批次序（用户"3号4号批次乱"根因）
+  // 行级数组排序：**sort 全局录入序优先**（用户"每批顺序=扫描时实际顺序"——sort 即录入序，
+  // 跨单连续递增 0,1,2,3…：批1行0、批2行1、批1行2、批2行3 交错展示=录入先后）。
+  // 旧数据 sort 缺失/重复时才用订单 id 数字段兜底（同 sort 的行按订单创建序→行 id）。
+  // 注：同毫秒创建的订单 id 数字段相同，不能作为主排序键——这正是"3号4号批次乱"的根因之一。
   const rowIdNum = (id: string | null | undefined): string => {
     const m = /^(?:s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
     return m ? m[1].padStart(24, '0') : String(id ?? '');
   };
   saleItemRows.sort((a, b) => {
-    const oa = rowIdNum((a as { sale_id?: string }).sale_id);
-    const ob = rowIdNum((b as { sale_id?: string }).sale_id);
-    if (oa !== ob) return oa < ob ? -1 : 1;
     const sa = Number((a as { sort?: number }).sort ?? 0);
     const sb = Number((b as { sort?: number }).sort ?? 0);
     if (sa !== sb) return sa - sb;
+    const oa = rowIdNum((a as { sale_id?: string }).sale_id);
+    const ob = rowIdNum((b as { sale_id?: string }).sale_id);
+    if (oa !== ob) return oa < ob ? -1 : 1;
     const ia = rowIdNum((a as { id?: string }).id);
     const ib = rowIdNum((b as { id?: string }).id);
     return ia < ib ? -1 : ia > ib ? 1 : 0;
@@ -474,6 +475,45 @@ salesRouter.delete('/items/:id', async (c) => {
   // 无 head 表：组装时 happened_at=明细行最大日期，无需再同步 head
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: c.get('user').username });
   return c.json({ ok: true });
+});
+
+// POST /sales/fix-sort — 存量数据批次内顺序修复：按每单内行「创建序」重排 sort（0,1,2…）。
+// 用途：旧版本保存时服务端用数组索引覆盖了客户端传入的 sort（或本地镜像缺 sort），
+// 导致账本/批量直编批内顺序乱。按 created_at（≈录入/扫描序）重算后全量同步即可恢复。
+// 仅老板；不触发同步流（客户端 fullSync 拉新 sort 即可生效）。
+salesRouter.post('/fix-sort', adminOnly(), async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT id, sale_id, created_at FROM sale_items ORDER BY sale_id, created_at, id`,
+  ).all<{ id: string; sale_id: string; created_at: string }>();
+  // 每单内按 created_at（+id 稳定）排序，重新编号 sort
+  const byOrder = new Map<string, Array<{ id: string; created_at: string }>>();
+  for (const r of rows.results) {
+    const list = byOrder.get(r.sale_id) ?? [];
+    list.push({ id: r.id, created_at: r.created_at });
+    byOrder.set(r.sale_id, list);
+  }
+  const batch: D1PreparedStatement[] = [];
+  let orders = 0;
+  let lines = 0;
+  for (const [oid, list] of byOrder.entries()) {
+    list.sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : (a.id < b.id ? -1 : 1)));
+    orders++;
+    list.forEach((r, i) => {
+      batch.push(c.env.DB.prepare('UPDATE sale_items SET sort = ? WHERE id = ?').bind(i, r.id));
+      lines++;
+    });
+  }
+  if (batch.length > 0) {
+    // 分批执行（D1 batch 单次上限）
+    for (let i = 0; i < batch.length; i += 100) {
+      await c.env.DB.batch(batch.slice(i, i + 100));
+    }
+  }
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'fix', entity_type: 'sale_item',
+    detail: `修复出货批内顺序：${orders} 单 ${lines} 行（按创建序重排 sort）`,
+  });
+  return c.json({ ok: true, orders, lines });
 });
 
 // DELETE /sales/:id — 删除出货记录（回滚库存 + 删全部商品行，仅老板）

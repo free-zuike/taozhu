@@ -390,6 +390,42 @@ purchasesRouter.delete('/items/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+// POST /purchases/fix-sort — 存量数据批次内顺序修复：按每单内行「创建序」重排 sort（0,1,2…）。
+// 用途：旧版本保存时服务端用数组索引覆盖了客户端传入的 sort，导致进货历史批内顺序乱。
+// 仅老板；客户端 fullSync 拉新 sort 即可生效。
+purchasesRouter.post('/fix-sort', adminOnly(), async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT id, purchase_id, created_at FROM purchase_items ORDER BY purchase_id, created_at, id`,
+  ).all<{ id: string; purchase_id: string; created_at: string }>();
+  const byOrder = new Map<string, Array<{ id: string; created_at: string }>>();
+  for (const r of rows.results) {
+    const list = byOrder.get(r.purchase_id) ?? [];
+    list.push({ id: r.id, created_at: r.created_at });
+    byOrder.set(r.purchase_id, list);
+  }
+  const batch: D1PreparedStatement[] = [];
+  let orders = 0;
+  let lines = 0;
+  for (const [oid, list] of byOrder.entries()) {
+    list.sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : (a.id < b.id ? -1 : 1)));
+    orders++;
+    list.forEach((r, i) => {
+      batch.push(c.env.DB.prepare('UPDATE purchase_items SET sort = ? WHERE id = ?').bind(i, r.id));
+      lines++;
+    });
+  }
+  if (batch.length > 0) {
+    for (let i = 0; i < batch.length; i += 100) {
+      await c.env.DB.batch(batch.slice(i, i + 100));
+    }
+  }
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'fix', entity_type: 'purchase_item',
+    detail: `修复进货批内顺序：${orders} 单 ${lines} 行（按创建序重排 sort）`,
+  });
+  return c.json({ ok: true, orders, lines });
+});
+
 // DELETE /purchases/:id — 删除进货记录（回滚库存 + 删全部商品行，仅老板）
 purchasesRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
