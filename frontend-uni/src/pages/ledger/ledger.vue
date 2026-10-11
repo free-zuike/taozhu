@@ -484,15 +484,12 @@ const saleGroups = computed<SaleGroup[]>(() => {
       });
     }
   }
-  // 批次级排序（对齐 App _buildSaleFlow 多级键）：日期降序 → 店名升序 → 订单创建序（id 数字段）→
-  // 行 sort（单内录入序）→ 行 id 数字段。Dart List.sort 不稳定 = 只在完全同键时顺序可能被打乱，
-  // 这里用全序键保证："第三批后全部顺序乱"（用户曾反馈）靠订单 id 数字段兜住批次先后。
-  // 小程序此前只按后端行数组顺序（created_at，同日秒内批次交错）→ 批次顺序错误根因。
+  // 批次级排序（对齐 App _buildSaleFlow 多级键）：日期降序 → 订单创建序（id 数字段）→
+  // 行 sort（批内扫描/录入序）→ 行 id 数字段。不再按店名排序——店名键会把同日多店批次
+  // 顺序打散（用户"3号4号批次乱"根因）。"第一批在最上方"=订单 id 数字段升序。
   allLines.sort((a, b) => {
     const x = String(b.date).localeCompare(String(a.date));
     if (x !== 0) return x;
-    const y = String(a.client_name).localeCompare(String(b.client_name));
-    if (y !== 0) return y;
     const z = idNum(String((a.order as any)?.id || '')).localeCompare(idNum(String((b.order as any)?.id || '')));
     if (z !== 0) return z;
     const s2 = a.sort - b.sort;

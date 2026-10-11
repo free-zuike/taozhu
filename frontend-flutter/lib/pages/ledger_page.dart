@@ -1568,15 +1568,12 @@ class _LedgerPageState extends State<LedgerPage> {
         ),
       );
     }
-    // 按行日期分组（日期降序：最新日期在最上方；同日按店名排序）。
-    // 同日同店必须保持识别/录入批次序：仅按日期+店名比较在同日同店返回 0，
-    // Dart List.sort 不稳定会把展开行的识别顺序打乱（用户"第三批后全部顺序乱"）——
-    // 次级键=订单创建序（s{毫秒}{随机} 数字段），三级键=行 sort（单内录入序），四级=行 id 数字段
+    // 按行日期分组（日期降序：最新日期在最上方；同日按批次，第一批在最上方——用户定稿）。
+    // 批次序=订单创建序（s{毫秒}{随机} 数字段）→ 批内=行 sort（扫描/录入序）→ 行 id 数字段。
+    // 注意：不再按店名排序（店名键会把同日多店的批次顺序打散=用户"3号4号批次乱"根因）。
     lines.sort((a, b) {
       final x = '${b['date']}'.compareTo('${a['date']}');
       if (x != 0) return x;
-      final y = '${a['client_name']}'.compareTo('${b['client_name']}');
-      if (y != 0) return y;
       final oa = _rowIdNumeric('${(a['order'] as Map?)?['id'] ?? ''}');
       final ob = _rowIdNumeric('${(b['order'] as Map?)?['id'] ?? ''}');
       final zo = oa.compareTo(ob);

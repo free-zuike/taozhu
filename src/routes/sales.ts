@@ -179,8 +179,26 @@ salesRouter.get('/', async (c) => {
      LEFT JOIN clients c ON c.id = si.client_id
      LEFT JOIN items i ON i.id = si.item_id
      WHERE si.sale_id IN (${chunk.map(() => '?').join(',')})
-     ORDER BY si.sort, si.created_at`,
+     ORDER BY si.created_at`,
     ).bind(...chunk).all().then((r) => r.results));
+  // 批次级排序（与 App _rowIdNumeric 同口径）：订单 id 数字段（s{毫秒}{随机}，补零=数值序）→
+  // 单内 sort（扫描/录入序）→ 行 id 数字段。SQL 无法按 id 数字段排序（字符串比较位数失真），
+  // 在 JS 层排——小程序批量直编/账本行级组装按此顺序拿到正确批次序（用户"3号4号批次乱"根因）
+  const rowIdNum = (id: string | null | undefined): string => {
+    const m = /^(?:s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
+    return m ? m[1].padStart(24, '0') : String(id ?? '');
+  };
+  saleItemRows.sort((a, b) => {
+    const oa = rowIdNum((a as { sale_id?: string }).sale_id);
+    const ob = rowIdNum((b as { sale_id?: string }).sale_id);
+    if (oa !== ob) return oa < ob ? -1 : 1;
+    const sa = Number((a as { sort?: number }).sort ?? 0);
+    const sb = Number((b as { sort?: number }).sort ?? 0);
+    if (sa !== sb) return sa - sb;
+    const ia = rowIdNum((a as { id?: string }).id);
+    const ib = rowIdNum((b as { id?: string }).id);
+    return ia < ib ? -1 : ia > ib ? 1 : 0;
+  });
   return c.json({
     total: countRow?.cnt ?? 0,
     sales: aggRows.results.map((row) => ({

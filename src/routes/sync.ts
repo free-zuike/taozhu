@@ -190,8 +190,25 @@ syncRouter.get('/full', async (c) => {
      FROM sale_items si
      JOIN items i ON i.id = si.item_id
      LEFT JOIN clients c ON c.id = si.client_id
-     ORDER BY si.sort, si.created_at`,
+     ORDER BY si.created_at`,
   ).all();
+  // 批次级排序（与 /sales saleItemRows 同口径）：订单 id 数字段 → 单内 sort → 行 id 数字段。
+  // App 本地镜像由此得到与 Web 完全一致的批次序（"第一批在上，批内=扫描顺序"）
+  const rowIdNum = (id: string | null | undefined): string => {
+    const m = /^(?:s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
+    return m ? m[1].padStart(24, '0') : String(id ?? '');
+  };
+  saleItems.results.sort((a, b) => {
+    const oa = rowIdNum((a as { sale_id?: string }).sale_id);
+    const ob = rowIdNum((b as { sale_id?: string }).sale_id);
+    if (oa !== ob) return oa < ob ? -1 : 1;
+    const sa = Number((a as { sort?: number }).sort ?? 0);
+    const sb = Number((b as { sort?: number }).sort ?? 0);
+    if (sa !== sb) return sa - sb;
+    const ia = rowIdNum((a as { id?: string }).id);
+    const ib = rowIdNum((b as { id?: string }).id);
+    return ia < ib ? -1 : ia > ib ? 1 : 0;
+  });
   // 去单据化：head 表已物理删除，整单兼容数组按 sale_id 从商品行聚合派生
   const salesRows = await db.prepare(
     `SELECT si.sale_id AS id, MAX(si.client_id) AS client_id, MAX(COALESCE(si.happened_at, '')) AS happened_at,
