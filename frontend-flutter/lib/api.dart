@@ -136,9 +136,9 @@ class Api {
       (await SharedPreferences.getInstance()).getString(_refreshTokenKey) ?? '';
 
   /// 双 token 静默刷新（单例防并发）：同一时刻多个请求 401 只刷一次，其余 await 同一 future。
-  /// 返回三态：'ok'=刷新成功 / 'invalid'=refresh token 明确无效（需重新登录）/ 'net'=网络失败（保留登录态，下次重试）
-  static Future<bool>? _refreshing;
-  static Future<bool> _tryRefreshToken() {
+  /// 返回三态：true=刷新成功 / false=refresh 明确无效（需重新登录）/ null=网络失败（保留登录态，下次重试）
+  static Future<bool?>? _refreshing;
+  static Future<bool?> _tryRefreshToken() {
     final existing = _refreshing;
     if (existing != null) return existing;
     final f = _doRefreshToken();
