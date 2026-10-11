@@ -466,10 +466,12 @@ jobs:
           echo "已取消整个 workflow（本版本未创建 release，无残留）"
 
   # ── macOS ──────────────────────────────────────────────────────────────────────────
+  # 仅手动触发（workflow_dispatch）：push 发版不含 macOS——macOS runner 高峰排队/取消
+  # 会触发 GitHub 对整个 run 的取消（无法用 needs 规避），用户定稿"等有机器再单独构建"。
   macos:
     needs: [test, analyze]
-    if: github.repository == 'free-zuike/taozhu'
-    runs-on: macos-13   # Intel runner：容量更足、排队少（macos-latest=arm64 高峰常被取消导致整个 run 失败）
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-13   # Intel runner：容量更足、排队少（macos-latest=arm64 高峰常被取消）
     name: macOS
     steps:
       - uses: actions/checkout@v4
