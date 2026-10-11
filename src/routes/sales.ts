@@ -174,12 +174,12 @@ salesRouter.get('/', async (c) => {
     c.env.DB.prepare(
       `SELECT si.id, si.sale_id, si.client_id, c.name AS client_name, si.item_id, i.name AS item_name,
             i.category AS item_category, si.unit, si.quantity, si.sale_price, si.cost_price, si.amount,
-            si.happened_at, si.note, si.created_by
+            si.happened_at, si.note, si.created_by, si.sort
      FROM sale_items si
      LEFT JOIN clients c ON c.id = si.client_id
      LEFT JOIN items i ON i.id = si.item_id
      WHERE si.sale_id IN (${chunk.map(() => '?').join(',')})
-     ORDER BY si.created_at`,
+     ORDER BY si.sort, si.created_at`,
     ).bind(...chunk).all().then((r) => r.results));
   return c.json({
     total: countRow?.cnt ?? 0,

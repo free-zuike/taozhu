@@ -186,11 +186,11 @@ syncRouter.get('/full', async (c) => {
   const saleItems = await db.prepare(
     `SELECT si.id, si.sale_id, si.client_id, c.name AS client_name, si.item_id, i.name AS item_name,
             i.category AS item_category, si.unit, si.quantity, si.sale_price, si.cost_price, si.amount,
-            si.happened_at, si.note, si.created_by, si.sync_key
+            si.happened_at, si.note, si.created_by, si.sync_key, si.sort
      FROM sale_items si
      JOIN items i ON i.id = si.item_id
      LEFT JOIN clients c ON c.id = si.client_id
-     ORDER BY si.created_at`,
+     ORDER BY si.sort, si.created_at`,
   ).all();
   // 去单据化：head 表已物理删除，整单兼容数组按 sale_id 从商品行聚合派生
   const salesRows = await db.prepare(
@@ -227,10 +227,10 @@ syncRouter.get('/full', async (c) => {
   const purchaseItems = await db.prepare(
     `SELECT pi.id, pi.purchase_id, pi.item_id, i.name AS item_name, i.category AS item_category,
             pi.unit, pi.quantity, pi.purchase_price, pi.amount,
-            pi.happened_at, pi.note, pi.created_by, pi.sync_key
+            pi.happened_at, pi.note, pi.created_by, pi.sync_key, pi.sort
      FROM purchase_items pi
      JOIN items i ON i.id = pi.item_id
-     ORDER BY pi.created_at`,
+     ORDER BY pi.sort, pi.created_at`,
   ).all();
   const purchaseRows = await db.prepare(
     `SELECT pi.purchase_id AS id, MAX(COALESCE(pi.happened_at, '')) AS happened_at,

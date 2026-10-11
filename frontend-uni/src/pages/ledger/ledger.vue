@@ -436,14 +436,22 @@ type SaleLine = {
   key: string; date: string; week: string; client_name: string; item_name: string;
   note: string; sale_price: number; quantity: string | number; unit: string; amount: number;
   cost_price: number; category: string;
+  sort: number; // 行序（识别批次/插入序，对齐 App _buildSaleFlow）；旧数据无 sort=0 回退 id 数字段
   count_qty?: number | null; count_unit?: string; // 折合计数（对齐 App 行编辑）
   itemId: string; orderId: string; order: Record<string, any>;
 };
 type SaleGroup = { date: string; week: string; count: number; amount: number; lines: SaleLine[] };
+
+/// 单据/明细行 id → 数值比较键：明细行 id 形如 si{微秒}{随机}、单据 id 形如 s{毫秒}{随机}
+/// （s 前缀无 i；旧版只识别 si/pi 前缀 → 单据 id 回退字符串比较位数不同失真=批次乱序）；
+/// 统一提取数字段补前导零，字典序=数值序；与 App _rowIdNumeric 同口径
+function idNum(id: string): string {
+  const m = /^(?:s|p|si|pi|sl|pl)?(\d+)/.exec(String(id || '').trim());
+  return m ? m[1].padStart(24, '0') : String(id || '');
+}
 const saleGroups = computed<SaleGroup[]>(() => {
-  const map = new Map<string, SaleGroup>();
-  const WEEKS = ['日', '一', '二', '三', '四', '五', '六'];
   const q = searchQ.value.trim().toLowerCase();
+  const allLines: SaleLine[] = [];
   const pushLine = (line: SaleLine) => {
     // 搜索过滤：按商品名/店铺名/备注（本地行级，对齐 App）
     if (q) {
@@ -452,14 +460,7 @@ const saleGroups = computed<SaleGroup[]>(() => {
           (line.note || '').toLowerCase().includes(q);
       if (!hit) return;
     }
-    const g = map.get(line.date) || { date: line.date, week: '', count: 0, amount: 0, lines: [] };
-    const d = new Date(`${line.date}T00:00:00`);
-    g.week = `${line.date.slice(0, 4)}年${line.date.slice(5, 7)}月${line.date.slice(8, 10)}日 周${WEEKS[d.getDay()]}`;
-    g.count += 1;
-    // 日分组合计=每笔先舍入再累加（与单笔显示/余额笔舍入一致，digits=0/1 时原始累加会与单笔对不上）
-    g.amount += roundAmount(Number(line.amount || 0));
-    g.lines.push(line);
-    map.set(line.date, g);
+    allLines.push(line);
   };
   for (const s of sales.value) {
     const orderDate = String(s.happened_at || '').slice(0, 10);
@@ -468,7 +469,7 @@ const saleGroups = computed<SaleGroup[]>(() => {
       pushLine({
         key: `o-${s.id}`, date: orderDate, week: '', client_name: String(s.client_name || ''),
         item_name: '备注行', note: String(s.note || ''), sale_price: 0, quantity: '', unit: '',
-        amount: Number(s.total || 0), cost_price: 0, category: '', itemId: '', orderId: String(s.id), order: s,
+        amount: Number(s.total || 0), cost_price: 0, category: '', sort: 0, itemId: '', orderId: String(s.id), order: s,
       });
       continue;
     }
@@ -479,9 +480,36 @@ const saleGroups = computed<SaleGroup[]>(() => {
         item_name: String(it.item_name || ''), note: String(it.note || ''),
         sale_price: Number(it.sale_price || 0), quantity: it.quantity ?? '', unit: String(it.unit || ''),
         amount: Number(it.amount || 0), cost_price: Number(it.cost_price || 0), category: String(it.item_category || it.category_name || it.category || ''),
-        itemId: String(it.id || ''), orderId: String(s.id), order: s,
+        sort: Number(it.sort ?? 0), itemId: String(it.id || ''), orderId: String(s.id), order: s,
       });
     }
+  }
+  // 批次级排序（对齐 App _buildSaleFlow 多级键）：日期降序 → 店名升序 → 订单创建序（id 数字段）→
+  // 行 sort（单内录入序）→ 行 id 数字段。Dart List.sort 不稳定 = 只在完全同键时顺序可能被打乱，
+  // 这里用全序键保证："第三批后全部顺序乱"（用户曾反馈）靠订单 id 数字段兜住批次先后。
+  // 小程序此前只按后端行数组顺序（created_at，同日秒内批次交错）→ 批次顺序错误根因。
+  allLines.sort((a, b) => {
+    const x = String(b.date).localeCompare(String(a.date));
+    if (x !== 0) return x;
+    const y = String(a.client_name).localeCompare(String(b.client_name));
+    if (y !== 0) return y;
+    const z = idNum(String((a.order as any)?.id || '')).localeCompare(idNum(String((b.order as any)?.id || '')));
+    if (z !== 0) return z;
+    const s2 = a.sort - b.sort;
+    if (s2 !== 0) return s2;
+    return idNum(a.itemId).localeCompare(idNum(b.itemId));
+  });
+  const map = new Map<string, SaleGroup>();
+  const WEEKS = ['日', '一', '二', '三', '四', '五', '六'];
+  for (const line of allLines) {
+    const g = map.get(line.date) || { date: line.date, week: '', count: 0, amount: 0, lines: [] };
+    const d = new Date(`${line.date}T00:00:00`);
+    g.week = `${line.date.slice(0, 4)}年${line.date.slice(5, 7)}月${line.date.slice(8, 10)}日 周${WEEKS[d.getDay()]}`;
+    g.count += 1;
+    // 日分组合计=每笔先舍入再累加（与单笔显示/余额笔舍入一致，digits=0/1 时原始累加会与单笔对不上）
+    g.amount += roundAmount(Number(line.amount || 0));
+    g.lines.push(line);
+    map.set(line.date, g);
   }
   return [...map.values()].sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : 0));
 });

@@ -428,13 +428,14 @@ class _LedgerPageState extends State<LedgerPage> {
     }).toList();
   }
 
-  /// 明细行 id（si{微秒}{随机数}）→ 数值比较键：字符串比较在随机数位数不一时失真
-  /// （同微秒 '9' vs '10' 时 '9'>'10' 把旧行排后=批次乱序）；非 si/pi 前缀 id 回退原串
+  /// 单据/明细行 id → 数值比较键：明细行 id 形如 si{微秒}{随机}（si 前缀）、单据 id 形如 s{毫秒}{随机}
+  /// （s 前缀无 i——旧正则 `^(?:si|pi)?(\d+)$` 匹配不到 s 前缀 → 回退字符串比较，
+  /// 位数不同时字典序失真=同日同店多单批次乱序根因）；统一提取数字段补前导零后字典序=数值序
   static Comparable _rowIdNumeric(String id) {
-    final m = RegExp(r'^(?:si|pi)?(\d+)$').firstMatch(id.trim());
+    final m = RegExp(r'^(?:s|p|si|pi|sl|pl)?(\d+)$').firstMatch(id.trim());
     if (m != null) {
-      final n = BigInt.tryParse(m.group(1)!);
-      if (n != null) return n;
+      final digits = m.group(1)!;
+      return digits.padLeft(24, '0');
     }
     return id;
   }

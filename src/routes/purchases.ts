@@ -148,7 +148,7 @@ purchasesRouter.get('/', async (c) => {
     c.env.DB.prepare(
       `SELECT pi.id, pi.purchase_id, pi.item_id, i.name AS item_name, i.category AS item_category,
             pi.unit, pi.quantity, pi.purchase_price, pi.amount,
-            pi.happened_at, pi.note, pi.created_by
+            pi.happened_at, pi.note, pi.created_by, pi.sort
      FROM purchase_items pi
      LEFT JOIN items i ON i.id = pi.item_id
      WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')})
