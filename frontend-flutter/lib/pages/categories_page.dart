@@ -249,6 +249,45 @@ class _CategoriesPageState extends State<CategoriesPage> {
     );
   }
 
+  /// 分类图标（按名称映射常用 Material 图标，参考 beecount 分类带图标；未匹配用默认）
+  static IconData _catIcon(String name, {required bool isParent}) {
+    const map = <String, IconData>{
+      // 食材/肉类
+      '肉': Icons.lunch_dining, '猪肉': Icons.lunch_dining, '牛肉': Icons.lunch_dining,
+      '羊肉': Icons.lunch_dining, '鸡': Icons.set_meal, '鸭': Icons.set_meal,
+      '鱼': Icons.set_meal, '虾': Icons.set_meal, '海鲜': Icons.set_meal, '水产': Icons.set_meal,
+      '菜': Icons.eco, '蔬菜': Icons.eco, '水果': Icons.apple, '粮油': Icons.grain,
+      '米': Icons.grain, '面': Icons.grain, '调料': Icons.blender, '干货': Icons.inventory_2,
+      '豆': Icons.spa, '蛋': Icons.egg_alt, '奶': Icons.local_drink, '饮料': Icons.local_drink,
+      '饮品': Icons.local_cafe, '冷冻': Icons.ac_unit, '冰': Icons.ac_unit,
+      // 店铺
+      '饭': Icons.restaurant, '餐': Icons.restaurant, '火锅': Icons.local_fire_department,
+      '烧烤': Icons.outdoor_grill, '快餐': Icons.fastfood, '面馆': Icons.ramen_dining,
+      '超市': Icons.local_grocery_store, '便利': Icons.storefront, '杂货': Icons.storefront,
+      '批发': Icons.warehouse, '市场': Icons.storefront, '酒店': Icons.hotel,
+      '食堂': Icons.restaurant, '档口': Icons.storefront,
+    };
+    for (final e in map.entries) {
+      if (name.contains(e.key)) return e.value;
+    }
+    return isParent ? Icons.folder : Icons.label_outline;
+  }
+
+  /// 分类图标配色的主色（名字 hash 到一组主题色，参考 beecount 彩色图标块）
+  static Color _catColor(String name, {required bool isParent, Color? fallback}) {
+    const palette = [
+      Color(0xFFEF7830), // 橙
+      Color(0xFF22A06B), // 绿
+      Color(0xFF2F81C1), // 蓝
+      Color(0xFFB78846), // 金
+      Color(0xFFA05CE6), // 紫
+      Color(0xFFD9544F), // 红
+    ];
+    var h = 0;
+    for (final ch in name.codeUnits) h = (h * 31 + ch) & 0x7fffffff;
+    return palette[h % palette.length];
+  }
+
   /// 查看该分类下商品/店铺（弹层列表）：商品按本地 items 镜像 category_id 匹配（一级=含子分类）；
   /// 店铺按 clients 镜像 category_id 匹配。
   Future<void> _viewItems(Map<String, dynamic> c) async {
@@ -306,21 +345,31 @@ class _CategoriesPageState extends State<CategoriesPage> {
   Widget _itemTile(Map<String, dynamic> c, {required bool indent}) {
     final isParent = _childrenOf('${c['id']}').isNotEmpty;
     final collapsed = _collapsed.contains('${c['id']}');
+    final color = _catColor('${c['name']}', isParent: !indent);
+    final children = indent ? const <Map<String, dynamic>>[] : _childrenOf('${c['id']}');
     return Card(
       elevation: 0,
+      margin: EdgeInsets.only(bottom: indent ? 0 : 10),
       shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12), side: BorderSide(color: _c.divider)),
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(indent ? 0 : 12),
+            bottom: Radius.circular(12),
+          ),
+          side: BorderSide(color: _c.divider)),
       child: ListTile(
-        contentPadding: EdgeInsets.only(left: indent ? 32 : 16, right: 8),
+        contentPadding: EdgeInsets.only(left: indent ? 36 : 16, right: 8),
         leading: Container(
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-              color: _c.primary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
-          child: Icon(indent ? Icons.subdirectory_arrow_right : (isParent ? Icons.folder : Icons.label_outline),
-              color: _c.primary, size: 22),
+              color: color.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(10)),
+          child: Icon(_catIcon('${c['name']}', isParent: !indent),
+              color: color, size: 22),
         ),
         title: Text('${c['name']}', style: TextStyle(fontWeight: indent ? FontWeight.w400 : FontWeight.w600)),
+        subtitle: (!indent && children.isNotEmpty)
+            ? Text('${children.length} 个子分类', style: TextStyle(fontSize: 12, color: _c.textSub))
+            : null,
         // 一级分类可点击折叠/展开子分类（有子分类时显示箭头）
         onTap: isParent && !indent
             ? () => setState(() {

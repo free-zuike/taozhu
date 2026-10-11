@@ -1,11 +1,12 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <!-- 店铺筛选（月份移入下方月度卡头部，对齐 App：店铺条 + 月度卡） -->
+    <!-- 店铺筛选（缩窄，与搜索同一行——对齐 App：店铺选择+搜索同行，不单独占一行） -->
     <view class="filter-bar">
       <picker class="client-picker" mode="selector" :range="clientNames" @change="onClientFilter">
         <view class="client-btn">{{ filterClientId ? filterClientName : '全部店铺' }} ▾</view>
       </picker>
+      <input class="search" v-model="searchQ" placeholder="搜索商品 / 店铺 / 备注" confirm-type="search" />
     </view>
 
     <!-- 月度卡（对齐 App：左侧年月两层点击切换 + 竖线 + 右侧四列统计；列表全量，月份只影响统计卡） -->
@@ -71,7 +72,7 @@
     </view>
 
     <view v-if="tab === 'payments'">
-      <view v-for="p in payments" :key="p.id" class="card" @click="editPayment(p)" @longpress="removePayment(p)">
+      <view v-for="p in filteredPayments" :key="p.id" class="card" @click="editPayment(p)" @longpress="removePayment(p)">
         <view class="head">
           <text class="name">{{ p.client_name }}</text>
           <text class="amt" style="color:#67c23a">¥{{ fmtNum(p.amount) }}</text>
@@ -86,7 +87,7 @@
           <text class="tip-longpress" @click.stop>长按撤销该收款</text>
         </view>
       </view>
-      <view v-if="payments.length === 0" class="empty">暂无收款记录</view>
+      <view v-if="filteredPayments.length === 0" class="empty">暂无收款记录</view>
     </view>
     </scroll-view>
 
@@ -198,6 +199,8 @@ const tab = ref<'sales' | 'payments'>('sales');
 const isAdmin = ref(getRole() !== 'staff');
 const sales = ref<Array<Record<string, any>>>([]);
 const payments = ref<Array<Record<string, any>>>([]);
+// 搜索关键词（按 商品名/店铺名/备注 本地过滤出货+收款——对齐 App 前端行级过滤零网络）
+const searchQ = ref('');
 const saving = ref(false);
 // 月份只由顶部月度卡选择器控制（pickMonth），滚动不再联动改月份（0.17.317 已移除联动）
 // 收款账户：服务器同步实体（云端直连读取）
@@ -420,7 +423,15 @@ type SaleGroup = { date: string; week: string; count: number; amount: number; li
 const saleGroups = computed<SaleGroup[]>(() => {
   const map = new Map<string, SaleGroup>();
   const WEEKS = ['日', '一', '二', '三', '四', '五', '六'];
+  const q = searchQ.value.trim().toLowerCase();
   const pushLine = (line: SaleLine) => {
+    // 搜索过滤：按商品名/店铺名/备注（本地行级，对齐 App）
+    if (q) {
+      const hit = (line.item_name || '').toLowerCase().includes(q) ||
+          (line.client_name || '').toLowerCase().includes(q) ||
+          (line.note || '').toLowerCase().includes(q);
+      if (!hit) return;
+    }
     const g = map.get(line.date) || { date: line.date, week: '', count: 0, amount: 0, lines: [] };
     const d = new Date(`${line.date}T00:00:00`);
     g.week = `${line.date.slice(0, 4)}年${line.date.slice(5, 7)}月${line.date.slice(8, 10)}日 周${WEEKS[d.getDay()]}`;
@@ -464,6 +475,18 @@ function monthRange(): { from: string; to: string } {
   const to = `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`;
   return { from, to };
 }
+// 收款列表按搜索关键词过滤（店铺名/备注/收款方式——对齐 App _filteredPayments）
+const filteredPayments = computed(() => {
+  const q = searchQ.value.trim().toLowerCase();
+  if (!q) return payments.value;
+  return payments.value.filter((p) => {
+    const hit = String(p.client_name || '').toLowerCase().includes(q) ||
+        String(p.note || '').toLowerCase().includes(q) ||
+        String(p.method || '').toLowerCase().includes(q);
+    return hit;
+  });
+});
+
 function onClientFilter(e: { detail: { value: number } }) {
   const c = clients.value[e.detail.value];
   if (!c) return;
@@ -866,7 +889,10 @@ async function removePayment(p: Record<string, any>) {
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { height: 100vh; overflow: hidden; display: flex; flex-direction: column; background: var(--page-bg); }
 .flow { flex: 1; min-height: 0; } /* 列表区占剩余高度内部滚动：统计栏/筛选/seg 固定顶部不随滑动消失 */
-.filter-bar { display: flex; justify-content: space-between; align-items: center; background: transparent; border-radius: 12rpx; padding: 8rpx 4rpx 12rpx; margin-bottom: 4rpx;}
+.filter-bar { display: flex; align-items: center; gap: 12rpx; background: transparent; border-radius: 12rpx; padding: 8rpx 4rpx 12rpx; margin-bottom: 4rpx; }
+.client-picker { flex-shrink: 0; max-width: 200rpx; }
+.client-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 8rpx 16rpx; max-width: 200rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search { flex: 1; min-width: 0; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; padding: 8rpx 20rpx; font-size: 26rpx; height: 60rpx; }
 .month-nav { display: flex; align-items: center; }
 .month-label { font-size: 28rpx; font-weight: bold; }
 .month-caret { font-size: 22rpx; color: var(--text-sub); margin-left: 6rpx; }
@@ -883,7 +909,7 @@ async function removePayment(p: Record<string, any>) {
 .mcol { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 6rpx; padding-right: 8rpx; }
 .ml { font-size: 22rpx; color: var(--text-sub); }
 .mv { font-size: 30rpx; font-weight: bold; color: var(--text-main); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.client-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
+.client-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 8rpx 16rpx; max-width: 200rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .export-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; flex-shrink: 0; }
 .seg { display: flex; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; margin-bottom: 20rpx; overflow: hidden;}
 .seg-item { flex: 1; text-align: center; padding: 20rpx; font-size: 28rpx; color: var(--text-sub); }

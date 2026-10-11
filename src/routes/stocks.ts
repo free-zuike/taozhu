@@ -16,7 +16,7 @@ stocksRouter.get('/', async (c) => {
   const canSeeCost = c.get('user').role === 'admin';
   const q = c.req.query('q')?.trim() ?? '';
   const belowOnly = c.req.query('below') === '1';
-  let sql = `SELECT st.id, st.item_id, st.unit, st.quantity, st.min_stock, i.name AS item_name,
+  let sql = `SELECT st.id, st.item_id, st.unit, st.quantity, st.min_stock, i.name AS item_name, i.count_unit,
       (SELECT p.purchase_price FROM item_prices p WHERE p.item_id = st.item_id AND p.unit = st.unit AND p.active = 1 LIMIT 1) AS cost_price
     FROM stocks st JOIN items i ON i.id = st.item_id
     WHERE i.deleted_at IS NULL`;
@@ -25,7 +25,7 @@ stocksRouter.get('/', async (c) => {
   if (belowOnly) { sql += ' AND st.quantity < st.min_stock'; }
   sql += ' ORDER BY i.name, st.unit';
   const rows = await c.env.DB.prepare(sql).bind(...params).all<{
-    id: string; item_id: string; unit: string; quantity: number; min_stock: number; item_name: string; cost_price: number | null;
+    id: string; item_id: string; unit: string; quantity: number; min_stock: number; item_name: string; count_unit: string | null; cost_price: number | null;
   }>();
   // 建议预警阈值 = 近 30 天平均每笔出货量 × 40%（无出货记录则 0）。
   // 前端仅"阈值未手动设置（min_stock=0）且库存 ≥1"时自动填充，不覆盖用户手设值。
@@ -51,15 +51,38 @@ stocksRouter.get('/', async (c) => {
   }
   return c.json({
     stocks: rows.results.map((r) => ({
-      id: r.id, item_id: r.item_id, item_name: r.item_name, unit: r.unit,
-      // 负数库存（卖出多于进）按 0 展示：没有就是 0
-      quantity: Math.max(Number(r.quantity) || 0, 0), min_stock: r.min_stock,
+      id: r.id, item_id: r.item_id, item_name: r.item_name, unit: r.unit, count_unit: r.count_unit ?? '',
+      // 负数库存（卖出多于进）按 0 展示：没有就是 0；两位小数防浮点尾数（1.7000000000000002 斤）
+      quantity: Math.round(Math.max(Number(r.quantity) || 0, 0) * 100) / 100, min_stock: r.min_stock,
       suggest_min: suggest.get(`${r.item_id}\u0000${r.unit}`) ?? 0,
       cost_price: canSeeCost ? (r.cost_price ?? 0) : 0,
       low: (Number(r.quantity) || 0) < r.min_stock,
     })),
     can_see_cost: canSeeCost,
   });
+});
+
+// GET /stocks/trace?item_id=&limit= — 该商品的进货/出货流水分录（数量来源明细；行级主记录，无需 JOIN 单据头）
+stocksRouter.get('/trace', async (c) => {
+  const itemId = c.req.query('item_id')?.trim() ?? '';
+  if (!itemId) return c.json({ error: '缺少 item_id' }, 400);
+  const limit = Math.min(Math.max(Number(c.req.query('limit')) || 50, 1), 200);
+  const out = await c.env.DB.prepare(
+    `SELECT * FROM (
+       SELECT 'in' AS kind, pi.happened_at, pi.quantity, pi.unit, COALESCE(pi.count_qty, pi.quantity) AS eff_qty, pi.count_qty,
+              i.name AS item_name, pi.purchase_id AS ref_id, pi.note
+         FROM purchase_items pi JOIN items i ON i.id = pi.item_id
+        WHERE pi.item_id = ?
+       UNION ALL
+       SELECT 'out' AS kind, si.happened_at, si.quantity, si.unit, COALESCE(si.count_qty, si.quantity) AS eff_qty, si.count_qty,
+              i.name AS item_name, si.sale_id AS ref_id, si.note
+         FROM sale_items si JOIN items i ON i.id = si.item_id
+        WHERE si.item_id = ?
+     )
+     ORDER BY happened_at DESC, ref_id DESC
+     LIMIT ?`,
+  ).bind(itemId, itemId, limit).all<{ kind: string; happened_at: string; quantity: number; unit: string; eff_qty: number; count_qty: number | null; item_name: string; ref_id: string; note: string | null }>();
+  return c.json({ rows: out.results });
 });
 
 // PUT /stocks — 盘点/批量设置（body: {rows:[{item_id, unit, quantity, min_stock?}]}）

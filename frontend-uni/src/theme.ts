@@ -265,7 +265,8 @@ function skinSvgSrc(skin: string, click: { ink: string; ink2: string }): string 
   // 小程序 btoa/TextEncoder 可能缺失：自实现 base64（UTF-8 安全），image 组件 src 直接用
   return 'data:image/svg+xml;base64,' + utf8ToBase64(svg);
 }
-function utf8ToBase64(s: string): string {
+/** UTF-8 安全的 base64（小程序 btoa/TextEncoder 可能缺失：自实现；对账单打印 base64url 复用） */
+export function utf8ToBase64(s: string): string {
   // UTF-8 编码（手写，不依赖 TextEncoder）
   const bytes: number[] = [];
   for (let i = 0; i < s.length; i++) {

@@ -45,6 +45,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   bool _saving = false;
   bool _testing = false;
   String _tab = 'providers'; // 'providers' | 'binding'
+  /// 各能力测试状态：idle 未测 / testing 测试中 / ok 通过 / fail 失败（对齐小程序圆点：灰=未测、蓝转圈=测中、绿=通过、红=失败）
+  final Map<String, String> _testState = {'text': 'idle', 'vision': 'idle', 'speech': 'idle'};
 
   List<_Provider> _providers = [];
   String _textProviderId = 'zhipu_glm';
@@ -202,73 +204,90 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
   }
 
-  /// 测试单个能力：弹窗显示结果
+  /// 测试单个能力：圆点状态就地展示（绿=通过/红=失败/转圈=测试中），结果文字用轻提示（对齐小程序：不弹界面）
   Future<void> _testOne(String capability, String label) async {
     if (_testing) return;
-    setState(() => _testing = true);
+    setState(() {
+      _testing = true;
+      _testState[capability] = 'testing';
+    });
     try {
       final result = await _testCapability(capability);
       if (!mounted) return;
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text('测试$label'),
-          content: Text(result),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('好的'))],
-        ),
-      );
+      setState(() => _testState[capability] = 'ok');
+      toast(context, '$label：$result');
     } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) setState(() => _testState[capability] = 'fail');
+      toast(context, '$label：${e.toString().replaceFirst('Exception: ', '')}');
     } finally {
       if (mounted) setState(() => _testing = false);
     }
   }
 
-  /// 一键测试：串行跑文字 → 图片 → 语音，汇总弹窗展示（参考项目：并行跑三项；串行便于逐项看结果）
+  /// 一键测试：串行跑文字 → 图片 → 语音，各项圆点就地更新状态（对齐小程序：不弹汇总界面）
   Future<void> _testAll() async {
     if (_testing) return;
     setState(() => _testing = true);
     final results = <String>[];
     try {
       for (final (cap, label) in [('text', '文字记账'), ('vision', '图片识别'), ('speech', '语音记账')]) {
+        if (mounted) setState(() => _testState[cap] = 'testing');
         try {
-          results.add('$label：${await _testCapability(cap)}');
+          final r = await _testCapability(cap);
+          results.add('$label：$r');
+          if (mounted) setState(() => _testState[cap] = 'ok');
         } catch (e) {
           results.add('$label：✗ ${e.toString().replaceFirst('Exception: ', '')}');
+          if (mounted) setState(() => _testState[cap] = 'fail');
         }
       }
-      if (!mounted) return;
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('AI 一键测试结果'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: results.map((r) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Text(r, style: const TextStyle(fontSize: 13)),
-              )).toList(),
-            ),
-          ),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('好的'))],
-        ),
-      );
     } finally {
       if (mounted) setState(() => _testing = false);
     }
+    if (!mounted || results.isEmpty) return;
+    toast(context, results.join('；'));
   }
 
-  /// 单项能力测试的图标按钮（tooltip 说明，点击弹窗展示结果）
+  /// 单项能力测试的状态圆点（对齐小程序：idle=灰 / testing=转圈 / ok=绿 / fail=红）
+  Widget _stateDot(String cap) {
+    final st = _testState[cap] ?? 'idle';
+    return Container(
+      width: 14,
+      height: 14,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: st == 'ok'
+            ? const Color(0xFF22C55E)
+            : (st == 'fail' ? const Color(0xFFEF4444) : const Color(0xFF9CA3AF)),
+      ),
+      child: st == 'testing'
+          ? const Center(
+              child: SizedBox(
+                width: 10,
+                height: 10,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF3B82F6)),
+              ),
+            )
+          : (st == 'ok'
+              ? const Icon(Icons.check, size: 10, color: Colors.white)
+              : (st == 'fail' ? const Icon(Icons.close, size: 10, color: Colors.white) : null)),
+    );
+  }
+
+  /// 单项能力测试的图标按钮（tooltip 说明，点击后圆点状态就地展示结果，不弹界面）
   Widget _testBtn(String cap, String label, IconData icon) {
     return SizedBox(
       width: 44,
       height: 40,
-      child: IconButton.filledTonal(
-        tooltip: '测试$label',
-        onPressed: _testing ? null : () => _testOne(cap, label),
-        icon: Icon(icon, size: 20),
+      child: Stack(
+        children: [
+          IconButton.filledTonal(
+            tooltip: '测试$label',
+            onPressed: _testing ? null : () => _testOne(cap, label),
+            icon: Icon(icon, size: 20),
+          ),
+          Positioned(right: 2, top: 2, child: _stateDot(cap)),
+        ],
       ),
     );
   }

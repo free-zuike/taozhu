@@ -34,23 +34,8 @@
         <button class="btn-copy" @click="copyCsv">复制 CSV（粘到 Excel）</button>
         <button class="btn-copy" @click="share">分享对账单（生成链接）</button>
         <button class="btn-copy" @click="manageShares">我的分享</button>
+        <button class="btn-copy" @click="printStmt">打印（生成打印页，浏览器打开）</button>
       </view>
-    </view>
-
-    <view v-if="loaded" class="list">
-      <view class="list-title">出货明细</view>
-      <view v-for="s in sales" :key="s.id" class="list-row">
-        <text class="lr-l">{{ s.client_name }} {{ s.happened_at }}</text>
-        <text class="lr-r red">¥{{ fmtAmount(Number((s.amount ?? s.total) || 0)) }}</text>
-      </view>
-      <view v-if="sales.length === 0" class="empty">周期内无出货</view>
-
-      <view class="list-title">收款明细</view>
-      <view v-for="p in payments" :key="p.id" class="list-row">
-        <text class="lr-l">{{ p.client_name }} {{ p.happened_at }}<text v-if="p.method"> {{ p.method }}</text></text>
-        <text class="lr-r green">¥{{ fmtAmount(Number(p.amount)) }}</text>
-      </view>
-      <view v-if="payments.length === 0" class="empty">周期内无收款</view>
     </view>
 
     <!-- 我的分享管理（对齐 App：列表 + 延期 + 删除） -->
@@ -77,12 +62,12 @@
 import { onShow, onHide } from '@dcloudio/uni-app';
 import { onWs, offWs } from '../../ws';
 
-import { useThemeVars } from '../../theme';
+import { useThemeVars, utf8ToBase64 } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { ref } from 'vue';
 ;
 ;
-import { request, getToken } from '../../api';
+import { request, getToken, getApiBase } from '../../api';
 import { roundAmount, fmtAmount, initRounding } from '../../utils/money';
 
 const clients = ref<Array<{ id: string; name: string }>>([]);
@@ -247,6 +232,53 @@ function copyCsv() {
   uni.showToast({ title: 'CSV 已复制（带表头）', icon: 'success' });
 }
 
+// 打印对账单：构造行集（标题+汇总+出货/收款明细）→ base64 → 服务端 /print/template 渲染打印页
+// （对齐 App：服务端自包含 HTML + 自动打印；小程序无法直接唤浏览器，复制链接后用户浏览器打开打印）
+async function printStmt() {
+  if (!loaded.value) {
+    uni.showToast({ title: '请先生成对账单', icon: 'none' });
+    return;
+  }
+  const rows: unknown[] = [
+    [['对账单', 'center', true, '', 1, 4]],
+    [['店铺', 'left', true, '', 1, 1], [clientName.value, 'left', false, '', 1, 3]],
+    [['周期', 'left', true, '', 1, 1], [`${from.value} 至 ${to.value}`, 'left', false, '', 1, 3]],
+  ];
+  // 出货明细
+  rows.push([['出货明细', 'left', true, 'grey', 1, 4]]);
+  rows.push([['日期', 'left', true, '', 1, 1], ['商品/店铺', 'left', true, '', 1, 2], ['金额', 'right', true, '', 1, 1]]);
+  for (const s of sales.value) {
+    const name = s.item_name ? `${s.item_name}${s.quantity ?? ''}${s.unit ?? ''} ${s.client_name || ''}` : (s.client_name || '出货');
+    rows.push([['', '', false, '', 1, 1], [name, 'left', false, '', 1, 2], [fmtAmount(Number((s.amount ?? s.total) || 0)), 'right', false, '', 1, 1]]);
+  }
+  // 收款明细
+  rows.push([['收款明细', 'left', true, 'grey', 1, 4]]);
+  rows.push([['日期', 'left', true, '', 1, 1], ['店铺/方式', 'left', true, '', 1, 2], ['金额', 'right', true, '', 1, 1]]);
+  for (const p of payments.value) {
+    rows.push([['', '', false, '', 1, 1], [`${p.client_name || ''}${p.method ? ' ' + p.method : ''}`, 'left', false, '', 1, 2], [fmtAmount(Number(p.amount || 0)), 'right', false, '', 1, 1]]);
+  }
+  // 汇总
+  rows.push([['出货合计', 'left', true, '', 1, 1], [`¥${fmtAmount(saleTotal.value)}（${sales.value.length} 笔）`, 'left', false, '', 1, 3]]);
+  rows.push([['收款合计', 'left', true, '', 1, 1], [`¥${fmtAmount(payTotal.value)}（${payments.value.length} 笔）`, 'left', false, '', 1, 3]]);
+  rows.push([['期末欠款', 'left', true, '', 1, 1], [`¥${fmtAmount(debt.value)}`, 'left', false, '', 1, 3]]);
+
+  const rowsJson = JSON.stringify(rows);
+  // base64url（UTF-8 → base64 → base64url，与 App 一致；小程序无 btoa/TextEncoder，用 theme 自实现）
+  const b64 = utf8ToBase64(rowsJson).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const token = getToken() || '';
+  const base = getApiBase();
+  const title = encodeURIComponent(`${clientName.value} 对账单`);
+  const url = `${base}/api/v1/print/template?title=${title}&rows=${b64}&token=${token}${clientId ? `&client_id=${clientId}` : ''}`;
+  uni.setClipboardData({
+    data: url,
+    success: () => uni.showModal({
+      title: '打印页链接已复制',
+      content: '请用浏览器打开该链接，页面会自动弹出打印（可另存为 PDF）。\n已复制到剪贴板。',
+      showCancel: false,
+    }),
+  });
+}
+
 type ShareItem = { token: string; url?: string; expires_at?: string; created_at?: string };
 const shares = ref<ShareItem[]>([]);
 const shareDlg = ref(false);
@@ -369,11 +401,6 @@ async function delShare(s: ShareItem) {
 .stat { display: flex; justify-content: space-between; padding: 12rpx 0; font-size: 28rpx; }
 .red { color: #f56c6c; }
 .green { color: #67c23a; }
-.list { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
-.list-title { font-size: 30rpx; font-weight: bold; margin: 20rpx 0 12rpx; }
-.list-row { display: flex; justify-content: space-between; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); font-size: 26rpx; }
-.lr-l { color: var(--text-main); }
-.lr-r { font-weight: bold; }
 .empty { color: var(--text-sub); text-align: center; padding: 24rpx 0; font-size: 26rpx; }
 /* 我的分享弹层 */
 .mask { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); z-index: 100; display: flex; align-items: flex-end; }

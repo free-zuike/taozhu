@@ -1221,197 +1221,6 @@ class _LedgerPageState extends State<LedgerPage> {
     }
   }
 
-  /// CSV 字段转义：含逗号/引号/换行的加引号包裹
-  String _csv(Object? v) {
-    final s = '$v';
-    return s.contains(',') || s.contains('"') || s.contains('\n') ? '"${s.replaceAll('"', '""')}"' : s;
-  }
-
-  /// 导入交易 CSV（与导出同格式：类型,日期,店铺,商品,数量,单位,单价,金额,备注）。
-  /// 出货行 → 该店 sale_item 本地入队同步；收款行 → payment 入队。匹配商品库名称带出价格组合。
-  /// 参考 beecount 导入理念：CSV 批量录入历史交易，字段清晰可编辑。
-  Future<void> _importCsv() async {
-    if (_clientId == null) {
-      toast(context, '请先选择店铺再导入');
-      return;
-    }
-    final text = await pickTextFile();
-    if (text == null || text.trim().isEmpty) {
-      if (!kIsWeb) toast(context, '当前平台暂不支持导入，请用 Web 端导入');
-      return;
-    }
-    final lines = text.trim().split('\n');
-    if (lines.length < 2) {
-      toast(context, 'CSV 至少需要表头 + 一行数据');
-      return;
-    }
-    final rows = <Map<String, String>>[];
-    final head = lines.first.split(',');
-    for (var i = 1; i < lines.length; i++) {
-      final cells = _splitCsvLine(lines[i]);
-      if (cells.length < 8) continue;
-      rows.add({
-        'type': cells[0].trim(),
-        'date': cells[1].trim(),
-        'client': cells[2].trim(),
-        'item': cells[3].trim(),
-        'qty': cells[4].trim(),
-        'unit': cells[5].trim(),
-        'price': cells[6].trim(),
-        'amount': cells[7].trim(),
-        'note': cells.length > 8 ? cells[8].trim() : '',
-      });
-    }
-    if (rows.isEmpty) {
-      toast(context, '没有有效的数据行');
-      return;
-    }
-    // 按行构建 sale_item/payment 本地入队（与记单提交同链路：行级镜像 + pending 队列）
-    var okCount = 0;
-    var skipCount = 0;
-    final items = await LocalDb.getAllByName('items');
-    for (final r in rows) {
-      final type = r['type'] ?? '';
-      final date = r['date'] ?? '';
-      final itemName = r['item'] ?? '';
-      final unitIn = r['unit'] ?? '';
-      final noteIn = r['note'] ?? '';
-      final qty = double.tryParse(r['qty'] ?? '');
-      final price = double.tryParse(r['price'] ?? '');
-      final amount = double.tryParse(r['amount'] ?? '');
-      if (qty == null || qty <= 0) {
-        skipCount++;
-        continue;
-      }
-      final h = date.length >= 10 ? date.substring(0, 10) : date;
-      if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(h)) {
-        skipCount++;
-        continue;
-      }
-      if (type == '出货' || type == 'sale') {
-        final match = items.where((it) => '${it['name']}' == itemName ||
-            '${it['name']}'.contains(itemName) || itemName.contains('${it['name']}')).firstOrNull;
-        if (match == null) {
-          skipCount++;
-          continue;
-        }
-        final unit = unitIn.isNotEmpty ? unitIn : '${(match['prices'] as List? ?? []).cast<Map<String, dynamic>>().firstOrNull?['unit'] ?? ''}';
-        final prices = ((match['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
-        final pr = prices.where((p) => '${p['unit']}' == unit).firstOrNull ?? prices.firstOrNull;
-        final salePrice = price ?? ((pr?['sale_price'] as num?)?.toDouble() ?? 0);
-        final rid = 'si${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
-        final saleId = 's${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
-        final rowPayload = {
-          'id': rid, 'sale_id': saleId, 'client_id': _clientId,
-          'item_id': '${match['id']}', 'item_name': '${match['name']}',
-          'unit': unit, 'quantity': qty,
-          'sale_price': salePrice, 'cost_price': (pr?['purchase_price'] as num?)?.toDouble() ?? 0,
-          'amount': amount ?? qty * salePrice,
-          'happened_at': h, 'note': noteIn, 'sort': 0,
-        };
-        await LocalDb.upsertOne('sale_items', rowPayload);
-        await SyncService.enqueueChange(
-            entityType: 'sale_item', entitySyncId: rid, action: 'upsert', payload: rowPayload);
-        // 整单镜像占位（批量直编/编辑模式按 sale_id 组装）
-        await LocalDb.upsertOne('sales', {
-          'id': saleId, 'client_id': _clientId, 'client_name': '${match['name']}',
-          'happened_at': h, 'note': noteIn, 'total': qty * salePrice, 'items': [rowPayload],
-        });
-        okCount++;
-      } else if (type == '收款' || type == 'payment') {
-        final pid = 'pay${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
-        await LocalDb.upsertOne('payments', {
-          'id': pid, 'client_id': _clientId, 'happened_at': h,
-          'amount': amount ?? 0, 'waived': 0, 'method': '', 'note': noteIn,
-        });
-        await SyncService.enqueueChange(
-            entityType: 'payment', entitySyncId: pid, action: 'upsert',
-            payload: {
-              'id': pid, 'client_id': _clientId, 'happened_at': h,
-              'amount': amount ?? 0, 'waived': 0, 'method': '', 'note': noteIn,
-            });
-        okCount++;
-      } else {
-        skipCount++;
-      }
-    }
-    unawaited(SyncService.pushPending());
-    SyncService.version.notifyListeners();
-    toast(context, '导入完成：新增 $okCount 条，跳过 $skipCount 条');
-    _load();
-  }
-
-  /// CSV 行按逗号拆分（支持引号包裹含逗号的字段）
-  List<String> _splitCsvLine(String line) {
-    final out = <String>[];
-    var cur = StringBuffer();
-    var inQuote = false;
-    for (var i = 0; i < line.length; i++) {
-      final ch = line[i];
-      if (inQuote) {
-        if (ch == '"') {
-          if (i + 1 < line.length && line[i + 1] == '"') {
-            cur.write('"');
-            i++;
-          } else {
-            inQuote = false;
-          }
-        } else {
-          cur.write(ch);
-        }
-      } else if (ch == '"') {
-        inQuote = true;
-      } else if (ch == ',') {
-        out.add(cur.toString());
-        cur = StringBuffer();
-      } else {
-        cur.write(ch);
-      }
-    }
-    out.add(cur.toString());
-    return out;
-  }
-
-  /// 导出当前筛选 CSV（出货/收款，按店铺+范围）
-  Future<void> _exportCsv() async {
-    final buf = StringBuffer('\uFEFF');
-    buf.writeln('类型,日期,店铺,商品,数量,单位,单价,金额,备注');
-    for (final s in _sales) {
-      final items = (s['items'] as List? ?? []);
-      for (final it in items) {
-        buf.writeln([
-          '出货',
-          _csv(_date(s['happened_at'])),
-          _csv(s['client_name']),
-          _csv(it['item_name']),
-          _csv(it['quantity']),
-          _csv(it['unit']),
-          _csv(it['sale_price']),
-          _csv(it['amount']),
-          _csv(s['note']),
-        ].join(','));
-      }
-    }
-    for (final p in _payments) {
-      buf.writeln([
-        '收款',
-        _csv(_date(p['happened_at'])),
-        _csv(p['client_name']),
-        '',
-        '',
-        '',
-        '',
-        _csv(p['amount']),
-        _csv(p['method']),
-      ].join(','));
-    }
-    final bytes = Uint8List.fromList(utf8.encode(buf.toString()));
-    await Share.shareXFiles(
-      [XFile.fromData(bytes, mimeType: 'text/csv', name: 'taozhu-店铺.csv')],
-      text: '陶朱店铺 CSV',
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).extension<TaozhuColors>()!;
@@ -1448,70 +1257,62 @@ class _LedgerPageState extends State<LedgerPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 全局搜索：按商品名/店铺名/备注过滤出货+收款（本地行级，零网络）
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _searchCtrl,
-                          style: TextStyle(color: c.textMain),
-                          decoration: InputDecoration(
-                            prefixIcon: const Icon(Icons.search, size: 20),
-                            hintText: '搜索交易：商品名 / 店铺 / 备注',
-                            hintStyle: TextStyle(color: c.textSub, fontSize: 13),
-                            isDense: true,
-                          ),
-                          onChanged: (v) => setState(() => _query = v.trim()),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      // 店铺交易 导出/导入 CSV（与账本筛选同维度：按店铺+范围）
-                      IconButton(
-                        tooltip: '导出交易 CSV',
-                        icon: Icon(Icons.download_outlined, color: c.primary, size: 22),
-                        onPressed: _exportCsv,
-                      ),
-                      IconButton(
-                        tooltip: '导入交易 CSV',
-                        icon: Icon(Icons.upload_outlined, color: c.primary, size: 22),
-                        onPressed: _importCsv,
-                      ),
-                    ],
-                  ),
-                  // 店铺选择：点击弹出全部店铺弹层（名称+交易笔数+欠款+新增）
+                  // 店铺选择（宽度减少，与搜索同一行——用户"搜索不要单独一行太占位置"）+
+                  // 搜索（无独立行，缩窄并排）
                   if (_clients.isNotEmpty)
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: _showLedgerPicker,
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          // 透明：与月度结余合成一块，露出主题背景图案
-                          child: Row(
-                            children: [
-                              Icon(Icons.store_outlined, size: 20, color: c.primary),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  _clients
-                                          .where((c) => '${c['id']}' == _clientId)
-                                          .map((c) => '${c['name']}')
-                                          .firstOrNull ??
-                                      '选择店铺',
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: c.textMain,
+                    Row(
+                      children: [
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: _showLedgerPicker,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                              // 透明：露出主题背景
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.store_outlined, size: 18, color: c.primary),
+                                  const SizedBox(width: 4),
+                                  ConstrainedBox(
+                                    constraints: const BoxConstraints(maxWidth: 96),
+                                    child: Text(
+                                      _clients
+                                              .where((cs) => '${cs['id']}' == _clientId)
+                                              .map((cs) => '${cs['name']}')
+                                              .firstOrNull ??
+                                          '选择店铺',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: c.textMain,
+                                      ),
+                                    ),
                                   ),
-                                ),
+                                  Icon(Icons.keyboard_arrow_down, size: 18, color: c.textSub),
+                                ],
                               ),
-                              Icon(Icons.keyboard_arrow_down, color: c.textSub),
-                            ],
+                            ),
                           ),
                         ),
-                      ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: _searchCtrl,
+                            style: TextStyle(color: c.textMain),
+                            decoration: InputDecoration(
+                              prefixIcon: const Icon(Icons.search, size: 18),
+                              hintText: '搜索商品 / 店铺 / 备注',
+                              hintStyle: TextStyle(color: c.textSub, fontSize: 13),
+                              isDense: true,
+                            ),
+                            onChanged: (v) => setState(() => _query = v.trim()),
+                          ),
+                        ),
+                      ],
                     ),
                   // 月度结余卡（三列：支出=进货/收入=出货/结余=出货−进货）：
                   // 点击进入全部月份流式页；店员无统计权限不显示

@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../api.dart';
@@ -8,6 +10,9 @@ import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../utils/download.dart';
+import '../utils/trades_csv.dart';
+import '../widgets/center_sheet.dart';
 import 'router.dart';
 
 class ClientsPage extends StatefulWidget {
@@ -430,12 +435,96 @@ class _ClientsPageState extends State<ClientsPage> {
     _load();
   }
 
+  /// 导出全部店铺交易 CSV（店铺管理页入口，用户"交易导入导出放在店铺管理中"）
+  Future<void> _exportAllTrades() async {
+    try {
+      final data = await loadTradesLocal();
+      final csv = buildTradesCsv(data.sales, data.payments);
+      final bytes = Uint8List.fromList(utf8.encode(csv));
+      await saveBytes(bytes, 'taozhu-all-trades.csv', 'text/csv', '陶朱交易导出');
+      if (kIsWeb) toast(context, '已导出全部店铺交易 CSV');
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// 导出单店铺交易 CSV（该店全部出货+收款）
+  Future<void> _exportClientTrades(Map<String, dynamic> c) async {
+    try {
+      final data = await loadTradesLocal();
+      final csv = buildTradesCsv(data.sales, data.payments, onlyClientId: '${c['id']}');
+      final bytes = Uint8List.fromList(utf8.encode(csv));
+      await saveBytes(bytes, '${c['name']}-交易.csv', 'text/csv', '陶朱交易导出');
+      if (kIsWeb) toast(context, '已导出「${c['name']}」交易 CSV');
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// 导入交易 CSV：先选目标店铺，解析行归入该店（行带店铺列忽略，强制当前店）
+  Future<void> _importTradesFromCsv() async {
+    if (_clients.isEmpty) {
+      toast(context, '请先创建店铺再导入');
+      return;
+    }
+    final storeId = await showCenterSheet<String>(
+      context: context,
+      maxHeightFactor: 0.7,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Text('选择导入目标店铺', style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          Flexible(
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final c in _clients)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.store_outlined, size: 20),
+                    title: Text('${c['name']}'),
+                    onTap: () => Navigator.pop(ctx, '${c['id']}'),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (storeId == null) return;
+    final client = _clients.where((c) => '${c['id']}' == storeId).firstOrNull;
+    if (client == null) return;
+    final text = await pickTradesCsv();
+    if (text == null || text.trim().isEmpty) {
+      if (!kIsWeb) toast(context, '当前平台暂不支持导入，请用 Web 端导入');
+      return;
+    }
+    final r = await importTradesCsv(text, storeId, '${client['name']}');
+    unawaited(SyncService.pushPending());
+    SyncService.version.notifyListeners();
+    toast(context, '导入完成：新增 ${r.ok} 条，跳过 ${r.skip} 条');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
+          // 店铺交易 导入/导出（用户"交易导入导出放在店铺管理中，不要在主界面"）
+          IconButton(
+            tooltip: '导出全部交易 CSV',
+            icon: const Icon(Icons.download_outlined),
+            onPressed: _exportAllTrades,
+          ),
+          IconButton(
+            tooltip: '导入交易 CSV（按行店铺）',
+            icon: const Icon(Icons.upload_outlined),
+            onPressed: _importTradesFromCsv,
+          ),
           IconButton(onPressed: () => _edit(), icon: const Icon(Icons.add)),
         ],
       ),
@@ -508,6 +597,11 @@ class _ClientsPageState extends State<ClientsPage> {
                               IconButton(
                                 icon: const Icon(Icons.edit_outlined, size: 20, color: Color(0xFF409EFF)),
                                 onPressed: () => _edit(c),
+                              ),
+                              IconButton(
+                                tooltip: '导出该店交易',
+                                icon: Icon(Icons.download_outlined, size: 20, color: _c.textSub),
+                                onPressed: () => _exportClientTrades(c),
                               ),
                               IconButton(
                                 icon: Icon(Icons.delete_outline, size: 20, color: _c.danger),

@@ -9,16 +9,23 @@
     <button class="btn-add" @click="openForm()">+ 新增{{ type === 'item' ? '商品' : '店铺' }}分类</button>
 
     <view v-for="c in top" :key="c.id" class="card">
-      <view class="head">
-        <view class="cat-ic"><text class="mi">&#xe2c7;</text></view>
-        <text class="name" @click="showCatItems(c)">{{ c.name }}</text>
-        <text class="view-hint" @click="showCatItems(c)">查看</text>
-        <text class="mi op-ic" @click="openForm(c.id, c.name)">&#xe145;</text>
-        <text class="mi op-ic" @click="openRename(c)">&#xe3c9;</text>
-        <text class="mi op-ic op-del" @click="remove(c)">&#xe92e;</text>
+      <view class="head" @click="toggleCollapse(c.id)">
+        <view class="cat-ic" :style="{ background: catColorBg(c.name), color: catColor(c.name) }">
+          <text class="mi">{{ catIcon(c.name, isParent(c.id)) }}</text>
+        </view>
+        <view class="name-box">
+          <text class="name" @click.stop="showCatItems(c)">{{ c.name }}</text>
+          <text v-if="childrenOf(c.id).length" class="cnt">{{ childrenOf(c.id).length }} 个子分类</text>
+        </view>
+        <text v-if="childrenOf(c.id).length" class="mi fold-ic">{{ collapsed.has(c.id) ? '&#xe5cf;' : '&#xe5ce;' }}</text>
+        <text class="mi op-ic" @click.stop="openForm(c.id, c.name)">&#xe145;</text>
+        <text class="mi op-ic" @click.stop="openRename(c)">&#xe3c9;</text>
+        <text class="mi op-ic op-del" @click.stop="remove(c)">&#xe92e;</text>
       </view>
-      <view v-for="ch in childrenOf(c.id)" :key="ch.id" class="child">
-        <text class="mi sub-ic">&#xe2c7;</text>
+      <view v-for="ch in childrenOf(c.id)" v-show="!collapsed.has(c.id)" :key="ch.id" class="child">
+        <view class="sub-ic" :style="{ background: catColorBg(ch.name), color: catColor(ch.name) }">
+          <text class="mi">{{ catIcon(ch.name, false) }}</text>
+        </view>
         <text class="ch-name" @click="showCatItems(ch)">{{ ch.name }}</text>
         <text class="mi op-ic" @click="openRename(ch)">&#xe3c9;</text>
         <text class="mi op-ic op-del" @click="remove(ch)">&#xe92e;</text>
@@ -68,9 +75,36 @@ const saving = ref(false);
 const form = ref<{ title: string; name: string; id?: string; parentId?: string; parentName: string }>({
   title: '', name: '', id: undefined, parentId: undefined, parentName: '',
 });
+// 已收起的一级分类 id（二级分类默认展开，点一级头折叠/展开）
+const collapsed = ref<Set<string>>(new Set());
 
 const top = computed(() => cats.value.filter((c) => !c.parent_id));
 const childrenOf = (id: string) => cats.value.filter((c) => c.parent_id === id);
+const isParent = (id: string) => childrenOf(id).length > 0;
+function toggleCollapse(id: string) {
+  const s = new Set(collapsed.value);
+  if (s.has(id)) s.delete(id); else s.add(id);
+  collapsed.value = s;
+}
+
+// 分类图标（名称映射 Material 码点——只用本项目已验证的码点防乱码；一级文件夹/店铺图标、二级展开小图标）
+const CAT_ICON_STORE = String.fromCharCode(0xea12); // 店铺（ledger 同源已验证）
+const CAT_ICON_FOLDER = String.fromCharCode(0xe2c7); // 文件夹（本项目常用）
+function catIcon(name: string, parent: boolean): string {
+  if (type.value === 'client') return CAT_ICON_STORE;
+  return CAT_ICON_FOLDER;
+}
+
+// 分类配色（与 App 端 categories_page._catColor 同 palette 同 hash 算法，两端一致）
+const CAT_PALETTE = ['#EF7830', '#22A06B', '#2F81C1', '#B78846', '#A05CE6', '#D9544F'];
+function catColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0x7fffffff;
+  return CAT_PALETTE[h % CAT_PALETTE.length];
+}
+function catColorBg(name: string): string {
+  return catColor(name) + '24'; // 15% 透明度浅底
+}
 
 // 分类下商品/店铺查看（点分类名称）：item=商品列表（名称+首价格）；client=店铺列表
 const itemsDlg = ref(false);
@@ -194,14 +228,17 @@ async function remove(c: Cat) {
 .btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
 .card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; margin-bottom: 12rpx; }
-.cat-ic { width: 52rpx; height: 52rpx; border-radius: 14rpx; background: var(--primary-soft); display: flex; align-items: center; justify-content: center; margin-right: 14rpx; flex-shrink: 0; }
-.cat-ic .mi { font-size: 28rpx; }
-.name { font-size: 30rpx; font-weight: bold; flex: 1; min-width: 0; }
-.view-hint { font-size: 22rpx; color: var(--primary); margin-right: 12rpx; flex-shrink: 0; }
+.cat-ic { width: 64rpx; height: 64rpx; border-radius: 16rpx; background: var(--primary-soft); display: flex; align-items: center; justify-content: center; margin-right: 16rpx; flex-shrink: 0; }
+.cat-ic .mi { font-size: 32rpx; }
+.name-box { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.name { font-size: 30rpx; font-weight: bold; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cnt { font-size: 20rpx; color: var(--text-sub); margin-top: 2rpx; }
+.fold-ic { font-size: 28rpx; color: var(--text-sub); margin-left: 8rpx; flex-shrink: 0; }
 .op-ic { font-size: 30rpx; color: var(--text-sub); margin-left: 20rpx; flex-shrink: 0; }
 .op-ic.op-del { color: #f56c6c; }
-.child { display: flex; align-items: center; padding: 10rpx 0 10rpx 14rpx; border-top: 1rpx solid var(--divider); }
-.sub-ic { font-size: 26rpx; color: var(--text-sub); margin-right: 10rpx; flex-shrink: 0; }
+.child { display: flex; align-items: center; padding: 12rpx 0 12rpx 36rpx; border-top: 1rpx solid var(--divider); }
+.sub-ic { width: 44rpx; height: 44rpx; border-radius: 12rpx; display: flex; align-items: center; justify-content: center; margin-right: 12rpx; flex-shrink: 0; }
+.sub-ic .mi { font-size: 24rpx; }
 .ch-name { font-size: 28rpx; flex: 1; min-width: 0; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; z-index: 100; }

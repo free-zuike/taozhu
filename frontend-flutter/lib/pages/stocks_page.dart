@@ -62,7 +62,7 @@ class _StocksPageState extends State<StocksPage> {
         local.sort((a, b) => '${a['item_name'] ?? ''}'.compareTo('${b['item_name'] ?? ''}'));
         if (mounted) {
           setState(() {
-            _stocks = local;
+            _stocks = _mergeByItem(local);
             _loading = false;
           });
         }
@@ -77,7 +77,7 @@ class _StocksPageState extends State<StocksPage> {
       if (cached != null && mounted) {
         _canSeeCost = cached['can_see_cost'] != false;
         setState(() {
-          _stocks = ((cached['stocks'] as List?) ?? []).cast<Map<String, dynamic>>();
+          _stocks = _mergeByItem(((cached['stocks'] as List?) ?? []).cast<Map<String, dynamic>>());
           _loading = false;
         });
       }
@@ -99,7 +99,7 @@ class _StocksPageState extends State<StocksPage> {
       }
       if (!mounted) return;
       setState(() {
-        _stocks = ((d['stocks'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _stocks = _mergeByItem(((d['stocks'] as List?) ?? []).cast<Map<String, dynamic>>());
         _canSeeCost = d['can_see_cost'] != false;
         _loading = false;
       });
@@ -299,105 +299,142 @@ class _StocksPageState extends State<StocksPage> {
     }
   }
 
-    /// 全量重算库存：从进货(+)出货(−)流水重建（历史 App 行级同步在旧版无库存联动，升级后一次性回补）
-  Future<void> _rebuildStock() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('重算库存'),
-        content: const Text('按全部进货/出货流水重新计算每个商品+单位的库存（保留预警阈值）。\n用于修复历史数据：旧版本 App 端添加的进货/出货未联动库存。\n\n确认重算？'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('重算'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    // 本地优先：原生端从本地行级流水（进货/出货，含换算 count_qty 折算）本地重算，不访问网络；
-    // Web 无本地库才走服务端全量重算端点。
-    if (!kIsWeb) {
-      try {
-        final rebuilt = await _localRebuild();
-        await LocalDb.putAll('stocks', rebuilt);
-        if (mounted) {
-          setState(() {
-            _stocks = rebuilt;
-            _loading = false;
-          });
-        }
-        toast(context, '已本地重算 ${rebuilt.length} 个商品库存');
-        SyncService.notifyStockChanged();
-        return;
-      } catch (e) {
-        toast(context, '本地重算失败：${e.toString().replaceFirst('Exception: ', '')}');
-        return;
-      }
-    }
-    try {
-      final r = await Api.instance.post('/stocks/rebuild', {});
-      toast(context, '已重算 ${r['rebuilt'] ?? 0} 个商品库存');
-      SyncService.notifyStockChanged();
-      _refresh();
-    } catch (e) {
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
-    }
+    /// 数量显示：整数不显示小数（后端已舍入两位），小数最多两位去尾 0（防 1.7000000000000002 斤）
+  static String fmtQty(num? v) {
+    final n = (v ?? 0).toDouble();
+    if (n == n.roundToDouble()) return n.toInt().toString();
+    return n.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
   }
 
-  /// 本地重算库存：从本地进货(+)出货(−)流水聚合（含单位换算 count_qty 折算、计数单位归并），保留旧阈值。
-  /// 与服务器 rebuild 口径一致：单位=商品计数单位（无则行单位），数量=count_qty（无则 quantity）。
-  Future<List<Map<String, dynamic>>> _localRebuild() async {
-    final items = await LocalDb.getAll('items');
-    final countUnitOf = {for (final it in items) '${it['id']}': '${it['count_unit'] ?? ''}'};
-    final nameOf = {for (final it in items) '${it['id']}': '${it['name'] ?? ''}'};
-    // old 阈值保留 key = item\0unit（按重算后的单位维度）
-    final oldStocks = await LocalDb.getAll('stocks');
-    final minMap = <String, double>{};
-    for (final s in oldStocks) {
-      minMap['${s['item_id']}\u0000${s['unit']}'] = ((s['min_stock'] as num?)?.toDouble() ?? 0);
-    }
-    // 聚合：进货 + / 出货 −（按 商品+计数单位 维度）
-    final agg = <String, double>{};
-    void add(String itemId, String rowUnit, double qty) {
-      final cu = countUnitOf[itemId]?.isNotEmpty == true ? countUnitOf[itemId]! : rowUnit;
-      final key = '$itemId\u0000$cu';
-      agg[key] = (agg[key] ?? 0) + qty;
-    }
-    for (final b in await LocalDb.getAll('purchase_items')) {
-      final qty = (double.tryParse('${b['count_qty'] ?? ''}') ?? 0) > 0
-          ? double.parse('${b['count_qty']}')
-          : ((b['quantity'] as num?)?.toDouble() ?? 0);
-      add('${b['item_id']}', '${b['unit'] ?? ''}', qty);
-    }
-    for (final s in await LocalDb.getAll('sale_items')) {
-      final qty = (double.tryParse('${s['count_qty'] ?? ''}') ?? 0) > 0
-          ? double.parse('${s['count_qty']}')
-          : ((s['quantity'] as num?)?.toDouble() ?? 0);
-      add('${s['item_id']}', '${s['unit'] ?? ''}', -qty);
+  /// 按商品合并展示：同商品多单位行收敛到一张卡片，主数量用"出货单位"行
+  /// （unit == 商品计数单位 count_unit；未配计数单位则取该商品第一行），
+  /// 其余单位行折叠为副文本，既不重复也不丢数据。
+  static List<Map<String, dynamic>> _mergeByItem(List<Map<String, dynamic>> rows) {
+    final byItem = <String, List<Map<String, dynamic>>>{};
+    for (final s in rows) {
+      byItem.putIfAbsent('${s['item_id'] ?? ''}', () => []).add(s);
     }
     final out = <Map<String, dynamic>>[];
-    for (final e in agg.entries) {
-      final sep = e.key.indexOf('\u0000');
-      final itemId = e.key.substring(0, sep);
-      final unit = e.key.substring(sep + 1);
-      final min = minMap[e.key] ?? 0;
-      out.add({
-        'id': null,
-        'item_id': itemId,
-        'unit': unit,
-        'item_name': nameOf[itemId] ?? '',
-        'quantity': e.value,
-        'min_stock': min,
-        'low': e.value < min,
-        'cost_price': 0,
-        'can_see_cost': true,
-      });
+    for (final list in byItem.values) {
+      if (list.isEmpty) continue;
+      String mainUnit = '';
+      for (final s in list) {
+        final cu = '${s['count_unit'] ?? ''}';
+        if (cu.isNotEmpty && '${s['unit']}' == cu) { mainUnit = '${s['unit']}'; break; }
+      }
+      var main = mainUnit.isEmpty
+          ? list.first
+          : list.firstWhere((s) => '${s['unit']}' == mainUnit, orElse: () => list.first);
+      final others = list.where((s) => s != main).toList();
+      if (others.isNotEmpty) {
+        main = Map<String, dynamic>.from(main);
+        main['_others'] = others;
+      }
+      out.add(main);
     }
     out.sort((a, b) => '${a['item_name'] ?? ''}'.compareTo('${b['item_name'] ?? ''}'));
     return out;
+  }
+
+  /// 点商品卡：查看该商品进货/出货明细（数量来源追溯）+ 调整库存在弹层内
+  Future<void> _viewTrace(Map<String, dynamic> s) async {
+    var rows = <Map<String, dynamic>>[];
+    try {
+      final d = await Api.instance.get('/stocks/trace?item_id=${s['item_id']}');
+      rows = ((d['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
+    } catch (_) {
+      rows = [];
+    }
+    if (!mounted) return;
+    await showCenterSheet<bool>(
+      context: context,
+      maxHeightFactor: 0.85,
+      builder: (ctx) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('${s['item_name']} · 进货/出货来源',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                ),
+                TextButton(
+                  onPressed: () { Navigator.pop(ctx); _edit(s); },
+                  child: const Text('调整库存', style: TextStyle(fontSize: 13)),
+                ),
+              ],
+            ),
+          ),
+          if (rows.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(child: Text('暂无进货/出货记录（数量可能来自盘点初始化）', style: TextStyle(fontSize: 13))),
+            )
+          else
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: rows.length,
+                itemBuilder: (_, i) {
+                  final r = rows[i];
+                  final isIn = '${r['kind']}' == 'in';
+                  final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
+                  final cq = (r['count_qty'] as num?)?.toDouble() ?? 0;
+                  final eff = (r['eff_qty'] as num?)?.toDouble() ?? qty;
+                  final conv = (cq > 0 && cq != qty && qty > 0);
+                  final convertUnit = '${s['count_unit'] ?? ''}'.isNotEmpty ? '${s['count_unit']}' : '${r['unit']}';
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 46,
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: (isIn ? const Color(0xFF22C55E) : const Color(0xFFEF4444)).withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            isIn ? '进货' : '出货',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                                color: isIn ? const Color(0xFF16A34A) : const Color(0xFFDC2626)),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('${r['happened_at'] ?? ''}',
+                                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                              if ('${r['note'] ?? ''}'.isNotEmpty)
+                                Text('${r['note']}', maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          '${isIn ? '+' : '−'}${fmtQty(qty)}${r['unit']}'
+                          '${conv ? '（折 ${fmtQty(eff)}$convertUnit）' : ''}',
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700,
+                            color: isIn ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
   }
 
   @override
@@ -407,11 +444,6 @@ class _StocksPageState extends State<StocksPage> {
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
           IconButton(tooltip: '盘点', icon: const Icon(Icons.edit_note_outlined), onPressed: _count),
-          IconButton(
-            tooltip: '重算库存（从进货/出货流水重建，保留阈值）',
-            icon: const Icon(Icons.autorenew),
-            onPressed: _rebuildStock,
-          ),
           IconButton(
             tooltip: '只看预警',
             icon: Icon(Icons.notification_important_outlined,
@@ -461,7 +493,13 @@ class _StocksPageState extends State<StocksPage> {
                                     style: TextStyle(fontSize: 12, color: _c.textSub)),
                                 const Spacer(),
                                 Text(
-                                  '¥${fmtMoney(_stocks.fold<double>(0, (s, x) => s + (((x['quantity'] as num?)?.toDouble() ?? 0) * ((x['cost_price'] as num?)?.toDouble() ?? 0))))}',
+                                  '¥${fmtMoney(_stocks.fold<double>(0, (sum, x) {
+                                    var v = (((x['quantity'] as num?)?.toDouble() ?? 0) * ((x['cost_price'] as num?)?.toDouble() ?? 0));
+                                    for (final o in ((x['_others'] as List?) ?? const []).cast<Map<String, dynamic>>()) {
+                                      v += ((o['quantity'] as num?)?.toDouble() ?? 0) * ((o['cost_price'] as num?)?.toDouble() ?? 0);
+                                    }
+                                    return sum + v;
+                                  }))}',
                                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _c.success),
                                 ),
                               ],
@@ -473,44 +511,57 @@ class _StocksPageState extends State<StocksPage> {
                             child: Center(child: Text('暂无库存记录\n进货后自动入库，可点右上角盘点初始化', textAlign: TextAlign.center, style: TextStyle(color: _c.textSub))),
                           ),
                         for (final s in _stocks)
-                          Card(
-                            margin: const EdgeInsets.symmetric(vertical: 3),
-                            elevation: 0,
-                            color: (s['low'] == true)
-                                ? _c.danger.withOpacity(0.1)
-                                : _c.card,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(
-                                  color: s['low'] == true ? _c.danger.withOpacity(0.5) : _c.divider),
-                            ),
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                radius: 16,
-                                backgroundColor: (s['low'] == true
-                                        ? _c.danger
-                                        : _c.success)
-                                    .withOpacity(0.12),
-                                child: Icon(
-                                  s['low'] == true ? Icons.warning_amber_outlined : Icons.inventory_2_outlined,
-                                  size: 16,
-                                  color: s['low'] == true ? _c.danger : _c.success,
-                                ),
-                              ),
-                              title: Text('${s['item_name']}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                              subtitle: Text('还剩 ${s['quantity']} ${s['unit']} · 阈值 ${s['min_stock']} ${s['unit']}',
-                                  style: TextStyle(fontSize: 12, color: _c.textSub)),
-                              trailing: Text(
-                                '${s['quantity']} ${s['unit']}',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: s['low'] == true ? _c.danger : _c.success,
-                                ),
-                              ),
-                              onTap: () => _edit(s),
-                            ),
-                          ),
+                          _stockCard(s),
+                      ],
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 单商品库存卡：主单位为出货单位（count_unit），其余单位折叠为副文本；点卡片看进/出来源
+  Widget _stockCard(Map<String, dynamic> s) {
+    final others = (s['_others'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+    final othersText = others.isNotEmpty
+        ? '\n另有 ${others.map((o) => '${fmtQty(o['quantity'] as num?)} ${o['unit']}').join('、')}'
+        : '';
+    final low = (s['low'] == true);
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      elevation: 0,
+      color: low ? _c.danger.withOpacity(0.1) : _c.card,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: low ? _c.danger.withOpacity(0.5) : _c.divider),
+      ),
+      child: ListTile(
+        leading: CircleAvatar(
+          radius: 16,
+          backgroundColor: (low ? _c.danger : _c.success).withOpacity(0.12),
+          child: Icon(
+            low ? Icons.warning_amber_outlined : Icons.inventory_2_outlined,
+            size: 16,
+            color: low ? _c.danger : _c.success,
+          ),
+        ),
+        title: Text('${s['item_name']}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        subtitle: Text('还剩 ${fmtQty(s['quantity'] as num?)} ${s['unit']} · 阈值 ${fmtQty(s['min_stock'] as num?)} ${s['unit']}$othersText',
+            style: TextStyle(fontSize: 12, color: _c.textSub)),
+        trailing: Text(
+          '${fmtQty(s['quantity'] as num?)} ${s['unit']}',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: low ? _c.danger : _c.success,
+          ),
+        ),
+        onTap: () => _viewTrace(s),
+      ),
+    );
+  }
+}
                       ],
                     ),
                   ),

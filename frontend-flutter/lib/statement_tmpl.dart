@@ -390,24 +390,38 @@ List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
       out.addAll(_multiColBill(d, withTitle: onlyRow));
       continue;
     }
-    // 每日行按实际月份裁剪：行内 {N日销售额} 的 N 全部超出当月天数（如 9 月 30 天 → 31 日行）→ 整行不渲染
-    // （用户"9月直接显示文字"/按实际月份不显示——否则 {31日销售额} 替换为空后日期格还在=多一行空表）
-    final dayNs = <int>[];
-    for (final c in row) {
-      for (final m in RegExp(r'\{(\d{1,2})日销售额\}').allMatches(c.text)) {
-        dayNs.add(int.tryParse(m.group(1)!) ?? 0);
-      }
+    // 逐格按实际月份裁剪：行内含超天数日期的格子（如 9月30天 → 31日）清空
+    // ——多栏模板每行有 {1日}{11日}{21日}{31日销售额}，此前整行 every 判断会漏 31 日（用户"多栏还有31号"）。
+    // 标准模板每日一行（{月}月31日 + {31日销售额} 全超天数）→ 渲染后整行全空，跳过（整行消失）
+    final maxDay = daily.days.length;
+    String trimDay(String text) {
+      // 销售额格：{N日销售额} → 超天数清空
+      var t = text.replaceAllMapped(RegExp(r'\{(\d{1,2})日销售额\}'), (m) {
+        final n = int.tryParse(m.group(1)!) ?? 0;
+        return n > maxDay ? '' : m.group(0)!;
+      });
+      // 日期格：{月}月N日 → 超天数清空（保留表头等非日期格）
+      t = t.replaceAllMapped(RegExp(r'\{月\}月(\d{1,2})日'), (m) {
+        final n = int.tryParse(m.group(1)!) ?? 0;
+        return n > maxDay ? '' : m.group(0)!;
+      });
+      return t;
     }
-    if (dayNs.isNotEmpty && dayNs.every((n) => n > daily.days.length)) continue;
-    out.add([
+    final rendered = [
       for (var cc = 0; cc < row.length; cc++)
         GridCell(
-          _replaceVars(row[cc].text, d),
+          _replaceVars(trimDay(row[cc].text), d),
           cc < cfg.colAligns.length && cfg.colAligns[cc].isNotEmpty ? cfg.colAligns[cc] : row[cc].align,
           row[cc].bold,
           row[cc].bg,
+          row[cc].rowSpan, // 保留合并（colSpan=8 标题行此前漏传 → 渲染输出每列都画标题）
+          row[cc].colSpan,
+          row[cc].borderTop, row[cc].borderRight, row[cc].borderBottom, row[cc].borderLeft,
         ),
-    ]);
+    ];
+    // 整行渲染后全空（标准模板 9月31号那一行）→ 跳过不显示
+    if (rendered.every((c) => c.text.trim().isEmpty)) continue;
+    out.add(rendered);
   }
   return out;
 }
@@ -489,8 +503,10 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
         .toList();
     // 内置模板内容演进迁移（2026-10-08）：旧「标准」=标题行+{月账单}、旧「按日汇总」=对账单头部+{月账单}
     // 2026-10-10 用户定稿：头部只要一行「店铺X月份账单」+表格，不要重复标题行——内置模板统一为
-    // 展开网格（标题行 + 每日/多栏 + 合计），不再用 {月账单} 宏。仍是内置名的旧结构才迁移，
-    // 用户改过的自定义内容不碰；旧「按日汇总」与「标准」同形 → 移除（用户"去掉重复"）。
+    // 展开网格（标题行 + 每日/多栏 + 合计），不再用 {月账单} 宏。
+    // **内置名强制使用最新出厂定义**：用户本地存的旧「标准」/「多栏」（旧结构=40天/旧标题/旧布局）必须
+    // 替换为最新展开网格——否则用户升级后看到的是旧模板（用户"32-40天还存在/标题重复"根因）。
+    // 用户要自定义请另存新名；内置名 = 出厂定义，用户对内置名的修改不保留。
     var migrated = false;
     final kept = <XlsCfg>[];
     for (final t in list) {
@@ -498,28 +514,19 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
         migrated = true; // 内置按日汇总已与标准合并，跳过（用户自定义过的按日汇总保留）
         continue;
       }
-      if (t.comps.isNotEmpty || t.content.trim().isNotEmpty || t.grid.isEmpty) {
-        kept.add(t);
+      if (t.name == '标准') {
+        kept.add(_defaultTemplate());
+        migrated = true;
         continue;
       }
-      final first = t.grid[0].isNotEmpty ? t.grid[0][0].text : '';
-      if (t.name == '标准' && first.contains('月份账单')) {
-        t.grid = _defaultTemplate().grid;
+      if (t.name == '多栏') {
+        kept.add(_multiColTemplate());
         migrated = true;
-      } else if (t.name == '标准' && t.grid.length <= 1 && first.contains('{月账单}')) {
-        t.grid = _defaultTemplate().grid;
-        migrated = true;
-      } else if (t.name == '标准' && first.contains('对账单') &&
-          t.grid.length > 1 && t.grid[1].any((c) => c.text.contains('{月账单}'))) {
-        // 旧「标准」=店铺名+对账单 头部行 + {月账单}（用户实存"寻牛 对账单 / {月账单}"双标题）
-        // → 展开为内置标准网格（标题用变量，去掉写死的店名头部=只留一行头部）
-        t.grid = _defaultTemplate().grid;
-        migrated = true;
+        continue;
       }
       kept.add(t);
     }
-    // 内置模板始终合并进列表（用户旧缓存缺「标准」/「多栏」时补回——否则新模板不显示）：
-    // 已存在同名内置模板（含用户编辑过的）不覆盖，用户自定义模板保留
+    // 内置模板始终合并进列表（用户旧缓存缺「标准」/「多栏」时补回——否则新模板不显示）
     final names = kept.map((t) => t.name).toSet();
     if (!names.contains('标准')) {
       kept.insert(0, _defaultTemplate());

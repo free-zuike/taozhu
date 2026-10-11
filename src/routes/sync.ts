@@ -264,7 +264,7 @@ syncRouter.get('/full', async (c) => {
   });
 
   const stockRows = await db.prepare(
-    `SELECT st.item_id, st.unit, st.quantity, st.min_stock, i.name AS item_name FROM stocks st JOIN items i ON i.id = st.item_id ORDER BY i.name`,
+    `SELECT st.item_id, st.unit, st.quantity, st.min_stock, i.name AS item_name, i.count_unit FROM stocks st JOIN items i ON i.id = st.item_id ORDER BY i.name`,
   ).all();
   const stocks = stockRows.results.map((x) => {
     const r = x as Record<string, unknown>;
