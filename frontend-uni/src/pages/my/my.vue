@@ -118,7 +118,7 @@ import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { request, getRole, getToken, getApiBase, setApiBase, clearToken } from '../../api';
+import { request, getRole, getToken, getApiBase, setApiBase, clearToken, clearAccountData } from '../../api';
 import { fmtAmount } from '../../utils/money';
 import { APP_VERSION } from '../../version';
 
@@ -280,10 +280,10 @@ function logout() {
 function switchAccount() {
   uni.showModal({
     title: '切换账号',
-    content: '将清除当前账号的本地登录状态，返回登录页换号登录。',
+    content: '将清除当前账号的本地登录状态与缓存（不影响服务器数据），返回登录页换号登录。',
     success: (r) => {
       if (r.confirm) {
-        clearToken();
+        clearAccountData();
         uni.reLaunch({ url: '/pages/login/login' });
       }
     },

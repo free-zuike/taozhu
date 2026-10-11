@@ -26,6 +26,7 @@ interface PurchaseItemInput {
   purchase_price?: number;   // 可覆盖默认进价
   happened_at?: string;      // 行独立日期（缺省用单据日期）
   note?: string;             // 行级备注（缺省空）
+  sort?: number;             // 行序（批量直编跨单全局录入序；缺省服务端按数组序）
 }
 
 // POST /purchases
@@ -85,11 +86,13 @@ purchasesRouter.post('/', async (c) => {
     const effCount = Number.isFinite(countQty) && countQty > 0
       ? countQty
       : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
+    // 行序：客户端显式传 sort（批量直编跨单全局录入序）优先，缺省回退数组索引（批内扫描顺序）
+    const lineSort = Number.isFinite(Number(item.sort)) && Number(item.sort) >= 0 ? Number(item.sort) : i;
     batch.push(
       c.env.DB.prepare(
         'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sync_key, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(randomId(), purchaseId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount,
-        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null, i),
+        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null, lineSort),
     );
     // 进货增加库存（进销单位换算：折合过则按计数单位累计，否则按原单位）
     batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
@@ -324,11 +327,13 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
       const newId = item.id ?? randomId();
       newLineIds.push(newId);
+      // 行序：客户端显式传 sort（批量直编跨单全局录入序）优先，缺省回退数组索引（批内扫描顺序）
+      const lineSort = Number.isFinite(Number(item.sort)) && Number(item.sort) >= 0 ? Number(item.sort) : i;
       batch.push(
         c.env.DB.prepare(
           'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).bind(newId, id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount2,
-          item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id, i),
+          item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id, lineSort),
       );
       // 按新明细增加库存（进销单位换算：折合过则按计数单位累计）
       batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));

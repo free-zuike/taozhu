@@ -888,10 +888,15 @@ async function submit() {
           if (lid) origIds.add(lid);
         }
       }
+      // 全局 sort 索引：按 valid 全量顺序连续递增（不是每组从 0 重计）——
+      // 否则同一天多单时每单 sort 都 0,1,2…，账本按"订单 id→sort"排会交错（用户"3号4号批次乱"根因）。
+      // 批次序=订单创建序，批内=全量录入序（识别/扫描实际顺序）；与 App _submit 同口径。
+      const globalSort = new Map<string, number>();
+      valid.forEach((r, gi) => { if (r.rowId) globalSort.set(r.rowId, gi); });
       for (const [oid, rowList] of byOrder.entries()) {
         await request(`/sales/${oid}`, 'PATCH', {
           happened_at: date.value,
-          items: rowList.map((r, i) => ({
+          items: rowList.map((r) => ({
             id: r.rowId || undefined, // 保留原行 id（服务端重建不换 id，行级附件不孤儿化）
             price_id: r.priceId,
             quantity: Number(r.quantity),
@@ -899,7 +904,7 @@ async function submit() {
             sale_price: Number(r.salePrice) || 0,
             happened_at: r.happenedAt || date.value,
             note: r.note || '',
-            sort: i, // 行序=展示/插入顺序（服务端按 sort 存储，插入行不排末尾）
+            sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0, // 全局录入序
           })),
         });
       }
@@ -911,7 +916,7 @@ async function submit() {
           client_id: clientId.value,
           happened_at: date.value,
           note: note.value.trim(),
-          items: newRows.map((r, i) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', sort: i })),
+          items: newRows.map((r) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0 })),
         });
         newOrderId = d.id;
         for (const r of newRows) r.orderId = newOrderId; // 回填：行级凭证回退单据级查询命中

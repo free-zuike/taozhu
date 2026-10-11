@@ -1376,9 +1376,14 @@ class _SalePageState extends State<SalePage> {
             final oid = r.origSaleId.isNotEmpty ? r.origSaleId : saleId;
             (byOrder[oid] ??= []).add(r);
           }
+          // 全局 sort 索引：按 valid 全量顺序连续递增（不是每组从 0 重计）——
+          // 否则同一天多单时每单 sort 都 0,1,2…，账本按"订单 id→sort"排会交错（用户"3号4号批次乱"根因）。
+          // 批次序=订单创建序，批内=全量录入序（识别/扫描实际顺序）。
+          final globalSort = <String, int>{};
+          for (final (gi, r) in valid.indexed) globalSort[r.rowId] = gi;
           for (final e in byOrder.entries) {
             // 批量直编只改日期/数量/价格：不传 client_id（防串改店铺归属）与整单 note（防清空），
-            // items 逐行带原 id + 原行备注
+            // items 逐行带原 id + 原行备注；sort 用全局索引保持批内录入序
             await Api.instance.patch('/sales/${e.key}', {
               'happened_at': orderDate,
               'items': [
@@ -1390,7 +1395,7 @@ class _SalePageState extends State<SalePage> {
                     'sale_price': r.salePrice,
                     'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
                     'note': r.note,
-                    'sort': i,
+                    'sort': globalSort[r.rowId] ?? i,
                   },
               ],
             });

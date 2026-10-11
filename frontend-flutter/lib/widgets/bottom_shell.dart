@@ -31,6 +31,8 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
   // 懒构建：只有切到的 tab 才实例化（避免 IndexedStack 预构建全部页面 →
   // 启动瞬间 4 个页面同时 initState 并发发网络请求导致"重复请求 + 挂起"）。
   // 已构建的 tab 保留状态（IndexedStack 持有），切回不重载。
+  // 店员无统计/进货权限（用户定稿）：底部只显示 交易/记一笔/我的，但页面数组保持全量
+  // （导航索引不变：0 交易、1 统计(隐藏)、2 进货(隐藏)、3 我的——隐藏 tab 永不跳转即可）
   final List<Widget> _pages = const [
     LedgerPage(),
     StatsPage(),
@@ -72,10 +74,12 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
         title: const Text('分享图片记账'),
         content: const Text('识别为哪类单据？识别结果可修改后再保存'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, 'purchase'),
-            child: const Text('进货'),
-          ),
+          // 店员不记进货（用户定稿）：分享图片记账弹窗隐藏「进货」选项
+          if (!_isStaff)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'purchase'),
+              child: const Text('进货'),
+            ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, 'sale'),
             child: const Text('出货'),
@@ -181,9 +185,9 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
                   _navItem(0, Icons.receipt_long_outlined, '交易'),
                   if (!_isStaff) _navItem(1, Icons.bar_chart_outlined, '统计'),
                   _centerButton(),
-                  // 进货/我的固定指向页数组索引 2/3（staff 时统计 tab 隐藏但索引不变）
-                  _navItem(2, Icons.shopping_cart_outlined, '进货'),
-                  _navItem(3, Icons.person_outline, '我的'),
+                  // 店员不记进货（用户定稿：店员无进货权限）：隐藏进货 tab；"我的"仍在最后
+                  if (!_isStaff) _navItem(2, Icons.shopping_cart_outlined, '进货'),
+                  _navItem(_isStaff ? 2 : 3, Icons.person_outline, '我的'),
                 ],
               ),
             ),
@@ -253,15 +257,17 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
               Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SalePage()));
             },
           ),
-          ListTile(
-            leading: const Icon(Icons.shopping_cart, color: Color(0xFF67C23A)),
-            title: const Text('进货记单'),
-            subtitle: const Text('从供应商进货'),
-            onTap: () {
-              Navigator.pop(ctx);
-              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PurchasePage()));
-            },
-          ),
+          // 店员不记进货（用户定稿）：记一笔弹窗隐藏「进货记单」
+          if (!_isStaff)
+            ListTile(
+              leading: const Icon(Icons.shopping_cart, color: Color(0xFF67C23A)),
+              title: const Text('进货记单'),
+              subtitle: const Text('从供应商进货'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PurchasePage()));
+              },
+            ),
           const SizedBox(height: 8),
         ],
       ),

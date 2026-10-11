@@ -21,6 +21,18 @@ export function clearToken() {
   uni.removeStorageSync(REFRESH_KEY);
 }
 
+/**
+ * 切换账号：清当前账号的本地登录态 + 账号相关缓存（token/角色/用户名/当前店铺/离线日志），
+ * 保留服务器地址（切换域名属于另一操作）。防止换号后旧账号数据串号残留（对齐 App _clearAccountData）。
+ */
+export function clearAccountData() {
+  clearToken();
+  uni.removeStorageSync('taozhu_username');
+  uni.removeStorageSync('taozhu_cur_client');
+  uni.removeStorageSync('taozhu_logs');
+  uni.removeStorageSync('taozhu_rounding'); // 金额舍入为全局配置，但换账号后按新账号服务器配置回读更干净
+}
+
 /** 双 token：refresh_token（access 过期后静默刷新用；旧版单 token 会话无此值） */
 export function getRefreshToken(): string {
   return (uni.getStorageSync(REFRESH_KEY) as string) || '';
