@@ -500,10 +500,6 @@ class _StatsPageState extends State<StatsPage> {
                       ),
                     if (_clientsStats.isEmpty) _empty('该区间暂无数据', Icons.store_outlined),
                   ],
-                  const SizedBox(height: 20),
-                  _sectionTitle(_isBuy ? '进货明细（商品）' : '出货明细（商品）'),
-                  const SizedBox(height: 8),
-                  _detailRows(),
                 ],
               ),
             ),
@@ -535,61 +531,6 @@ class _StatsPageState extends State<StatsPage> {
     final list = agg.values.toList()
       ..sort((a, b) => (b['quantity'] as double).compareTo(a['quantity'] as double));
     return list.take(20).toList();
-  }
-
-  /// 出货明细（商品级）：按日期分组的商品行——不再只是店铺/日期/笔数/总额
-  /// 明细空态文案（按出货/进货）
-  Widget _emptyDetail() => _empty(_isBuy ? '该区间暂无进货明细' : '该区间暂无出货明细', Icons.receipt_long_outlined);
-
-  Widget _detailRows() {
-    if (_saleDetail.isEmpty) {
-      return _emptyDetail();
-    }
-    final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final d in _saleDetail) {
-      (grouped['${d['date']}'] ??= []).add(d);
-    }
-    return Column(
-      children: [
-        for (final e in grouped.entries) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 10, 4, 4),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text('${e.key}（${e.value.length} 条）',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _main)),
-            ),
-          ),
-          for (final d in e.value)
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 2),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(color: _surface, borderRadius: BorderRadius.circular(10)),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('${d['name'] ?? ''}',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _main)),
-                        Text(
-                          _clientId == null && '${d['client_name'] ?? ''}'.isNotEmpty
-                              ? '${d['client_name']} · ${d['quantity']}${d['unit']}'
-                              : '${d['quantity']}${d['unit']}',
-                          style: TextStyle(fontSize: 12, color: _sub),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Text('¥${fmtMoney(_num(d['amount']))}',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _danger)),
-                ],
-              ),
-            ),
-        ],
-      ],
-    );
   }
 
   // ── 周期胶囊（对齐小程序：今天 / 当月 / 今年 / 全部 / 自定义，自定义在最后）──
@@ -794,7 +735,8 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   /// 排行卡片：序号底色块 + 标题/副标题 + 金额（圆角 12，亮白/暗 #1C1C1E）
-  /// 分类排行卡片：分类名称居中显示（用户"分类名称可以居中显示"），只显示分类名+金额
+  /// 分类排行卡片：分类名称垂直居中（用户要求"垂直居中"——非水平居中；名称保持左对齐，
+  /// 在卡片高度内上下居中，与序号/金额垂直对齐）
   Widget _rankCardCenter(int rank, Color color, String title, String amount) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
@@ -805,6 +747,7 @@ class _StatsPageState extends State<StatsPage> {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center, // 垂直居中（用户要求）
         children: [
           Container(
             width: 30,
@@ -818,7 +761,6 @@ class _StatsPageState extends State<StatsPage> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(title,
-                textAlign: TextAlign.center,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _main)),

@@ -97,6 +97,14 @@
 			}
 		},
 		{
+			"path": "pages/attach-viewer/attach-viewer",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "凭证附件",
+				"backgroundColor": "#000000"
+			}
+		},
+		{
 			"path": "pages/ai-settings/ai-settings",
 			"style": {
 				"navigationBarTitleText": "AI 识别设置"

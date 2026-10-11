@@ -248,15 +248,18 @@ class Api {
     var res = await http.get(Uri.parse(url), headers: headers);
     if (res.statusCode == 404) return null;
     if (res.statusCode == 401) {
-      // 双 token 静默刷新后重放一次
-      if (await _tryRefreshToken()) {
+      // 双 token 静默刷新后重放一次；刷新网络失败(null)不清登录，明确无效(false)才清
+      final refreshed = await _tryRefreshToken();
+      if (refreshed == true) {
         final nt = await _token();
         if (nt != null && nt.isNotEmpty) headers['Authorization'] = 'Bearer $nt';
         res = await http.get(Uri.parse(url), headers: headers);
         if (res.statusCode == 404) return null;
-      } else {
+      } else if (refreshed == false) {
         await clearToken();
         throw Exception('登录已过期，请重新登录');
+      } else {
+        throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
       }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;

@@ -91,29 +91,6 @@
     </view>
     </scroll-view>
 
-    <!-- 附件查看/上传/删除：全屏大图查看器（对齐 App：点击直接全屏，不再先弹小弹层；有图看大图，无图全屏空态可添加） -->
-    <view v-if="attach.show" class="viewer" @click.stop>
-      <!-- 有图：swiper 大图 -->
-      <swiper v-if="attach.list.length > 0" class="viewer-swiper" :current="attach.index" @change="onViewerChange">
-        <swiper-item v-for="a in attach.list" :key="a.key">
-          <image class="viewer-img" :src="attachmentUrl(a.key)" mode="aspectFit" @click.stop />
-        </swiper-item>
-      </swiper>
-      <!-- 无图：全屏空态（不再弹"凭证附件/完成"sheet，直接在全屏查看器里添加） -->
-      <view v-else class="viewer-empty">
-        <text class="viewer-empty-tx">暂无凭证，点上方「添加」上传</text>
-      </view>
-      <view class="viewer-top">
-        <text class="viewer-close" @click="closeAttach">✕</text>
-        <text class="viewer-count">{{ attach.list.length > 0 ? attach.index + 1 + '/' + attach.list.length : '' }}</text>
-        <view class="viewer-ops">
-          <text class="viewer-op" @click="uploadAttach">添加</text>
-          <text v-if="attach.list.length > 0" class="viewer-op" @click="downloadAttach">下载</text>
-          <text v-if="attach.list.length > 0" class="viewer-op viewer-op-del" @click="removeAttach(attach.list[attach.index].key)">删除</text>
-        </view>
-      </view>
-    </view>
-
     <!-- 收款编辑弹层 -->
     <view v-if="payForm.show" class="mask" @click="payForm.show = false">
       <view class="sheet" @click.stop>
@@ -202,7 +179,7 @@
 </template>
 
 <script setup lang="ts">
-import { onShow, onHide, onBackPress } from '@dcloudio/uni-app';
+import { onShow, onHide } from '@dcloudio/uni-app';
 import { onWs, offWs } from '../../ws';
 
 import { useThemeVars } from '../../theme';
@@ -210,7 +187,7 @@ const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 ;
 ;
-import { request, getToken, getRole, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
+import { request, getToken, getRole } from '../../api';
 import { attachIconSrc } from '../../attach-icon';
 import { fmtAmount, roundAmount, fmtPrice } from '../../utils/money';
 
@@ -251,19 +228,9 @@ function openFormAttach() {
 }
 
 // ── 附件凭证 ──
-const attach = ref<{ show: boolean; entity: string; id: string; list: Array<{ key: string }>; index: number }>({
-  show: false, entity: '', id: '', list: [], index: 0,
-});
-// 安卓返回键/左滑返回：查看器开着先关查看器（本页为 tabBar 根页，直接返回=退出小程序）
-onBackPress(() => {
-  if (attach.value.show) {
-    attach.value.show = false;
-    return true;
-  }
-  return false;
-});
-// 附件计数：sale_item（行级）/ sale（无明细备注行的单据级）/ payment（收款单据级）→ id → 张数
 const attachCounts = ref<Record<string, Record<string, number>>>({ sale_item: {}, sale: {}, payment: {} });
+// 附件变更（独立查看器页内增删后）→ 回本页刷新计数
+uni.$on('attach-changed', () => { loadAttachCounts(); });
 
 /** 行级附件数：有行 id 按 sale_item 查，行级空回退该单（识别原图挂首个商品行，其他行共用）；
  *  无明细（备注占位行）直接按单据级 sale 查 */
@@ -293,100 +260,13 @@ async function loadAttachCounts() {
   if (payIds.length > 0) await fetch('payment', payIds);
 }
 
-/** 打开凭证：加载列表后直接进全屏查看器（对齐 App attachment_viewer：
- *  点击即全屏大图 + 上边添加/下载/删除按钮；不再先弹小图弹层再点一次）
- */
-async function showAttach(entity: string, id: string, fbEntity = '', fbId = '') {
-  attach.value = { show: true, entity, id, list: [], index: 0 };
-  let list: Array<{ key: string }> = [];
-  try {
-    const d = await getAttachments(entity, id);
-    list = d.attachments || [];
-  } catch (e) {
-    uni.showToast({ title: (e as Error).message || '加载凭证失败', icon: 'none' });
-    return;
-  }
-  if (list.length === 0 && fbEntity && fbId) {
-    try {
-      const d = await getAttachments(fbEntity, fbId);
-      list = d.attachments || [];
-    } catch (_) {}
-  }
-  attach.value.list = list;
-  // 全屏查看器直接打开（有图看大图；无图显示空态可添加）
-}
-
-function closeAttach() {
-  attach.value.show = false;
-}
-
-function onViewerChange(e: { detail: { current: number } }) {
-  attach.value.index = e.detail.current;
-}
-
-function uploadAttach() {
-  uni.chooseImage({
-    count: 1,
-    sourceType: ['camera', 'album'],
-    success: async (res) => {
-      const path = res.tempFilePaths?.[0];
-      if (!path) return;
-      try {
-        const d = await uploadAttachment(attach.value.entity, attach.value.id, path);
-        attach.value.list.push({ key: d.key });
-        uni.showToast({ title: '已添加', icon: 'success' });
-        loadAttachCounts();
-      } catch (e) {
-        uni.showToast({ title: (e as Error).message || '上传失败', icon: 'none' });
-      }
-    },
+/** 打开凭证：navigateTo 独立查看器页（对齐 App attachment_viewer）。
+ *  独立子页面：安卓返回键/全面屏侧滑手势只 pop 查看器，不会退出小程序（此前页内遮罩会退出）。
+ *  行级空附件时回退单据级（fbEntity/fbId）由查看器页内处理。 */
+function showAttach(entity: string, id: string, fbEntity = '', fbId = '') {
+  uni.navigateTo({
+    url: `/pages/attach-viewer/attach-viewer?entity=${entity}&id=${id}${fbEntity ? `&fbEntity=${fbEntity}&fbId=${fbId}` : ''}`,
   });
-}
-
-/** 下载当前凭证到系统相册（小程序无本地库：直连服务器取图存相册，对齐 App attachment_viewer 保存按钮） */
-function downloadAttach() {
-  const it = attach.value.list[attach.value.index];
-  if (!it) return;
-  uni.showLoading({ title: '下载中…' });
-  uni.downloadFile({
-    url: attachmentUrl(it.key),
-    success(res) {
-      if (res.statusCode !== 200) {
-        uni.hideLoading();
-        uni.showToast({ title: '下载失败', icon: 'none' });
-        return;
-      }
-      uni.saveImageToPhotosAlbum({
-        filePath: res.tempFilePath,
-        success() {
-          uni.hideLoading();
-          uni.showToast({ title: '已保存到相册', icon: 'success' });
-        },
-        fail(e) {
-          uni.hideLoading();
-          uni.showToast({ title: e.errMsg?.includes('auth') ? '需要相册权限' : '保存失败', icon: 'none' });
-        },
-      });
-    },
-    fail() {
-      uni.hideLoading();
-      uni.showToast({ title: '下载失败', icon: 'none' });
-    },
-  });
-}
-
-async function removeAttach(key: string) {
-  if (!(await confirm('删除凭证', '确定删除这张凭证图片吗？'))) return;
-  try {
-    await deleteAttachment(key);
-    const idx = attach.value.list.findIndex((a) => a.key === key);
-    attach.value.list = attach.value.list.filter((a) => a.key !== key);
-    if (idx >= 0 && attach.value.index >= idx && attach.value.index > 0) attach.value.index -= 1;
-    uni.showToast({ title: '已删除', icon: 'success' });
-    loadAttachCounts();
-  } catch (e) {
-    uni.showToast({ title: (e as Error).message || '删除失败', icon: 'none' });
-  }
 }
 
 // ── 月份/店铺筛选 ──
