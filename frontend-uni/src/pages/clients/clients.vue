@@ -310,27 +310,55 @@ async function exportClientTrades(c: Client) {
   }
 }
 
-/// 导入该店交易：粘贴 CSV（App 导出格式）→ 出货走 /sales 行创建（匹配商品库带价格）、收款走 /payments
+/// 导入该店交易：选择 CSV 文件（对齐 App file_picker）→ 出货走 /sales 行创建（匹配商品库带价格）、收款走 /payments
 async function importClientTrades(c: Client) {
-  const r = await new Promise<boolean>((resolve) => {
-    uni.showModal({
-      title: `导入交易到「${c.name}」`,
-      content: '请先复制 CSV 到剪贴板（格式：类型,日期,店铺,商品,数量,单位,单价,金额,备注），然后点确定读取剪贴板导入。',
-      editable: true,
-      placeholderText: '粘贴 CSV 文本…',
-      success: (m) => resolve(m.confirm),
+  let data = '';
+  // #ifdef H5
+  data = await new Promise<string>((resolve) => {
+    const input = document.createElement('input') as HTMLInputElement;
+    input.type = 'file';
+    input.accept = '.csv,.txt,.json,text/csv,text/plain';
+    input.onchange = () => {
+      const f = input.files?.[0];
+      if (!f) { resolve(''); return; }
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => resolve('');
+      reader.readAsText(f);
+    };
+    input.click();
+  });
+  // #endif
+  // #ifndef H5
+  data = await new Promise<string>((resolve) => {
+    uni.chooseFile({
+      count: 1,
+      extension: ['csv', 'txt', 'json'],
+      success: (res) => {
+        const files = (res as any).tempFiles as Array<{ path?: string }> | undefined;
+        const fp = files?.[0]?.path || (res as any).tempFilePaths?.[0] as string;
+        if (!fp) { resolve(''); return; }
+        uni.getFileSystemManager().readFile({
+          filePath: fp,
+          encoding: 'utf8',
+          success: (r) => resolve(String((r as any).data || '')),
+          fail: () => resolve(''),
+        });
+      },
+      fail: () => resolve(''),
     });
   });
-  if (!r) return;
+  // #endif
+  if (!data.trim()) {
+    uni.showToast({ title: '未选择文件', icon: 'none' });
+    return;
+  }
   uni.showLoading({ title: '导入中…' });
   try {
-    const data = await new Promise<string>((resolve2) => {
-      uni.getClipboardData({ success: (d) => resolve2(String(d.data || '')), fail: () => resolve2('') });
-    });
-    const lines = data.trim().split('\n').filter((l) => l.trim());
+    const lines = data.split('\n').filter((l) => l.trim());
     if (lines.length < 2) {
       uni.hideLoading();
-      uni.showToast({ title: '剪贴板没有 CSV 数据', icon: 'none' });
+      uni.showToast({ title: '文件没有 CSV 数据', icon: 'none' });
       return;
     }
     // 匹配商品库（出货行需 item_id/price_id 才能建行）

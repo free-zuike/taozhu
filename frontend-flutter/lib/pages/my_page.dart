@@ -427,6 +427,35 @@ class _MyPageState extends State<MyPage> {
     return widgets;
   }
 
+  /// 修复历史批次顺序（仅老板）：旧版本保存时服务端用数组索引覆盖了客户端 sort，
+  /// 导致批次内顺序错乱。按创建时间重排每单 sort 后，全量同步即可恢复。
+  Future<void> _fixSort() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('修复历史批次顺序'),
+        content: const Text('按创建时间重新排定每笔出货/进货的批次内顺序（0,1,2…），修复旧版本保存时顺序错乱的问题。\n\n执行后请在同步页做一次全量同步，列表顺序即可恢复。\n\n确认执行？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('执行修复'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await Api.instance.post('/sales/fix-sort', {});
+      await Api.instance.post('/purchases/fix-sort', {});
+      toast(context, '已修复，请做一次全量同步');
+      SyncService.notifyStockChanged();
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   /// 退出登录：只清登录态（token/缓存），保留本地库与待同步队列——
   /// 同一账号重登离线秒开、本地数据不丢；串号由登录时账号检测+切换账号全清兜底
   Future<void> _logout() async {
@@ -1173,6 +1202,9 @@ class _MyPageState extends State<MyPage> {
             _item(Icons.receipt_long_outlined, c.primary, '日志',
                 '操作记录与错误（全部 / 错误 / 正常 / Debug）',
                 () => goPage(context, const LogsPage())),
+            if (_role != 'staff')
+              _item(Icons.reorder_outlined, c.primary, '修复历史批次顺序',
+                  '旧版本保存的批次内顺序错乱时，按创建时间重排后全量同步生效', _fixSort),
             if (_role != 'staff')
               _item(Icons.manage_search_outlined, c.primary, '操作审计',
                   '登录 / 删除 / 修改 / 导入导出等关键操作留痕（仅老板）',

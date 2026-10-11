@@ -295,14 +295,15 @@ describe('记单与欠款联动（核心业务）', () => {
     await env.DB.prepare('INSERT INTO clients (id, name) VALUES (?, ?)').bind('fix-sort-client', '测试店').run();
     const saleA = randomId();
     const saleB = randomId();
-    const mk = async (saleId: string, qty: number, sort: number) => {
+    const mk = async (saleId: string, qty: number, sort: number, ts: string) => {
       await env.DB.prepare(
-        `INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by, sort)
-         VALUES (?, ?, 'fix-sort-client', ?, '斤', ?, 2.5, 2.0, ?, '2026-09-06', '', 'u', ?)`,
-      ).bind(randomId(), saleId, itemId, qty, qty * 2.5, sort).run();
+        `INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by, sort, created_at)
+         VALUES (?, ?, 'fix-sort-client', ?, '斤', ?, 2.5, 2.0, ?, '2026-09-06', '', 'u', ?, ?)`,
+      ).bind(randomId(), saleId, itemId, qty, qty * 2.5, sort, ts).run();
     };
-    await mk(saleA, 1, 3); await mk(saleA, 2, 1); await mk(saleA, 3, 2);
-    await mk(saleB, 4, 5); await mk(saleB, 5, 0); await mk(saleB, 6, 4);
+    // 每单内 created_at 明确递增：A 单 1→2→3、B 单 4→5→6（ts 前缀相同即按后缀递增）
+    await mk(saleA, 1, 3, '2026-09-06T00:00:00.001Z'); await mk(saleA, 2, 1, '2026-09-06T00:00:00.002Z'); await mk(saleA, 3, 2, '2026-09-06T00:00:00.003Z');
+    await mk(saleB, 4, 5, '2026-09-06T00:00:01.001Z'); await mk(saleB, 5, 0, '2026-09-06T00:00:01.002Z'); await mk(saleB, 6, 4, '2026-09-06T00:00:01.003Z');
     const fix = await call(env, 'POST', '/api/v1/sales/fix-sort', token);
     expect(fix.status).toBe(200);
     // 直接按两单 id 查（避开 client_id 条件），验证每单内 sort 已按创建序重排

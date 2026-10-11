@@ -465,7 +465,8 @@ class _StatsPageState extends State<StatsPage> {
                   const SizedBox(height: 8),
                   for (final (i, c) in _cats.indexed)
                     // 分类排行只显示出货/进货金额：不同分类下商品计数单位不同（斤/盒/件），数量跨分类合计无意义
-                    _rankCard(i + 1, _c.warning, '${c['category']}', '', '¥${fmtMoney(_num(c['amount']))}'),
+                    // 名称居中显示（用户要求）
+                    _rankCardCenter(i + 1, _c.warning, '${c['category']}', '¥${fmtMoney(_num(c['amount']))}'),
                   if (_cats.isEmpty) _empty('该区间暂无分类数据', Icons.category_outlined),
                   if (!_isBuy) ...[
                     const SizedBox(height: 20),
@@ -793,6 +794,43 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   /// 排行卡片：序号底色块 + 标题/副标题 + 金额（圆角 12，亮白/暗 #1C1C1E）
+  /// 分类排行卡片：分类名称居中显示（用户"分类名称可以居中显示"），只显示分类名+金额
+  Widget _rankCardCenter(int rank, Color color, String title, String amount) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(9)),
+            child: Center(
+              child: Text('$rank',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(title,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _main)),
+          ),
+          const SizedBox(width: 8),
+          Text(amount,
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: color)),
+        ],
+      ),
+    );
+  }
+
   Widget _rankCard(int rank, Color color, String title, String subtitle, String amount,
       {Color? amountColor}) {
     final dark = Theme.of(context).brightness == Brightness.dark;

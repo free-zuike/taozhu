@@ -127,41 +127,17 @@ async function exportTablePages(db: D1Database, table: string): Promise<unknown[
   return rows;
 }
 
-/// 收集全部附件字节 → base64 内嵌（分块转换防 spread 栈溢出；并发 6 防串行拖慢 503）
-async function collectAttachmentFiles(
-  env: Env,
-): Promise<{ files: Array<{ key: string; data: string }>; ok: number; failed: number; total: number }> {
+/// 云端备份附件清单（对齐用户"App 本地备份、Web/小程序云端备份"分工）：
+/// 只记录附件 key 引用清单（不含内容）——附件本体已存存储端（R2），恢复时
+/// attachment_refs 的 file_key 直接指向原文件，无需重传。避免全量 base64 内嵌
+/// 导致备份 JSON 巨大 → 整包 stringify 超 Worker 内存/CPU → 503（用户"备份 503 未解决"根因）。
+async function collectAttachmentRefs(env: Env): Promise<{ keys: string[]; total: number }> {
   const refs = await env.DB.prepare('SELECT file_key FROM attachment_refs').all<{ file_key: string }>();
   const seen = new Set<string>();
-  const uniq = refs.results.filter((r) => {
-    if (!r.file_key || seen.has(r.file_key)) return false;
-    seen.add(r.file_key);
-    return true;
-  });
-  const store = createStorage(env);
-  const toBase64 = async (key: string): Promise<{ key: string; data: string } | null> => {
-    try {
-      const obj = await store.get(key);
-      if (!obj) return null;
-      const buf = new Uint8Array(await new Response(obj.body).arrayBuffer());
-      let bin = '';
-      for (let i = 0; i < buf.length; i += 0x8000) {
-        bin += String.fromCharCode(...buf.subarray(i, Math.min(i + 0x8000, buf.length)));
-      }
-      return { key, data: btoa(bin) };
-    } catch (_) {
-      return null;
-    }
-  };
-  const files: Array<{ key: string; data: string }> = [];
-  let failed = 0;
-  for (let i = 0; i < uniq.length; i += 6) {
-    const batch = await Promise.all(uniq.slice(i, i + 6).map((r) => toBase64(r.file_key)));
-    for (const f of batch) {
-      if (f) files.push(f); else failed++;
-    }
-  }
-  return { files, ok: files.length, failed, total: uniq.length };
+  const keys = refs.results
+    .map((r) => r.file_key)
+    .filter((k): k is string => !!k && !seen.has(k) && !!seen.add(k));
+  return { keys, total: keys.length };
 }
 
 /// 导出全部业务表数据（手动导出与每日定时自动备份共用）
@@ -175,8 +151,8 @@ export async function exportAllData(db: D1Database, env?: Env): Promise<Record<s
   }
   if (env) {
     try {
-      const att = await collectAttachmentFiles(env);
-      if (att.files.length > 0) data['__attachments'] = att.files;
+      const att = await collectAttachmentRefs(env);
+      if (att.keys.length > 0) data['__attachments'] = att.keys.map((key) => ({ key }));
     } catch (_) {}
   }
   return data;
@@ -229,17 +205,18 @@ export async function importBackupData(
     }
     report[t] = { inserted, skipped };
   }
-  // 附件本体写回存储端（备份内嵌的 __attachments 数组：{key, data(base64)}）
+  // 附件：云端备份为引用清单（{key}，本体已在存储端，恢复时 attachment_refs.file_key 直接可用）；
+  // 兼容旧格式（内嵌 {key,data}）：有 data 才写回存储端（跨环境导入/旧备份留底）
   if (env) {
     const files = data['__attachments'];
     if (Array.isArray(files)) {
       const store = createStorage(env);
       let restored = 0;
       const list = files as Array<{ key?: string; data?: string }>;
-      // 并发写回（chunk 6，对齐导出端并发上限，避免大附件串行拖慢恢复）
       const putOne = async (f: { key?: string; data?: string }): Promise<boolean> => {
         const key = f?.key;
-        if (!key || !f.data) return false;
+        if (!key) return false;
+        if (!f.data) return true; // 引用模式：本体已在存储端，无需重传
         try {
           const bin = atob(f.data);
           const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
@@ -280,14 +257,14 @@ export async function performBackup(env: Env, username?: string): Promise<{
       failedTables.push(t);
     }
   }
-  // 2) 附件收集（base64 内嵌，失败记数不中断整体）
-  let attResult: { files: Array<{ key: string; data: string }>; ok: number; failed: number; total: number };
+  // 2) 附件引用清单（云端备份只记 key 引用，附件本体已在存储端——不内嵌防 503）
+  let attResult: { keys: string[]; total: number };
   try {
-    attResult = await collectAttachmentFiles(env);
+    attResult = await collectAttachmentRefs(env);
   } catch (e) {
-    attResult = { files: [], ok: 0, failed: 0, total: 0 };
+    attResult = { keys: [], total: 0 };
   }
-  if (attResult.files.length > 0) data['__attachments'] = attResult.files;
+  if (attResult.keys.length > 0) data['__attachments'] = attResult.keys.map((key) => ({ key }));
 
   // 3) 上传存储端（失败=整体 failed）
   const store = createStorage(env);
@@ -299,7 +276,7 @@ export async function performBackup(env: Env, username?: string): Promise<{
     return {
       key, size: 0, status: 'failed', message: `上传备份失败：${(e as Error).message}`,
       tables: { total: tables.length, ok: tables.length - failedTables.length, failed: failedTables },
-      attachments: attResult,
+      attachments: { total: attResult.total, ok: 0, failed: attResult.total },
     };
   }
 
@@ -314,25 +291,26 @@ export async function performBackup(env: Env, username?: string): Promise<{
     }
   } catch (_) {}
 
-  // 5) 汇总状态：全成功=succeeded；表和附件都没成功=failed；其余（有表或附件失败）=partial
+  // 5) 汇总状态：全成功=succeeded；表失败=failed；其余=partial（附件引用清单基本无失败）
   const tableOk = failedTables.length === 0;
-  const attOk = attResult.failed === 0;
+  const attOk = attResult.total >= 0; // 引用清单无失败概念（本体已在存储端）
   let status: 'succeeded' | 'partial' | 'failed';
   let message: string;
-  if (tableOk && attOk) {
+  if (tableOk) {
     status = 'succeeded';
-    message = `备份成功：${tables.length} 张表 · 附件 ${attResult.ok}/${attResult.total}`;
-  } else if (!tableOk && attResult.ok === 0 && attResult.total > 0) {
-    status = 'failed';
-    message = `备份失败：表 <${failedTables.join(', ')}> 导出失败${attResult.total > 0 ? `，附件 ${attResult.failed}/${attResult.total} 未收集` : ''}`;
+    message = `备份成功：${tables.length} 张表 · 附件引用 ${attResult.total} 个`;
   } else {
-    status = 'partial';
-    message = `部分成功：${tableOk ? '表全部导出' : `表 <${failedTables.join(', ')}> 失败`}；${attOk ? '附件全部收集' : `附件 ${attResult.failed}/${attResult.total} 未收集`}`;
+    status = 'failed';
+    message = `备份失败：表 <${failedTables.join(', ')}> 导出失败`;
   }
   if (username) {
     await recordAudit(env.DB, { username, action: 'create', entity_type: 'backup', entity_id: key, detail: `手动全库备份：${message}` });
   }
-  return { key, size: body.length, status, message, tables: { total: tables.length, ok: tables.length - failedTables.length, failed: failedTables }, attachments: attResult };
+  return {
+    key, size: body.length, status, message,
+    tables: { total: tables.length, ok: tables.length - failedTables.length, failed: failedTables },
+    attachments: { total: attResult.total, ok: attResult.total, failed: 0 },
+  };
 }
 
 // GET /backup — 全部数据 JSON（含附件本体 base64，随备份可完整恢复）

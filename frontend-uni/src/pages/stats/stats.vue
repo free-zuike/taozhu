@@ -92,13 +92,11 @@
       <view v-if="monthly.length === 0" class="empty">该年份暂无数据</view>
     </view>
 
-    <!-- 分类排行（区间内出货/进货额） -->
+    <!-- 分类排行（区间内出货/进货额）：名称居中显示（对齐 App） -->
     <view class="card">
       <view class="card-title">{{ kind === 'purchase' ? '进货' : '出货' }}分类排行</view>
       <view v-for="(c, i) in catRank" :key="i" class="row">
-        <view class="left">
-          <text class="name">{{ c.category }}</text>
-        </view>
+        <text class="name center">{{ c.category }}</text>
         <text class="pay" style="color:var(--primary)">¥{{ fmt(c.amount) }}</text>
       </view>
       <view v-if="catRank.length === 0" class="empty">该区间暂无数据</view>
@@ -386,6 +384,7 @@ async function onYear(e: { detail: { value: number } }) {
 .row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); }
 .left { flex: 1; min-width: 0; }
 .name { font-size: 28rpx; display: block; color: var(--text-main); }
+.name.center { flex: 1; text-align: center; }
 .meta { font-size: 22rpx; color: var(--text-sub); display: block; margin-top: 4rpx; }
 .debt { font-size: 28rpx; font-weight: bold; }
 .pay { font-size: 28rpx; font-weight: bold; }

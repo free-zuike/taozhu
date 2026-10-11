@@ -448,11 +448,11 @@ class _ClientsPageState extends State<ClientsPage> {
     }
   }
 
-  /// 导入交易 CSV（店铺级）：[client] 指定目标店铺，解析行直接归入该店（行带店铺列忽略，强制当前店）
+  /// 导入交易 CSV（店铺级）：[client] 指定目标店铺，选 CSV 文件解析后直接归入该店（行带店铺列忽略，强制当前店）
   Future<void> _importClientTrades(Map<String, dynamic> client) async {
     final text = await pickTradesCsv();
     if (text == null || text.trim().isEmpty) {
-      if (!kIsWeb) toast(context, '当前平台暂不支持导入，请用 Web 端导入');
+      toast(context, '未选择文件');
       return;
     }
     final r = await importTradesCsv(text, '${client['id']}', '${client['name']}');
@@ -461,60 +461,14 @@ class _ClientsPageState extends State<ClientsPage> {
     toast(context, '已导入到「${client['name']}」：新增 ${r.ok} 条，跳过 ${r.skip} 条');
   }
 
-  /// 导入交易 CSV：先选目标店铺，解析行归入该店（行带店铺列忽略，强制当前店）
-  Future<void> _importTradesFromCsv() async {
-    if (_clients.isEmpty) {
-      toast(context, '请先创建店铺再导入');
-      return;
-    }
-    final storeId = await showCenterSheet<String>(
-      context: context,
-      maxHeightFactor: 0.7,
-      builder: (ctx) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Text('选择导入目标店铺', style: TextStyle(fontWeight: FontWeight.w600)),
-          ),
-          Flexible(
-            child: ListView(
-              shrinkWrap: true,
-              children: [
-                for (final c in _clients)
-                  ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.store_outlined, size: 20),
-                    title: Text('${c['name']}'),
-                    onTap: () => Navigator.pop(ctx, '${c['id']}'),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-    if (storeId == null) return;
-    final client = _clients.where((c) => '${c['id']}' == storeId).firstOrNull;
-    if (client == null) return;
-    // 复用店铺级导入（解析+归入该店+同步）
-    await _importClientTrades(client);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: appBarBackground(context), // 顶部露出主题背景（无标题文字）
         actions: [
-          // 店铺交易 导入/导出（用户"交易导入导出放在店铺管理中，不要在主界面"+"按店铺级别，不是全部"）
-          // 导出全部已移除——导出/导入均以店铺为单位：每店行 导出该店交易/导入该店交易；
-          // AppBar 保留"导入交易"（选目标店铺后归入该店）作为全局入口
-          IconButton(
-            tooltip: '导入交易 CSV（选择目标店铺）',
-            icon: const Icon(Icons.upload_outlined),
-            onPressed: _importTradesFromCsv,
-          ),
+          // 店铺交易 导入/导出（用户"导入导出放在店铺管理中，按店铺级别"）——
+          // 顶部不设导入/导出按钮，直接在每店铺行的 导出该店交易/导入该店交易 操作
           IconButton(onPressed: () => _edit(), icon: const Icon(Icons.add)),
         ],
       ),

@@ -204,7 +204,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
   }
 
-  /// 测试单个能力：圆点状态就地展示（绿=通过/红=失败/转圈=测试中），结果文字用轻提示（对齐小程序：不弹界面）
+  /// 测试单个能力：圆点状态就地展示（绿=通过/红=失败/转圈=测试中）——成功只变绿不提示，失败才 toast 原因
   Future<void> _testOne(String capability, String label) async {
     if (_testing) return;
     setState(() {
@@ -212,10 +212,9 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       _testState[capability] = 'testing';
     });
     try {
-      final result = await _testCapability(capability);
+      await _testCapability(capability);
       if (!mounted) return;
       setState(() => _testState[capability] = 'ok');
-      toast(context, '$label：$result');
     } catch (e) {
       if (mounted) setState(() => _testState[capability] = 'fail');
       toast(context, '$label：${e.toString().replaceFirst('Exception: ', '')}');
@@ -224,28 +223,27 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
   }
 
-  /// 一键测试：串行跑文字 → 图片 → 语音，各项圆点就地更新状态（对齐小程序：不弹汇总界面）
+  /// 一键测试：串行跑文字 → 图片 → 语音，各项圆点就地更新状态——成功只变绿不提示，失败才 toast 原因
   Future<void> _testAll() async {
     if (_testing) return;
     setState(() => _testing = true);
-    final results = <String>[];
+    final failed = <String>[];
     try {
       for (final (cap, label) in [('text', '文字记账'), ('vision', '图片识别'), ('speech', '语音记账')]) {
         if (mounted) setState(() => _testState[cap] = 'testing');
         try {
-          final r = await _testCapability(cap);
-          results.add('$label：$r');
+          await _testCapability(cap);
           if (mounted) setState(() => _testState[cap] = 'ok');
         } catch (e) {
-          results.add('$label：✗ ${e.toString().replaceFirst('Exception: ', '')}');
           if (mounted) setState(() => _testState[cap] = 'fail');
+          failed.add('$label：${e.toString().replaceFirst('Exception: ', '')}');
         }
       }
     } finally {
       if (mounted) setState(() => _testing = false);
     }
-    if (!mounted || results.isEmpty) return;
-    toast(context, results.join('；'));
+    if (!mounted || failed.isEmpty) return;
+    toast(context, failed.join('；'));
   }
 
   /// 单项能力测试的状态圆点（对齐小程序：idle=灰 / testing=转圈 / ok=绿 / fail=红）
