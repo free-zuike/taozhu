@@ -293,8 +293,8 @@ describe('记单与欠款联动（核心业务）', () => {
     const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string }> };
     const itemId = items.items[0].id;
     await env.DB.prepare('INSERT INTO clients (id, name) VALUES (?, ?)').bind('fix-sort-client', '测试店').run();
-    const saleA = randomId();
-    const saleB = randomId();
+    const saleA = 'aaaa-fixsort-a'; // 固定 id 保证 ORDER BY sale_id 时 A 单在前（随机 hex 会 flaky）
+    const saleB = 'bbbb-fixsort-b';
     const mk = async (saleId: string, qty: number, sort: number, ts: string) => {
       await env.DB.prepare(
         `INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by, sort, created_at)
