@@ -13,9 +13,9 @@ dependencies:
   shared_preferences: ^2.2.0
   intl: ^0.20.3
   image_picker: ^1.1.2
-  # file_picker 6.x（非 8.x）：8.x 的 androidx 传递依赖要求 compileSdk 36+，CI Android 构建
-  # checkReleaseAarMetadata 失败（file_picker compiled against android-34 需 36）；6.x 兼容 34/35
-  file_picker: ^6.1.1
+  # file_selector（Flutter 官方）：选文件读文本，Android compileSdk 要求温和（34 即可），
+  # 替代 file_picker 8.x（其 androidx 传递依赖硬要求 compileSdk 36 致 CI checkReleaseAarMetadata 失败）
+  file_selector: ^1.0.3
   share_plus: ^10.1.2
   path_provider: ^2.1.0
   crypto: ^3.0.3
