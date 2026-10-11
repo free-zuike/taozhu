@@ -136,7 +136,7 @@ class Api {
       (await SharedPreferences.getInstance()).getString(_refreshTokenKey) ?? '';
 
   /// 双 token 静默刷新（单例防并发）：同一时刻多个请求 401 只刷一次，其余 await 同一 future。
-  /// 成功返回 true 并写新 token/refresh_token；无 refresh_token（旧版会话）或刷新失败返回 false。
+  /// 返回三态：'ok'=刷新成功 / 'invalid'=refresh token 明确无效（需重新登录）/ 'net'=网络失败（保留登录态，下次重试）
   static Future<bool>? _refreshing;
   static Future<bool> _tryRefreshToken() {
     final existing = _refreshing;
@@ -147,7 +147,9 @@ class Api {
     return f;
   }
 
-  static Future<bool> _doRefreshToken() async {
+  /// 刷新结果：null=网络失败（保留 token 不清登录，调用方按网络错误处理）；
+  /// true=成功；false=refresh 明确无效（400/401，清登录）。
+  static Future<bool?> _doRefreshToken() async {
     final rt = await Api.instance.getRefreshToken();
     if (rt.isEmpty) return false;
     try {
@@ -158,16 +160,21 @@ class Api {
               headers: {'Content-Type': 'application/json'},
               body: jsonEncode({'refresh_token': rt}))
           .timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return false;
-      final d = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
-      final nt = d['token'] as String?;
-      if (nt == null || nt.isEmpty) return false;
-      await Api.instance.setToken(nt);
-      final nrt = d['refresh_token'] as String?;
-      if (nrt != null && nrt.isNotEmpty) await Api.instance.setRefreshToken(nrt);
-      return true;
+      if (r.statusCode == 200) {
+        final d = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+        final nt = d['token'] as String?;
+        if (nt == null || nt.isEmpty) return false;
+        await Api.instance.setToken(nt);
+        final nrt = d['refresh_token'] as String?;
+        if (nrt != null && nrt.isNotEmpty) await Api.instance.setRefreshToken(nrt);
+        return true;
+      }
+      // 400/401=refresh 明确无效；其它状态码（5xx 等）按网络/服务异常处理不清登录
+      if (r.statusCode == 400 || r.statusCode == 401) return false;
+      return null;
     } catch (_) {
-      return false;
+      // 网络/DNS/超时：不清 token、不清登录，返回 null 由调用方按网络错误处理（本地可用不丢）
+      return null;
     }
   }
 
@@ -370,15 +377,20 @@ class Api {
 
     if (res.statusCode == 401) {
       // 双 token 静默刷新：access 过期 → 用 refresh_token 换新后重放原请求一次（单例防并发：
-      // 多请求同时 401 只刷一次）。无 refresh_token（旧版 7 天单 token 会话）或刷新失败
-      // 才判定"登录已过期，请重新登录"。
-      if (await _tryRefreshToken()) {
+      // 多请求同时 401 只刷一次）。无 refresh_token（旧版 7 天单 token 会话）→ 登录过期。
+      // 区分刷新失败原因：网络失败（null）→ 保留登录态按网络错误处理（域名抖动不清登录，
+      // 本地可用不丢——用户"这不就失去了本地可用的意义吗"）；refresh 明确无效（false）才清登录。
+      final refreshed = await _tryRefreshToken();
+      if (refreshed == true) {
         final nt = await _token();
         if (nt != null && nt.isNotEmpty) headers['Authorization'] = 'Bearer $nt';
         res = await retry();
-      } else {
+      } else if (refreshed == false) {
         await clearToken();
         throw Exception('登录已过期，请重新登录');
+      } else {
+        // refresh 网络失败：不清登录，按网络错误提示（保留 token，网络恢复后自动重试）
+        throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
       }
     }
     if (res.statusCode == 426) {
@@ -421,14 +433,17 @@ class Api {
     final res0 = await http.get(Uri.parse(url), headers: headers);
     var res = res0;
     if (res.statusCode == 401) {
-      // 双 token 静默刷新后重放一次（备份导出等原始字节请求）
-      if (await _tryRefreshToken()) {
+      // 双 token 静默刷新后重放一次（备份导出等原始字节请求）；刷新网络失败不清登录
+      final refreshed = await _tryRefreshToken();
+      if (refreshed == true) {
         final nt = await _token();
         if (nt != null && nt.isNotEmpty) headers['Authorization'] = 'Bearer $nt';
         res = await http.get(Uri.parse(url), headers: headers);
-      } else {
+      } else if (refreshed == false) {
         await clearToken();
         throw Exception('登录已过期，请重新登录');
+      } else {
+        throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
       }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
@@ -526,8 +541,9 @@ class Api {
       throw Exception(_friendlyNetError(e, path));
     }
     if (res.statusCode == 401) {
-      // 双 token 静默刷新后重发一次（上传请求 multipart 可重新 send）
-      if (await _tryRefreshToken()) {
+      // 双 token 静默刷新后重发一次（上传请求 multipart 可重新 send）；刷新网络失败不清登录
+      final refreshed = await _tryRefreshToken();
+      if (refreshed == true) {
         final nt = await _token();
         if (nt != null && nt.isNotEmpty) req.headers['Authorization'] = 'Bearer $nt';
         try {
@@ -536,9 +552,11 @@ class Api {
         } catch (e) {
           throw Exception(_friendlyNetError(e, path));
         }
-      } else {
+      } else if (refreshed == false) {
         await clearToken();
         throw Exception('登录已过期，请重新登录');
+      } else {
+        throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
       }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) {
@@ -586,8 +604,9 @@ class Api {
       throw Exception(_friendlyNetError(e, path));
     }
     if (res.statusCode == 401) {
-      // 双 token 静默刷新后重发一次（上传请求 multipart 可重新 send）
-      if (await _tryRefreshToken()) {
+      // 双 token 静默刷新后重发一次（上传请求 multipart 可重新 send）；刷新网络失败不清登录
+      final refreshed = await _tryRefreshToken();
+      if (refreshed == true) {
         final nt = await _token();
         if (nt != null && nt.isNotEmpty) req.headers['Authorization'] = 'Bearer $nt';
         try {
@@ -596,9 +615,11 @@ class Api {
         } catch (e) {
           throw Exception(_friendlyNetError(e, path));
         }
-      } else {
+      } else if (refreshed == false) {
         await clearToken();
         throw Exception('登录已过期，请重新登录');
+      } else {
+        throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
       }
     }
     if (res.statusCode == 426) {

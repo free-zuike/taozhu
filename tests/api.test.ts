@@ -241,7 +241,7 @@ describe('记单与欠款联动（核心业务）', () => {
     expect(noItems.status).toBe(400);
   });
 
-  it('行级数组批次序：订单 id 数字段（s{毫秒}{随机}）→ sort 全局序，批次不交错', async () => {
+  it('行级数组批次序：订单 id 数字段（s{毫秒}{随机}）优先 → 批内 sort，批次整体不交错', async () => {
     // 用 App 风格单据 id（s{毫秒}{随机}）直接造两单同日各 2 行——服务端真实 id 是 hex，
     // 但 App 上传/同步链路保留客户端 id（s 前缀），行级数组排序须按 App id 数字段排
     await call(env, 'POST', '/api/v1/items', token, { name: '土豆', prices: [{ unit: '斤', purchase_price: 1.0, sale_price: 2.0 }] });
@@ -260,8 +260,9 @@ describe('记单与欠款联动（核心业务）', () => {
     const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
       sale_items: Array<{ quantity: number; sort: number }>;
     };
-    // 跨单全局录入序：批A行1(sort0)、批B行3(sort1)、批A行2(sort2)、批B行4(sort3)
-    expect(list.sale_items.map((x) => x.quantity)).toEqual([1, 3, 2, 4]);
+    // 用户规则"第一批在最上方，批内=扫描顺序"：A 单整体在上（行1、行2），B 单整体在下（行3、行4）——
+    // 不按 sort 全局交错（A1,B1,A2,B2 是错误行为，fix-sort 后全乱根因）
+    expect(list.sale_items.map((x) => x.quantity)).toEqual([1, 2, 3, 4]);
   });
 
   it('PATCH 重建明细：sort 沿用客户端值（不重置为数组索引）', async () => {

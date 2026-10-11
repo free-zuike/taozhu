@@ -192,19 +192,19 @@ syncRouter.get('/full', async (c) => {
      LEFT JOIN clients c ON c.id = si.client_id
      ORDER BY si.created_at`,
   ).all();
-  // 行级数组排序：sort 全局录入序优先（用户"每批顺序=扫描时实际顺序"），
-  // 旧数据 sort 缺失/重复才按订单 id 数字段兜底（同 sort → 订单创建序 → 行 id）。
+  // 行级数组排序：订单(批次)优先 → 批内 sort（用户"第一批在最上方，批内=扫描实际顺序"）。
+  // 不按 sort 全局交错（每单 sort 都 0 起，全局排会 A1,B1,C1… 交错）。与 /sales saleItemRows 同口径。
   const rowIdNum = (id: string | null | undefined): string => {
     const m = /^(?:s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
     return m ? m[1].padStart(24, '0') : String(id ?? '');
   };
   saleItems.results.sort((a, b) => {
-    const sa = Number((a as { sort?: number }).sort ?? 0);
-    const sb = Number((b as { sort?: number }).sort ?? 0);
-    if (sa !== sb) return sa - sb;
     const oa = rowIdNum((a as { sale_id?: string }).sale_id);
     const ob = rowIdNum((b as { sale_id?: string }).sale_id);
     if (oa !== ob) return oa < ob ? -1 : 1;
+    const sa = Number((a as { sort?: number }).sort ?? 0);
+    const sb = Number((b as { sort?: number }).sort ?? 0);
+    if (sa !== sb) return sa - sb;
     const ia = rowIdNum((a as { id?: string }).id);
     const ib = rowIdNum((b as { id?: string }).id);
     return ia < ib ? -1 : ia > ib ? 1 : 0;

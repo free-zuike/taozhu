@@ -184,21 +184,21 @@ salesRouter.get('/', async (c) => {
      WHERE si.sale_id IN (${chunk.map(() => '?').join(',')})
      ORDER BY si.created_at`,
     ).bind(...chunk).all().then((r) => r.results));
-  // 行级数组排序：**sort 全局录入序优先**（用户"每批顺序=扫描时实际顺序"——sort 即录入序，
-  // 跨单连续递增 0,1,2,3…：批1行0、批2行1、批1行2、批2行3 交错展示=录入先后）。
-  // 旧数据 sort 缺失/重复时才用订单 id 数字段兜底（同 sort 的行按订单创建序→行 id）。
-  // 注：同毫秒创建的订单 id 数字段相同，不能作为主排序键——这正是"3号4号批次乱"的根因之一。
+  // 行级数组排序：**订单(批次)优先 → 批内 sort**（用户"第一批在最上方，批内=扫描实际顺序"——
+  // 同日多单按订单创建序整体排列，每单内按 sort(扫描序)。**不要按 sort 全局交错**
+  // （每单 sort 都从 0 起，全局按 sort 排会 A1,B1,C1,A2,B2,C2 交错——用户 fix-sort 后全乱根因）。
+  // sort 缺失/重复时行 id 数字段兜底。
   const rowIdNum = (id: string | null | undefined): string => {
     const m = /^(?:s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
     return m ? m[1].padStart(24, '0') : String(id ?? '');
   };
   saleItemRows.sort((a, b) => {
-    const sa = Number((a as { sort?: number }).sort ?? 0);
-    const sb = Number((b as { sort?: number }).sort ?? 0);
-    if (sa !== sb) return sa - sb;
     const oa = rowIdNum((a as { sale_id?: string }).sale_id);
     const ob = rowIdNum((b as { sale_id?: string }).sale_id);
     if (oa !== ob) return oa < ob ? -1 : 1;
+    const sa = Number((a as { sort?: number }).sort ?? 0);
+    const sb = Number((b as { sort?: number }).sort ?? 0);
+    if (sa !== sb) return sa - sb;
     const ia = rowIdNum((a as { id?: string }).id);
     const ib = rowIdNum((b as { id?: string }).id);
     return ia < ib ? -1 : ia > ib ? 1 : 0;

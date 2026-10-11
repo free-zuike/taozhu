@@ -42,9 +42,9 @@ export function setRefreshToken(rt: string) {
 }
 
 /** 双 token 静默刷新（单例防并发）：同一时刻多个请求 401 只刷一次，其余 await 同一 Promise。
- *  成功返回 true 并写新 token/refresh_token；无 refresh_token 或刷新失败返回 false。 */
-let refreshing: Promise<boolean> | null = null;
-export function tryRefreshToken(): Promise<boolean> {
+ *  返回三态：true=刷新成功 / false=refresh 明确无效（400/401，需重新登录）/ null=网络失败（保留登录态，下次重试） */
+let refreshing: Promise<boolean | null> | null = null;
+export function tryRefreshToken(): Promise<boolean | null> {
   if (refreshing) return refreshing;
   const p = (async () => {
     const rt = getRefreshToken();
@@ -60,14 +60,19 @@ export function tryRefreshToken(): Promise<boolean> {
           fail: (err) => rej2(err),
         });
       });
-      if (r.statusCode !== 200) return false;
-      const d = r.data as { token?: string; refresh_token?: string } | undefined;
-      if (!d?.token) return false;
-      setToken(d.token);
-      if (d.refresh_token) setRefreshToken(d.refresh_token);
-      return true;
+      if (r.statusCode === 200) {
+        const d = r.data as { token?: string; refresh_token?: string } | undefined;
+        if (!d?.token) return false;
+        setToken(d.token);
+        if (d.refresh_token) setRefreshToken(d.refresh_token);
+        return true;
+      }
+      // 400/401=refresh 明确无效；其它（5xx 等）按服务异常处理不清登录
+      if (r.statusCode === 400 || r.statusCode === 401) return false;
+      return null;
     } catch (_) {
-      return false;
+      // 网络/DNS/超时：不清 token、不清登录（域名抖动不清——本地可用不丢）
+      return null;
     }
   })();
   refreshing = p;
@@ -147,12 +152,18 @@ export function request<T = any>(path: string, method: UniMethod = 'GET', data?:
             return;
           }
           if (status === 401) {
-            // 仅重放一次（防循环）：刷新成功带新 token 重发；失败才判定登录过期
+            // 仅重放一次（防循环）：刷新成功带新 token 重发；
+            // refresh 明确无效（false）→ 清登录跳登录页；网络失败（null）→ 不清登录，
+            // 按网络错误提示（域名抖动不清——本地可用不丢，用户反馈"这不就失去本地可用意义"）
             if (!replayed) {
               tryRefreshToken()
                 .then((ok) => {
-                  if (ok) send(getToken(), true);
-                  else fail401();
+                  if (ok === true) send(getToken(), true);
+                  else if (ok === false) fail401();
+                  else {
+                    logApiError(path, '登录校验超时（网络失败），保留登录态');
+                    reject(new Error('无法连接服务器（登录校验超时），请检查网络后重试'));
+                  }
                 })
                 .catch(() => fail401());
             } else {
