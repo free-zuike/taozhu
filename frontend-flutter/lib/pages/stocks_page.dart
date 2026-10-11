@@ -518,6 +518,8 @@ class _StocksPageState extends State<StocksPage> {
           ),
         ],
       ),
+        ],
+      ),
     );
   }
 
@@ -558,17 +560,6 @@ class _StocksPageState extends State<StocksPage> {
           ),
         ),
         onTap: () => _viewTrace(s),
-      ),
-    );
-  }
-}
-                      ],
-                    ),
-                  ),
-          ),
-        ],
-      ),
-        ],
       ),
     );
   }

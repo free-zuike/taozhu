@@ -54,7 +54,7 @@ Future<({List<Map<String, dynamic>> sales, List<Map<String, dynamic>> payments})
           .cast<Map<String, dynamic>>();
       return (sales: sales, payments: pays);
     } catch (_) {
-      return (sales: [], payments: []);
+      return (sales: <Map<String, dynamic>>[], payments: <Map<String, dynamic>>[]);
     }
   }
   try {
@@ -84,7 +84,7 @@ Future<({List<Map<String, dynamic>> sales, List<Map<String, dynamic>> payments})
     final payments = await LocalDb.getAll('payments');
     return (sales: sales, payments: payments);
   } catch (_) {
-    return (sales: [], payments: []);
+    return (sales: <Map<String, dynamic>>[], payments: <Map<String, dynamic>>[]);
   }
 }
 
