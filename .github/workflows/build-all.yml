@@ -526,13 +526,8 @@ jobs:
           path: /tmp/taozhu-macos-*.zip
           retention-days: 1
 
-      - name: 失败即取消整个 run（省掉其它平台的无效构建时间）
-        if: failure() && steps.guard.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh run cancel "${{ github.run_id }}" --repo "$GITHUB_REPOSITORY" || true
-          echo "已取消整个 workflow（本版本未创建 release，无残留）"
+      # macOS 独立构建：失败/取消不再连坐整个 run（用户定稿：等有机器/排队能过时再单独补发，
+      # 不阻塞 Android/小程序/Web 发版）。不再取消整个 workflow。
 
 
       - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
@@ -605,12 +600,11 @@ jobs:
   # ── iOS（未签名）──────────────────────────────────────────────────────────────────
 
   # ── 微信小程序（uni-app）──────────────────────────────────────────────────────────
-  # 依赖全部平台成功：任一 Flutter 端失败则小程序不构建/不上传（全通过或全不通过）
-  # ── 平台产物门槛：主仓库=5 平台全部成功才继续；fork 用户（平台 job 跳过）视为通过 ──
+  # 依赖平台：apk/linux/windows（macOS 独立构建不阻塞——用户定稿：等有机器再单独补发）
 
   miniprogram:
-    needs: [test, apk, linux, windows, macos]
-    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success')) }}
+    needs: [test, apk, linux, windows]
+    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success')) }}
     runs-on: ubuntu-latest
     name: 微信小程序
     steps:
@@ -697,11 +691,11 @@ jobs:
           gh run cancel "${{ github.run_id }}" --repo "$GITHUB_REPOSITORY" || true
           echo "已取消整个 workflow（本版本未创建 release，无残留）"
 
-  # ── 统一发布：全部平台成功后才创建 release + 一次上传所有产物 ──
-  # 任一平台失败 → 本 job 不运行 → release 根本不创建（修复"失败残留半成品 release/draft"根因）
+  # ── 统一发布：apk/linux/windows/小程序成功后才创建 release + 一次上传所有产物 ──
+  # macOS 独立构建不参与（用户定稿：等有机器再单独补发，不阻塞主发版）
   publish:
-    needs: [apk, linux, windows, macos, miniprogram]
-    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.miniprogram.result == 'success')) }}
+    needs: [apk, linux, windows, miniprogram]
+    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.miniprogram.result == 'success')) }}
     runs-on: ubuntu-latest
     name: 统一发布（release+全部资产）
     steps:
