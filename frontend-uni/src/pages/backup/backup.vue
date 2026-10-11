@@ -177,11 +177,19 @@ async function load() {
 async function backupNow() {
   busy.value = true;
   try {
-    await request('/backup/now', 'POST', {});
-    uni.showToast({ title: '备份成功', icon: 'success' });
+    const r = await request<{ key?: string; status?: string; message?: string }>('/backup/now', 'POST', {});
+    const status = r?.status || 'succeeded';
+    const msg = r?.message || '';
+    if (status === 'failed') {
+      uni.showToast({ title: `备份失败：${msg || '未知错误'}`, icon: 'none', duration: 3000 });
+    } else if (status === 'partial') {
+      uni.showModal({ title: '备份部分成功', content: msg || '部分数据未能完整备份', showCancel: false });
+    } else {
+      uni.showToast({ title: `备份成功：${msg || '已备份到云端'}`, icon: 'success' });
+    }
     load();
   } catch (e) {
-    uni.showToast({ title: '备份失败', icon: 'none' });
+    uni.showToast({ title: '备份失败（503 超时等），请重试或检查云端存储', icon: 'none', duration: 3000 });
   } finally {
     busy.value = false;
   }

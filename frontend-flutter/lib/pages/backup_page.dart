@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -165,11 +166,18 @@ class _BackupPageState extends State<BackupPage> {
   Future<void> _backupNow() async {
     try {
       final r = await Api.instance.post('/backup/now', {});
-      final name = '${r['key'] ?? ''}'.split('/').last;
-      toast(context, '备份完成：$name');
+      final status = '${r['status'] ?? 'succeeded'}';
+      final msg = '${r['message'] ?? ''}';
+      if (status == 'failed') {
+        toast(context, '备份失败：${msg.isEmpty ? '未知错误' : msg}');
+      } else if (status == 'partial') {
+        toast(context, '备份部分成功：$msg');
+      } else {
+        toast(context, '备份成功：${msg.isEmpty ? '已备份到云端' : msg}');
+      }
       _loadBackups();
     } catch (e) {
-      toast(context, '备份失败：${e.toString().replaceFirst('Exception: ', '')}');
+      toast(context, '备份失败（可能超时），请重试或检查云端存储');
     }
   }
 

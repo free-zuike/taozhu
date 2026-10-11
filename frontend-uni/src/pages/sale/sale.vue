@@ -18,22 +18,29 @@
       <button class="copy-btn" :disabled="loading" @click="copyLast">复制上一笔</button>
       <button class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
     </view>
-    <!-- 批量直编头：竖排对齐 App（_infoCard=店铺/日期各一行，凭证卡+AI 操作行；不挤一排） -->
-    <view v-if="isDateRows" class="head-col">
-      <picker class="field" mode="selector" :range="clientNames" @change="onClient">
+    <!-- 批量直编头：卡片式对齐 App _infoCard（店铺/日期/整单凭证各行分层 + AI 操作行；不挤一排） -->
+    <view v-if="isDateRows" class="info-card">
+      <picker class="info-field" mode="selector" :range="clientNames" @change="onClient">
         <view class="field-inner">
           <text class="label">饭店</text>
           <text :class="['value', { placeholder: !clientId }]">{{ clientId ? clientName : '请选择饭店' }}</text>
         </view>
       </picker>
-      <picker class="field" mode="date" :value="date" @change="onDate">
+      <picker class="info-field" mode="date" :value="date" @change="onDate">
         <view class="field-inner">
           <text class="label">批量日期（全部行改期）</text>
           <text class="value">{{ date }}</text>
         </view>
       </picker>
-      <view class="head-ops">
-        <view class="batch-voucher" @click="showBatchAttach"><text class="mi">&#xe3f4;</text>整单凭证</view>
+      <view class="voucher-tile" @click="showBatchAttach">
+        <view class="v-ic"><text class="mi">&#xe3f4;</text></view>
+        <view class="v-main">
+          <text class="v-tx">整单凭证（自动关联全部商品）</text>
+          <text class="v-sub">上传一张凭证自动存到该单每个商品行</text>
+        </view>
+        <text class="v-arrow">›</text>
+      </view>
+      <view class="ops-row">
         <button class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
       </view>
     </view>
@@ -961,8 +968,22 @@ async function submit() {
 .page { min-height: 100vh;  background: var(--page-bg); }
 .head-row { display: flex; gap: 12rpx; align-items: flex-start; margin-bottom: 16rpx; }
 .head-row .field { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
-.head-col { display: flex; flex-direction: column; gap: 12rpx; margin-bottom: 12rpx; }
-.head-col .field { width: 100%; box-sizing: border-box; background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; }
+/* 批量直编头部：单卡片内 店铺/批量日期/整单凭证/AI 操作 分层（对齐 App _infoCard） */
+.info-card { background: var(--card-bg); border-radius: 16rpx; border: var(--card-border); padding: 6rpx 24rpx; margin-bottom: 12rpx; }
+.info-field { display: flex; padding: 20rpx 0; border-bottom: 1rpx solid var(--divider); }
+.info-field:last-of-type { border-bottom: none; }
+.info-card .field-inner { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+.info-card .label { flex-shrink: 0; margin-right: 16rpx; }
+.info-card .value { flex: 1; text-align: right; }
+.voucher-tile { display: flex; align-items: center; gap: 16rpx; padding: 18rpx 0; border-top: 1rpx solid var(--divider); }
+.v-ic { width: 64rpx; height: 64rpx; border-radius: 14rpx; background: var(--primary-soft); color: var(--primary); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.v-ic .mi { font-size: 32rpx; }
+.v-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4rpx; }
+.v-tx { font-size: 28rpx; font-weight: 600; color: var(--text-main); }
+.v-sub { font-size: 22rpx; color: var(--text-sub); }
+.v-arrow { font-size: 32rpx; color: var(--text-sub); flex-shrink: 0; }
+.ops-row { padding: 16rpx 0 20rpx; border-top: 1rpx solid var(--divider); }
+.ops-row .ai-btn { width: 100%; height: 84rpx; line-height: 84rpx; border-radius: 12rpx; }
 .head-ops { display: flex; gap: 12rpx; align-items: center; }
 .head-ops .batch-voucher, .head-ops .ai-btn { flex: 1; text-align: center; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }

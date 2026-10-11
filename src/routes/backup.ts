@@ -11,18 +11,39 @@ type V = { user: AuthUser };
 export const backupRouter = new Hono<{ Bindings: Env; Variables: V }>();
 backupRouter.use('*', authMiddleware(), adminOnly());
 
-const TABLES = [
-  'clients', 'items', 'item_prices', 'purchase_items',
-  'sale_items', 'payments', 'categories', 'settings', 'stocks',
-  'payment_accounts', 'attachment_refs',
+/** 备份排除表（内部/运行时，非业务数据）：login_attempts 限流/登录防爆破、schema_meta 建表标记、
+ *  sync_changes 变更流(恢复后由 fullSync 重建，导入会导致客户端重放旧游标)、audit_logs 操作审计（量大且可再生成）
+ */
+const EXCLUDED_TABLES = new Set(['login_attempts', 'schema_meta', 'sync_changes', 'audit_logs']);
+
+/// 动态枚举全部业务表（参考 beecount：sqlite_master 全量 - 内部表），不再硬编码——
+/// 新增表（价格组/分享/账号/设备…）自动纳入备份，杜绝"备份不全"
+async function listBusinessTables(db: D1Database): Promise<string[]> {
+  const r = await db.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'table'
+       AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%'
+     ORDER BY name`,
+  ).all<{ name: string }>();
+  return (r.results || []).map((x) => x.name).filter((n) => !EXCLUDED_TABLES.has(n));
+}
+
+/// 导入顺序权重：父表(被引用)在前、子表在后，剩余表按字母序（动态枚举——新增表自动插入尾部不阻塞恢复）
+const IMPORT_ORDER = [
+  'categories', 'clients', 'items', 'item_prices', 'price_groups', 'item_group_prices',
+  'sale_items', 'purchase_items', 'payments', 'settings', 'payment_accounts', 'stocks',
+  'users', 'devices', 'share_links', 'attachment_refs',
 ] as const;
 
-/// 导入顺序：先父表再子表（弱外键，避免引用表尚未插入）
-const IMPORT_ORDER = [
-  'categories', 'clients', 'items', 'item_prices', 'stocks',
-  'sale_items', 'purchase_items', 'payments', 'settings',
-  'payment_accounts', 'attachment_refs',
-] as const;
+/// 按导入权重排序（未列入权重的新表按字母序追加在末尾）
+async function sortImportTables(db: D1Database, data: Record<string, unknown[]>): Promise<string[]> {
+  const names = Object.keys(data);
+  const known = IMPORT_ORDER.filter((t) => names.includes(t));
+  const rest = names.filter((n) => !(IMPORT_ORDER as readonly string[]).includes(n)).sort();
+  const tables = [...known, ...rest];
+  // 生产库可能因老版本缺表/导入包含且表存在才恢复——过滤掉当前库不存在的表
+  const all = new Set(await listBusinessTables(db));
+  return tables.filter((t) => all.has(t));
+}
 
 /// 备份文件前缀（与附件同库同 R2，走 createStorage 工厂——STORAGE_DRIVER 可切换备份端）
 const BACKUP_PREFIX = 'taozhu/backups/backup-';
@@ -93,33 +114,69 @@ backupRouter.put('/auto', async (c) => {
   });
 });
 
+/// 分页拉取单表（LIMIT 1000）：一次性 SELECT * 全表在大库超 Worker 内存/CPU → 503
+async function exportTablePages(db: D1Database, table: string): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  let offset = 0;
+  for (;;) {
+    const r = await db.prepare(`SELECT * FROM ${table} LIMIT 1000 OFFSET ?`).bind(offset).all();
+    rows.push(...r.results);
+    if (r.results.length < 1000) break;
+    offset += 1000;
+  }
+  return rows;
+}
+
+/// 收集全部附件字节 → base64 内嵌（分块转换防 spread 栈溢出；并发 6 防串行拖慢 503）
+async function collectAttachmentFiles(
+  env: Env,
+): Promise<{ files: Array<{ key: string; data: string }>; ok: number; failed: number; total: number }> {
+  const refs = await env.DB.prepare('SELECT file_key FROM attachment_refs').all<{ file_key: string }>();
+  const seen = new Set<string>();
+  const uniq = refs.results.filter((r) => {
+    if (!r.file_key || seen.has(r.file_key)) return false;
+    seen.add(r.file_key);
+    return true;
+  });
+  const store = createStorage(env);
+  const toBase64 = async (key: string): Promise<{ key: string; data: string } | null> => {
+    try {
+      const obj = await store.get(key);
+      if (!obj) return null;
+      const buf = new Uint8Array(await new Response(obj.body).arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < buf.length; i += 0x8000) {
+        bin += String.fromCharCode(...buf.subarray(i, Math.min(i + 0x8000, buf.length)));
+      }
+      return { key, data: btoa(bin) };
+    } catch (_) {
+      return null;
+    }
+  };
+  const files: Array<{ key: string; data: string }> = [];
+  let failed = 0;
+  for (let i = 0; i < uniq.length; i += 6) {
+    const batch = await Promise.all(uniq.slice(i, i + 6).map((r) => toBase64(r.file_key)));
+    for (const f of batch) {
+      if (f) files.push(f); else failed++;
+    }
+  }
+  return { files, ok: files.length, failed, total: uniq.length };
+}
+
 /// 导出全部业务表数据（手动导出与每日定时自动备份共用）
 /// 附件本体（R2/存储端文件）随备份内嵌（base64）：attachment_refs 只是引用元数据，
 /// 不含文件内容——旧版只导表导致恢复后附件丢失（用户"附件无法正常处理"）。
 export async function exportAllData(db: D1Database, env?: Env): Promise<Record<string, unknown[]>> {
   const data: Record<string, unknown[]> = {};
-  for (const t of TABLES) {
-    const r = await db.prepare(`SELECT * FROM ${t}`).all();
-    data[t] = r.results;
+  const tables = await listBusinessTables(db);
+  for (const t of tables) {
+    data[t] = await exportTablePages(db, t);
   }
   if (env) {
     try {
-      const refs = await db.prepare('SELECT file_key FROM attachment_refs').all<{ file_key: string }>();
-      const files: unknown[] = [];
-      const seen = new Set<string>();
-      const store = createStorage(env);
-      for (const r of refs.results) {
-        const key = r.file_key;
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        try {
-          const obj = await store.get(key);
-          if (!obj) continue;
-          const buf = await new Response(obj.body).arrayBuffer();
-          files.push({ key, data: btoa(String.fromCharCode(...new Uint8Array(buf))) });
-        } catch (_) {}
-      }
-      if (files.length > 0) data['__attachments'] = files;
+      const att = await collectAttachmentFiles(env);
+      if (att.files.length > 0) data['__attachments'] = att.files;
     } catch (_) {}
   }
   return data;
@@ -141,7 +198,8 @@ export async function importBackupData(
 ): Promise<{ report: Record<string, { inserted: number; skipped: number }>; total_inserted: number }> {
   const report: Record<string, { inserted: number; skipped: number }> = {};
   let totalInserted = 0;
-  for (const t of IMPORT_ORDER) {
+  const order = await sortImportTables(db, data);
+  for (const t of order) {
     const rows = data[t];
     if (!Array.isArray(rows)) continue;
     let inserted = 0;
@@ -177,17 +235,25 @@ export async function importBackupData(
     if (Array.isArray(files)) {
       const store = createStorage(env);
       let restored = 0;
-      for (const f of files as Array<{ key?: string; data?: string }>) {
+      const list = files as Array<{ key?: string; data?: string }>;
+      // 并发写回（chunk 6，对齐导出端并发上限，避免大附件串行拖慢恢复）
+      const putOne = async (f: { key?: string; data?: string }): Promise<boolean> => {
         const key = f?.key;
-        if (!key || !f.data) continue;
+        if (!key || !f.data) return false;
         try {
           const bin = atob(f.data);
           const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
           await store.put(key, bytes, 'application/octet-stream');
-          restored++;
-        } catch (_) {}
+          return true;
+        } catch (_) {
+          return false;
+        }
+      };
+      for (let i = 0; i < list.length; i += 6) {
+        const batch = await Promise.all(list.slice(i, i + 6).map(putOne));
+        restored += batch.filter(Boolean).length;
       }
-      report['__attachments'] = { inserted: restored, skipped: files.length - restored };
+      report['__attachments'] = { inserted: restored, skipped: list.length - restored };
       totalInserted += restored;
     }
   }
@@ -196,24 +262,77 @@ export async function importBackupData(
 
 /// 立即执行一次备份（手动 POST /backup/now 与定时 scheduledBackup 共用）：
 /// 导出全库 → 走 createStorage 工厂写入存储端（STORAGE_DRIVER 可换备份端，不写死 R2）→ 清理超保留份数。
-export async function performBackup(env: Env, username?: string): Promise<{ key: string; size: number }> {
+/// 返回带状态（对齐 beecount BackupResult：succeeded=全部成功 / partial=部分失败 / failed=整体失败）+ 详情消息，
+/// 前端据此明确展示"成功/部分成功（哪几项失败）/失败"，不再只有转圈或 503。
+export async function performBackup(env: Env, username?: string): Promise<{
+  key: string; size: number; status: 'succeeded' | 'partial' | 'failed'; message: string;
+  tables: { total: number; ok: number; failed: string[] }; attachments: { total: number; ok: number; failed: number };
+}> {
   const keep = await getBackupKeep(env.DB);
-  const data = await exportAllData(env.DB, env);
-  const store = createStorage(env);
-  const key = `${BACKUP_PREFIX}${bjStamp(new Date())}.json`;
-  const body = JSON.stringify({ exported_at: new Date().toISOString(), data });
-  await store.put(key, body, 'application/json');
-  const list = await store.list(BACKUP_PREFIX);
-  if (list.objects.length > keep) {
-    const keepSet = new Set(list.objects.map((o) => o.key).sort().slice(-keep));
-    for (const o of list.objects) {
-      if (!keepSet.has(o.key)) await store.delete(o.key);
+  // 1) 导出各表：单表失败不中断（收集 failed 表清单，最后汇总 partial/failed）
+  const tables = await listBusinessTables(env.DB);
+  const data: Record<string, unknown[]> = {};
+  const failedTables: string[] = [];
+  for (const t of tables) {
+    try {
+      data[t] = await exportTablePages(env.DB, t);
+    } catch (e) {
+      failedTables.push(t);
     }
   }
-  if (username) {
-    await recordAudit(env.DB, { username, action: 'create', entity_type: 'backup', entity_id: key, detail: `手动全库备份（${Object.keys(data).length} 张表）` });
+  // 2) 附件收集（base64 内嵌，失败记数不中断整体）
+  let attResult: { files: Array<{ key: string; data: string }>; ok: number; failed: number; total: number };
+  try {
+    attResult = await collectAttachmentFiles(env);
+  } catch (e) {
+    attResult = { files: [], ok: 0, failed: 0, total: 0 };
   }
-  return { key, size: body.length };
+  if (attResult.files.length > 0) data['__attachments'] = attResult.files;
+
+  // 3) 上传存储端（失败=整体 failed）
+  const store = createStorage(env);
+  const key = `${BACKUP_PREFIX}${bjStamp(new Date())}.json`;
+  const body = JSON.stringify({ exported_at: new Date().toISOString(), data, status: '' });
+  try {
+    await store.put(key, body, 'application/json');
+  } catch (e) {
+    return {
+      key, size: 0, status: 'failed', message: `上传备份失败：${(e as Error).message}`,
+      tables: { total: tables.length, ok: tables.length - failedTables.length, failed: failedTables },
+      attachments: attResult,
+    };
+  }
+
+  // 4) 清理超保留份数（失败不改变备份结果，best-effort）
+  try {
+    const list = await store.list(BACKUP_PREFIX);
+    if (list.objects.length > keep) {
+      const keepSet = new Set(list.objects.map((o) => o.key).sort().slice(-keep));
+      for (const o of list.objects) {
+        if (!keepSet.has(o.key)) await store.delete(o.key);
+      }
+    }
+  } catch (_) {}
+
+  // 5) 汇总状态：全成功=succeeded；表和附件都没成功=failed；其余（有表或附件失败）=partial
+  const tableOk = failedTables.length === 0;
+  const attOk = attResult.failed === 0;
+  let status: 'succeeded' | 'partial' | 'failed';
+  let message: string;
+  if (tableOk && attOk) {
+    status = 'succeeded';
+    message = `备份成功：${tables.length} 张表 · 附件 ${attResult.ok}/${attResult.total}`;
+  } else if (!tableOk && attResult.ok === 0 && attResult.total > 0) {
+    status = 'failed';
+    message = `备份失败：表 <${failedTables.join(', ')}> 导出失败${attResult.total > 0 ? `，附件 ${attResult.failed}/${attResult.total} 未收集` : ''}`;
+  } else {
+    status = 'partial';
+    message = `部分成功：${tableOk ? '表全部导出' : `表 <${failedTables.join(', ')}> 失败`}；${attOk ? '附件全部收集' : `附件 ${attResult.failed}/${attResult.total} 未收集`}`;
+  }
+  if (username) {
+    await recordAudit(env.DB, { username, action: 'create', entity_type: 'backup', entity_id: key, detail: `手动全库备份：${message}` });
+  }
+  return { key, size: body.length, status, message, tables: { total: tables.length, ok: tables.length - failedTables.length, failed: failedTables }, attachments: attResult };
 }
 
 // GET /backup — 全部数据 JSON（含附件本体 base64，随备份可完整恢复）

@@ -131,44 +131,51 @@
       </view>
     </view>
 
-    <!-- 单商品编辑弹层：点击明细行 = 只编辑该商品（数量/单位/折合计数/价格/日期/备注 + 删除，对齐 App 单行编辑） -->
+    <!-- 单商品编辑弹层：竖排字段对齐 App sale_line_edit（数量/单位/折合/售价/日期/分类/附件/备注） -->
     <view v-if="itemForm.show" class="mask" @click="itemForm.show = false">
       <view class="sheet" @click.stop>
         <view class="sheet-title">编辑「{{ itemForm.itemName }}」</view>
         <view class="sheet-body">
         <scroll-view scroll-y class="sheet-body-scroll">
-        <view class="form-row">
-          <view class="f-col">
-            <text class="f-label">数量</text>
-            <input class="ipt" v-model="itemForm.quantity" type="digit" placeholder="0" />
-          </view>
-          <view class="f-col">
-            <text class="f-label">单位</text>
-            <input class="ipt" v-model="itemForm.unit" placeholder="斤/件/箱…" />
-          </view>
+        <view class="form-row v">
+          <text class="f-label">数量</text>
+          <input class="ipt" v-model="itemForm.quantity" type="digit" placeholder="0" />
         </view>
-        <view class="form-row">
-          <view class="f-col">
-            <text class="f-label">{{ itemForm.isPurchase ? '进价（元）' : '售价（元）' }}</text>
-            <input class="ipt" v-model="itemForm.salePrice" type="digit" placeholder="0" />
-          </view>
-          <view v-if="itemForm.countUnit" class="f-col">
-            <text class="f-label">折合 {{ itemForm.countUnit }} 数</text>
-            <input class="ipt" v-model="itemForm.countQty" type="digit" placeholder="0" />
-          </view>
+        <view class="form-row v">
+          <text class="f-label">单位（斤/件/箱…）</text>
+          <input class="ipt" v-model="itemForm.unit" placeholder="斤/件/箱…" />
+        </view>
+        <view v-if="itemForm.countUnit" class="form-row v">
+          <text class="f-label">折合 {{ itemForm.countUnit }} 数（可选）</text>
+          <input class="ipt" v-model="itemForm.countQty" type="digit" placeholder="0" />
+        </view>
+        <view class="form-row v">
+          <text class="f-label">{{ itemForm.isPurchase ? '进价（元）' : '售价（元）' }}</text>
+          <input class="ipt" v-model="itemForm.salePrice" type="digit" placeholder="0" />
         </view>
         <!-- 日期：picker 原生滚轮（对齐 App 行编辑 DateField，不可手输） -->
-        <picker mode="date" :value="itemForm.date || today" @change="onFormDate">
-          <view class="field-inner">
+        <picker class="form-row v" mode="date" :value="itemForm.date || today" @change="onFormDate">
+          <view class="f-pick">
             <text class="label">日期</text>
             <text class="value" :class="{ placeholder: !itemForm.date }">{{ itemForm.date || '选择日期' }}</text>
           </view>
         </picker>
-        <input class="ipt" v-model="itemForm.note" placeholder="备注（选填）" />
+        <!-- 商品分类（商品级，全局生效）：点击「修改分类」选择后即时保存（对齐 App changeCategory） -->
+        <view class="form-row v">
+          <view class="f-info">
+            <text class="label">商品分类</text>
+            <text class="value" :class="{ placeholder: !itemForm.category }">{{ itemForm.category || '未分类' }}</text>
+          </view>
+          <text class="f-act" @click="changeItemCategory">修改分类</text>
+        </view>
         <!-- 该条凭证附件（对齐 App 行编辑弹窗：查看/添加，点击直接全屏查看器） -->
         <view class="attach-row" @click="openFormAttach">
           <text class="label">该条凭证附件</text>
           <text class="value attach-go">查看/添加</text>
+        </view>
+        <view class="form-row v">
+          <text class="f-label">备注（该条商品，可留空）</text>
+          <input class="ipt" v-model="itemForm.note" placeholder="备注（选填）" />
         </view>
         </scroll-view>
         </view>
@@ -176,6 +183,19 @@
           <button class="btn-del" :disabled="saving" @click="deleteItem">删除该行</button>
           <button class="btn-save" :disabled="saving" @click="saveItem">{{ saving ? '保存中…' : '保存' }}</button>
         </view>
+      </view>
+    </view>
+  <!-- 修改商品分类弹层（两级目录：一级加粗、二级缩进，对齐 App changeCategory SimpleDialog） -->
+    <view v-if="catDlg" class="mask" @click="catDlg = false">
+      <view class="sheet cat-sheet" @click.stop>
+        <text class="s-title">选择商品分类</text>
+        <scroll-view scroll-y class="cat-scroll">
+          <view class="cat-opt" @click="pickCategory('')">无分类</view>
+          <view v-for="p in catParents" :key="p.id">
+            <view class="cat-opt cat-opt-p" @click="pickCategory(p.id)">{{ p.name }}</view>
+            <view v-for="ch in catChildrenOf(p.id)" :key="ch.id" class="cat-opt cat-opt-c" @click="pickCategory(ch.id)">{{ ch.name }}</view>
+          </view>
+        </scroll-view>
       </view>
     </view>
   </view>
@@ -209,12 +229,12 @@ const payForm = ref<{
   show: boolean; id: string; amount: string; date: string; method: string; methodIdx: number; note: string;
 }>({ show: false, id: '', amount: '', date: '', method: '', methodIdx: 0, note: '' });
 
-// 单商品编辑（明细行级）：只改该商品数量/单位/折合计数/售价/日期/备注（对齐 App 单行编辑）
+// 单商品编辑（明细行级）：只改该商品数量/单位/折合计数/售价/日期/备注/分类（对齐 App 单行编辑）
 const itemForm = ref<{
-  show: boolean; isPurchase: boolean; saleId: string; itemId: string; itemName: string;
+  show: boolean; isPurchase: boolean; saleId: string; itemId: string; goodsId: string; itemName: string;
   quantity: string; unit: string; salePrice: string; countQty: string; countUnit: string; date: string; note: string;
-  category: string; // 当前分类名（修改分类行显示）
-}>({ show: false, isPurchase: false, saleId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', countQty: '', countUnit: '', date: '', note: '', category: '' });
+  category: string; categoryId: string; // 当前分类名/id（修改分类行显示与保存）
+}>({ show: false, isPurchase: false, saleId: '', itemId: '', goodsId: '', itemName: '', quantity: '', unit: '', salePrice: '', countQty: '', countUnit: '', date: '', note: '', category: '', categoryId: '' });
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -666,11 +686,13 @@ function openSaleBatch(date: string) {
 
 // 明细行点击 → 只编辑该商品（对齐 App 单行编辑语义：数据按明细行独立存储）
 function editSaleLine(l: SaleLine) {
+  const it = ((l.order?.items || []) as Array<Record<string, any>>).find((x) => String(x.id) === String(l.itemId));
   itemForm.value = {
     show: true,
     isPurchase: false,
     saleId: l.orderId,
     itemId: l.itemId,
+    goodsId: String(it?.item_id || it?.goods_id || ''), // 商品库真实商品 id（改分类用）：明细行 id≠商品 id
     itemName: l.item_name,
     quantity: String(l.quantity ?? ''),
     unit: String(l.unit || ''),
@@ -680,6 +702,7 @@ function editSaleLine(l: SaleLine) {
     date: l.date.slice(0, 10),
     note: String(l.note ?? ''),
     category: String(l.category || ''),
+    categoryId: String(it?.category_id || ''),
   };
 }
 
@@ -711,6 +734,7 @@ function editSaleItem(s: Record<string, any>, it: Record<string, any>) {
     isPurchase: false,
     saleId: String(s.id),
     itemId: String(it.id || ''),
+    goodsId: String(it.item_id || it.goods_id || ''), // 商品库真实商品 id（改分类用）
     itemName: String(it.item_name || ''),
     quantity: String(it.quantity ?? ''),
     unit: String(it.unit || ''),
@@ -720,6 +744,7 @@ function editSaleItem(s: Record<string, any>, it: Record<string, any>) {
     date: String(it.happened_at || s.happened_at || '').slice(0, 10),
     note: String(it.note ?? ''),
     category: String(it.category || it.item_category || ''),
+    categoryId: String(it.category_id || ''),
   };
 }
 
@@ -730,6 +755,7 @@ function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
     isPurchase: true,
     saleId: String(p.id),
     itemId: String(it.id || ''),
+    goodsId: String(it.item_id || it.goods_id || ''), // 商品库真实商品 id（改分类用）
     itemName: String(it.item_name || ''),
     quantity: String(it.quantity ?? ''),
     unit: String(it.unit || ''),
@@ -739,7 +765,49 @@ function editPurchaseItem(p: Record<string, any>, it: Record<string, any>) {
     date: String(it.happened_at || p.happened_at || '').slice(0, 10),
     note: String(it.note ?? ''),
     category: String(it.category || it.item_category || ''),
+    categoryId: String(it.category_id || ''),
   };
+}
+
+// 修改商品分类（商品级，全局生效）：加载两级目录 → 选择 → PATCH /items/:id（对齐 App changeCategory）
+const catDlg = ref(false);
+const catList = ref<Array<{ id: string; name: string; parent_id: string | null }>>([]);
+const catSaving = ref(false);
+// 一级分类（parent_id 空）与二级（挂在父下）——对齐 App changeCategory 两级目录
+const catParents = computed(() => catList.value.filter((c) => !c.parent_id));
+const catChildrenOf = (pid: string) => catList.value.filter((c) => c.parent_id === pid);
+async function changeItemCategory() {
+  const goodsId = itemForm.value.goodsId;
+  if (!goodsId) {
+    uni.showToast({ title: '该商品已从商品库删除（历史明细仍显示原名称），无法修改分类', icon: 'none' });
+    return;
+  }
+  try {
+    const d = await request<{ categories?: Array<{ id: string; name: string; parent_id: string | null }> }>('/categories?type=item', 'GET');
+    catList.value = d?.categories || [];
+    catDlg.value = true;
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '分类加载失败', icon: 'none' });
+  }
+}
+async function pickCategory(id: string) {
+  catDlg.value = false;
+  const cat = catList.value.find((c) => c.id === id);
+  const catName = id ? (cat?.name || '') : '';
+  catSaving.value = true;
+  try {
+    await request(`/items/${itemForm.value.goodsId}`, 'PATCH', {
+      category: catName,
+      category_id: id || null,
+    });
+    itemForm.value.category = catName;
+    itemForm.value.categoryId = id;
+    uni.showToast({ title: catName ? `已改为「${catName}」` : '已改为未分类', icon: 'success' });
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '分类修改失败', icon: 'none' });
+  } finally {
+    catSaving.value = false;
+  }
 }
 
 async function saveItem() {
@@ -967,15 +1035,28 @@ async function removePayment(p: Record<string, any>) {
 .placeholder { color: var(--text-sub); }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 .form-row { display: flex; gap: 16rpx; }
+.form-row.v { display: flex; flex-direction: column; gap: 8rpx; margin-bottom: 16rpx; }
 .f-col { flex: 1; min-width: 0; }
 .f-label { display: block; font-size: 22rpx; color: var(--text-sub); margin-bottom: 8rpx; }
 .f-col .ipt { width: 100%; box-sizing: border-box; margin-bottom: 16rpx; }
+.form-row.v .ipt { width: 100%; box-sizing: border-box; background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; font-size: 28rpx; }
+.f-info { display: flex; flex-direction: column; gap: 4rpx; }
+.f-pick { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; display: flex; justify-content: space-between; align-items: center; }
+.f-act { color: var(--primary); font-size: 26rpx; flex-shrink: 0; margin-top: 8rpx; text-align: right; }
 .attach-row { display: flex; justify-content: space-between; align-items: center; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; margin-bottom: 16rpx; }
 .attach-go { color: var(--primary); }
 .flex1 { flex: 1; }
 .btn-del { background: var(--card-bg); color: #f56c6c; border: 1rpx solid #f56c6c; border-radius: 12rpx; font-size: 30rpx; }
 .dlg-ops { display: flex; gap: 20rpx; margin-top: 8rpx; flex-shrink: 0; padding-top: 16rpx; }
 .dlg-ops .btn-save, .dlg-ops .btn-del { flex: 1; }
+/* 修改商品分类弹层（两级目录，对齐 App changeCategory SimpleDialog） */
+.cat-sheet { padding: 32rpx 28rpx; max-height: 65vh; display: flex; flex-direction: column; }
+.cat-sheet .s-title { font-size: 30rpx; font-weight: bold; text-align: center; margin-bottom: 20rpx; flex-shrink: 0; }
+.cat-scroll { flex: 1; min-height: 0; }
+.cat-opt { padding: 18rpx 24rpx; font-size: 28rpx; color: var(--text-main); border-bottom: 1rpx solid var(--divider); }
+.cat-opt:last-child { border-bottom: none; }
+.cat-opt-p { font-weight: bold; }
+.cat-opt-c { padding-left: 56rpx; color: var(--text-sub); }
 /* 附件弹层 */
 .attach-scroll { max-height: 600rpx; margin-bottom: 16rpx; }
 .attach-item { display: flex; align-items: center; gap: 16rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
