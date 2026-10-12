@@ -189,9 +189,16 @@ salesRouter.get('/', async (c) => {
   // 同日多单按订单创建序整体排列，每单内按 sort(扫描序)。**不要按 sort 全局交错**
   // （每单 sort 都从 0 起，全局按 sort 排会 A1,B1,C1,A2,B2,C2 交错——用户 fix-sort 后全乱根因）。
   // sort 缺失/重复时行 id 数字段兜底。
+  // 数字段 = 时间戳 + 随机尾（位数不定 1-10，参与比较会主导字典序=批次乱序根因）→ 只取时间戳段：
+  // s/p 前缀=毫秒 13 位、si/pi 前缀=微秒 16 位；补零后字典序=时间序
   const rowIdNum = (id: string | null | undefined): string => {
-    const m = /^(?:s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
-    return m ? m[1].padStart(24, '0') : String(id ?? '');
+    const m = /^(s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
+    if (!m) return String(id ?? '');
+    const prefix = m[1] || '';
+    const digits = m[2];
+    const tsLen = prefix.includes('i') ? 16 : 13;
+    const core = digits.length >= tsLen ? digits.slice(0, tsLen) : digits;
+    return core.padStart(24, '0');
   };
   saleItemRows.sort((a, b) => {
     const oa = rowIdNum((a as { sale_id?: string }).sale_id);

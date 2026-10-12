@@ -1511,14 +1511,17 @@ class _SalePageState extends State<SalePage> {
   _Row _newRow() => _Row()
     ..rowId = 'si${DateTime.now().microsecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
 
-  /// 明细行 id（si{微秒}{随机数}）→ 数值比较键：微秒段固定高位+随机数低位，
-  /// BigInt 数值比较即创建序——字符串比较在随机数位数不一时失真（同微秒 '9' vs '10'
-  /// 时 '9'>'10' 把旧行排后=批次乱序）；非 si/pi 前缀 id 回退原串比较
+  /// 单据/明细行 id → 排序键：提取数字段中「时间戳段」（s/p=毫秒 13 位、si/pi=微秒 16 位）
+  /// 补零，字典序=时间序。随机尾位数不定（1-10 位）参与比较会按位数分组主导字典序
+  /// =批次乱序根因；非标准前缀 id 回退原串比较
   static Comparable _rowIdNumeric(String id) {
-    final m = RegExp(r'^(?:si|pi)?(\d+)$').firstMatch(id.trim());
+    final m = RegExp(r'^(s|p|si|pi|sl|pl)?(\d+)$').firstMatch(id.trim());
     if (m != null) {
-      final n = BigInt.tryParse(m.group(1)!);
-      if (n != null) return n;
+      final prefix = m.group(1) ?? '';
+      final digits = m.group(2)!;
+      final tsLen = prefix.contains('i') ? 16 : 13;
+      final core = digits.length >= tsLen ? digits.substring(0, tsLen) : digits;
+      return core.padLeft(24, '0');
     }
     return id;
   }

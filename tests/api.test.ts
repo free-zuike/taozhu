@@ -266,6 +266,31 @@ describe('记单与欠款联动（核心业务）', () => {
     expect(list.sale_items.map((x) => x.quantity)).toEqual([1, 2, 3, 4]);
   });
 
+  it('批次排序键只取毫秒段：随机尾位数不主导（补录批次乱序根因回归）', async () => {
+    // 修复前：数字段 21 位（随机尾短）补零后排前于 23 位（随机尾长）——即使其毫秒更大=批次乱序根因；
+    // 修复后：排序键=数字段前 13 位毫秒（s/p=毫秒、si/pi=微秒），按真实创建序排
+    await call(env, 'POST', '/api/v1/items', token, { name: '土豆', prices: [{ unit: '斤', purchase_price: 1.0, sale_price: 2.0 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string }> };
+    const itemId = items.items[0].id;
+    await env.DB.prepare('INSERT INTO clients (id, name) VALUES (?, ?)').bind('ts-sort-client', '测试店').run();
+    const mk = async (saleId: string, qty: number) => {
+      await env.DB.prepare(
+        `INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, 'ts-sort-client', ?, '斤', ?, 2.5, 2.0, ?, '2026-09-06', '', 'u', 0)`,
+      ).bind(randomId(), saleId, itemId, qty, qty * 2.5).run();
+    };
+    // B：ms=1791596996010（小）随机尾 10 位 → 数字段 23 位（补 1 零）
+    // A：ms=1791602129434（大）随机尾 8 位 → 数字段 21 位（补 3 零，修复前按位数排最前）
+    const saleB = 's17915969960101177234391';
+    const saleA = 's179160212943448152247';
+    await mk(saleB, 1);
+    await mk(saleA, 2);
+    const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
+      sale_items: Array<{ quantity: number }>;
+    };
+    // 真实创建序（毫秒段）：B 早于 A → B 行(1)在前、A 行(2)在后；不按随机尾位数分组
+    expect(list.sale_items.map((x) => x.quantity)).toEqual([1, 2]);
+  });
+
   it('PATCH 重建明细：sort 沿用客户端值（不重置为数组索引）', async () => {
     const created = (await (await call(env, 'POST', '/api/v1/sales', token, {
       client_id: clientId, happened_at: '2026-09-06',

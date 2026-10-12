@@ -322,12 +322,17 @@ type SaleLine = {
 };
 type SaleGroup = { date: string; week: string; count: number; amount: number; lines: SaleLine[] };
 
-/// 单据/明细行 id → 数值比较键：明细行 id 形如 si{微秒}{随机}、单据 id 形如 s{毫秒}{随机}
-/// （s 前缀无 i；旧版只识别 si/pi 前缀 → 单据 id 回退字符串比较位数不同失真=批次乱序）；
-/// 统一提取数字段补前导零，字典序=数值序；与 App _rowIdNumeric 同口径
+/// 单据/明细行 id → 排序键：提取数字段中「时间戳段」（s/p=毫秒 13 位、si/pi=微秒 16 位）
+/// 补前导零，字典序=时间序；与 App _rowIdNumeric 同口径。随机尾位数不定（1-10 位）参与
+/// 比较会按位数分组主导字典序=批次乱序根因
 function idNum(id: string): string {
-  const m = /^(?:s|p|si|pi|sl|pl)?(\d+)/.exec(String(id || '').trim());
-  return m ? m[1].padStart(24, '0') : String(id || '');
+  const m = /^(s|p|si|pi|sl|pl)?(\d+)/.exec(String(id || '').trim());
+  if (!m) return String(id || '');
+  const prefix = m[1] || '';
+  const digits = m[2];
+  const tsLen = prefix.includes('i') ? 16 : 13;
+  const core = digits.length >= tsLen ? digits.slice(0, tsLen) : digits;
+  return core.padStart(24, '0');
 }
 const saleGroups = computed<SaleGroup[]>(() => {
   const q = searchQ.value.trim().toLowerCase();

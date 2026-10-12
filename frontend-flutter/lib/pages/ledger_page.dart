@@ -428,14 +428,19 @@ class _LedgerPageState extends State<LedgerPage> {
     }).toList();
   }
 
-  /// 单据/明细行 id → 数值比较键：明细行 id 形如 si{微秒}{随机}（si 前缀）、单据 id 形如 s{毫秒}{随机}
+  /// 单据/明细行 id → 数值比较键：明细行 id 形如 si{微秒}{随机}、单据 id 形如 s{毫秒}{随机}
   /// （s 前缀无 i——旧正则 `^(?:si|pi)?(\d+)$` 匹配不到 s 前缀 → 回退字符串比较，
-  /// 位数不同时字典序失真=同日同店多单批次乱序根因）；统一提取数字段补前导零后字典序=数值序
+  /// 位数不同时字典序失真=同日同店多单批次乱序根因）；统一提取数字段中「时间戳段」
+  /// （s/p=毫秒 13 位、si/pi=微秒 16 位）补前导零，字典序=时间序。随机尾位数不定（1-10 位）
+  /// 不能参与比较——完整数字段补零会按位数分组（21位<22位<23位）主导字典序=补录批次乱序根因
   static Comparable _rowIdNumeric(String id) {
-    final m = RegExp(r'^(?:s|p|si|pi|sl|pl)?(\d+)$').firstMatch(id.trim());
+    final m = RegExp(r'^(s|p|si|pi|sl|pl)?(\d+)$').firstMatch(id.trim());
     if (m != null) {
-      final digits = m.group(1)!;
-      return digits.padLeft(24, '0');
+      final prefix = m.group(1) ?? '';
+      final digits = m.group(2)!;
+      final tsLen = prefix.contains('i') ? 16 : 13;
+      final core = digits.length >= tsLen ? digits.substring(0, tsLen) : digits;
+      return core.padLeft(24, '0');
     }
     return id;
   }

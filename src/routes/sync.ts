@@ -194,9 +194,16 @@ syncRouter.get('/full', async (c) => {
   ).all();
   // 行级数组排序：订单(批次)优先 → 批内 sort（用户"第一批在最上方，批内=扫描实际顺序"）。
   // 不按 sort 全局交错（每单 sort 都 0 起，全局排会 A1,B1,C1… 交错）。与 /sales saleItemRows 同口径。
+  // 数字段 = 时间戳 + 随机尾（位数不定 1-10，参与比较会主导字典序=批次乱序根因）→ 只取时间戳段：
+  // s/p 前缀=毫秒 13 位、si/pi 前缀=微秒 16 位；补零后字典序=时间序
   const rowIdNum = (id: string | null | undefined): string => {
-    const m = /^(?:s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
-    return m ? m[1].padStart(24, '0') : String(id ?? '');
+    const m = /^(s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
+    if (!m) return String(id ?? '');
+    const prefix = m[1] || '';
+    const digits = m[2];
+    const tsLen = prefix.includes('i') ? 16 : 13;
+    const core = digits.length >= tsLen ? digits.slice(0, tsLen) : digits;
+    return core.padStart(24, '0');
   };
   saleItems.results.sort((a, b) => {
     const oa = rowIdNum((a as { sale_id?: string }).sale_id);
