@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../api.dart';
+import '../local_db.dart';
 import '../theme.dart';
 import '../utils/download.dart';
 import 'router.dart';
@@ -101,10 +102,20 @@ class _BackupPageState extends State<BackupPage> {
     }
   }
 
-  /// 全库备份导出：Web 直接下载文件；移动/桌面弹系统分享保存
+  /// 全库备份导出：**本地优先**——直接从本地库导出全量 JSON（本地库是数据主体，离线可用，
+  /// 不经服务器）；Web 直接下载文件，移动/桌面弹系统分享保存
   Future<void> _exportBackup() async {
     try {
-      final d = await Api.instance.get('/backup');
+      final data = <String, List<dynamic>>{};
+      for (final store in [
+        'clients', 'items', 'item_prices', 'categories', 'payment_accounts',
+        'price_groups', 'stocks', 'sale_items', 'purchase_items', 'payments', 'attachment_refs',
+      ]) {
+        try {
+          data[store] = await LocalDb.getAll(store);
+        } catch (_) {}
+      }
+      final d = {'exported_at': DateTime.now().toIso8601String(), 'data': data};
       final bytes = Uint8List.fromList(
           utf8.encode(const JsonEncoder.withIndent('  ').convert(d)));
       final name = 'taozhu-backup-${DateTime.now().toIso8601String().split('T').first}.json';

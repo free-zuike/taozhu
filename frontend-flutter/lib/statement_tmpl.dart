@@ -251,6 +251,12 @@ String _replaceVars(String text, TemplateData d) {
   }
   final daily = _dailyOf(d);
   final payTotal = d.payments.fold<double>(0, (a, p) => a + _roundVal(d, _num(p['amount']) + _num(p['waived'])));
+  // 旬段小计（用户"1-10 的总金额、11-20 的总金额"）：{1-10日合计}{11-20日合计}{21日以后合计}
+  final segSum = (int from, int to) {
+    var s = 0.0;
+    for (var i = from; i <= to && i <= daily.days.length; i++) s += daily.days[i - 1];
+    return _fmtMoney(s);
+  };
   var line = text
       .replaceAll('{店铺}', d.clientName)
       .replaceAll('{账期}', '${d.from} 至 ${d.to}')
@@ -262,7 +268,11 @@ String _replaceVars(String text, TemplateData d) {
       .replaceAll('{收款合计}', _fmtMoney(payTotal))
       .replaceAll('{期末欠款}', _fmtMoney(d.debtEnd))
       .replaceAll('{出货笔数}', '${d.sales.length}')
-      .replaceAll('{月合计}', _fmtMoney(daily.total));
+      .replaceAll('{月合计}', _fmtMoney(daily.total))
+      .replaceAll('{1-10日合计}', segSum(1, 10))
+      .replaceAll('{11-20日合计}', segSum(11, 20))
+      .replaceAll('{21-30日合计}', segSum(21, 30))
+      .replaceAll('{21日以后合计}', segSum(21, 31));
   for (var dd = 1; dd <= 31; dd++) {
     // 超出当月天数（如 9 月 30 天时 31 日）→ 替换为空串，杜绝字面 {31日销售额} 残留
     // （用户"9月直接显示文字"——31日替换不到；按实际月份不显示）
@@ -586,6 +596,10 @@ XlsCfg _defaultTemplate() => XlsCfg()
     // 日期格用 $d 构建时插值（{月} 是渲染时替换的模板变量；$d = 1日/2日… 固定数字，不是变量）
     for (var d = 1; d <= 31; d++)
       [GridCell('{月}月$d日', 'center'), GridCell('{$d日销售额}', 'right')],
+    // 旬段小计（用户"1-10 的总金额、11-20 的总金额"）：1-10 / 11-20 / 21 日以后
+    [GridCell('1-10 日合计', 'right', true), GridCell('{1-10日合计}', 'right', true)],
+    [GridCell('11-20 日合计', 'right', true), GridCell('{11-20日合计}', 'right', true)],
+    [GridCell('21 日以后合计', 'right', true), GridCell('{21日以后合计}', 'right', true)],
     [GridCell('合计', 'right', true, 'grey'), GridCell('{月合计}', 'right', true, 'grey')],
   ];
 
@@ -611,6 +625,17 @@ XlsCfg _multiColTemplate() => XlsCfg()
             GridCell('{${cc * 10 + r + 1}日销售额}', 'right'),
           ],
       ],
+    // 栏底小计（用户"1-10 的总金额、11-20 的总金额"）：每栏小计（1-10 / 11-20 / 21-30 / 31）
+    [
+      GridCell('小计', 'center', true),
+      GridCell('{1-10日合计}', 'right', true),
+      GridCell('', ''),
+      GridCell('{11-20日合计}', 'right', true),
+      GridCell('', ''),
+      GridCell('{21-30日合计}', 'right', true),
+      GridCell('', ''),
+      GridCell('{31日销售额}', 'right', true),
+    ],
     [
       GridCell('总计', 'center', true, 'grey'),
       for (var i = 0; i < 6; i++) GridCell('', ''),

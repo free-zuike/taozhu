@@ -102,13 +102,16 @@
       <view v-if="catRank.length === 0" class="empty">该区间暂无数据</view>
     </view>
 
-    <!-- 商品出货排行（对齐 App：商品+单位聚合数量降序，top 20；仅出货视图） -->
+    <!-- 商品出货排行（对齐 App：商品名 + 下边重量和单位 + 金额） -->
     <view v-if="kind === 'sale'" class="card">
       <view class="card-title">商品出货排行（数量 · 金额）</view>
       <view v-for="(it, i) in itemRank" :key="i" class="row">
         <text class="rank-no">{{ i + 1 }}</text>
-        <text class="name">{{ it.name }}<text class="meta"> {{ it.unit }}</text></text>
-        <text class="pay" style="color:var(--primary)">{{ it.quantity }}{{ it.unit }} · ¥{{ fmt(it.amount) }}</text>
+        <view class="left">
+          <text class="name">{{ it.name }}</text>
+          <text class="meta">{{ fmtQty(it.quantity) }}{{ it.unit }}</text>
+        </view>
+        <text class="pay" style="color:var(--primary)">¥{{ fmt(it.amount) }}</text>
       </view>
       <view v-if="itemRank.length === 0" class="empty">该区间暂无商品出货数据</view>
     </view>
@@ -167,6 +170,8 @@ const firstDate = ref('');
 const canSeeProfit = ref(true);
 // 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
 const fmt = (n: number | null | undefined) => fmtAmount(Number(n) || 0);
+// 数量去浮点长尾（46.80000000000001 → 46.8）：保留 2 位小数去尾零
+const fmtQty = (n: number) => String(Math.round((Number(n) || 0) * 100) / 100);
 const monthLabel = (m: string) => (m && m.length >= 7 ? `${Number(m.slice(5, 7))}月` : m);
 
 function dStr(dt: Date) {

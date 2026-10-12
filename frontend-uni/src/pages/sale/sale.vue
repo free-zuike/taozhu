@@ -59,8 +59,6 @@
           <text class="idx">{{ i + 1 }}</text>
           <input class="goods-field" :class="{ ph: !row.itemName }" v-model="row.itemName" placeholder="选商品（可输入或选择）" @blur="onItemInput(i)" />
           <text v-if="row.rowId" class="att-btn" @click.stop="showRowAttach(row)"><text class="mi">&#xe3f4;</text></text>
-          <text class="mv mi" :class="{ off: i === 0 }" @click="moveRow(i, -1)">&#xe5d8;</text>
-          <text class="mv mi" :class="{ off: i === rows.length - 1 }" @click="moveRow(i, 1)">&#xe5db;</text>
           <text class="del mi" @click="rows.splice(i, 1)">&#xe872;</text>
         </view>
         <input class="unit-field" :class="{ ph: !row.unit }" v-model="row.unit" placeholder="单位（可手动填写）" @blur="onUnitBlur(i)" />
@@ -81,6 +79,12 @@
         <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折合 ${row.countUnit} 数`" />
         <view class="amt-line">金额 <text class="amt">¥{{ rowAmount(row) }}</text></view>
         <input class="row-note" v-model="row.note" placeholder="行备注（选填）" />
+        <!-- 行上移/下移（批次内商品顺序调整；放行底部不挤商品名，保存按数组序重排 sort） -->
+        <view class="mv-row">
+          <text class="mv mi" :class="{ off: i === 0 }" @click="moveRow(i, -1)">&#xe5d8;</text>
+          <text class="mv mi" :class="{ off: i === rows.length - 1 }" @click="moveRow(i, 1)">&#xe5db;</text>
+          <text class="mv-tx">调整该行顺序</text>
+        </view>
       </view>
     </view>
     <input class="ipt-note" v-model="note" placeholder="整单备注（选填，如：赊账/送货单号…）" />
@@ -1025,6 +1029,8 @@ async function submit() {
 /* 行上移/下移（对齐 App IconButton：主色小图标；边界行置灰不可点） */
 .mv { color: var(--primary); font-size: 34rpx; padding: 6rpx; flex-shrink: 0; line-height: 1; }
 .mv.off { color: var(--text-sub); opacity: 0.35; }
+.mv-row { display: flex; align-items: center; margin-top: 10rpx; }
+.mv-tx { font-size: 22rpx; color: var(--text-sub); margin-left: 8rpx; }
 .unit-field { margin-top: 12rpx; width: 100%; box-sizing: border-box; background: var(--input-bg); border-radius: 10rpx; padding: 14rpx 18rpx; font-size: 26rpx; }
 .unit-field.ph { color: var(--text-sub); }
 .price-hint { margin-top: 8rpx; font-size: 22rpx; color: var(--primary); }

@@ -290,7 +290,7 @@ function csvField(v: unknown): string {
   return /[,"\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-/// 导出该店交易：拉该店出货+收款 → 组装 CSV → 复制剪贴板
+/// 导出该店交易：拉该店出货+收款 → 组装 CSV → **保存文件并分享到微信**（用户：复制没用，要文件）
 async function exportClientTrades(c: Client) {
   uni.showLoading({ title: '生成中…' });
   try {
@@ -311,6 +311,28 @@ async function exportClientTrades(c: Client) {
         '', '', '', '', csvField(p.amount), csvField(p.method)].join(','));
     }
     uni.hideLoading();
+    const fileName = `${c.name}-交易.csv`;
+    // #ifdef MP-WEIXIN
+    // 微信：存临时文件 → 分享文件到聊天（wx.shareFileMessage 基础库 2.16+）
+    try {
+      const fs = uni.getFileSystemManager();
+      const filePath = `${((uni as any).env?.USER_DATA_PATH || '')}/${fileName}`;
+      fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
+      (globalThis as any).wx?.shareFileMessage?.({
+        filePath,
+        fileName,
+        success: () => uni.showToast({ title: `已分享「${c.name}」交易文件`, icon: 'success' }),
+        fail: () => {
+          fs.saveFile({ tempFilePath: filePath, success: () => uni.showToast({ title: `已保存「${c.name}」交易 CSV`, icon: 'success' }), fail: () => uni.showToast({ title: '保存失败', icon: 'none' }) });
+        },
+      });
+      return;
+    } catch (e2) {
+      uni.showToast({ title: '导出失败', icon: 'none' });
+      return;
+    }
+    // #endif
+    // 其他端（H5/App）：复制剪贴板兜底
     uni.setClipboardData({
       data: lines.join('\n'),
       success: () => uni.showToast({ title: `「${c.name}」交易 CSV 已复制`, icon: 'success' }),
@@ -341,6 +363,28 @@ async function importClientTrades(c: Client) {
   });
   // #endif
   // #ifndef H5
+  // #ifdef MP-WEIXIN
+  // 微信：从聊天记录选文件（uni.chooseFile 微信端不可用=之前"导入点击没用"根因）
+  data = await new Promise<string>((resolve) => {
+    uni.chooseMessageFile({
+      count: 1,
+      type: 'file',
+      extension: ['csv', 'txt', 'json'],
+      success: (res: any) => {
+        const fp = res.tempFiles?.[0]?.path as string | undefined;
+        if (!fp) { resolve(''); return; }
+        uni.getFileSystemManager().readFile({
+          filePath: fp,
+          encoding: 'utf8',
+          success: (r: any) => resolve(String(r.data || '')),
+          fail: () => resolve(''),
+        });
+      },
+      fail: () => resolve(''),
+    });
+  });
+  // #endif
+  // #ifndef MP-WEIXIN
   data = await new Promise<string>((resolve) => {
     uni.chooseFile({
       count: 1,
@@ -359,6 +403,7 @@ async function importClientTrades(c: Client) {
       fail: () => resolve(''),
     });
   });
+  // #endif
   // #endif
   if (!data.trim()) {
     uni.showToast({ title: '未选择文件', icon: 'none' });

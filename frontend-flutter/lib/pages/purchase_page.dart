@@ -15,6 +15,7 @@ import '../local_freq.dart';
 import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
+import '../utils/ai_local.dart';
 import '../utils/money.dart';
 import '../widgets/date_field.dart';
 import '../widgets/center_sheet.dart';
@@ -186,16 +187,26 @@ class _PurchasePageState extends State<PurchasePage> {
   Future<void> _parseBytes(Uint8List bytes, String mime) async {
     final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
     toast(context, '识别中…');
-    final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
-    final rowIds = _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+    // App 本地直连 AI 服务商（用户要求：参考项目本地直连，不经服务器代理）；Web 保持服务器（CORS 限制）
     if (kIsWeb) {
-      setState(() => _pendingPhoto = bytes); // Web 无本地库：保存成功后直传（多批组含 bytes）
+      final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
+      final rowIds = _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+      setState(() => _pendingPhoto = bytes);
       _pendingGroups.add({'file': '${md5.convert(bytes).toString()}.jpg', 'rowIds': rowIds, 'bytes': bytes});
-    } else {
-      await _attachRecognized(bytes); // App 本地：立即挂单据级，取消时 dispose 清理
+      toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
+      return;
     }
+    final inv = await aiParsePhoto(bytes, mime, purpose: 'purchase');
+    final rowIds = _fillFromDrafts(_draftsToMaps(inv), inv.date);
+    await _attachRecognized(bytes);
     toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
   }
+
+  /// AI 草稿（本地直连 AiInvoice）→ 填行 Map 列表（对齐服务器返回形态）
+  List<Map<String, dynamic>> _draftsToMaps(AiInvoice inv) => [
+        for (final d in inv.items)
+          {'name': d.name, 'unit': d.unit, 'quantity': d.quantity, 'price': d.price},
+      ];
 
   /// 识别原图立即挂为本单凭证（App 本地优先）：写公共目录副本 + **挂单据级一份**
   /// （entity=purchase/{_purchaseId}，对齐 Web 直传与"单据级一份全商品行共享可见"——
@@ -523,64 +534,6 @@ class _PurchasePageState extends State<PurchasePage> {
     setState(() {});
   }
 
-  /// 商品选择弹层：搜索 + 列表选择（也可直接输入新名称走「新增商品」）
-  Future<void> _pickItem(_PRow row) async {
-    final searchCtrl = TextEditingController();
-    final picked = await showCenterSheet<String>(
-      context: context,
-      maxHeightFactor: 0.8,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheet) {
-          final q = searchCtrl.text.trim().toLowerCase();
-          final list = q.isEmpty
-              ? _items
-              : _items.where((x) => '${x['name']}'.toLowerCase().contains(q)).toList();
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-                child: TextField(
-                  controller: searchCtrl,
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.search, size: 20),
-                    hintText: '搜索商品名称',
-                    isDense: true,
-                  ),
-                  onChanged: (_) => setSheet(() {}),
-                ),
-              ),
-              Flexible(
-                child: list.isEmpty
-                    ? Center(child: Text('没有匹配商品，可直接在上方输入新名称', style: TextStyle(color: Theme.of(ctx).extension<TaozhuColors>()!.textSub)))
-                    : ListView(
-                        shrinkWrap: true,
-                        children: [
-                          for (final it in list)
-                            ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.label_outline, size: 18, color: Color(0xFF409EFF)),
-                              title: Text('${it['name']}'),
-                              subtitle: '${it['category'] ?? ''}'.isNotEmpty
-                                  ? Text('${it['category']}', style: const TextStyle(fontSize: 11))
-                                  : null,
-                              onTap: () => Navigator.pop(ctx, '${it['id']}'),
-                            ),
-                        ],
-                      ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-    if (picked == null) return;
-    final item = _items.where((x) => '${x['id']}' == picked).firstOrNull;
-    if (item != null) _selectItem(row, item);
-    setState(() {});
-  }
-
   /// 创建商品：Web 直连 POST /items；原生本地生成 id 落库+入队（离线可用，队列推送跨端生效）
   /// 新建商品入库：category=分类名称（冗余快照，商品行/列表直接显示）、categoryId=分类 id
   /// （后端按 id 关联分类；两者都写，避免商品页/交易行把 id 当名称显示）
@@ -820,8 +773,14 @@ class _PurchasePageState extends State<PurchasePage> {
     if (text == null || text.isEmpty) return;
     toast(context, '识别中…');
     try {
-      final d = await Api.instance.post('/ai/parse-text?purpose=purchase', {'text': text});
-      _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+      // App 本地直连（用户要求）；Web 保持服务器（CORS 限制）
+      if (kIsWeb) {
+        final d = await Api.instance.post('/ai/parse-text?purpose=purchase', {'text': text});
+        _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+      } else {
+        final inv = await aiParseText(text, purpose: 'purchase');
+        _fillFromDrafts(_draftsToMaps(inv), inv.date);
+      }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -836,10 +795,16 @@ class _PurchasePageState extends State<PurchasePage> {
       _VoiceRecorder.takeContext = null;
       if (audio == null) return;
       toast(context, '识别中…');
-      final d = await Api.instance.uploadAudio('/ai/parse-voice?purpose=purchase', audio.bytes, audio.name, audio.mime);
-      final text = '${d['text'] ?? ''}';
-      if (text.isNotEmpty) toast(context, '语音识别：$text');
-      _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+      // App 本地直连（用户要求）；Web 保持服务器（CORS 限制）
+      if (kIsWeb) {
+        final d = await Api.instance.uploadAudio('/ai/parse-voice?purpose=purchase', audio.bytes, audio.name, audio.mime);
+        final text = '${d['text'] ?? ''}';
+        if (text.isNotEmpty) toast(context, '语音识别：$text');
+        _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+      } else {
+        final inv = await aiParseVoice(audio.bytes, audio.mime, purpose: 'purchase');
+        _fillFromDrafts(_draftsToMaps(inv), inv.date);
+      }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -1610,11 +1575,6 @@ class _PurchasePageState extends State<PurchasePage> {
                 ),
               ),
               const SizedBox(width: 4),
-              IconButton(
-                tooltip: '选择商品',
-                icon: const Icon(Icons.search, size: 22, color: Color(0xFF409EFF)),
-                onPressed: () => _pickItem(row),
-              ),
               // 行级附件：该条商品独立凭证（仅编辑已有明细行；新建未提交行无行 id）
               if (row.rowId.isNotEmpty) ...[
                 const SizedBox(width: 4),
@@ -1630,25 +1590,7 @@ class _PurchasePageState extends State<PurchasePage> {
                           : [row.origPurchaseId.isNotEmpty ? row.origPurchaseId : _purchaseId]),
                 ),
               ],
-              const SizedBox(width: 4),
-              // 行上移/下移（对齐 App sale：批次内商品顺序可直接挪位置，保存按数组序重排 sort）
-              IconButton(
-                tooltip: '上移',
-                icon: Icon(Icons.keyboard_arrow_up, size: 20, color: c.textSub),
-                onPressed: i > 0 ? () => setState(() {
-                  final r = _rows.removeAt(i);
-                  _rows.insert(i - 1, r);
-                }) : null,
-              ),
-              IconButton(
-                tooltip: '下移',
-                icon: Icon(Icons.keyboard_arrow_down, size: 20, color: c.textSub),
-                onPressed: i < _rows.length - 1 ? () => setState(() {
-                  final r = _rows.removeAt(i);
-                  _rows.insert(i + 1, r);
-                }) : null,
-              ),
-              const SizedBox(width: 4),
+              // 删除：头部只留 序号+商品名+附件+删除，商品名不被图标挤没
               IconButton(
                 tooltip: '删除此商品',
                 icon: Icon(Icons.delete_outline, color: c.danger),
@@ -1735,6 +1677,29 @@ class _PurchasePageState extends State<PurchasePage> {
                 },
               ),
             ),
+          // 行上移/下移（批次内商品顺序调整；放行底部不挤商品名，保存按数组序重排 sort）
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              IconButton(
+                tooltip: '上移',
+                icon: Icon(Icons.keyboard_arrow_up, size: 18, color: c.textSub),
+                onPressed: i > 0 ? () => setState(() {
+                  final r = _rows.removeAt(i);
+                  _rows.insert(i - 1, r);
+                }) : null,
+              ),
+              IconButton(
+                tooltip: '下移',
+                icon: Icon(Icons.keyboard_arrow_down, size: 18, color: c.textSub),
+                onPressed: i < _rows.length - 1 ? () => setState(() {
+                  final r = _rows.removeAt(i);
+                  _rows.insert(i + 1, r);
+                }) : null,
+              ),
+              Text('调整该行顺序', style: TextStyle(fontSize: 11, color: c.textSub)),
+            ],
+          ),
         ],
       ),
     ));

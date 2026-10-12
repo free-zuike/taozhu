@@ -27,9 +27,9 @@
       <button class="btn-save" :disabled="loading" @click="load">{{ loading ? '生成中…' : '生成对账单' }}</button>
 
       <view v-if="loaded">
-        <!-- 对账单表格（对齐 App 标准模板：标题 + 按日分组明细 + 每日小计） -->
+        <!-- 对账单表格（对齐 App 标准模板：标题「店铺 X月份账单」+ 按日分组明细 + 旬段小计） -->
         <view class="card stmt-tbl">
-          <view class="t-title">{{ clientName }} 对账单</view>
+          <view class="t-title">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
           <view class="t-sub">{{ from }} 至 {{ to }}</view>
           <view class="t-head">
             <text class="c-date">日期</text>
@@ -47,6 +47,10 @@
               <text class="c-amt">{{ l.kind === 'pay' ? '−¥' + fmtAmount(l.amount) : '¥' + fmtAmount(l.amount) }}</text>
             </view>
           </view>
+          <!-- 旬段小计（对齐 App：1-10 / 11-20 / 21 日以后） -->
+          <view class="t-total"><text>1-10 日合计</text><text>¥{{ fmtAmount(segTotal(1, 10)) }}</text></view>
+          <view class="t-total"><text>11-20 日合计</text><text>¥{{ fmtAmount(segTotal(11, 20)) }}</text></view>
+          <view class="t-total"><text>21 日以后合计</text><text>¥{{ fmtAmount(segTotal(21, 31)) }}</text></view>
           <view class="t-total"><text>出货合计</text><text>¥{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
           <view class="t-total"><text>收款合计</text><text>¥{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
           <view class="t-total"><text>期末欠款</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ fmtAmount(debt) }}</text></view>
@@ -143,6 +147,15 @@ const dayGroups = computed(() => {
   }
   return list;
 });
+
+/// 旬段小计（1-10 / 11-20 / 21 日以后；对齐 App 旬段合计）
+const segTotal = (from: number, to: number) =>
+  dayGroups.value
+    .filter((g) => {
+      const d = Number(g.day.slice(8, 10));
+      return d >= from && d <= to;
+    })
+    .reduce((s, g) => s + g.total, 0);
 
 onShow(async () => {
   onWs('*', load);

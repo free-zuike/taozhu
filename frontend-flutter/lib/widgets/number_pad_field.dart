@@ -62,7 +62,7 @@ class NumberPadField extends StatelessWidget {
             labelText: label,
             hintText: hintText,
             helperText: helperText,
-            suffixIcon: const Icon(Icons.pin_outlined, size: 16),
+            // 无后缀图标（此前 pin_outlined 占位挤压输入框，进价/售价/折合显示不全——用户要求去掉）
           ),
     );
   }

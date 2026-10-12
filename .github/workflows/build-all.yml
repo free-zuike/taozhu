@@ -473,11 +473,10 @@ jobs:
           echo "已取消整个 workflow（本版本未创建 release，无残留）"
 
   # ── macOS ──────────────────────────────────────────────────────────────────────────
-  # 仅手动触发（workflow_dispatch）：push 发版不含 macOS——macOS runner 高峰排队/取消
-  # 会触发 GitHub 对整个 run 的取消（无法用 needs 规避），用户定稿"等有机器再单独构建"。
+  # 总是构建（用户定稿：macOS runner 高峰排队/慢也一直等，工作流不停止、不跳过——
+  # 跳过会造成该版本 macOS 产物缺失；发布等 macOS 完成才出 release）
   macos:
     needs: [test, analyze]
-    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-13   # Intel runner：容量更足、排队少（macos-latest=arm64 高峰常被取消）
     name: macOS
     steps:
@@ -535,8 +534,7 @@ jobs:
           path: /tmp/taozhu-macos-*.zip
           retention-days: 1
 
-      # macOS 独立构建：失败/取消不再连坐整个 run（用户定稿：等有机器/排队能过时再单独补发，
-      # 不阻塞 Android/小程序/Web 发版）。不再取消整个 workflow。
+      # macOS 总是构建（用户定稿：排队/慢也一直等，工作流不停止、不跳过，否则版本缺 macOS 产物）
 
 
       - name: Version guard（防覆盖已发布版本：同名 tag 已存在且非当前提交→失败）
@@ -700,11 +698,11 @@ jobs:
           gh run cancel "${{ github.run_id }}" --repo "$GITHUB_REPOSITORY" || true
           echo "已取消整个 workflow（本版本未创建 release，无残留）"
 
-  # ── 统一发布：apk/linux/windows/小程序成功后才创建 release + 一次上传所有产物 ──
-  # macOS 独立构建不参与（用户定稿：等有机器再单独补发，不阻塞主发版）
+  # ── 统一发布：全部平台（含 macOS）成功后才创建 release + 一次上传所有产物 ──
+  # macOS 总是构建并等待（用户定稿：排队/慢也一直等，跳过会造成版本缺 macOS 产物）
   publish:
-    needs: [apk, linux, windows, miniprogram]
-    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.miniprogram.result == 'success')) }}
+    needs: [apk, linux, windows, miniprogram, macos]
+    if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.miniprogram.result == 'success' && needs.macos.result == 'success')) }}
     runs-on: ubuntu-latest
     name: 统一发布（release+全部资产）
     steps:

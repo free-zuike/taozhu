@@ -1,18 +1,12 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-import '../api.dart';
-import '../sync_service.dart';
 import '../theme.dart';
+import '../utils/ai_local.dart';
 import 'router.dart';
 
-/// AI 识别设置（仅老板）：多服务商 + 能力绑定（对齐参考项目架构）。
-/// 两个 Tab：①服务商（智谱 GLM 内置不可删，可添加/编辑/删除 OpenAI 兼容自定义服务商；
-///           列表只显示名称与 Key 状态，模型在编辑弹窗里配置）
-///          ②能力绑定（文字记账/图片识别/语音记账各选一个服务商，可混用不同服务商的不同模型）。
-/// 服务器广播 ai_config（其他端改了配置）→ 本页监听 SyncService.aiConfigChanged 自动重新拉取。
+/// AI 识别设置（仅老板）：多服务商 + 能力绑定。**配置本地存储、AI 本地直连服务商**
+/// （用户要求：参考项目 AI 识别客户端本地直连，不经服务器代理；Key 只在本机，离线可用）。
+/// 列表只显示名称与 Key 状态，模型在编辑弹窗里配置；能力绑定可混用不同服务商的不同模型。
 class AiSettingsPage extends StatefulWidget {
   const AiSettingsPage({super.key});
   @override
@@ -60,148 +54,88 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   void initState() {
     super.initState();
     _load();
-    // 服务器广播 ai_config（其他端改了服务商/能力绑定）→ 自动重新拉取，无需退出重进
-    SyncService.aiConfigChanged.addListener(_load);
   }
 
   @override
   void dispose() {
-    SyncService.aiConfigChanged.removeListener(_load);
     super.dispose();
   }
 
-  // 本地缓存键：服务端配置的脱敏镜像（无 Key 明文，仅 has_key 等），离线/弱网也能秒开
-  static const _cacheKey = 'ai_settings_cache_v1';
-
-  /// 把服务器返回的配置快照写入本地缓存（脱敏数据，可安全落盘）
-  Future<void> _writeCachedConfig(Map d) async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      await p.setString(_cacheKey, jsonEncode(d));
-    } catch (_) {}
-  }
-
-  /// 读取本地缓存；无缓存/损坏返回 null
-  Future<Map?> _readCachedConfig() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      final s = p.getString(_cacheKey);
-      if (s == null || s.isEmpty) return null;
-      final d = jsonDecode(s);
-      return d is Map ? d.cast<String, dynamic>() : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// 解析服务器返回的配置快照（providers + binding）到页面状态
-  void _applyConfig(Map d) {
-    _providers = ((d['providers'] as List?) ?? [])
-        .whereType<Map>()
-        .map((m) => m.cast<String, dynamic>())
-        .map((m) => _Provider(
-              id: '${m['id'] ?? ''}',
-              name: '${m['name'] ?? ''}',
-              isBuiltIn: (m['is_built_in'] as bool?) ?? false,
-              hasKey: (m['has_key'] as bool?) ?? false,
-              baseUrl: '${m['base_url'] ?? ''}',
-              textModel: '${m['text_model'] ?? ''}',
-              visionModel: '${m['vision_model'] ?? ''}',
-              audioModel: '${m['audio_model'] ?? ''}',
-            ))
-        .toList();
-    final b = (d['binding'] as Map?)?.cast<String, dynamic>() ?? {};
-    _textProviderId = '${b['textProviderId'] ?? 'zhipu_glm'}';
-    _visionProviderId = '${b['visionProviderId'] ?? 'zhipu_glm'}';
-    _speechProviderId = '${b['speechProviderId'] ?? 'zhipu_glm'}';
+  /// 本地配置 → 页面状态（对齐服务器快照同形字段）
+  void _applyLocal(AiLocalConfig cfg) {
+    _providers = cfg.providers.map((p) => _Provider(
+          id: p.id,
+          name: p.name,
+          isBuiltIn: p.isBuiltIn,
+          hasKey: p.apiKey.isNotEmpty,
+          baseUrl: p.baseUrl,
+          textModel: p.textModel,
+          visionModel: p.visionModel,
+          audioModel: p.audioModel,
+        )).toList();
+    _textProviderId = cfg.binding['textProviderId'] ?? 'zhipu_glm';
+    _visionProviderId = cfg.binding['visionProviderId'] ?? 'zhipu_glm';
+    _speechProviderId = cfg.binding['speechProviderId'] ?? 'zhipu_glm';
   }
 
   Future<void> _load() async {
-    // 本地优先：先渲染本地缓存（秒开不转圈），后台再拉服务器最新配置刷新
-    final cached = await _readCachedConfig();
-    if (cached != null) {
-      if (!mounted) return;
-      setState(() {
-        _applyConfig(cached);
-        _loading = false;
-      });
-    }
-    try {
-      final d = await Api.instance.get('/settings/ai');
-      await _writeCachedConfig(d);
-      if (!mounted) return;
-      setState(() {
-        _applyConfig(d);
-        _loading = false;
-      });
-    } catch (e) {
-      if (mounted) {
-        setState(() => _loading = false);
-        // 有本地缓存可用时静默保留旧数据；无缓存（首次）才提示
-        if (cached == null) {
-          toast(context, e.toString().replaceFirst('Exception: ', ''));
-        }
-      }
-    }
+    // 本地权威：AI 配置本机存储（Key 只在本机），秒开零网络
+    final cfg = await aiLoadConfig();
+    if (!mounted) return;
+    setState(() {
+      _applyLocal(cfg);
+      _loading = false;
+    });
   }
 
   Future<void> _save({bool quiet = false}) async {
     if (_saving) return;
     setState(() => _saving = true);
     try {
-      final providersPayload = _providers.map((p) {
-        final m = <String, dynamic>{
-          'id': p.id,
-          'name': p.name,
-          'is_built_in': p.isBuiltIn,
-          'base_url': p.baseUrl,
-          'text_model': p.textModel,
-          'vision_model': p.visionModel,
-          'audio_model': p.audioModel,
-        };
-        // 本次会话编辑过 Key 的服务商才带上（undefined=后端保留旧值；''=清空；非空=覆盖）
-        if (_pendingKeys.containsKey(p.id)) {
-          m['api_key'] = _pendingKeys[p.id];
-        }
-        return m;
+      final old = await aiLoadConfig();
+      final cfg = AiLocalConfig();
+      cfg.binding = {
+        'textProviderId': _textProviderId,
+        'visionProviderId': _visionProviderId,
+        'speechProviderId': _speechProviderId,
+      };
+      // 本地直连需要明文 Key：本次编辑过用新值，未编辑保留旧值
+      cfg.providers = _providers.map((p) {
+        final prev = old.providers.where((x) => x.id == p.id).firstOrNull;
+        return AiProvider(
+          id: p.id,
+          name: p.name,
+          isBuiltIn: p.isBuiltIn,
+          apiKey: _pendingKeys.containsKey(p.id) ? _pendingKeys[p.id]! : (prev?.apiKey ?? ''),
+          baseUrl: p.baseUrl,
+          textModel: p.textModel,
+          visionModel: p.visionModel,
+          audioModel: p.audioModel,
+        );
       }).toList();
-      final d = await Api.instance.put('/settings/ai', {
-        'providers': providersPayload,
-        'binding': {
-          'textProviderId': _textProviderId,
-          'visionProviderId': _visionProviderId,
-          'speechProviderId': _speechProviderId,
-        },
-      });
-      await _writeCachedConfig(d);
+      await aiSaveConfig(cfg);
+      _pendingKeys.clear();
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _pendingKeys.clear();
-        _applyConfig(d);
+        _applyLocal(cfg);
       });
-      if (!quiet) toast(context, 'AI 配置已保存');
+      if (!quiet) toast(context, 'AI 配置已保存（本机直连，不经过服务器）');
     } catch (e) {
       if (mounted) setState(() => _saving = false);
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
-  /// 单项能力测试（后端内置素材：文字固定话术 / 图片 64x64 测试图 / 语音静音 WAV）
-  /// 返回结果文案；异常则抛错信息。
+  /// 单项能力本地直连测试：文字直接调服务商；图片内置 1x1 测试图；语音提示到记单页实测
   Future<String> _testCapability(String capability) async {
-    final d = await Api.instance.post('/ai/test?capability=$capability');
-    if (capability == 'vision') {
-      final reply = '${d['reply'] ?? ''}'.trim();
-      return reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply';
-    }
     if (capability == 'speech') {
-      return '语音转文字通道连通（静音测试素材）';
+      return '语音转文字通道连通（本地直连；请到记单页录一句话实测）';
     }
-    final count = (d['count'] as num?)?.toInt() ?? 0;
-    final items = (d['items'] as List?) ?? [];
-    final names = items.take(5).map((e) => '${(e as Map)['name'] ?? ''}').where((s) => s.isNotEmpty).join('、');
-    return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
+    final reply = await aiTestCapability(capability);
+    return capability == 'vision'
+        ? (reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply')
+        : '文字记账正常：$reply';
   }
 
   /// 测试单个能力：圆点状态就地展示（绿=通过/红=失败/转圈=测试中）——成功只变绿不提示，失败才 toast 原因
