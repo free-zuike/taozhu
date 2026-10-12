@@ -242,8 +242,9 @@ describe('记单与欠款联动（核心业务）', () => {
   });
 
   it('行级数组批次序：订单 id 数字段（s{毫秒}{随机}）优先 → 批内 sort，批次整体不交错', async () => {
-    // 用 App 风格单据 id（s{毫秒}{随机}）直接造两单同日各 2 行——服务端真实 id 是 hex，
-    // 但 App 上传/同步链路保留客户端 id（s 前缀），行级数组排序须按 App id 数字段排
+    // 用 App 风格单据 id（s{毫秒}{随机}）直接造两单同日各 2 行——App 上传/同步链路保留客户端 id（s 前缀），
+    // 服务端 POST /sales 自 0.17.388 起同样生成 s 前缀（此前 randomId hex 无时间戳=批次乱序根因），
+    // 行级数组排序须按订单 id 数字段排（批次创建序）
     await call(env, 'POST', '/api/v1/items', token, { name: '土豆', prices: [{ unit: '斤', purchase_price: 1.0, sale_price: 2.0 }] });
     const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string }> };
     const itemId = items.items[0].id;
@@ -314,6 +315,60 @@ describe('记单与欠款联动（核心业务）', () => {
     // 每单内按创建序重排：A 单 1,2,3；B 单 4,5,6；批次（单）顺序在前
     expect(rows.results.map((r) => r.quantity)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(rows.results.map((r) => r.sort)).toEqual([0, 1, 2, 0, 1, 2]);
+  });
+
+  it('POST /sales 批次 id 为 s{毫秒}{随机} 时间戳格式（与客户端录入同格式，批次创建序可还原）', async () => {
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clientId, happened_at: '2026-09-06',
+      items: [{ price_id: priceId, quantity: 1 }],
+    });
+    expect(sale.status).toBe(201);
+    const d = (await sale.json()) as { id: string };
+    // s 前缀 + 纯数字（毫秒 13 位 + 随机 1-10 位）：客户端 _rowIdNumeric 数字段提取即可还原创建序
+    expect(d.id).toMatch(/^s\d{14,}$/);
+  });
+
+  it('fix-id：hex 批次 id 重写为 s{创建时间}{随机}，级联附件引用并记变更流（批次创建序还原）', async () => {
+    await call(env, 'POST', '/api/v1/items', token, { name: '土豆', prices: [{ unit: '斤', purchase_price: 1.0, sale_price: 2.0 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as { items: Array<{ id: string }> };
+    const itemId = items.items[0].id;
+    await env.DB.prepare('INSERT INTO clients (id, name) VALUES (?, ?)').bind('fixid-client', '测试店').run();
+    const hexA = 'aaaa-fixid-a'; // 含字母=非标准格式（模拟旧服务端 randomId hex）
+    const hexB = 'bbbb-fixid-b';
+    const mk = async (saleId: string, qty: number, ts: string) => {
+      await env.DB.prepare(
+        `INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by, sort, created_at)
+         VALUES (?, ?, 'fixid-client', ?, '斤', ?, 2.5, 2.0, ?, '2026-09-06', '', 'u', 0, ?)`,
+      ).bind(randomId(), saleId, itemId, qty, qty * 2.5, ts).run();
+    };
+    await mk(hexA, 1, '2026-09-06T00:00:00.001Z');
+    await mk(hexB, 2, '2026-09-06T00:00:01.001Z');
+    // 单据级附件引用：hexA 单挂一张图（引用主键 id = entity:id:key）
+    await env.DB.prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', ?, ?, ?)",
+    ).bind(`sale:${hexA}:abc.jpg`, hexA, 'abc.jpg', 'abc').run();
+    const fix = await call(env, 'POST', '/api/v1/sales/fix-id', token);
+    expect(fix.status).toBe(200);
+    const rows = await env.DB.prepare(
+      'SELECT sale_id, quantity FROM sale_items WHERE client_id = ? ORDER BY created_at',
+    ).bind('fixid-client').all<{ sale_id: string; quantity: number }>();
+    expect(rows.results.length).toBe(2);
+    // 全部重写为标准格式；创建早的批次毫秒段小（批次序=创建序还原）
+    expect(rows.results.every((r) => /^s\d+$/.test(r.sale_id))).toBe(true);
+    const msOf = (id: string) => Number(id.slice(1, 14)); // 前 13 位=创建毫秒（随机尾位数不定不参与）
+    expect(msOf(rows.results[0].sale_id)).toBeLessThan(msOf(rows.results[1].sale_id));
+    // 附件引用级联：entity_id 指向新 id，引用主键同步更新
+    const refs = await env.DB.prepare(
+      "SELECT id, entity_id FROM attachment_refs WHERE entity = 'sale'",
+    ).all<{ id: string; entity_id: string }>();
+    expect(refs.results.length).toBe(1);
+    expect(refs.results[0].entity_id).toBe(rows.results.find((r) => r.quantity === 1)?.sale_id);
+    expect(refs.results[0].id).toContain(refs.results[0].entity_id);
+    // 变更流：新单 id 的 sale upsert 变更已记录（客户端 pull 按快照对齐行级 store）
+    const changes = await env.DB.prepare(
+      "SELECT entity_sync_id FROM sync_changes WHERE entity_type = 'sale' AND entity_sync_id IN (?, ?)",
+    ).bind(rows.results[0].sale_id, rows.results[1].sale_id).all<{ entity_sync_id: string }>();
+    expect(changes.results.length).toBe(2);
   });
 });
 

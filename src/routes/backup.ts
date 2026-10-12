@@ -16,7 +16,7 @@ backupRouter.use('*', authMiddleware(), adminOnly());
  */
 const EXCLUDED_TABLES = new Set(['login_attempts', 'schema_meta', 'sync_changes', 'audit_logs']);
 
-/// 动态枚举全部业务表（参考 beecount：sqlite_master 全量 - 内部表），不再硬编码——
+/// 动态枚举全部业务表（参考 sqlite_master 全量 - 内部表），不再硬编码——
 /// 新增表（价格组/分享/账号/设备…）自动纳入备份，杜绝"备份不全"
 async function listBusinessTables(db: D1Database): Promise<string[]> {
   const r = await db.prepare(
@@ -239,7 +239,7 @@ export async function importBackupData(
 
 /// 立即执行一次备份（手动 POST /backup/now 与定时 scheduledBackup 共用）：
 /// 导出全库 → 走 createStorage 工厂写入存储端（STORAGE_DRIVER 可换备份端，不写死 R2）→ 清理超保留份数。
-/// 返回带状态（对齐 beecount BackupResult：succeeded=全部成功 / partial=部分失败 / failed=整体失败）+ 详情消息，
+/// 返回带状态（succeeded=全部成功 / partial=部分失败 / failed=整体失败）+ 详情消息，
 /// 前端据此明确展示"成功/部分成功（哪几项失败）/失败"，不再只有转圈或 503。
 export async function performBackup(env: Env, username?: string): Promise<{
   key: string; size: number; status: 'succeeded' | 'partial' | 'failed'; message: string;

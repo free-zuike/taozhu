@@ -427,14 +427,19 @@ class _MyPageState extends State<MyPage> {
     return widgets;
   }
 
-  /// 修复历史批次顺序（仅老板）：旧版本保存时服务端用数组索引覆盖了客户端 sort，
-  /// 导致批次内顺序错乱。按创建时间重排每单 sort 后，全量同步即可恢复。
+  /// 修复历史批次顺序（仅老板）：
+  /// ① fix-sort：旧版本保存时服务端用数组索引覆盖了客户端 sort，导致批次内顺序错乱，按创建时间重排每单 sort；
+  /// ② fix-id：小程序/Web 保存走的 POST /sales 服务端生成 32 位 hex 单 id（无时间戳），客户端按
+  /// 「订单 id 数字段」还原批次创建序时提取失败 → 与 App 录入批次混排乱序，按创建时间重写为 s/p{毫秒}{随机}。
   Future<void> _fixSort() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('修复历史批次顺序'),
-        content: const Text('按创建时间重新排定每笔出货/进货的批次内顺序（0,1,2…），修复旧版本保存时顺序错乱的问题。\n\n执行后请在同步页做一次全量同步，列表顺序即可恢复。\n\n确认执行？'),
+        content: const Text(
+            '① 按创建时间重新排定每笔出货/进货的批次内顺序（0,1,2…），修复旧版本保存时顺序错乱；\n'
+            '② 把小程序/Web 创建的批次 id 统一为时间戳格式（恢复批次创建顺序，与 App 录入批次混排不乱）。\n\n'
+            '执行后请在同步页做一次全量同步，列表顺序即可恢复。\n\n确认执行？'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(
@@ -449,6 +454,8 @@ class _MyPageState extends State<MyPage> {
     try {
       await Api.instance.post('/sales/fix-sort', {});
       await Api.instance.post('/purchases/fix-sort', {});
+      await Api.instance.post('/sales/fix-id', {});
+      await Api.instance.post('/purchases/fix-id', {});
       toast(context, '已修复，请做一次全量同步');
       SyncService.notifyStockChanged();
     } catch (e) {

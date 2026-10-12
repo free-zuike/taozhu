@@ -1,6 +1,6 @@
 /** 出货单（送店铺记账）：sales + sale_items，进价快照计毛利 */
 import { Hono } from 'hono';
-import { randomId } from '../lib/password';
+import { orderIdWith, randomId } from '../lib/password';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
 import { stockDelta, stockDeltaFor } from '../lib/stock';
@@ -67,7 +67,8 @@ salesRouter.post('/', async (c) => {
     ).bind(...chunk).all<{ id: string; item_id: string; unit: string; purchase_price: number; sale_price: number; active: number; per?: number | null; count_unit?: string | null }>().then((r) => r.results));
 
   const priceMap = new Map(priceRows.map((p) => [p.id, p]));
-  const saleId = randomId();
+  // 批次 id 与客户端录入同格式（s{毫秒}{随机}）：内嵌创建时间，客户端按数字段还原批次创建序
+  const saleId = orderIdWith('s');
   const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
   const note = body?.note?.trim() ?? '';
   const saleItemIds: string[] = [];
@@ -514,6 +515,59 @@ salesRouter.post('/fix-sort', adminOnly(), async (c) => {
     detail: `修复出货批内顺序：${orders} 单 ${lines} 行（按创建序重排 sort）`,
   });
   return c.json({ ok: true, orders, lines });
+});
+
+// POST /sales/fix-id — 存量数据批次 id 统一为时间戳格式：旧版服务端（小程序/Web 保存走 POST /sales）
+// 用 randomId() 生成 32 位 hex 单 id（无时间戳），客户端按"订单 id 数字段"还原批次创建序时提取失败
+// → hex 批次与 App 录入批次（s{毫秒}{随机}）混排乱序。此处按每单最早行 created_at 重写为新格式，
+// 级联附件引用（entity_id + 引用主键 id = entity:id:key），并记变更流（客户端增量 pull 自动收敛
+// 行级 store 与本地附件引用）。仅老板；执行后客户端做一次全量同步最稳。
+salesRouter.post('/fix-id', adminOnly(), async (c) => {
+  const user = c.get('user');
+  const rows = await c.env.DB.prepare(
+    'SELECT sale_id, MIN(created_at) AS first_ts FROM sale_items GROUP BY sale_id',
+  ).all<{ sale_id: string; first_ts: string | null }>();
+  // 标准格式 = s/p 前缀 + 纯数字（客户端录入/新 POST 均如此）；hex（含字母）即存量待修
+  const targets = rows.results.filter((r) => r.sale_id.length > 0 && !/^[sp]\d+$/.test(r.sale_id));
+  let orders = 0;
+  for (const t of targets) {
+    const ms = t.first_ts ? Date.parse(t.first_ts) : Date.now();
+    if (!Number.isFinite(ms)) continue;
+    const newId = orderIdWith('s');
+    // 附件引用级联：引用主键 id 含 entity_id，必须同步改（否则同 key 新旧 id 引用冲突/查看器查不到）
+    const refs = await c.env.DB.prepare(
+      "SELECT id, file_key, md5 FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
+    ).bind(t.sale_id).all<{ id: string; file_key: string; md5: string | null }>();
+    const batch: D1PreparedStatement[] = [
+      c.env.DB.prepare('UPDATE sale_items SET sale_id = ? WHERE sale_id = ?').bind(newId, t.sale_id),
+    ];
+    for (const ref of refs.results) {
+      const newRefId = `sale:${newId}:${ref.file_key}`;
+      batch.push(
+        c.env.DB.prepare('UPDATE attachment_refs SET id = ?, entity_id = ? WHERE id = ?').bind(newRefId, newId, ref.id),
+      );
+      await recordChange(c.env.DB, {
+        entity_type: 'attachment', entity_sync_id: newRefId, action: 'upsert',
+        payload: {
+          file_key: ref.file_key, file: ref.file_key.split('/').pop() ?? '',
+          entity: 'sale', id: newId, md5: ref.md5 ?? '',
+        },
+        updated_at: new Date().toISOString(), updated_by_username: user.username,
+      });
+    }
+    await c.env.DB.batch(batch);
+    // 整单 upsert 变更：客户端 pull 按快照对齐行级 store（sale_id 随行更新）
+    await recordChange(c.env.DB, {
+      entity_type: 'sale', entity_sync_id: newId,
+      payload: await buildPayload(c.env.DB, 'sale', newId), updated_by_username: user.username,
+    });
+    orders++;
+  }
+  await recordAudit(c.env.DB, {
+    username: user.username, action: 'fix', entity_type: 'sale',
+    detail: `修复出货批次 id：${orders} 单（hex → s{创建时间}{随机}，恢复批次创建序）`,
+  });
+  return c.json({ ok: true, orders });
 });
 
 // DELETE /sales/:id — 删除出货记录（回滚库存 + 删全部商品行，仅老板）

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
+import 'local_db.dart';
 import 'system_proxy.dart';
 import 'theme.dart';
 import 'utils/money.dart';
@@ -56,8 +57,22 @@ class TaoZhuApp extends StatefulWidget {
 
 class _TaoZhuAppState extends State<TaoZhuApp> {
   // 一次性创建（不在 build 里新建 Future）：主题变化触发 MaterialApp 重建时
-  // FutureBuilder 不重置 → 导航栈/当前页面保留（否则整棵树换 loading 跳回首页）
-  late final Future<bool> _tokenFuture = Api.instance.hasToken();
+  // FutureBuilder 不重置 → 导航栈/当前页面保留（否则整棵树换 loading 跳回首页）。
+  // 本地优先：登录只是同步门槛，本地数据可用不因未登录而锁界面——
+  // 有 token（可同步）或本地已有数据（离线可用）→ 直接进主界面；两者都没有才进登录页。
+  late final Future<bool> _enterFuture = _canEnter();
+
+  /// 是否有资格直接进入主界面：已登录（有 token）或本地已有业务数据（离线秒开）。
+  /// 本地有数据但未登录：仍进主界面离线可用，同步/写操作时引导登录（不再强制登录页）。
+  static Future<bool> _canEnter() async {
+    if (await Api.instance.hasToken()) return true;
+    try {
+      for (final s in ['clients', 'items', 'sale_items', 'purchase_items', 'payments']) {
+        if ((await LocalDb.getAll(s)).isNotEmpty) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -96,7 +111,7 @@ class _TaoZhuAppState extends State<TaoZhuApp> {
           supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
           locale: const Locale('zh', 'CN'),
           home: FutureBuilder<bool>(
-            future: _tokenFuture,
+            future: _enterFuture,
             builder: (context, snap) {
               if (snap.connectionState != ConnectionState.done) {
                 return const Scaffold(body: Center(child: CircularProgressIndicator()));

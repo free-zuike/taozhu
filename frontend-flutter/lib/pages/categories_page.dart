@@ -249,7 +249,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
     );
   }
 
-  /// 分类图标（按名称映射常用 Material 图标，参考 beecount 分类带图标；未匹配用默认）
+  /// 分类图标（按名称映射常用 Material 图标，参考分类带图标；未匹配用默认）
   static IconData _catIcon(String name, {required bool isParent}) {
     const map = <String, IconData>{
       // 食材/肉类
@@ -273,7 +273,7 @@ class _CategoriesPageState extends State<CategoriesPage> {
     return isParent ? Icons.folder : Icons.label_outline;
   }
 
-  /// 分类图标配色的主色（名字 hash 到一组主题色，参考 beecount 彩色图标块）
+  /// 分类图标配色的主色（名字 hash 到一组主题色，参考彩色图标块）
   static Color _catColor(String name, {required bool isParent, Color? fallback}) {
     const palette = [
       Color(0xFFEF7830), // 橙

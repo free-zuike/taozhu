@@ -46,3 +46,9 @@ export function randomId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+/** 订单/批次 id：{s|p}{毫秒}{随机}——与客户端录入（App `s${毫秒}${随机}`/小程序 `si${毫秒}${随机}`）同格式，
+ *  内嵌创建时间毫秒，客户端按数字段即可还原批次创建序（服务端 randomId 纯 hex 无时间戳=批次乱序根因）。 */
+export function orderIdWith(prefix: 's' | 'p'): string {
+  return `${prefix}${Date.now()}${Math.floor(Math.random() * 0x7fffffff)}`;
+}
