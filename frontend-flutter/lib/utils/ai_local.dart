@@ -287,8 +287,9 @@ AiInvoice _normalizeInvoice(String raw) {
   }
   final tryPick = (Object? o) {
     if (o is Map) {
-      if (client.isEmpty) client = _pick(o, ['client', '购货单位', '供货商', '单位名称', '客户', '单位']).trim();
-      if (date.isEmpty) date = _pick(o, ['date', '单据日期', '日期', 'happened_at', 'time']).trim();
+      final m = Map<String, dynamic>.from(o);
+      if (client.isEmpty) client = _pick(m, ['client', '购货单位', '供货商', '单位名称', '客户', '单位']).trim();
+      if (date.isEmpty) date = _pick(m, ['date', '单据日期', '日期', 'happened_at', 'time']).trim();
     }
   };
   if (parsed is Map) {
