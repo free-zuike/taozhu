@@ -159,7 +159,7 @@ onUnload(() => {
 .viewer { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: #000; display: flex; flex-direction: column; z-index: 999; }
 .viewer-swiper { flex: 1; width: 100%; }
 .viewer-img { width: 100%; height: 100%; }
-.viewer-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 24rpx 28rpx; background: linear-gradient(rgba(0,0,0,0.5), transparent); box-sizing: border-box; }
+.viewer-top { position: absolute; left: 0; right: 0; top: var(--status-bar-height, 0); display: flex; align-items: center; justify-content: space-between; padding: 24rpx 28rpx; background: linear-gradient(rgba(0,0,0,0.5), transparent); box-sizing: border-box; }
 .viewer-close { color: #fff; font-size: 40rpx; line-height: 1; padding: 8rpx; }
 .viewer-count { color: rgba(255,255,255,0.85); font-size: 26rpx; }
 .viewer-ops { display: flex; gap: 28rpx; }

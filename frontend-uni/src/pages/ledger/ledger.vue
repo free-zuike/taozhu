@@ -43,6 +43,7 @@
           <text class="mi day-arrow">&#xe5cc;</text>
         </view>
         <view v-for="l in g.lines" :key="l.key" class="card-sale" :class="profitClass(l)" @click="editSaleLine(l)" @longpress="deleteSaleLine(l)">
+          <image v-if="isAdmin && l.cost_price > 0 && Number(l.quantity) !== 0" class="bg-line" :src="lineSvgOf(l)" mode="scaleToFill" />
           <view class="line-top">
             <view class="store-ic"><text class="mi st-tx">&#xeA12;</text></view>
             <view class="line-main">
@@ -64,7 +65,6 @@
             <text v-if="isAdmin && l.cost_price > 0" class="l2-tx">进价 ¥{{ fmtPrice(l.cost_price) }} · </text>
             <text v-if="l.quantity !== ''" class="l2-tx">重量{{ l.quantity }}{{ l.unit }} × </text>
             <text class="l2-tx">售价 ¥{{ fmtPrice(l.sale_price || 0) }}</text>
-            <text v-if="isAdmin && l.cost_price > 0" class="l2-profit" :class="profitText(l)">{{ profitText(l) }}</text>
           </view>
         </view>
       </view>
@@ -182,7 +182,7 @@
 import { onShow, onHide } from '@dcloudio/uni-app';
 import { onWs, offWs } from '../../ws';
 
-import { useThemeVars } from '../../theme';
+import { useThemeVars, utf8ToBase64 } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 ;
@@ -309,6 +309,19 @@ function profitText(l: SaleLine): string {
   const p = profitOf(l);
   if (!p) return '';
   return `${p > 0 ? '盈 +' : '亏 '}¥${fmtNum(Math.abs(p))}`;
+}
+
+/// 卡片背景折线（对齐 App _CardBgLinePainter：盈利=左下→右上上升、亏损=右上→左下下降、
+/// 无盈亏=贴底平线；主色 10% 透明细线）——盈亏用折线方向区别，非文字/边框
+function lineSvgOf(l: SaleLine): string {
+  const p = profitOf(l);
+  const stroke = (tv as any).value?.['--primary'] || '#409eff';
+  let points: string;
+  if (p === 0) points = '0,73.6 90,68.8 165,72 240,68 300,70.4';
+  else if (p > 0) points = '0,80 75,57.6 150,49.6 225,28 300,0';
+  else points = '0,0 75,22.4 150,30.4 225,52 300,80';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="80" viewBox="0 0 300 80"><polyline fill="none" stroke="${stroke}" stroke-opacity="0.10" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" points="${points}"/></svg>`;
+  return 'data:image/svg+xml;base64,' + utf8ToBase64(svg);
 }
 
 // ── 出货流水：展开为明细行并按日期分组（对齐 App：日期头 + 明细行卡片，非整单嵌套）──
@@ -903,9 +916,11 @@ async function removePayment(p: Record<string, any>) {
 .day-name { font-size: 27rpx; font-weight: bold; color: var(--text-main); flex: 1; }
 .day-total { font-size: 23rpx; color: var(--text-sub); }
 .day-arrow { color: var(--text-sub); font-size: 30rpx; margin-left: 8rpx; }
-.card-sale { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 16rpx 18rpx; margin-bottom: 12rpx; box-shadow: none; }
+.card-sale { background: var(--card-bg); border: var(--card-border); border-radius: 10rpx; padding: 16rpx 18rpx; margin-bottom: 12rpx; box-shadow: none; position: relative; overflow: hidden; }
 .card-sale.profit-win { border-color: rgba(34, 197, 94, 0.4); }
 .card-sale.profit-loss { border-color: rgba(239, 68, 68, 0.4); }
+/* 背景折线（对齐 App _CardBgLinePainter：盈亏用折线方向区别；绝对定位背景层不挡点击） */
+.bg-line { position: absolute; left: 0; right: 0; top: 0; bottom: 0; width: 100%; height: 100%; pointer-events: none; }
 .line-top { display: flex; align-items: center; gap: 12rpx; }
 .store-ic { width: 56rpx; height: 56rpx; border-radius: 50%; background: var(--primary-soft); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .st-tx { font-size: 26rpx; line-height: 1; }
@@ -937,7 +952,7 @@ async function removePayment(p: Record<string, any>) {
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; flex-shrink: 0; }
 .sheet-body { flex: 1; min-height: 0; max-height: 60vh; display: flex; }
 .sheet-body-scroll { flex: 1; height: 100%; }
-.ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
+.ipt { background: var(--input-bg); border-radius: 12rpx; padding: 20rpx 24rpx; margin-bottom: 16rpx; font-size: 28rpx; height: 88rpx; line-height: 88rpx; box-sizing: border-box; }
 .field { margin-bottom: 16rpx; }
 .field-inner { display: flex; justify-content: space-between; padding: 18rpx 20rpx; background: var(--input-bg); border-radius: 10rpx; }
 .label { color: var(--text-sub); font-size: 28rpx; }

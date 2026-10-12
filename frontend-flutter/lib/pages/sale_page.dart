@@ -1944,6 +1944,24 @@ class _SalePageState extends State<SalePage> {
                 ),
               ],
               const SizedBox(width: 4),
+              // 行上移/下移（用户"批次内商品顺序不对可以直接挪位置"）：交换行位置，保存按数组序重排 sort
+              IconButton(
+                tooltip: '上移',
+                icon: Icon(Icons.keyboard_arrow_up, size: 20, color: c.textSub),
+                onPressed: i > 0 ? () => setState(() {
+                  final r = _rows.removeAt(i);
+                  _rows.insert(i - 1, r);
+                }) : null,
+              ),
+              IconButton(
+                tooltip: '下移',
+                icon: Icon(Icons.keyboard_arrow_down, size: 20, color: c.textSub),
+                onPressed: i < _rows.length - 1 ? () => setState(() {
+                  final r = _rows.removeAt(i);
+                  _rows.insert(i + 1, r);
+                }) : null,
+              ),
+              const SizedBox(width: 4),
               IconButton(
                 tooltip: '删除此商品',
                 icon: Icon(Icons.delete_outline, color: c.danger),

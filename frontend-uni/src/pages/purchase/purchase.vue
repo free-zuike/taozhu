@@ -8,8 +8,8 @@
           <text class="value">{{ date }}</text>
         </view>
       </picker>
-      <button v-if="!isDateRows" class="copy-btn" :disabled="loading" @click="copyLast">复制上一笔</button>
-      <button v-if="!isDateRows" class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
+      <view v-if="!isDateRows" class="ic-btn" :class="{ disabled: loading }" @click="copyLast"><text class="mi">&#xe14d;</text></view>
+      <view v-if="!isDateRows" class="ic-btn ai" :class="{ disabled: aiBusy }" @click="aiMenu"><text class="mi">&#xe1ec;</text></view>
     </view>
     <!-- 批量直编头：卡片式对齐 App（日期 + 整单凭证/AI 操作分层，不挤一排） -->
     <view v-if="isDateRows" class="info-card">
@@ -28,7 +28,7 @@
         <text class="v-arrow">›</text>
       </view>
       <view class="ops-row">
-        <button class="ai-btn" :disabled="aiBusy" @click="aiMenu">AI 记账</button>
+        <view class="ic-btn ai" :class="{ disabled: aiBusy }" @click="aiMenu"><text class="mi">&#xe1ec;</text></view>
       </view>
     </view>
     <text v-if="isDateRows" class="batch-hint">该日 {{ rows.length }} 行 · 保存按原单分组提交</text>
@@ -45,6 +45,8 @@
           <text class="idx">{{ i + 1 }}</text>
           <input class="goods-field" :class="{ ph: !row.itemName }" v-model="row.itemName" placeholder="选商品（可输入或选择）" @blur="onItemInput(i)" />
           <text v-if="row.rowId" class="att-btn" @click.stop="showRowAttach(row)"><text class="mi">&#xe3f4;</text></text>
+          <text class="mv mi" :class="{ off: i === 0 }" @click="moveRow(i, -1)">&#xe5d8;</text>
+          <text class="mv mi" :class="{ off: i === rows.length - 1 }" @click="moveRow(i, 1)">&#xe5db;</text>
           <text class="del mi" @click="rows.splice(i, 1)">&#xe872;</text>
         </view>
         <input class="unit-field" :class="{ ph: !row.unit }" v-model="row.unit" placeholder="单位（可手动填写）" @blur="onUnitBlur(i)" />
@@ -304,6 +306,14 @@ async function copyLast() {
 
 function addRow() {
   rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '' });
+}
+
+/// 行上移/下移（对齐 App：批次内商品顺序直接挪位置，保存按数组序重排 sort）
+function moveRow(i: number, delta: number) {
+  const j = i + delta;
+  if (j < 0 || j >= rows.value.length) return;
+  const r = rows.value.splice(i, 1)[0];
+  rows.value.splice(j, 0, r);
 }
 
 /// 在该行上方插入一行（补识别漏行/调整顺序与图片一致；对齐 App 行内插入）。
@@ -908,11 +918,13 @@ async function submit() {
 .v-sub { font-size: 22rpx; color: var(--text-sub); }
 .v-arrow { font-size: 32rpx; color: var(--text-sub); flex-shrink: 0; }
 .ops-row { padding: 16rpx 0 20rpx; border-top: 1rpx solid var(--divider); }
-.ops-row .ai-btn { width: 100%; height: 84rpx; line-height: 84rpx; border-radius: 12rpx; }
 .head-row .field-inner { flex-direction: column; align-items: flex-start; gap: 6rpx; }
-.copy-btn { flex-shrink: 0; background: var(--card-bg); color: var(--primary); border: 1rpx solid var(--primary); border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
+/* 操作图标按钮（对齐 App AppBar IconButton：复制=copy_all、AI=auto_awesome，圆形主色底） */
+.ic-btn { flex-shrink: 0; width: 88rpx; height: 88rpx; display: flex; align-items: center; justify-content: center; background: var(--primary-soft); color: var(--primary); border-radius: 50%; }
+.ic-btn .mi { font-size: 40rpx; }
+.ic-btn.ai { background: var(--violet-bg); color: #7c4dff; }
+.ic-btn.disabled { opacity: 0.5; }
 .batch-hint { flex-shrink: 0; align-self: center; background: var(--violet-bg); color: #7c4dff; border-radius: 12rpx; font-size: 24rpx; padding: 12rpx 20rpx; display: block; margin: 0 0 12rpx 8rpx; }
-.ai-btn { flex-shrink: 0; background: var(--card-bg); color: #7c4dff; border: 1rpx solid #7c4dff; border-radius: 12rpx; font-size: 26rpx; padding: 0 20rpx; height: 88rpx; line-height: 88rpx; }
 .ai-tip { background: var(--violet-bg); color: #7c4dff; border-radius: 12rpx; padding: 16rpx 24rpx; margin-bottom: 16rpx; font-size: 26rpx; }
 .field { background: var(--card-bg); border-radius: 12rpx; padding: 24rpx; margin-bottom: 16rpx; }
 .field-inner { display: flex; justify-content: space-between; }
@@ -946,6 +958,9 @@ async function submit() {
 .ins-tx { font-size: 22rpx; color: var(--primary); }
 .ipt-note { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 36rpx; padding: 8rpx; flex-shrink: 0; line-height: 1; }
+/* 行上移/下移（对齐 App IconButton：主色小图标；边界行置灰不可点） */
+.mv { color: var(--primary); font-size: 34rpx; padding: 6rpx; flex-shrink: 0; line-height: 1; }
+.mv.off { color: var(--text-sub); opacity: 0.35; }
 /* 全屏凭证查看器（对齐 App attachment_viewer） */
 .viewer { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: #000; display: flex; flex-direction: column; z-index: 200; }
 .viewer-swiper { flex: 1; width: 100%; }

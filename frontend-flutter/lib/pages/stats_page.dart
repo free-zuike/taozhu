@@ -860,14 +860,14 @@ class _StatsPageState extends State<StatsPage> {
               child: CustomPaint(painter: _LineChartPainter(values, _primary)),
             ),
             const SizedBox(height: 4),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            // 底部日期标签：每天一个（用户"5天显示一次"反馈——首/中/尾 3 个太稀疏），
+            // Wrap 自动换行保证区间内每天日期都可见
+            Wrap(
+              spacing: 8,
+              runSpacing: 2,
               children: [
-                Text(_shortLabel(labels.first), style: TextStyle(fontSize: 10, color: _sub)),
-                if (labels.length > 2)
-                  Text(_shortLabel(labels[labels.length ~/ 2]),
-                      style: TextStyle(fontSize: 10, color: _sub)),
-                Text(_shortLabel(labels.last), style: TextStyle(fontSize: 10, color: _sub)),
+                for (final l in labels)
+                  Text(_shortLabel(l), style: TextStyle(fontSize: 9, color: _sub)),
               ],
             ),
           ],

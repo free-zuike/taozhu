@@ -27,6 +27,30 @@
       <button class="btn-save" :disabled="loading" @click="load">{{ loading ? '生成中…' : '生成对账单' }}</button>
 
       <view v-if="loaded">
+        <!-- 对账单表格（对齐 App 标准模板：标题 + 按日分组明细 + 每日小计） -->
+        <view class="card stmt-tbl">
+          <view class="t-title">{{ clientName }} 对账单</view>
+          <view class="t-sub">{{ from }} 至 {{ to }}</view>
+          <view class="t-head">
+            <text class="c-date">日期</text>
+            <text class="c-detail">摘要</text>
+            <text class="c-amt">金额</text>
+          </view>
+          <view v-for="g in dayGroups" :key="g.day" class="t-group">
+            <view class="t-day">
+              <text class="t-day-label">{{ g.label }}</text>
+              <text class="t-day-total">小计 ¥{{ fmtAmount(g.total) }}</text>
+            </view>
+            <view v-for="(l, i) in g.rows" :key="i" class="t-row">
+              <text class="c-date">{{ l.date.slice(5) }}</text>
+              <text class="c-detail" :class="{ 't-pay': l.kind === 'pay' }">{{ l.kind === 'pay' ? '收·' + l.detail : l.detail }}</text>
+              <text class="c-amt">{{ l.kind === 'pay' ? '−¥' + fmtAmount(l.amount) : '¥' + fmtAmount(l.amount) }}</text>
+            </view>
+          </view>
+          <view class="t-total"><text>出货合计</text><text>¥{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
+          <view class="t-total"><text>收款合计</text><text>¥{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
+          <view class="t-total"><text>期末欠款</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ fmtAmount(debt) }}</text></view>
+        </view>
         <view class="stat"><text>出货合计</text><text class="red">¥{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
         <view class="stat"><text>收款合计</text><text class="green">¥{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
         <view class="stat"><text>期末欠款（累计）</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ fmtAmount(debt) }}</text></view>
@@ -64,7 +88,7 @@ import { onWs, offWs } from '../../ws';
 
 import { useThemeVars, utf8ToBase64 } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 ;
 ;
 import { request, getToken, getApiBase } from '../../api';
@@ -86,6 +110,39 @@ const debt = ref(0);
 
 const saleTotal = ref(0);
 const payTotal = ref(0);
+
+/// 对账单表格数据（对齐 App 标准模板：按日分组出货/收款明细 + 每日小计）
+const dayGroups = computed(() => {
+  type Row = { date: string; detail: string; amount: number; kind: 'sale' | 'pay' };
+  type Group = { day: string; label: string; total: number; rows: Row[] };
+  const map = new Map<string, Group>();
+  const push = (date: unknown, detail: string, amount: unknown, kind: 'sale' | 'pay') => {
+    const d = String(date || '').slice(0, 10);
+    if (d.length < 10) return;
+    const g = map.get(d) || { day: d, label: '', total: 0, rows: [] };
+    g.total += roundAmount(Number(amount) || 0);
+    g.rows.push({ date: d, detail, amount: Number(amount) || 0, kind });
+    map.set(d, g);
+  };
+  for (const s of sales.value) {
+    const detail = s.item_name
+      ? `${s.item_name}${s.quantity ?? ''}${s.unit ?? ''}${s.client_name ? ' ' + s.client_name : ''}`
+      : (s.client_name || '出货');
+    push(s.happened_at, detail, s.amount ?? s.total, 'sale');
+  }
+  for (const p of payments.value) {
+    push(p.happened_at,
+      `${p.client_name || ''}${p.method ? ' ' + p.method : ''}${Number(p.waived) > 0 ? '（平账 ' + fmtAmount(p.waived) + '）' : ''}`,
+      p.amount, 'pay');
+  }
+  const list = [...map.values()].sort((a, b) => a.day.localeCompare(b.day));
+  const WEEKS = ['日', '一', '二', '三', '四', '五', '六'];
+  for (const g of list) {
+    const dt = new Date(`${g.day}T00:00:00`);
+    g.label = `${Number(g.day.slice(5, 7))}月${Number(g.day.slice(8, 10))}日 周${WEEKS[dt.getDay()]}`;
+  }
+  return list;
+});
 
 onShow(async () => {
   onWs('*', load);
@@ -401,6 +458,23 @@ async function delShare(s: ShareItem) {
 .stat { display: flex; justify-content: space-between; padding: 12rpx 0; font-size: 28rpx; }
 .red { color: #f56c6c; }
 .green { color: #67c23a; }
+/* 对账单表格（对齐 App 标准模板形态） */
+.stmt-tbl { padding: 0; overflow: hidden; }
+.t-title { font-size: 32rpx; font-weight: bold; text-align: center; padding: 24rpx 24rpx 4rpx; color: var(--text-main); }
+.t-sub { font-size: 24rpx; color: var(--text-sub); text-align: center; padding: 0 24rpx 16rpx; }
+.t-head, .t-row { display: flex; align-items: center; padding: 12rpx 24rpx; }
+.t-head { background: var(--input-bg); font-size: 24rpx; color: var(--text-sub); font-weight: 600; }
+.t-row { border-bottom: 1rpx solid var(--divider); font-size: 26rpx; color: var(--text-main); }
+.c-date { width: 110rpx; flex-shrink: 0; font-size: 24rpx; color: var(--text-sub); }
+.c-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-amt { width: 150rpx; flex-shrink: 0; text-align: right; }
+.t-pay { color: #67c23a; }
+.t-group { border-bottom: 1rpx solid var(--divider); }
+.t-day { display: flex; justify-content: space-between; align-items: center; padding: 14rpx 24rpx; background: var(--primary-soft); }
+.t-day-label { font-size: 26rpx; font-weight: 600; color: var(--text-main); }
+.t-day-total { font-size: 24rpx; color: var(--text-sub); }
+.t-total { display: flex; justify-content: space-between; padding: 12rpx 24rpx; font-size: 26rpx; font-weight: 600; border-bottom: 1rpx solid var(--divider); color: var(--text-main); }
+.t-total:last-child { border-bottom: none; }
 .empty { color: var(--text-sub); text-align: center; padding: 24rpx 0; font-size: 26rpx; }
 /* 我的分享弹层 */
 .mask { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); z-index: 100; display: flex; align-items: flex-end; }

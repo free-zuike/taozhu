@@ -1,38 +1,21 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <view class="group-title">AI 服务商（Key 由服务器持有）</view>
-    <view class="card" v-for="p in providers" :key="p.id">
-      <view class="p-head">
-        <view class="p-info">
-          <text class="p-name">{{ p.name }}</text>
-          <text :class="['p-state', p.hasKey ? 'ok' : 'no']">{{ p.hasKey ? '已配置' : '未配置 Key' }}</text>
-          <text class="p-id">{{ p.isBuiltIn ? '内置' : '自定义' }}</text>
+    <view class="group-title">服务商（智谱内置 + 自定义 OpenAI 兼容）</view>
+    <view class="card">
+      <view v-for="p in providers" :key="p.id" class="p-row">
+        <view class="p-ic"><text class="mi">&#xe2b6;</text></view>
+        <view class="p-main">
+          <view class="p-name-line">
+            <text class="p-name">{{ p.name }}</text>
+            <text class="p-id">{{ p.isBuiltIn ? '内置' : '自定义' }}</text>
+          </view>
+          <text :class="['p-state', p.hasKey ? 'ok' : 'no']">{{ p.hasKey ? 'Key 已配置' : '未添加 Key' }}</text>
         </view>
         <view class="p-ops">
-          <text v-if="!p.isBuiltIn" class="p-del" @click="removeProvider(p)">删除</text>
+          <text class="p-op" @click="openEdit(p)">编辑</text>
+          <text v-if="!p.isBuiltIn" class="p-op del" @click="removeProvider(p)">删除</text>
         </view>
-      </view>
-      <view class="f-row">
-        <text class="f-lb">API 地址</text>
-        <input class="f-ipt" :value="(editBase[p.id] ?? p.baseUrl) || ''" placeholder="https://api.xxx.com/v1" @input="onBase(p.id, $event)" />
-      </view>
-      <view class="f-row">
-        <text class="f-lb">API Key</text>
-        <input class="f-ipt" :value="editKey[p.id] ?? ''" placeholder="留空=保留原值" @input="onKey(p.id, $event)" />
-        <text v-if="p.hasKey" class="p-clear" @click="clearKey(p)">清空</text>
-      </view>
-      <view class="f-row">
-        <text class="f-lb">文字模型</text>
-        <input class="f-ipt" :value="editModel[p.id]?.text ?? p.textModel ?? ''" placeholder="如 glm-4-flash" @input="onModel(p.id, 'text', $event)" />
-      </view>
-      <view class="f-row">
-        <text class="f-lb">图片模型</text>
-        <input class="f-ipt" :value="editModel[p.id]?.vision ?? p.visionModel ?? ''" placeholder="如 glm-4v-flash（视觉）" @input="onModel(p.id, 'vision', $event)" />
-      </view>
-      <view class="f-row">
-        <text class="f-lb">语音模型</text>
-        <input class="f-ipt" :value="editModel[p.id]?.speech ?? p.audioModel ?? ''" placeholder="如 glm-4-voice（语音转文字）" @input="onModel(p.id, 'speech', $event)" />
       </view>
     </view>
     <view class="add-btn" @click="showAdd = true">+ 添加自定义服务商</view>
@@ -70,6 +53,19 @@
         <button class="btn-save" @click="addProvider">添加</button>
       </view>
     </view>
+
+    <!-- 编辑服务商弹层（对齐 App：Key/三能力模型在编辑弹窗配，列表只显示名称+Key 状态） -->
+    <view v-if="showEdit" class="mask" @click="showEdit = false">
+      <view class="sheet" @click.stop>
+        <view class="sheet-title">编辑「{{ editName }}」</view>
+        <input class="ipt" :value="(editBase[editId] ?? editProv?.baseUrl) || ''" placeholder="API 地址 https://…/v1" @input="onBase(editId, $event)" />
+        <input class="ipt" :value="editKey[editId] ?? ''" placeholder="API Key（留空=保留原值）" @input="onKey(editId, $event)" />
+        <input class="ipt" :value="(editModel[editId]?.text ?? editProv?.textModel) || ''" placeholder="文字模型，如 glm-4-flash" @input="onModel(editId, 'text', $event)" />
+        <input class="ipt" :value="(editModel[editId]?.vision ?? editProv?.visionModel) || ''" placeholder="图片模型，如 glm-4v-flash（视觉）" @input="onModel(editId, 'vision', $event)" />
+        <input class="ipt" :value="(editModel[editId]?.speech ?? editProv?.audioModel) || ''" placeholder="语音模型，如 glm-4-voice（语音转文字）" @input="onModel(editId, 'speech', $event)" />
+        <button class="btn-save" @click="showEdit = false">完成</button>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -91,6 +87,17 @@ const saving = ref(false);
 const testing = ref(false);
 const showAdd = ref(false);
 const addForm = ref({ name: '', baseUrl: '', apiKey: '' });
+// 编辑服务商弹层（对齐 App：列表紧凑行，Key/模型进弹窗）
+const showEdit = ref(false);
+const editProv = ref<Provider | null>(null);
+const editId = ref('');
+const editName = ref('');
+function openEdit(p: Provider) {
+  editProv.value = p;
+  editId.value = p.id;
+  editName.value = p.name;
+  showEdit.value = true;
+}
 const testTxt = ref<Record<string, string>>({});
 
 const caps = [
@@ -241,15 +248,21 @@ async function testAll() {
 .page { padding: 24rpx;  min-height: 100vh;  background: var(--page-bg); }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; }
 .card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 8rpx 24rpx; margin-bottom: 24rpx; }
-.p-head { display: flex; align-items: center; justify-content: space-between; padding: 20rpx 0 8rpx; }
-.p-info { display: flex; align-items: center; gap: 14rpx; }
-.p-name { font-size: 28rpx; color: var(--text-main); }
-.p-state { font-size: 20rpx; padding: 4rpx 14rpx; border-radius: 999rpx; }
+/* 服务商紧凑行（对齐 App _providerTiles：图标+名称+Key 状态+操作按钮一行） */
+.p-row { display: flex; align-items: center; gap: 16rpx; padding: 20rpx 8rpx; border-bottom: 1rpx solid var(--divider); }
+.p-row:last-child { border-bottom: none; }
+.p-ic { width: 76rpx; height: 76rpx; border-radius: 22rpx; background: linear-gradient(135deg, var(--primary), rgba(0, 0, 0, 0.45)); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.p-ic .mi { font-size: 40rpx; color: #fff; }
+.p-main { flex: 1; min-width: 0; }
+.p-name-line { display: flex; align-items: center; gap: 12rpx; }
+.p-name { font-size: 28rpx; color: var(--text-main); font-weight: 600; }
+.p-state { font-size: 20rpx; padding: 4rpx 14rpx; border-radius: 999rpx; display: inline-block; margin-top: 6rpx; }
 .p-state.ok { background: var(--ok-bg); color: #67c23a; }
 .p-state.no { background: var(--warn-bg); color: #e6a23c; }
 .p-id { font-size: 22rpx; color: var(--text-sub); }
-.p-ops { display: flex; gap: 16rpx; }
-.p-del { font-size: 24rpx; color: #f56c6c; }
+.p-ops { display: flex; gap: 16rpx; flex-shrink: 0; }
+.p-op { font-size: 24rpx; color: var(--primary); padding: 8rpx 18rpx; border: 1rpx solid var(--primary); border-radius: 999rpx; }
+.p-op.del { color: #f56c6c; border-color: #f56c6c; }
 .p-clear { font-size: 22rpx; color: var(--text-sub); border: 1rpx solid var(--text-sub); border-radius: 8rpx; padding: 4rpx 12rpx; flex-shrink: 0; }
 .f-row { display: flex; align-items: center; gap: 16rpx; padding: 14rpx 0 20rpx; }
 .f-lb { font-size: 24rpx; color: var(--text-sub); width: 120rpx; flex-shrink: 0; }

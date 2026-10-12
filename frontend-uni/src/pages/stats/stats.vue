@@ -45,10 +45,10 @@
       </view>
     </view>
 
-    <!-- 日流水柱状图（最近 14 天，纯 view 柱；对齐 App 折线图趋势） -->
+    <!-- 每日出货/进货趋势（对齐 App：区间内全部天数折线 + 每天日期标签） -->
     <view class="card">
       <view class="card-title">
-        <text>{{ kind === 'purchase' ? '进货' : '出货' }}日流水（近 14 天）</text>
+        <text>{{ kind === 'purchase' ? '每日进货趋势' : '每日出货趋势' }}</text>
         <text class="range-txt">{{ rangeLabel }}</text>
       </view>
       <view v-if="bars.length" class="chart">
@@ -61,9 +61,9 @@
       <view v-else class="empty">该区间暂无流水</view>
     </view>
 
-    <!-- 按店统计 -->
+    <!-- 按店结账（对齐 App：出货·已收·欠，名称一致） -->
     <view class="card">
-      <view class="card-title">按店统计（区间）</view>
+      <view class="card-title">按店结账（元）</view>
       <view v-for="c in byClient" :key="c.id" class="row">
         <view class="left">
           <text class="name">{{ c.name }}</text>
@@ -92,14 +92,25 @@
       <view v-if="monthly.length === 0" class="empty">该年份暂无数据</view>
     </view>
 
-    <!-- 分类排行（区间内出货/进货额）：名称垂直居中（左对齐，对齐 App） -->
+    <!-- 分类排行（区间内出货/进货额；对齐 App 名称） -->
     <view class="card">
-      <view class="card-title">{{ kind === 'purchase' ? '进货' : '出货' }}分类排行</view>
+      <view class="card-title">{{ kind === 'purchase' ? '分类排行（进货额）' : '分类排行（出货额）' }}</view>
       <view v-for="(c, i) in catRank" :key="i" class="row">
         <text class="name">{{ c.category }}</text>
         <text class="pay" style="color:var(--primary)">¥{{ fmt(c.amount) }}</text>
       </view>
       <view v-if="catRank.length === 0" class="empty">该区间暂无数据</view>
+    </view>
+
+    <!-- 商品出货排行（对齐 App：商品+单位聚合数量降序，top 20；仅出货视图） -->
+    <view v-if="kind === 'sale'" class="card">
+      <view class="card-title">商品出货排行（数量 · 金额）</view>
+      <view v-for="(it, i) in itemRank" :key="i" class="row">
+        <text class="rank-no">{{ i + 1 }}</text>
+        <text class="name">{{ it.name }}<text class="meta"> {{ it.unit }}</text></text>
+        <text class="pay" style="color:var(--primary)">{{ it.quantity }}{{ it.unit }} · ¥{{ fmt(it.amount) }}</text>
+      </view>
+      <view v-if="itemRank.length === 0" class="empty">该区间暂无商品出货数据</view>
     </view>
   </view>
 </template>
@@ -136,6 +147,18 @@ const byClient = ref<ByClient[]>([]);
 const monthly = ref<Monthly[]>([]);
 const days = ref<DayRow[]>([]);
 const catRank = ref<Array<{ category: string; quantity: number; amount: number }>>([]);
+// 商品出货排行数据源：行级出货明细（对齐 App _saleDetail / _itemRank：商品+单位聚合数量降序 top20）
+const saleDetail = ref<Array<{ name: string; unit: string; quantity: number; amount: number }>>([]);
+const itemRank = computed(() => {
+  const agg = new Map<string, { name: string; unit: string; quantity: number; amount: number }>();
+  for (const d of saleDetail.value) {
+    const key = `${d.name}\u0000${d.unit}`;
+    const prev = agg.get(key);
+    if (!prev) agg.set(key, { name: d.name, unit: d.unit, quantity: Number(d.quantity) || 0, amount: Number(d.amount) || 0 });
+    else { prev.quantity += Number(d.quantity) || 0; prev.amount += Number(d.amount) || 0; }
+  }
+  return [...agg.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 20);
+});
 const sub = ref({ sales_total: 0, paid_total: 0, debt: 0, gross_profit: 0, purchase_total: 0, sales_count: 0 });
 const years = ref<number[]>([]);
 const yearLabels = ref<string[]>([]);
@@ -169,9 +192,9 @@ const rangeLabel = computed(() => {
   return s.start === s.end ? (s.start || '') : `${s.start} ~ ${s.end}`;
 });
 
-// 日流水数据：最近 14 天（无流水日金额 0，归一化供折线/标签）
+// 日流水数据：区间内全部天数（无流水日金额 0，归一化供折线/标签；对齐 App 全量天数）
 const bars = computed(() => {
-  const list = days.value.slice(-14);
+  const list = days.value;
   if (!list.length) return [];
   const max = Math.max(...list.map((d) => Number(d.sales_total) || 0), 1);
   return list.map((d) => ({
@@ -256,6 +279,7 @@ async function load() {
       request<{ clients: ByClient[] }>(`/stats/clients?start=${start}&end=${end}`, 'GET').catch(() => null),
       request<{ months: Monthly[]; can_see_profit?: boolean }>(`/stats/monthly-flow?year=${year.value}`, 'GET').catch(() => null),
       request<{ categories?: Array<{ category: string; quantity: number; amount: number }> }>(`/stats/categories?start=${start}&end=${end}&kind=${kind.value}${cq}`, 'GET').catch(() => null),
+      request<{ sale_items?: Array<Record<string, any>> }>(`/sales?date_from=${start}&date_to=${end}&limit=1000${cq}`, 'GET').catch(() => null),
     ]);
     const s = results[0];
     if (s) {
@@ -280,6 +304,13 @@ async function load() {
     }
     const cats = results[4];
     catRank.value = (cats as any)?.categories || (cats as any)?.rows || [];
+    const sd = results[5] as any;
+    saleDetail.value = ((sd?.sale_items || []) as Array<Record<string, any>>).map((r) => ({
+      name: String(r.item_name || ''),
+      unit: String(r.unit || ''),
+      quantity: Number(r.quantity) || 0,
+      amount: Number(r.amount) || 0,
+    }));
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
@@ -378,8 +409,9 @@ async function onYear(e: { detail: { value: number } }) {
 .sum-sub { margin-top: 16rpx; font-size: 24rpx; color: var(--text-sub); text-align: center; }
 .chart { position: relative; padding-top: 10rpx; }
 .line-chart { width: 100%; height: 130rpx; }
-.x-labels { display: flex; justify-content: space-between; margin-top: 10rpx; }
+.x-labels { display: flex; flex-wrap: wrap; justify-content: space-between; margin-top: 10rpx; row-gap: 4rpx; }
 .bar-label { font-size: 18rpx; color: var(--text-sub); }
+.rank-no { width: 40rpx; height: 40rpx; border-radius: 50%; background: var(--primary-soft); color: var(--primary); font-size: 24rpx; font-weight: 600; display: flex; align-items: center; justify-content: center; margin-right: 14rpx; flex-shrink: 0; }
 .year-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
 .row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); }
 .left { flex: 1; min-width: 0; }

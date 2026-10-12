@@ -1,9 +1,13 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <button class="btn-add" @click="openAdd">+ 新增饭店</button>
+    <!-- 顶部：搜索 + 新增（对齐 App：搜索框 + 新增图标按钮同一行） -->
+    <view class="top-bar">
+      <input class="search" v-model="query" placeholder="搜索店铺（名称关键字）" confirm-type="search" />
+      <view class="add-btn" @click="openAdd"><text class="mi">&#xe145;</text><text class="add-tx">新增</text></view>
+    </view>
 
-    <view v-for="c in clients" :key="c.id" class="card">
+    <view v-for="c in filteredClients" :key="c.id" class="card">
       <view class="head" @click="openEdit(c)">
         <view class="left">
           <view class="name-line">
@@ -12,7 +16,11 @@
           </view>
           <text class="meta">{{ c.contact || '' }} {{ c.phone || '' }}</text>
         </view>
-        <text class="del" @click.stop="remove(c.id)">删除</text>
+        <view class="head-ops" @click.stop>
+          <text class="op-ic" @click="exportClientTrades(c)"><text class="mi">&#xe2c4;</text></text>
+          <text class="op-ic" @click="importClientTrades(c)"><text class="mi">&#xe2c6;</text></text>
+          <text class="op-ic del" @click="remove(c.id)"><text class="mi">&#xe872;</text></text>
+        </view>
       </view>
       <!-- 三格统计（对齐 App 店铺卡）：记账天数 / 欠款 / 周期 -->
       <view class="stat-row">
@@ -30,10 +38,6 @@
           <text class="stat-num">{{ (Number(c.month_start_day) || 1) > 1 ? `每月 ${c.month_start_day} 日` : '自然月' }}</text>
           <text class="stat-label">周期</text>
         </view>
-      </view>
-      <view class="trade-ops">
-        <text class="op" @click="exportClientTrades(c)">导出该店交易</text>
-        <text class="op" @click="importClientTrades(c)">导入该店交易</text>
       </view>
       <text v-if="c.first_book_date" class="stat-start">记账起始 {{ c.first_book_date }}</text>
     </view>
@@ -83,7 +87,7 @@ import { onWs, offWs } from '../../ws';
 
 import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
@@ -106,6 +110,13 @@ interface Client {
 }
 
 const clients = ref<Client[]>([]);
+const query = ref('');
+// 搜索过滤（对齐 App：名称关键字，本地即时过滤）
+const filteredClients = computed(() => {
+  const q = query.value.trim().toLowerCase();
+  if (!q) return clients.value;
+  return clients.value.filter((c) => String(c.name || '').toLowerCase().includes(q));
+});
 const showForm = ref(false);
 const saving = ref(false);
 const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', priceGroupId: '', priceGroupName: '' });
@@ -423,10 +434,20 @@ async function importClientTrades(c: Client) {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
-.btn-add { background: var(--primary); color: #fff; border-radius: 12rpx; margin-bottom: 20rpx; font-size: 30rpx; }
+/* 顶部：搜索 + 新增（对齐 App：搜索框 + 新增图标按钮同一行） */
+.top-bar { display: flex; align-items: center; gap: 16rpx; margin-bottom: 20rpx; }
+.search { flex: 1; min-width: 0; background: var(--card-bg); border: var(--card-border); border-radius: 12rpx; padding: 14rpx 24rpx; font-size: 26rpx; height: 76rpx; box-sizing: border-box; }
+.add-btn { display: flex; align-items: center; gap: 6rpx; background: var(--primary); color: #fff; border-radius: 12rpx; padding: 0 28rpx; height: 76rpx; flex-shrink: 0; }
+.add-btn .mi { font-size: 34rpx; }
+.add-tx { font-size: 26rpx; font-weight: 600; }
 .card { background: var(--card-bg); border-radius: 24rpx; border: var(--card-border); padding: 24rpx; margin-bottom: 16rpx; }
 .head { display: flex; align-items: center; }
 .left { flex: 1; min-width: 0; }
+/* 头部操作：导出/导入/删除图标（对齐 App：行内图标按钮同一行） */
+.head-ops { display: flex; align-items: center; gap: 8rpx; flex-shrink: 0; }
+.op-ic { width: 60rpx; height: 60rpx; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--primary-soft); color: var(--primary); }
+.op-ic .mi { font-size: 30rpx; }
+.op-ic.del { background: var(--danger-bg); color: #f56c6c; }
 .name { font-size: 30rpx; font-weight: bold; display: block; }
 .name-line { display: flex; align-items: center; gap: 12rpx; }
 .cat { font-size: 20rpx; color: var(--primary); background: var(--primary-soft); border-radius: 6rpx; padding: 2rpx 10rpx; flex-shrink: 0; }
@@ -448,9 +469,6 @@ async function importClientTrades(c: Client) {
 .stat-label { font-size: 22rpx; color: var(--text-sub); }
 .stat-divider { width: 1rpx; height: 36rpx; background: var(--divider); }
 .stat-start { display: block; margin-top: 12rpx; font-size: 22rpx; color: var(--text-sub); }
-/* 店铺级交易导入/导出（对齐 App：每店 导出该店交易/导入该店交易） */
-.trade-ops { display: flex; gap: 24rpx; margin-top: 14rpx; }
-.trade-ops .op { font-size: 24rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 10rpx; padding: 8rpx 20rpx; flex-shrink: 0; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
