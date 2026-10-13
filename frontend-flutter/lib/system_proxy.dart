@@ -16,13 +16,29 @@ import 'package:flutter/services.dart';
 class SystemProxy {
   static bool _enabled = false;
   static String? _server;
+  // 代理失败熔断：连续失败 >=2 次 → 30s 内降级直连（坏代理/半开代理不再让全部请求瘫痪；
+  // 恢复后再走代理）——参考项目（dio）默认直连所以"没什么问题"，我们走系统代理需此兜底
+  static int _failCount = 0;
+  static DateTime? _failUntil;
+
+  /// 请求失败（走代理时）上报：累计到阈值触发熔断降级直连
+  static void markFail() {
+    if (!_enabled || _server == null) return;
+    _failCount++;
+    if (_failCount >= 2) {
+      _failUntil = DateTime.now().add(const Duration(seconds: 30));
+      _failCount = 0;
+    }
+  }
+
+  static bool _coolingDown() => _failUntil != null && DateTime.now().isBefore(_failUntil!);
 
   /// findProxy 回调（HttpOverrides 注入）：命中直连白名单 → DIRECT，否则走系统代理
   static String resolve(Uri uri) {
     final host = uri.host;
     // 本地/回环地址直连（代理软件本身也监听 127.0.0.1，走代理反而打不开）
     if (host == 'localhost' || host == '127.0.0.1') return 'DIRECT';
-    if (_enabled && _server != null && _server!.isNotEmpty) return 'PROXY $_server';
+    if (_enabled && _server != null && _server!.isNotEmpty && !_coolingDown()) return 'PROXY $_server';
     return 'DIRECT';
   }
 

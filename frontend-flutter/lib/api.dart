@@ -7,6 +7,7 @@ import 'package:http_parser/http_parser.dart' show MediaType;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'log.dart';
+import 'system_proxy.dart';
 import 'version.dart';
 
 /// 设备唯一 id（首次生成存本地）：设备管理按台上报/区分（x-device-id 头）
@@ -359,9 +360,19 @@ class Api {
       while (true) {
         try {
           return await doReq();
-        } catch (_) {
+        } catch (e) {
           attempts++;
-          if (attempts >= 4) rethrow;
+          // 走系统代理时请求失败 → 上报熔断（连续失败自动降级直连，坏代理不再全挂）
+          try {
+            if (SystemProxy.enabled) SystemProxy.markFail();
+          } catch (_) {}
+          if (attempts >= 4) {
+            // 最终失败记网络错误日志（日志页可查真实失败类型：解析失败/拒绝/超时/IPv6——定位用）
+            try {
+              appLog('net', '请求最终失败（重试4次）：${_friendlyNetError(e, url)} | $url', level: 'error');
+            } catch (_) {}
+            rethrow;
+          }
           await Future.delayed(
               Duration(milliseconds: attempts == 1 ? 500 : (attempts == 2 ? 1000 : 2000)));
         }
