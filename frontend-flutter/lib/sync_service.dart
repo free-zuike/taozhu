@@ -1100,6 +1100,26 @@ class SyncService {
         final detail = byType.entries.map((e) => '${e.key} ${e.value} 条').join('、');
         appLog('sync', '推送 ${batch.length} 条：$detail（本批）', level: 'info');
         appLog('sync', '本轮第 ${bi + 1}/${batches.length} 批推送 ${batch.length} 条，服务器接受 $accepted 条', level: 'info');
+        // 被拒变更（服务器逐条返回 items[].ok=false，原因：LWW 旧/apply_failed/权限/空 id 等）
+        // → 清除本地队列并记错误日志——否则"待同步 N"永远显示且每次同步重复推送（用户反馈）
+        if (accepted < batch.length && startIdx >= 0) {
+          final items = (d['items'] as List?) ?? [];
+          final rejectedItems = items.whereType<Map>().where((m) => m['ok'] != true).toList();
+          for (final m in rejectedItems) {
+            final rtype = '${m['entity_type'] ?? ''}';
+            final rid = '${m['entity_sync_id'] ?? ''}';
+            final reason = '${m['reason'] ?? ''}';
+            for (var k = 0; k < batch.length; k++) {
+              final q = batch[k];
+              if ('${q['entity_type'] ?? ''}' == rtype && '${q['entity_sync_id'] ?? ''}' == rid) {
+                final pq = pendingLeft[startIdx + k];
+                final pqid = pq['id'];
+                if (pqid is int) await LocalDb.removePendingChange(pqid);
+              }
+            }
+            appLog('sync', '推送被拒已清除队列：$rtype/$rid（$reason）', level: 'error');
+          }
+        }
         if (isExtraBatch) {
           // 持久删除集合：仅清除"本地库已确实删掉/软删落库"的条目；
           // 本地库只读导致 tombstone 未写入、行仍活跃的条目必须保留（含原时间戳）——

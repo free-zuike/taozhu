@@ -147,6 +147,7 @@ class TemplateData {
     required this.to,
     required this.clientName,
     this.debtEnd = 0,
+    this.debtUnit = '',
     this.roundMode = false,
   });
   final List<Map<String, dynamic>> sales;
@@ -155,6 +156,9 @@ class TemplateData {
   final String to;
   final String clientName;
   final double debtEnd;
+  /// 期末欠款显示精度（店铺 round_unit：yuan/jiao/fen；空=fen 逐笔舍入到分）。
+  /// 欠款按店铺抹零口径，显示按抹零精度（用户"欠款应显示整元而非到分"）。
+  final String debtUnit;
   /// true=逐步舍入（每笔先按分舍入再累加，与账本/欠款口径一致）；false=原始金额直接累加。
   /// 合计/每日销售额/明细金额都跟随此口径（用户"合计口径切换逐步舍入或者原始金额，下边显示也要跟随"）
   final bool roundMode;
@@ -266,7 +270,7 @@ String _replaceVars(String text, TemplateData d) {
       .replaceAll('{日期}', today)
       .replaceAll('{出货合计}', _fmtMoney(saleTotal))
       .replaceAll('{收款合计}', _fmtMoney(payTotal))
-      .replaceAll('{期末欠款}', _fmtMoney(d.debtEnd))
+      .replaceAll('{期末欠款}', d.debtUnit == 'yuan' ? '${d.debtEnd.round()}' : (d.debtUnit == 'jiao' ? d.debtEnd.toStringAsFixed(1) : _fmtMoney(d.debtEnd)))
       .replaceAll('{出货笔数}', '${d.sales.length}')
       .replaceAll('{月合计}', _fmtMoney(daily.total))
       .replaceAll('{1-10日合计}', segSum(1, 10))
@@ -596,51 +600,17 @@ XlsCfg _defaultTemplate() => XlsCfg()
     // 日期格用 $d 构建时插值（{月} 是渲染时替换的模板变量；$d = 1日/2日… 固定数字，不是变量）
     for (var d = 1; d <= 31; d++)
       [GridCell('{月}月$d日', 'center'), GridCell('{$d日销售额}', 'right')],
-    // 旬段小计（用户"1-10 的总金额、11-20 的总金额"）：1-10 / 11-20 / 21 日以后
-    [GridCell('1-10 日合计', 'right', true), GridCell('{1-10日合计}', 'right', true)],
-    [GridCell('11-20 日合计', 'right', true), GridCell('{11-20日合计}', 'right', true)],
-    [GridCell('21 日以后合计', 'right', true), GridCell('{21日以后合计}', 'right', true)],
-    [GridCell('合计', 'right', true, 'grey'), GridCell('{月合计}', 'right', true, 'grey')],
+    // 合计（无旬段小计——用户"标准不需要1-10日合计这种，有总金额就可以了"；合计行不加背景——用户"总金额背景去掉"）
+    [GridCell('合计', 'right', true), GridCell('{月合计}', 'right', true)],
   ];
 
 /// 「多栏」= 多栏月账单（寻牛记式：每栏 10 天，31 天 → 4 栏，最后一栏 1 天），展开为可编辑网格。
 XlsCfg _multiColTemplate() => XlsCfg()
   ..name = '多栏'
   ..grid = [
-    // 标题行：colSpan=8 跨全部 4 栏×2 列合并居中（用户"合并居中就是标题行"）
-    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey', 1, 8)],
-    [
-      for (var cc = 0; cc < 4; cc++) ...[
-        GridCell('日期', 'center', true, 'grey'),
-        GridCell('营业额', 'center', true, 'grey'),
-      ],
-    ],
-    // 31 天内分 4 栏（每栏 10 天：1-10 / 11-20 / 21-30 / 31）；第 4 栏仅 1 天，
-    // 超出 31 的格子不生成（此前 4×10=40 天 bug——用户"多出10月32到40日"）
-    for (var r = 0; r < 10; r++)
-      [
-        for (var cc = 0; cc < 4; cc++)
-          if (cc * 10 + r + 1 <= 31) ...[
-            GridCell('{月}月${cc * 10 + r + 1}日', 'center'),
-            GridCell('{${cc * 10 + r + 1}日销售额}', 'right'),
-          ],
-      ],
-    // 栏底小计（用户"1-10 的总金额、11-20 的总金额"）：每栏小计（1-10 / 11-20 / 21-30 / 31）
-    [
-      GridCell('小计', 'center', true),
-      GridCell('{1-10日合计}', 'right', true),
-      GridCell('', ''),
-      GridCell('{11-20日合计}', 'right', true),
-      GridCell('', ''),
-      GridCell('{21-30日合计}', 'right', true),
-      GridCell('', ''),
-      GridCell('{31日销售额}', 'right', true),
-    ],
-    [
-      GridCell('总计', 'center', true, 'grey'),
-      for (var i = 0; i < 6; i++) GridCell('', ''),
-      GridCell('{月合计}', 'right', true, 'grey'),
-    ],
+    // {月账单} 宏：渲染按当月实际天数动态分栏（30 天→3 栏；无 31 号则 31 那两列不显示——用户定稿），
+    // 自带一行标题「店铺 N月份账单」；栏底小计+底部总计（无背景色）
+    [GridCell('{月账单}', '')],
   ];
 
 Future<void> saveTemplates(List<XlsCfg> templates, String currentName) async {

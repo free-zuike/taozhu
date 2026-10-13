@@ -97,25 +97,8 @@ class _StatementPageState extends State<StatementPage> {
     super.initState();
     _loadClients();
     _loadTemplates();
-    _loadRoundPref(); // 恢复合计口径偏好（默认逐笔舍入）
+    // 合计口径移除（用户"去掉吧，全部按照上边设置的来"）：固定逐笔舍入（_roundTotals 恒 true）
     _initLoad(); // 先恢复记忆店铺，再生成对账单（避免首载默认全店数据串店）
-  }
-
-  /// 合计口径偏好（本机持久化，默认 true=逐笔舍入）
-  Future<void> _loadRoundPref() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      final v = p.getBool('taozhu_stmt_round_totals');
-      if (v != null && mounted) setState(() => _roundTotals = v);
-    } catch (_) {}
-  }
-
-  Future<void> _setRoundTotals(bool v) async {
-    setState(() => _roundTotals = v);
-    try {
-      final p = await SharedPreferences.getInstance();
-      await p.setBool('taozhu_stmt_round_totals', v);
-    } catch (_) {}
   }
 
   /// 恢复全局记忆的当前店铺后生成对账单（本地 prefs 读取，秒回；无记忆则全部店铺）
@@ -303,7 +286,7 @@ class _StatementPageState extends State<StatementPage> {
     buf.writeln('周期：$from 至 $to');
     buf.writeln('出货合计：¥${_saleTotal.toStringAsFixed(2)}（${_sales.length} 笔）');
     buf.writeln('收款合计：¥${_payTotal.toStringAsFixed(2)}（${_payments.length} 笔）');
-    buf.writeln('期末欠款：¥${_debtEnd.toStringAsFixed(2)}');
+    buf.writeln('期末欠款：¥${fmtByUnit(_debtEnd, _stmtUnit)}');
     buf.writeln('—— 出货明细 ——');
     for (final s in _sales) {
       buf.writeln('${_date(s['happened_at'])} 出货 ¥${(s['total'] as num?)?.toStringAsFixed(2) ?? '-'}');
@@ -325,6 +308,7 @@ class _StatementPageState extends State<StatementPage> {
         to: _toCtrl.text.trim(),
         clientName: clientName,
         debtEnd: _debtEnd,
+        debtUnit: _stmtUnit,
         roundMode: _roundTotals,
       );
 
@@ -1063,7 +1047,7 @@ class _StatementPageState extends State<StatementPage> {
         shown++;
       }
       if (_sales.length > 8) buf.writeln('… 共 ${_sales.length} 笔');
-      buf.writeln('收款 ${_payments.length} 笔 · 期末欠款 ¥${_debtEnd.toStringAsFixed(2)}');
+      buf.writeln('收款 ${_payments.length} 笔 · 期末欠款 ¥${fmtByUnit(_debtEnd, _stmtUnit)}');
     }
     return buf.toString();
   }
@@ -1393,7 +1377,7 @@ class _StatementPageState extends State<StatementPage> {
       if (cfg.headPeriod) '账期：${_fromCtrl.text.trim()} 至 ${_toCtrl.text.trim()}',
       if (cfg.headSaleTotal) '出货合计：¥${_saleTotal.toStringAsFixed(2)}（${_sales.length} 笔）',
       if (cfg.headPayTotal) '收款合计：¥${_payTotal.toStringAsFixed(2)}（${_payments.length} 笔）',
-      if (cfg.headDebt) '期末欠款：¥${_debtEnd.toStringAsFixed(2)}',
+      if (cfg.headDebt) '期末欠款：¥${fmtByUnit(_debtEnd, _stmtUnit)}',
     ];
     return SingleChildScrollView(
       child: Column(
@@ -1511,7 +1495,7 @@ class _StatementPageState extends State<StatementPage> {
         }
       }
       if (_sales.length > 10) rows.add(row(['… 共 ${_sales.length} 笔出货', '', '', '', '']));
-      rows.add(row(['收款 ${_payments.length} 笔 · 期末欠款 ¥${_debtEnd.toStringAsFixed(2)}', '', '', '', '']));
+      rows.add(row(['收款 ${_payments.length} 笔 · 期末欠款 ¥${fmtByUnit(_debtEnd, _stmtUnit)}', '', '', '', '']));
     }
     return Table(
       border: TableBorder.all(color: Colors.black26, width: 0.5),
@@ -1531,7 +1515,7 @@ class _StatementPageState extends State<StatementPage> {
         .replaceAll('{日期}', today)
         .replaceAll('{出货合计}', '¥${_saleTotal.toStringAsFixed(2)}')
         .replaceAll('{收款合计}', '¥${_payTotal.toStringAsFixed(2)}')
-        .replaceAll('{期末欠款}', '¥${_debtEnd.toStringAsFixed(2)}')
+        .replaceAll('{期末欠款}', '¥${fmtByUnit(_debtEnd, _stmtUnit)}')
         .replaceAll('{出货笔数}', '${_sales.length}');
     final daily = _salesByDayOfMonth();
     for (var d = 1; d <= daily.length; d++) {
@@ -1568,7 +1552,7 @@ class _StatementPageState extends State<StatementPage> {
           rows.add([
             _GridCell('出货合计\n¥${_saleTotal.toStringAsFixed(2)}', 'center'),
             _GridCell('收款合计\n¥${_payTotal.toStringAsFixed(2)}', 'center'),
-            _GridCell('期末欠款\n¥${_debtEnd.toStringAsFixed(2)}', 'center'),
+            _GridCell('期末欠款\n¥${fmtByUnit(_debtEnd, _stmtUnit)}', 'center'),
           ]);
           break;
         case 'days':
@@ -1941,32 +1925,7 @@ class _StatementPageState extends State<StatementPage> {
             ),
           ),
           if (_loaded) ...[
-            // 合计口径：默认逐笔舍入（合计与每笔金额对账一致）；可切原始金额（2 位导出口径）
-            const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                const Text('合计口径', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-                const SizedBox(width: 10),
-                SegmentedButton<bool>(
-                  style: ButtonStyle(
-                    visualDensity: VisualDensity.compact,
-                    textStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12)),
-                  ),
-                  segments: const [
-                    ButtonSegment(value: true, label: Text('逐笔舍入')),
-                    ButtonSegment(value: false, label: Text('原始金额')),
-                  ],
-                  selected: {_roundTotals},
-                  onSelectionChanged: (s) => _setRoundTotals(s.first),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('逐笔舍入=合计与每笔金额对账一致（推荐）',
-                      style: TextStyle(fontSize: 11, color: c.textSub)),
-                ),
-              ],
-            ),
+            // 合计口径已移除（用户"去掉吧，全部按照上边设置的来"）：统一按金额舍入口径（逐笔舍入）
             // 成品对账单（开箱即用）：样式 chips 切换 → 下方直接渲染模板成品，导出/打印同源
             const SizedBox(height: 12),
             const Text('对账单样式', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),

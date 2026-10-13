@@ -19,8 +19,7 @@ class RoundingSettingsPage extends StatefulWidget {
 class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
   bool _loading = true;
   double _carry = 0.5;
-  int _digits = 2;
-  bool _saving = false;
+ bool _saving = false;
   List<Map<String, dynamic>> _clients = [];
 
   // 预设档位（进位临界）：四舍五入 0.5 / 5舍6入 0.6 / 自定义（数值输入）
@@ -44,8 +43,7 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
     // 本地优先：只读本地缓存口径（离线秒开、不拉网络不跳动）。
     // 联网后的最新值由实时 WS 'rounding' 事件（Money.refresh）维护，本页不再打开即拉服务器。
     _carry = Money.carry;
-    _digits = Money.digits;
-    _loading = false;
+   _loading = false;
     _loadClients();
   }
 
@@ -124,8 +122,9 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
     setState(() => _saving = true);
     try {
       // 本地优先：先写本地口径（立即生效、重进仍生效、离线可用）；标记脏由同步队列推送
-      // （App 不直连改服务器数据库——服务端收到后广播 WS payload 各端直接应用）
-      await Money.apply(_carry, _digits);
+      // （App 不直连改服务器数据库——服务端收到后广播 WS payload 各端直接应用）。
+      // 精度默认固定 2（分）——单店精度由店铺结账抹零 round_unit 控制，全局不再可配
+      await Money.apply(_carry, 2);
       await Money.markRoundingDirty();
       SyncService.sync(); // 触发同步推送（失败静默保留脏标记下次再推，不阻塞、不兜底）
       toast(context, '已保存（新记账按新规则计算）');
@@ -134,15 +133,17 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
     }
   }
 
-  String _digitsLabel(int d) => switch (d) { 0 => '元（整数）', 1 => '角（1 位小数）', _ => '分（2 位小数）' };
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('金额舍入')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
+      // 与其它页面一致：整页铺主题背景（渐变+图案），非纯色（用户"背景不是透明的和其他地方不一致"）
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          _loading
+              ? const Center(child: CircularProgressIndicator())
+              : ListView(
               padding: const EdgeInsets.all(16),
               children: [
                 Container(
@@ -169,18 +170,11 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
                     onChanged: (x) => setState(() => _carry = x ?? 0.5),
                   ),
                 _customCarryRow(),
-                const SizedBox(height: 20),
-                const Text('精度（保留到多少分/角/元）', style: TextStyle(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 6),
-                for (final d in const [0, 1, 2])
-                  RadioListTile<int>(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title: Text(_digitsLabel(d), style: const TextStyle(fontSize: 14)),
-                    value: d,
-                    groupValue: _digits,
-                    onChanged: (x) => setState(() => _digits = x ?? 2),
-                  ),
+                const SizedBox(height: 14),
+                // 全局"精度"已移除（用户"精度改了显示还是分，去掉吧"）：金额默认显示到分，
+                // 需要按元/角/分单店显示时，在下方「店铺结账抹零」按店铺单独设置抹零精度
+                const Text('金额默认显示到分；单店精度在下方「店铺结账抹零」按店设置（元/角/分）',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF909399))),
                 const SizedBox(height: 24),
                 FilledButton(
                   onPressed: _saving ? null : _save,

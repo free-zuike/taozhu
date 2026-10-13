@@ -37,17 +37,20 @@ syncRouter.post('/push', async (c) => {
   } | null;
   const deviceId = (body?.device_id as string) || 'unknown';
   const changes = Array.isArray(body?.changes) ? body.changes : [];
-  const result = { accepted: 0, rejected: 0, conflict_count: 0, conflict_samples: [] as Array<Record<string, unknown>> };
+  const result = { accepted: 0, rejected: 0, conflict_count: 0, conflict_samples: [] as Array<Record<string, unknown>>, items: [] as Array<Record<string, unknown>> };
+  const itemResult = (entityType: string, id: string, ok: boolean, reason?: string) => {
+    result.items.push({ entity_type: entityType, entity_sync_id: id, ok, reason: reason ?? '' });
+  };
 
   for (const ch of changes) {
     const entityType = String(ch?.entity_type ?? '').trim();
     const id = String(ch?.entity_sync_id ?? '').trim();
     const action = ch?.action === 'delete' ? 'delete' : 'upsert';
     const incomingTs = Date.parse(String(ch?.updated_at ?? ''));
-    if (!entityType || !id) { result.rejected += 1; continue; }
-    if (!Number.isFinite(incomingTs)) { result.rejected += 1; continue; }
+    if (!entityType || !id) { result.rejected += 1; itemResult(entityType, id, false, 'missing_id'); continue; }
+    if (!Number.isFinite(incomingTs)) { result.rejected += 1; itemResult(entityType, id, false, 'bad_timestamp'); continue; }
     // 权限：staff 仅可推 sale/purchase 的 upsert
-    if (user.role === 'staff' && !staffPushAllowed(entityType, action)) { result.rejected += 1; continue; }
+    if (user.role === 'staff' && !staffPushAllowed(entityType, action)) { result.rejected += 1; itemResult(entityType, id, false, 'forbidden'); continue; }
 
     // LWW 决胜：比较该实体最新一条已收录变更
     const latest = await latestChange(c.env.DB, entityType, id);
@@ -56,6 +59,7 @@ syncRouter.post('/push', async (c) => {
       const isSameDevice = (latest.updated_by_device_id ?? '') === deviceId;
       if (existingTs > incomingTs) {
         result.rejected += 1; result.conflict_count += 1;
+        itemResult(entityType, id, false, 'lww_rejected_older_change');
         if (result.conflict_samples.length < 10) {
           result.conflict_samples.push({ reason: 'lww_rejected_older_change', entity_type: entityType, entity_sync_id: id, existing_change_id: latest.id });
         }
@@ -63,12 +67,13 @@ syncRouter.post('/push', async (c) => {
       }
       if (existingTs === incomingTs) {
         // 同设备幂等重放 → 接受但不重复应用；不同设备同时间戳按设备 id 字典序
-        if (isSameDevice) { result.accepted += 1; continue; }
+        if (isSameDevice) { result.accepted += 1; itemResult(entityType, id, true); continue; }
         if ((latest.updated_by_device_id ?? '') > deviceId) {
           result.rejected += 1; result.conflict_count += 1;
+          itemResult(entityType, id, false, 'lww_tie_lost');
           continue;
         }
-        if ((latest.updated_by_device_id ?? '') === deviceId) { result.accepted += 1; continue; }
+        if ((latest.updated_by_device_id ?? '') === deviceId) { result.accepted += 1; itemResult(entityType, id, true); continue; }
       }
     }
 
@@ -77,6 +82,7 @@ syncRouter.post('/push', async (c) => {
     const applied = await applyChange(c.env.DB, c.env, { entity_type: entityType, entity_sync_id: id, action, payload: ch.payload ?? {} }, user.username);
     if (!applied.ok) {
       result.rejected += 1;
+      itemResult(entityType, id, false, applied.error || 'apply_failed');
       if (result.conflict_samples.length < 10) {
         result.conflict_samples.push({ reason: 'apply_failed', entity_type: entityType, entity_sync_id: id, error: applied.error });
       }
@@ -89,6 +95,7 @@ syncRouter.post('/push', async (c) => {
       updated_by_device_id: deviceId, updated_by_username: user.username,
     });
     result.accepted += 1;
+    itemResult(entityType, id, true);
   }
 
   return c.json({ ...result, server_cursor: await maxCursor(c.env.DB), server_time: new Date().toISOString() });
