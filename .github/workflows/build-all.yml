@@ -473,11 +473,12 @@ jobs:
           echo "已取消整个 workflow（本版本未创建 release，无残留）"
 
   # ── macOS ──────────────────────────────────────────────────────────────────────────
-  # 总是构建（用户定稿：macOS runner 高峰排队/慢也一直等，工作流不停止、不跳过——
-  # 跳过会造成该版本 macOS 产物缺失；发布等 macOS 完成才出 release）
+  # 总是构建（用户定稿：macOS runner 排队/慢也一直等，工作流不停止、不跳过——
+  # 跳过会造成该版本 macOS 产物缺失；发布等 macOS 完成才出 release）。
+  # macos-13 已退役（2026 不再分配 label=永久排队），用 macos-latest（arm64，当前唯一免费可用）
   macos:
     needs: [test, analyze]
-    runs-on: macos-13   # Intel runner：容量更足、排队少（macos-latest=arm64 高峰常被取消）
+    runs-on: macos-latest
     name: macOS
     steps:
       - uses: actions/checkout@v4
