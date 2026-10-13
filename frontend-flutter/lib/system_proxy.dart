@@ -143,17 +143,21 @@ class _SystemProxyOverrides extends HttpOverrides {
     client.findProxy = SystemProxy.resolve;
     // 强制 IPv4 解析：域名有 IPv6 记录但本机/移动网络 IPv6 路由不可达时，Dart 默认取
     // IPv6 地址连接失败（被误报"域名解析失败"），而浏览器有 IPv4/IPv6 并行回退所以正常。
-    // 自定义 connectionFactory：lookup 只取 IPv4（解析失败时回退系统默认连接）
-    client.connectionFactory = (uri, port) async {
-      try {
-        final addrs = await InternetAddress.lookup(uri.host, type: InternetAddressType.IPv4);
-        if (addrs.isNotEmpty) {
-          return await Socket.connect(addrs.first, port, timeout: const Duration(seconds: 20));
-        }
-      } catch (_) {}
-      // IPv4 无结果/解析异常 → 回退默认（含 IPv6），避免 IPv6-only 网络不可用
-      return Socket.connect(uri.host, port, timeout: const Duration(seconds: 20));
+    // connectionFactory 需返回 ConnectionTask（可取消），用 fromFuture 包装异步连接。
+    client.connectionFactory = (uri, host, port) {
+      return ConnectionTask.fromFuture(_connectIPv4(host ?? uri.host, port ?? uri.port));
     };
     return client;
+  }
+
+  /// IPv4 优先连接：lookup 只取 IPv4；无 A 记录/解析异常回退默认连接（兼容 IPv6-only）
+  static Future<Socket> _connectIPv4(String host, int port) async {
+    try {
+      final addrs = await InternetAddress.lookup(host, type: InternetAddressType.IPv4);
+      if (addrs.isNotEmpty) {
+        return await Socket.connect(addrs.first, port, timeout: const Duration(seconds: 20));
+      }
+    } catch (_) {}
+    return Socket.connect(host, port, timeout: const Duration(seconds: 20));
   }
 }
