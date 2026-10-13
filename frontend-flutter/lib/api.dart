@@ -351,8 +351,9 @@ class Api {
       }
     }
 
-    // 网络异常自动重试（最多 3 次，递增退避：500ms/1s）：
-    // TLS 握手瞬时中断（弱网/切网/代理抖动）等偶发失败，重试后多数能恢复
+    // 网络异常自动重试（最多 4 次，递增退避 500ms/1s/2s）：
+    // TLS 握手瞬时中断/DNS 瞬时解析失败（弱网/切网/代理抖动，浏览器也靠重试恢复）等偶发
+    // 失败，重试后多数能恢复——App"动不动域名解析失败"（浏览器正常）很大程度是这类瞬时失败
     Future<http.Response> retry() async {
       var attempts = 0;
       while (true) {
@@ -360,8 +361,9 @@ class Api {
           return await doReq();
         } catch (_) {
           attempts++;
-          if (attempts >= 3) rethrow;
-          await Future.delayed(Duration(milliseconds: attempts == 1 ? 500 : 1000));
+          if (attempts >= 4) rethrow;
+          await Future.delayed(
+              Duration(milliseconds: attempts == 1 ? 500 : (attempts == 2 ? 1000 : 2000)));
         }
       }
     }
