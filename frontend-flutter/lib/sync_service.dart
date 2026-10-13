@@ -10,6 +10,7 @@ import 'theme.dart';
 import 'avatar_cache.dart';
 import 'local_db.dart';
 import 'log.dart';
+import 'utils/ai_local.dart';
 import 'utils/money.dart';
 
 /// 商品持久删除集合 key（SharedPreferences 独立存储）：本地库只读/写失败时删除标记跨重启保留，
@@ -1297,6 +1298,9 @@ class SyncService {
       await _syncTheme();
       // ⑥b 金额舍入随同步上传（本地有未同步修改 → 推送服务器，不直连改库；服务端广播 WS payload 其他端应用）
       await _syncRounding();
+      // ⑥c AI 配置随同步拉取（本地优先：本地已配 Key 的服务商保留本地=老板自己的配置；
+      // 本地空的服务商自动拿服务器值=员工/新设备同步一次即用上老板的 Key；页面不直连服务器）
+      await _syncAiConfig();
       // ⑦ 僵尸附件引用清理：引用目标实体不存在（识别取消残留等）→ 删引用行+对应副本文件；
       // 在用副本不清（孤儿文件仍由存储清理页扫描）——0.17.330 曾只加逻辑未挂调用点=从未执行
       await cleanupOrphanLocalAttachments();
@@ -1346,6 +1350,41 @@ class SyncService {
         'digits': Money.digits,
       });
       await Money.clearRoundingDirty();
+    } catch (_) {}
+  }
+
+  /// AI 配置随同步拉取（对齐附件/商品同步语义：页面不直连，同步获取；本地优先合并）。
+  /// 老板本地配好 Key 的服务商保留本地值；本地空的服务商（员工/新设备）自动用服务器值
+  /// （=老板上传的 Key，员工本地直连可用但界面不显示明文）。
+  static Future<void> _syncAiConfig() async {
+    try {
+      final d = await Api.instance.get('/settings/ai');
+      final provs = (d['providers'] as List?) ?? [];
+      if (provs.isEmpty) return;
+      final local = await aiLoadConfig();
+      final cfg = AiLocalConfig();
+      final b = (d['binding'] as Map?)?.cast<String, dynamic>() ?? {};
+      cfg.binding = {
+        'textProviderId': '${b['textProviderId'] ?? ''}',
+        'visionProviderId': '${b['visionProviderId'] ?? ''}',
+        'speechProviderId': '${b['speechProviderId'] ?? ''}',
+      };
+      cfg.providers = provs.whereType<Map>().map((m) {
+        final mm = Map<String, dynamic>.from(m);
+        final id = '${mm['id'] ?? ''}';
+        final prev = local.providers.where((x) => x.id == id).firstOrNull;
+        return AiProvider(
+          id: id,
+          name: '${mm['name'] ?? ''}',
+          isBuiltIn: mm['is_built_in'] == true,
+          apiKey: ((prev?.apiKey ?? '').trim().isNotEmpty) ? prev!.apiKey : '${mm['api_key'] ?? ''}',
+          baseUrl: '${mm['base_url'] ?? ''}',
+          textModel: '${mm['text_model'] ?? ''}',
+          visionModel: '${mm['vision_model'] ?? ''}',
+          audioModel: '${mm['audio_model'] ?? ''}',
+        );
+      }).toList();
+      await aiSaveConfig(cfg);
     } catch (_) {}
   }
 

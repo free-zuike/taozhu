@@ -118,49 +118,13 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       }
       return;
     }
-    // App 原生：本地权威（Key 只在本机，直连服务商）；本地空 → 一次性迁移服务器配置
-    // （服务商/绑定/模型，Key 服务器脱敏取不回，需用户补填）
-    var cfg = await aiLoadConfig();
-    final hasUserCfg = cfg.providers.any((p) => p.id != 'zhipu_glm' || p.apiKey.isNotEmpty);
-    var migrated = false;
-    if (!hasUserCfg) {
-      try {
-        final d = await Api.instance.get('/settings/ai');
-        final provs = (d['providers'] as List?) ?? [];
-        if (provs.isNotEmpty) {
-          cfg = AiLocalConfig();
-          cfg.providers = provs.whereType<Map>().map((m) {
-            final mm = Map<String, dynamic>.from(m);
-            return AiProvider(
-              id: '${mm['id'] ?? ''}',
-              name: '${mm['name'] ?? ''}',
-              isBuiltIn: mm['is_built_in'] == true,
-              apiKey: '',
-              baseUrl: '${mm['base_url'] ?? ''}',
-              textModel: '${mm['text_model'] ?? ''}',
-              visionModel: '${mm['vision_model'] ?? ''}',
-              audioModel: '${mm['audio_model'] ?? ''}',
-            );
-          }).toList();
-          final b = (d['binding'] as Map?)?.cast<String, dynamic>() ?? {};
-          cfg.binding = {
-            'textProviderId': '${b['textProviderId'] ?? ''}',
-            'visionProviderId': '${b['visionProviderId'] ?? ''}',
-            'speechProviderId': '${b['speechProviderId'] ?? ''}',
-          };
-          await aiSaveConfig(cfg);
-          migrated = true;
-        }
-      } catch (_) {}
-    }
+    // App 原生：本地权威（配置由同步 _syncAiConfig 拉取/合并，页面只读本地不直连服务器）
+    final cfg = await aiLoadConfig();
     if (!mounted) return;
     setState(() {
       _applyLocal(cfg);
       _loading = false;
     });
-    if (migrated && cfg.providers.any((p) => p.id != 'zhipu_glm')) {
-      toast(context, '已迁移服务器 AI 配置（Key 需重新填写后保存）');
-    }
   }
 
   Future<void> _save({bool quiet = false}) async {
@@ -199,7 +163,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         if (!quiet) toast(context, 'AI 配置已保存');
         return;
       }
-      // App 原生：写本地（Key 明文本机存储，直连用）
+      // App 原生：写本地（Key 明文本机存储，直连用）+ 推送服务器（老板配置供员工同步获取；
+      // 本地优先，推送失败静默保留，下次同步重推）
       final old = await aiLoadConfig();
       final cfg = AiLocalConfig();
       cfg.binding = {
@@ -222,6 +187,17 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       }).toList();
       await aiSaveConfig(cfg);
       _pendingKeys.clear();
+      // 推送服务器（老板：员工/新设备同步后自动拿到配置与 Key；失败静默下次重推）
+      try {
+        await Api.instance.put('/settings/ai', {
+          'providers': cfg.providers.map((x) => {
+            'id': x.id, 'name': x.name, 'is_built_in': x.isBuiltIn, 'api_key': x.apiKey,
+            'base_url': x.baseUrl, 'text_model': x.textModel,
+            'vision_model': x.visionModel, 'audio_model': x.audioModel,
+          }).toList(),
+          'binding': cfg.binding,
+        });
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         _saving = false;

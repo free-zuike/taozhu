@@ -90,7 +90,8 @@ export async function getAiConfig(db: D1Database): Promise<AiConfig> {
   return { providers, binding };
 }
 
-/** 脱敏输出（不回显 Key 明文）：providers 列表 + has_key + 绑定 */
+/** AI 配置输出（同步下发用：配置含 Key，由同步流程拉到各端本地后本地直连；
+ *  页面不直连本端点——本地优先铁律"同步通过同步状态获取，不直接连接服务器"） */
 export function sanitizeAiConfig(cfg: AiConfig) {
   return {
     providers: cfg.providers.map((p) => ({
@@ -98,6 +99,7 @@ export function sanitizeAiConfig(cfg: AiConfig) {
       name: p.name,
       is_built_in: Boolean(p.isBuiltIn),
       has_key: Boolean(p.apiKey),
+      api_key: p.apiKey,
       base_url: p.baseUrl,
       text_model: p.textModel,
       vision_model: p.visionModel,
@@ -107,7 +109,7 @@ export function sanitizeAiConfig(cfg: AiConfig) {
   };
 }
 
-// GET /api/v1/settings/ai — 配置状态（不回显 Key 明文）
+// GET /api/v1/settings/ai — 配置（含 Key，同步下发用；仅登录管理员）
 settingsRouter.get('/ai', async (c) => {
   const cfg = await getAiConfig(c.env.DB);
   return c.json(sanitizeAiConfig(cfg));

@@ -304,7 +304,7 @@ AiInvoice _normalizeInvoice(String raw) {
   return AiInvoice(client, date, drafts);
 }
 
-/// 单项能力连通测试（本地直连）：文字/视觉/语音
+/// 单项能力连通测试（本地直连）：文字/视觉/语音都真实调用服务商，有问题如实报
 Future<String> aiTestCapability(String cap) async {
   final cfg = await aiLoadConfig();
   if (cap == 'vision') {
@@ -312,6 +312,7 @@ Future<String> aiTestCapability(String cap) async {
     final tiny = base64Decode(
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
     final p = _providerFor(cfg, 'visionProviderId');
+    if (p.apiKey.trim().isEmpty) throw Exception('「${p.name}」未配置 Key，无法测试');
     final raw = await _chatCompletion(p, 'vision', [
       {
         'role': 'user',
@@ -324,10 +325,48 @@ Future<String> aiTestCapability(String cap) async {
     return raw;
   }
   if (cap == 'speech') {
-    throw Exception('语音测试需录音，请在记单页实测');
+    // 真实语音测试：生成 0.25s 静音 WAV 真发服务商 asr（Key 无效/通道错误如实报，不假通过）
+    final p = _providerFor(cfg, 'speechProviderId');
+    if (p.apiKey.trim().isEmpty) throw Exception('「${p.name}」未配置 Key，无法测试语音');
+    final url = '${p.baseUrl.replaceAll(RegExp(r'/+$'), '')}/audio/asr';
+    final req = http.MultipartRequest('POST', Uri.parse(url))
+      ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
+      ..headers['model'] = _modelFor(p, 'speech')
+      ..files.add(http.MultipartFile.fromBytes('file', _silenceWav(), filename: 'test.wav',
+          contentType: http.MediaType.parse('audio/wav')));
+    final resp = await req.send().timeout(const Duration(seconds: 60));
+    final body = await resp.stream.bytesToString();
+    if (resp.statusCode != 200) {
+      throw Exception('AI 语音通道 ${resp.statusCode}: ${body.length > 120 ? body.substring(0, 120) : body}');
+    }
+    return '语音转文字通道连通（已真实发送测试音频）';
   }
   final p = _providerFor(cfg, 'textProviderId');
+  if (p.apiKey.trim().isEmpty) throw Exception('「${p.name}」未配置 Key，无法测试');
   return await _chatCompletion(p, 'text', [
     {'role': 'user', 'content': '回复"OK"两个字'},
   ]);
+}
+
+/// 0.25s 8000Hz 16bit 单声道静音 WAV（语音测试素材，真实请求服务商）
+Uint8List _silenceWav() {
+  const sr = 8000;
+  final n = (sr * 0.25).round();
+  final dataLen = n * 2;
+  final b = Uint8List(44 + dataLen);
+  final dv = ByteData.view(b.buffer);
+  dv.setUint32(0, 0x52494646, Endian.little); // RIFF
+  dv.setUint32(4, 36 + dataLen, Endian.little);
+  dv.setUint32(8, 0x57415645, Endian.little); // WAVE
+  dv.setUint32(12, 0x666d7420, Endian.little); // fmt
+  dv.setUint32(16, 16, Endian.little);
+  dv.setUint16(20, 1, Endian.little); // PCM
+  dv.setUint16(22, 1, Endian.little); // mono
+  dv.setUint32(24, sr, Endian.little);
+  dv.setUint32(28, sr * 2, Endian.little);
+  dv.setUint16(32, 2, Endian.little);
+  dv.setUint16(34, 16, Endian.little);
+  dv.setUint32(36, 0x64617461, Endian.little); // data
+  dv.setUint32(40, dataLen, Endian.little);
+  return b;
 }
