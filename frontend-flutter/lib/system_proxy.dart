@@ -141,6 +141,19 @@ class _SystemProxyOverrides extends HttpOverrides {
   HttpClient createHttpClient(SecurityContext? context) {
     final client = super.createHttpClient(context);
     client.findProxy = SystemProxy.resolve;
+    // 强制 IPv4 解析：域名有 IPv6 记录但本机/移动网络 IPv6 路由不可达时，Dart 默认取
+    // IPv6 地址连接失败（被误报"域名解析失败"），而浏览器有 IPv4/IPv6 并行回退所以正常。
+    // 自定义 connectionFactory：lookup 只取 IPv4（解析失败时回退系统默认连接）
+    client.connectionFactory = (uri, port) async {
+      try {
+        final addrs = await InternetAddress.lookup(uri.host, type: InternetAddressType.IPv4);
+        if (addrs.isNotEmpty) {
+          return await Socket.connect(addrs.first, port, timeout: const Duration(seconds: 20));
+        }
+      } catch (_) {}
+      // IPv4 无结果/解析异常 → 回退默认（含 IPv6），避免 IPv6-only 网络不可用
+      return Socket.connect(uri.host, port, timeout: const Duration(seconds: 20));
+    };
     return client;
   }
 }
