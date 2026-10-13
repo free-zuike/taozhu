@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import '../api.dart';
 import '../theme.dart';
 import '../utils/ai_local.dart';
 import 'router.dart';
@@ -78,20 +80,126 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     _speechProviderId = cfg.binding['speechProviderId'] ?? 'zhipu_glm';
   }
 
+  /// 服务器返回的配置快照（providers + binding）→ 页面状态（Web 端专用：服务器配置权威）
+  void _applyConfig(Map d) {
+    _providers = ((d['providers'] as List?) ?? [])
+        .whereType<Map>()
+        .map((m) => m.cast<String, dynamic>())
+        .map((m) => _Provider(
+              id: '${m['id'] ?? ''}',
+              name: '${m['name'] ?? ''}',
+              isBuiltIn: (m['is_built_in'] as bool?) ?? false,
+              hasKey: (m['has_key'] as bool?) ?? false,
+              baseUrl: '${m['base_url'] ?? ''}',
+              textModel: '${m['text_model'] ?? ''}',
+              visionModel: '${m['vision_model'] ?? ''}',
+              audioModel: '${m['audio_model'] ?? ''}',
+            ))
+        .toList();
+    final b = (d['binding'] as Map?)?.cast<String, dynamic>() ?? {};
+    _textProviderId = '${b['textProviderId'] ?? 'zhipu_glm'}';
+    _visionProviderId = '${b['visionProviderId'] ?? 'zhipu_glm'}';
+    _speechProviderId = '${b['speechProviderId'] ?? 'zhipu_glm'}';
+  }
+
   Future<void> _load() async {
-    // 本地权威：AI 配置本机存储（Key 只在本机），秒开零网络
-    final cfg = await aiLoadConfig();
+    // Web：服务器配置权威（Web AI 走服务器代理，读 /settings/ai）
+    if (kIsWeb) {
+      try {
+        final d = await Api.instance.get('/settings/ai');
+        if (!mounted) return;
+        setState(() {
+          _applyConfig(d);
+          _loading = false;
+        });
+      } catch (e) {
+        if (mounted) setState(() => _loading = false);
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      }
+      return;
+    }
+    // App 原生：本地权威（Key 只在本机，直连服务商）；本地空 → 一次性迁移服务器配置
+    // （服务商/绑定/模型，Key 服务器脱敏取不回，需用户补填）
+    var cfg = await aiLoadConfig();
+    final hasUserCfg = cfg.providers.any((p) => p.id != 'zhipu_glm' || p.apiKey.isNotEmpty);
+    var migrated = false;
+    if (!hasUserCfg) {
+      try {
+        final d = await Api.instance.get('/settings/ai');
+        final provs = (d['providers'] as List?) ?? [];
+        if (provs.isNotEmpty) {
+          cfg = AiLocalConfig();
+          cfg.providers = provs.whereType<Map>().map((m) {
+            final mm = Map<String, dynamic>.from(m);
+            return AiProvider(
+              id: '${mm['id'] ?? ''}',
+              name: '${mm['name'] ?? ''}',
+              isBuiltIn: mm['is_built_in'] == true,
+              apiKey: '',
+              baseUrl: '${mm['base_url'] ?? ''}',
+              textModel: '${mm['text_model'] ?? ''}',
+              visionModel: '${mm['vision_model'] ?? ''}',
+              audioModel: '${mm['audio_model'] ?? ''}',
+            );
+          }).toList();
+          final b = (d['binding'] as Map?)?.cast<String, dynamic>() ?? {};
+          cfg.binding = {
+            'textProviderId': '${b['textProviderId'] ?? ''}',
+            'visionProviderId': '${b['visionProviderId'] ?? ''}',
+            'speechProviderId': '${b['speechProviderId'] ?? ''}',
+          };
+          await aiSaveConfig(cfg);
+          migrated = true;
+        }
+      } catch (_) {}
+    }
     if (!mounted) return;
     setState(() {
       _applyLocal(cfg);
       _loading = false;
     });
+    if (migrated && cfg.providers.any((p) => p.id != 'zhipu_glm')) {
+      toast(context, '已迁移服务器 AI 配置（Key 需重新填写后保存）');
+    }
   }
 
   Future<void> _save({bool quiet = false}) async {
     if (_saving) return;
     setState(() => _saving = true);
     try {
+      // Web：写服务器（Web AI 走服务器代理）
+      if (kIsWeb) {
+        final providersPayload = _providers.map((p) {
+          final m = <String, dynamic>{
+            'id': p.id,
+            'name': p.name,
+            'is_built_in': p.isBuiltIn,
+            'base_url': p.baseUrl,
+            'text_model': p.textModel,
+            'vision_model': p.visionModel,
+            'audio_model': p.audioModel,
+          };
+          if (_pendingKeys.containsKey(p.id)) m['api_key'] = _pendingKeys[p.id];
+          return m;
+        }).toList();
+        final d = await Api.instance.put('/settings/ai', {
+          'providers': providersPayload,
+          'binding': {
+            'textProviderId': _textProviderId,
+            'visionProviderId': _visionProviderId,
+            'speechProviderId': _speechProviderId,
+          },
+        });
+        _pendingKeys.clear();
+        if (!mounted) return;
+        setState(() {
+          _saving = false;
+          _applyConfig(d);
+        });
+        if (!quiet) toast(context, 'AI 配置已保存');
+        return;
+      }
+      // App 原生：写本地（Key 明文本机存储，直连用）
       final old = await aiLoadConfig();
       final cfg = AiLocalConfig();
       cfg.binding = {
@@ -99,7 +207,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         'visionProviderId': _visionProviderId,
         'speechProviderId': _speechProviderId,
       };
-      // 本地直连需要明文 Key：本次编辑过用新值，未编辑保留旧值
       cfg.providers = _providers.map((p) {
         final prev = old.providers.where((x) => x.id == p.id).firstOrNull;
         return AiProvider(
@@ -127,8 +234,20 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
   }
 
-  /// 单项能力本地直连测试：文字直接调服务商；图片内置 1x1 测试图；语音提示到记单页实测
+  /// 单项能力测试：App 本地直连；Web 走服务器（/ai/test）
   Future<String> _testCapability(String capability) async {
+    if (kIsWeb) {
+      final d = await Api.instance.post('/ai/test?capability=$capability');
+      if (capability == 'vision') {
+        final reply = '${d['reply'] ?? ''}'.trim();
+        return reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply';
+      }
+      if (capability == 'speech') return '语音转文字通道连通（静音测试素材）';
+      final count = (d['count'] as num?)?.toInt() ?? 0;
+      final items = (d['items'] as List?) ?? [];
+      final names = items.take(5).map((e) => '${(e as Map)['name'] ?? ''}').where((s) => s.isNotEmpty).join('、');
+      return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
+    }
     if (capability == 'speech') {
       return '语音转文字通道连通（本地直连；请到记单页录一句话实测）';
     }
