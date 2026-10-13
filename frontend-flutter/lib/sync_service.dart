@@ -1354,8 +1354,8 @@ class SyncService {
   }
 
   /// AI 配置随同步拉取（对齐附件/商品同步语义：页面不直连，同步获取；本地优先合并）。
-  /// 老板本地配好 Key 的服务商保留本地值；本地空的服务商（员工/新设备）自动用服务器值
-  /// （=老板上传的 Key，员工本地直连可用但界面不显示明文）。
+  /// 老板本地配好 Key 的服务商保留本地值；本地空的服务商（员工/新设备）自动用服务器值。
+  /// **只在配置有变化时（其他端改了 AI 配置→本端收到）写库并记日志；无变化静默**——不刷屏。
   static Future<void> _syncAiConfig() async {
     try {
       final d = await Api.instance.get('/settings/ai?include_key=1');
@@ -1384,8 +1384,24 @@ class SyncService {
           audioModel: '${mm['audio_model'] ?? ''}',
         );
       }).toList();
+      // 变化检测：服务商数量/关键字段 + 绑定任一不同 = 其他端有变更 → 写库并记日志；相同则静默
+      final sameBinding = local.binding['textProviderId'] == cfg.binding['textProviderId'] &&
+          local.binding['visionProviderId'] == cfg.binding['visionProviderId'] &&
+          local.binding['speechProviderId'] == cfg.binding['speechProviderId'];
+      final sameProviders = cfg.providers.length == local.providers.length &&
+          cfg.providers.every((p) {
+            final x = local.providers.where((q) => q.id == p.id).firstOrNull;
+            return x != null &&
+                x.name == p.name &&
+                x.baseUrl == p.baseUrl &&
+                x.apiKey == p.apiKey &&
+                x.textModel == p.textModel &&
+                x.visionModel == p.visionModel &&
+                x.audioModel == p.audioModel;
+          });
+      if (sameBinding && sameProviders) return; // 无变化：静默
       await aiSaveConfig(cfg);
-      appLog('ai', '同步 AI 配置：${cfg.providers.length} 个服务商（本地持 Key ${cfg.providers.where((x) => x.apiKey.trim().isNotEmpty).length} 个）');
+      appLog('ai', '同步 AI 配置：${cfg.providers.length} 个服务商（${cfg.providers.where((x) => x.apiKey.trim().isNotEmpty).length} 个 Key，他端变更）');
     } catch (e) {
       appLog('ai', '同步 AI 配置失败：${e.toString().split('\n').first}', level: 'error');
     }

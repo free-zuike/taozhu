@@ -159,7 +159,7 @@ class Api {
           .post(Uri.parse('$base/api/v1/auth/refresh'),
               headers: {'Content-Type': 'application/json'},
               body: jsonEncode({'refresh_token': rt}))
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 20));
       if (r.statusCode == 200) {
         final d = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
         final nt = d['token'] as String?;
@@ -333,21 +333,21 @@ class Api {
       switch (method) {
         case 'POST':
           return http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(const Duration(seconds: 8));
+              .timeout(const Duration(seconds: 20));
         case 'PUT':
           return http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(const Duration(seconds: 8));
+              .timeout(const Duration(seconds: 20));
         case 'PATCH':
           return http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(const Duration(seconds: 8));
+              .timeout(const Duration(seconds: 20));
         case 'DELETE':
           return (body == null
                   ? http.delete(Uri.parse(url), headers: headers)
                   : http.delete(Uri.parse(url), headers: headers, body: jsonEncode(body)))
-              .timeout(const Duration(seconds: 8));
+              .timeout(const Duration(seconds: 20));
         default:
           return http.get(Uri.parse(url), headers: headers)
-              .timeout(const Duration(seconds: 8));
+              .timeout(const Duration(seconds: 20));
       }
     }
 
