@@ -574,7 +574,7 @@ class _ClientsPageState extends State<ClientsPage> {
                                 Container(width: 1, height: 28, color: _c.divider),
                                 Expanded(
                                   child: Column(children: [
-                                    Text('¥${fmtMoney(_debt(c))}',
+                                    Text('¥${fmtByUnit(_debt(c), '${c['round_unit'] ?? 'fen'}')}',
                                         style: TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.w700,

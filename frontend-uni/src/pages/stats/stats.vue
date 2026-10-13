@@ -69,7 +69,7 @@
           <text class="name">{{ c.name }}</text>
           <text class="meta">出货 ¥{{ fmt(c.sales_total) }} · 收款 ¥{{ fmt(c.paid_total) }}<template v-if="canSeeProfit"> · 毛利 ¥{{ fmt(c.gross_profit) }}</template></text>
         </view>
-        <text class="debt red">欠 ¥{{ fmt(c.debt) }}</text>
+        <text class="debt red">欠 ¥{{ fmtByUnit(c.debt, c.round_unit) }}</text>
       </view>
       <view v-if="byClient.length === 0" class="empty">暂无数据</view>
     </view>
@@ -125,9 +125,9 @@ import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 import { request, getToken } from '../../api';
-import { fmtAmount } from '../../utils/money';
+import { fmtAmount, fmtByUnit } from '../../utils/money';
 
-interface ByClient { id: string; name: string; sales_total: number; paid_total: number; debt: number; gross_profit: number }
+interface ByClient { id: string; name: string; sales_total: number; paid_total: number; debt: number; gross_profit: number; round_unit?: string }
 interface Monthly { month: string; sales_total: number; purchase_total: number; balance: number }
 interface DayRow { day: string; sales_total: number; paid_total: number; purchase_total: number; gross_profit: number }
 

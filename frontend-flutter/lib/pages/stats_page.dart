@@ -493,7 +493,7 @@ class _StatsPageState extends State<StatsPage> {
                         _success,
                         '${c['name']}',
                         '出货 ¥${fmtMoney(_num(c['sales_total']))} · 已收 ¥${fmtMoney(_num(c['paid_total']))}',
-                        '欠 ¥${fmtMoney(_num(c['sales_total']) - _num(c['paid_total']))}',
+                        '欠 ¥${fmtByUnit(_num(c['sales_total']) - _num(c['paid_total']), '${c['round_unit'] ?? ''}')}',
                         amountColor: _num(c['sales_total']) > _num(c['paid_total'])
                             ? _danger
                             : _success,

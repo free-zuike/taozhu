@@ -75,3 +75,13 @@ export function fmtPrice(v: number): string {
   }
   return t;
 }
+
+/** 欠款/未回款/应收显示：按对应店铺抹零精度（yuan=整数元、jiao=1 位角、fen/空=2 位分）。
+ *  与交易金额（fmtAmount 按金额舍入到分）区分——欠款按店铺 round_stage/round_unit 计算并显示，
+ *  用户"店铺按天抹零精度元，欠款应显示整元而非到分"。 */
+export function fmtByUnit(v: number, unit?: string): string {
+  const u = unit || 'fen';
+  if (u === 'yuan') return String(Math.round(v));
+  if (u === 'jiao') return v.toFixed(1);
+  return fmtAmount(v);
+}

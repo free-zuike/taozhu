@@ -22,7 +22,7 @@
       <view class="mdivider"></view>
       <view class="mcols">
         <view class="mcol"><text class="ml">售出</text><text class="mv" style="color:var(--primary)">¥{{ fmtNum(mSold) }}</text></view>
-        <view class="mcol"><text class="ml">未回款</text><text class="mv" :style="{ color: mDebt > 0 ? '#f59e0b' : '#909399' }">¥{{ fmtNum(mDebt) }}</text></view>
+        <view class="mcol"><text class="ml">未回款</text><text class="mv" :style="{ color: mDebt > 0 ? '#f59e0b' : '#909399' }">¥{{ fmtByUnit(mDebt, selUnit) }}</text></view>
         <view class="mcol"><text class="ml">结余</text><text class="mv" :style="{ color: mBalance >= 0 ? '#22c55e' : '#ef4444' }">¥{{ fmtNum(mBalance) }}</text></view>
       </view>
     </view>
@@ -189,7 +189,7 @@ import { ref, computed } from 'vue';
 ;
 import { request, getToken, getRole } from '../../api';
 import { attachIconSrc } from '../../attach-icon';
-import { fmtAmount, roundAmount, fmtPrice } from '../../utils/money';
+import { fmtAmount, roundAmount, fmtPrice, fmtByUnit } from '../../utils/money';
 
 const tab = ref<'sales' | 'payments'>('sales');
 // 老板才显示行级盈亏（进价=毛利敏感数据，店员隐藏；对齐 App 仅老板可见毛利）
@@ -283,10 +283,15 @@ function onPickMonth(e: { detail: { value: string } }) {
     loadMonthly();
   }
 }
-const clients = ref<Array<{ id: string; name: string }>>([]);
+const clients = ref<Array<{ id: string; name: string; round_unit?: string }>>([]);
 const clientNames = ref<string[]>([]);
 const filterClientId = ref('');
 const filterClientName = ref('');
+/// 未回款显示精度：当前选中店铺抹零精度（yuan/jiao/fen）；全部店铺=fen
+const selUnit = computed(() => {
+  const c = clients.value.find((x) => x.id === filterClientId.value);
+  return c?.round_unit || 'fen';
+});
 // 月度结余（三列，对齐 App：售出/未回款/结余=毛利；App 已去「收入」列，小程序同步）
 const mSold = ref(0);
 const mDebt = ref(0);

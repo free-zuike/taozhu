@@ -131,6 +131,12 @@ class _PaymentsPageState extends State<PaymentsPage> {
     return _clientDebt['${c['id']}'] ?? 0;
   }
 
+  /// 当前选中店铺抹零精度（欠款显示按店铺 round_unit：元/角/分）
+  String get _selUnit {
+    final c = _clients.where((x) => '${x['id']}' == _clientId).firstOrNull;
+    return '${c?['round_unit'] ?? 'fen'}';
+  }
+
   /// 自动平账减免 = 应收 − 实收（非负；差几百几十直接抹平结账）
   double get _autoWaived {
     final amount = double.tryParse(_amountCtrl.text) ?? 0;
@@ -374,7 +380,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                             items: _clients
                                 .map((c) => DropdownMenuItem(
                                     value: c['id'] as String,
-                                    child: Text('${c['name']}（欠 ¥${fmtMoney(_debtOf(c))}）')))
+                                    child: Text('${c['name']}（欠 ¥${fmtByUnit(_debtOf(c), '${c['round_unit'] ?? 'fen'}')}）')))
                                 .toList(),
                             onChanged: (v) => setState(() {
                               _clientId = v;
@@ -388,7 +394,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                               child: Row(
                                 children: [
                                   Expanded(
-                                    child: Text('应收 ¥${fmtMoney(_selDebt)}（按该店舍入方式累计）',
+                                    child: Text('应收 ¥${fmtByUnit(_selDebt, _selUnit)}（按该店舍入方式累计）',
                                         style: TextStyle(color: _c.danger, fontSize: 13)),
                                   ),
                                   if (_selDebt > 0)

@@ -27,6 +27,26 @@ String fmtPrice(num v) {
   return t;
 }
 
+/// 欠款/未回款/应收显示：按对应店铺抹零精度格式化（yuan=整数元、jiao=1 位角、fen/空=2 位分）。
+/// 与交易金额（fmtMoney 按金额舍入到分）区分——欠款按店铺 round_stage/round_unit 计算并显示，
+/// 用户"三间店按天抹零精度元，欠款应显示整元而非到分"。
+String fmtByUnit(num v, String? unit) {
+  final u = unit ?? 'fen';
+  if (u == 'yuan') {
+    final s = v.round().toString();
+    return s.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+  }
+  if (u == 'jiao') {
+    final s = v.toStringAsFixed(1);
+    final neg = s.startsWith('-');
+    final body = neg ? s.substring(1) : s;
+    final parts = body.split('.');
+    final intPart = parts[0].replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+    return '${neg ? '-' : ''}$intPart.${parts[1]}';
+  }
+  return fmtMoney(v);
+}
+
 class Money {
   static double _carry = 0.5;
   static int _digits = 2;

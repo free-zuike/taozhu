@@ -107,12 +107,12 @@ import { computed, ref, watch } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
-import { fmtAmount } from '../../utils/money';
+import { fmtAmount, fmtByUnit } from '../../utils/money';
 
 const clientId = ref('');
 const clientName = ref('');
 const clientNames = ref<string[]>([]);
-const clients = ref<Array<{ id: string; name: string; debt: number }>>([]);
+const clients = ref<Array<{ id: string; name: string; debt: number; round_unit?: string }>>([]);
 const amount = ref('');
 const waived = ref('');
 const selDebtLabel = ref('');
@@ -275,11 +275,11 @@ function removeAccount(i: number) {
 async function load() {
   try {
     const [c, p] = await Promise.all([
-      request<{ clients: Array<{ id: string; name: string; debt: number }> }>('/clients', 'GET'),
+      request<{ clients: Array<{ id: string; name: string; debt: number; round_unit?: string }> }>('/clients', 'GET'),
       request<{ payments: typeof payments.value }>('/payments', 'GET'),
     ]);
     clients.value = c.clients;
-    clientNames.value = c.clients.map((x) => `${x.name}（欠 ¥${fmt(x.debt)}）`);
+    clientNames.value = c.clients.map((x) => `${x.name}（欠 ¥${fmtByUnit(x.debt, x.round_unit)}）`);
     payments.value = p.payments.slice(0, 100);
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
@@ -290,9 +290,9 @@ function onClient(e: { detail: { value: number } }) {
   const c = clients.value[e.detail.value];
   if (c) {
     clientId.value = c.id;
-    clientName.value = `${c.name}（欠 ¥${fmt(c.debt)}）`;
+    clientName.value = `${c.name}（欠 ¥${fmtByUnit(c.debt, c.round_unit)}）`;
     selDebt.value = Number(c.debt || 0);
-    selDebtLabel.value = `应收 ¥${fmt(selDebt.value)}（按该店舍入方式累计 · 实收+减免=账面已收）`;
+    selDebtLabel.value = `应收 ¥${fmtByUnit(selDebt.value, c.round_unit)}（按该店舍入方式累计 · 实收+减免=账面已收）`;
     waivedAutoTouched.value = false;
     amount.value = '';
     waived.value = ''; // 减免由 watch(amount) 自动算（应收−实收），用户手填则用手动值

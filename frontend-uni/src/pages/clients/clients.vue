@@ -30,7 +30,7 @@
         </view>
         <view class="stat-divider"></view>
         <view class="stat">
-          <text class="stat-num" :class="Number(c.debt || 0) > 0 ? 'red' : 'green'">¥{{ fmt(c.debt) }}</text>
+          <text class="stat-num" :class="Number(c.debt || 0) > 0 ? 'red' : 'green'">¥{{ fmtByUnit(c.debt, c.round_unit) }}</text>
           <text class="stat-label">欠款</text>
         </view>
         <view class="stat-divider"></view>
@@ -91,7 +91,7 @@ import { ref, computed } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
-import { fmtAmount } from '../../utils/money';
+import { fmtAmount, fmtByUnit } from '../../utils/money';
 
 interface Client {
   id: string;

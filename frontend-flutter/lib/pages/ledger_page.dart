@@ -62,6 +62,7 @@ class _LedgerPageState extends State<LedgerPage> {
   double _mSold = 0; // 售出 = 出货（当前店铺）
   double _mGross = 0; // 毛利 = 售出 − 成本（当前店铺）
   double _mDebt = 0; // 未回款 = 应收欠款（截止 end 累计出货 − 累计收款）
+  String _mUnit = 'fen'; // 未回款显示精度：当前店铺抹零精度（yuan/jiao/fen）；全部店铺=fen
   double _mBalance = 0; // 结余 = 毛利（售出 − 成本，不含进货）
   bool _mLoaded = false; // 月度结余是否已加载（未加载显示占位符，不闪 0）
   int _selYear = DateTime.now().year; // 月度结余所选年份（头部月份切换）
@@ -177,9 +178,11 @@ class _LedgerPageState extends State<LedgerPage> {
           // 单店视图：按该店自身抹零配置
           final me = await LocalDb.getOne('clients', selId);
           final cfg = normalizeRoundConfig(me?['round_stage'], me?['round_unit']);
+          _mUnit = cfg.unit; // 未回款显示精度跟随该店抹零精度（元/角/分）
           debt = salesSideRoundedLocal(debtRows, cfg.stage, cfg.unit) - paidDebt;
         } else {
           // 全部店铺视图：各店按自身配置分别算出货侧再累加（None 店=逐笔舍入，行为不变）
+          _mUnit = 'fen'; // 多店混精度无法统一，欠款显示到分
           final cfgById = <String, ({String stage, String unit})>{
             for (final c in await LocalDb.getAllByName('clients'))
               '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
@@ -689,14 +692,14 @@ class _LedgerPageState extends State<LedgerPage> {
     final debt = _mLoaded ? _mDebt : (localSold - localPaid); // 未回款=应收欠款（每笔先舍入再累加：与单笔显示/对账口径一致——427.8 正确，勿原始 SUM 尾数吞并）
     final balance = _mLoaded ? _mBalance : localGross; // 结余 = 毛利（售出 − 成本，不含进货）
 
-    Widget col(String label, double value, Color color) {
+    Widget col(String label, double value, Color color, {String? unit}) {
       return Expanded(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(label, style: TextStyle(fontSize: 11, color: c.textSub)),
             const SizedBox(height: 3),
-            Text('¥${fmtMoney(value)}',
+            Text(unit == null ? '¥${fmtMoney(value)}' : '¥${fmtByUnit(value, unit)}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: color)),
@@ -749,7 +752,7 @@ class _LedgerPageState extends State<LedgerPage> {
               children: [
                 col('售出', sold, c.primary),
                 const SizedBox(width: 3),
-                col('未回款', debt, debt > 0 ? c.warning : c.textSub),
+                col('未回款', debt, debt > 0 ? c.warning : c.textSub, unit: _mUnit),
                 const SizedBox(width: 3),
                 col('结余', balance, balance >= 0 ? c.success : c.danger),
               ],

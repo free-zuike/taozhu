@@ -44,6 +44,16 @@ class _StatementPageState extends State<StatementPage> {
     return 1;
   }
 
+  /// 选中店铺抹零精度（期末欠款显示按店铺 round_unit：元/角/分；全部店铺=fen）
+  String get _stmtUnit {
+    if (_clientId != null) {
+      final c = _clients.where((x) => '${x['id']}' == _clientId).firstOrNull;
+      final u = '${c?['round_unit'] ?? ''}';
+      if (u == 'yuan' || u == 'jiao') return u;
+    }
+    return 'fen';
+  }
+
   /// 结账周期（按起始日）：[起始日, 次月起始日-1]；起始日=1 时按自然月
   (String, String) _cyclePeriod(int startDay, DateTime anchor) {
     if (startDay <= 1) {
@@ -2035,7 +2045,7 @@ class _StatementPageState extends State<StatementPage> {
               _statCard('减免合计（平账）', '¥${fmtMoney(_waivedTotal)}', c.warning),
             ],
             const SizedBox(height: 12),
-            _statCard('期末欠款（累计）', '¥${fmtMoney(_debtEnd)}',
+            _statCard('期末欠款（累计）', '¥${fmtByUnit(_debtEnd, _stmtUnit)}',
                 _debtEnd > 0 ? c.danger : c.success),
             const SizedBox(height: 12),
             // 出货/收款明细已移除：对账单聚焦统计 + 成品预览，逐笔明细通过模板 {明细} 变量/导出查看
