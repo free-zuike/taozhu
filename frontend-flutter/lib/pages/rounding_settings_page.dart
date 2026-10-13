@@ -204,9 +204,10 @@ class _RoundingSettingsPageState extends State<RoundingSettingsPage> {
                     ),
                   ),
                 ],
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
+        ),
     );
   }
 
