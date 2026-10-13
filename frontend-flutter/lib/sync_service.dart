@@ -1358,7 +1358,7 @@ class SyncService {
   /// （=老板上传的 Key，员工本地直连可用但界面不显示明文）。
   static Future<void> _syncAiConfig() async {
     try {
-      final d = await Api.instance.get('/settings/ai');
+      final d = await Api.instance.get('/settings/ai?include_key=1');
       final provs = (d['providers'] as List?) ?? [];
       if (provs.isEmpty) return;
       final local = await aiLoadConfig();

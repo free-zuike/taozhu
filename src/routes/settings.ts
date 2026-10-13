@@ -109,9 +109,26 @@ export function sanitizeAiConfig(cfg: AiConfig) {
   };
 }
 
-// GET /api/v1/settings/ai — 配置（含 Key，同步下发用；仅登录管理员）
+// GET /api/v1/settings/ai — 配置状态；?include_key=1 时含 Key 明文（仅同步流程拉取用；
+// 默认脱敏=页面/测试不回显 Key 明文）
 settingsRouter.get('/ai', async (c) => {
   const cfg = await getAiConfig(c.env.DB);
+  const withKey = c.req.query('include_key') === '1';
+  if (!withKey) {
+    return c.json({
+      providers: cfg.providers.map((p) => ({
+        id: p.id,
+        name: p.name,
+        is_built_in: Boolean(p.isBuiltIn),
+        has_key: Boolean(p.apiKey),
+        base_url: p.baseUrl,
+        text_model: p.textModel,
+        vision_model: p.visionModel,
+        audio_model: p.audioModel,
+      })),
+      binding: cfg.binding,
+    });
+  }
   return c.json(sanitizeAiConfig(cfg));
 });
 
