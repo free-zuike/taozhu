@@ -157,6 +157,9 @@ class _SystemProxyOverrides extends HttpOverrides {
   HttpClient createHttpClient(SecurityContext? context) {
     final client = super.createHttpClient(context);
     client.findProxy = SystemProxy.resolve;
+    // 连接阶段短超时（DNS/握手慢或不可达快速失败，不占用整 20s 总超时）——
+    // 用户"某个请求太慢导致后续全部卡住"：连接卡住会让串行同步阻塞
+    client.connectionTimeout = const Duration(seconds: 10);
     return client;
   }
 }

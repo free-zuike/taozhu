@@ -359,9 +359,9 @@ class Api {
       }
     }
 
-    // 网络异常自动重试（最多 4 次，递增退避 500ms/1s/2s）：
-    // TLS 握手瞬时中断/DNS 瞬时解析失败（弱网/切网/代理抖动，浏览器也靠重试恢复）等偶发
-    // 失败，重试后多数能恢复——App"动不动域名解析失败"（浏览器正常）很大程度是这类瞬时失败
+    // 网络异常自动重试（最多 3 次，递增退避 500ms/1s）：
+    // TLS 握手瞬时中断/DNS 瞬时解析失败（弱网/切网，浏览器也靠重试恢复）等偶发失败重试恢复。
+    // 重试不设过多：单请求最坏 = 连接 10s + 总 20s 超时 × 3 次 ≈ 60s，避免慢请求卡住后续（串行同步）
     Future<http.Response> retry() async {
       var attempts = 0;
       while (true) {
@@ -373,15 +373,14 @@ class Api {
           try {
             if (SystemProxy.enabled) SystemProxy.markFail();
           } catch (_) {}
-          if (attempts >= 4) {
-            // 最终失败记网络错误日志（日志页可查真实失败类型：解析失败/拒绝/超时/IPv6——定位用）
+          if (attempts >= 3) {
+            // 最终失败记网络错误日志（日志页可查真实失败类型：解析失败/拒绝/超时——定位用）
             try {
-              appLog('net', '请求最终失败（重试4次）：${_friendlyNetError(e, url)} | $url', level: 'error');
+              appLog('net', '请求最终失败（重试3次）：${_friendlyNetError(e, url)} | $url', level: 'error');
             } catch (_) {}
             rethrow;
           }
-          await Future.delayed(
-              Duration(milliseconds: attempts == 1 ? 500 : (attempts == 2 ? 1000 : 2000)));
+          await Future.delayed(Duration(milliseconds: attempts == 1 ? 500 : 1000));
         }
       }
     }

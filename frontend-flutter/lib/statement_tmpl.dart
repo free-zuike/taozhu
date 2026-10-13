@@ -607,10 +607,39 @@ XlsCfg _defaultTemplate() => XlsCfg()
 /// 「多栏」= 多栏月账单（寻牛记式：每栏 10 天，31 天 → 4 栏，最后一栏 1 天），展开为可编辑网格。
 XlsCfg _multiColTemplate() => XlsCfg()
   ..name = '多栏'
+  // 展开网格（编辑/设计器直接可见可改，不再是 {月账单} 占位文本——用户"多栏编辑显示的是{月账单}"）；
+  // 渲染时 _renderGrid 按当月天数自动裁剪空栏（无 31 号则 31 那两列不显示——用户定稿）
   ..grid = [
-    // {月账单} 宏：渲染按当月实际天数动态分栏（30 天→3 栏；无 31 号则 31 那两列不显示——用户定稿），
-    // 自带一行标题「店铺 N月份账单」；栏底小计+底部总计（无背景色）
-    [GridCell('{月账单}', '')],
+    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey', 1, 8)],
+    [
+      for (var cc = 0; cc < 4; cc++) ...[
+        GridCell('日期', 'center', true, 'grey'),
+        GridCell('营业额', 'center', true, 'grey'),
+      ],
+    ],
+    for (var r = 0; r < 10; r++)
+      [
+        for (var cc = 0; cc < 4; cc++)
+          if (cc * 10 + r + 1 <= 31) ...[
+            GridCell('{月}月${cc * 10 + r + 1}日', 'center'),
+            GridCell('{${cc * 10 + r + 1}日销售额}', 'right'),
+          ],
+      ],
+    [
+      GridCell('小计', 'center', true),
+      GridCell('{1-10日合计}', 'right', true),
+      GridCell('', ''),
+      GridCell('{11-20日合计}', 'right', true),
+      GridCell('', ''),
+      GridCell('{21-30日合计}', 'right', true),
+      GridCell('', ''),
+      GridCell('{31日销售额}', 'right', true),
+    ],
+    [
+      GridCell('总计', 'center', true),
+      for (var i = 0; i < 6; i++) GridCell('', ''),
+      GridCell('{月合计}', 'right', true),
+    ],
   ];
 
 Future<void> saveTemplates(List<XlsCfg> templates, String currentName) async {
