@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../log.dart';
 import '../theme.dart';
 import '../utils/ai_local.dart';
 import 'router.dart';
@@ -241,10 +242,12 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       _testState[capability] = 'testing';
     });
     try {
-      await _testCapability(capability);
+      final msg = await _testCapability(capability);
+      appLog('ai', 'AI 测试通过（$capability）：$msg');
       if (!mounted) return;
       setState(() => _testState[capability] = 'ok');
     } catch (e) {
+      appLog('ai', 'AI 测试失败（$capability）：${e.toString().split('\n').first}', level: 'error');
       if (mounted) setState(() => _testState[capability] = 'fail');
       toast(context, '$label：${e.toString().replaceFirst('Exception: ', '')}');
     } finally {
@@ -261,9 +264,11 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       for (final (cap, label) in [('text', '文字记账'), ('vision', '图片识别'), ('speech', '语音记账')]) {
         if (mounted) setState(() => _testState[cap] = 'testing');
         try {
-          await _testCapability(cap);
+          final msg = await _testCapability(cap);
+          appLog('ai', 'AI 测试通过（$cap）：$msg');
           if (mounted) setState(() => _testState[cap] = 'ok');
         } catch (e) {
+          appLog('ai', 'AI 测试失败（$cap）：${e.toString().split('\n').first}', level: 'error');
           if (mounted) setState(() => _testState[cap] = 'fail');
           failed.add('$label：${e.toString().replaceFirst('Exception: ', '')}');
         }

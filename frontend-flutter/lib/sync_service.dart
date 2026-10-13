@@ -1385,7 +1385,10 @@ class SyncService {
         );
       }).toList();
       await aiSaveConfig(cfg);
-    } catch (_) {}
+      appLog('ai', '同步 AI 配置：${cfg.providers.length} 个服务商（本地持 Key ${cfg.providers.where((x) => x.apiKey.trim().isNotEmpty).length} 个）');
+    } catch (e) {
+      appLog('ai', '同步 AI 配置失败：${e.toString().split('\n').first}', level: 'error');
+    }
   }
 
   /// 实体类型 → 本地 store 名映射

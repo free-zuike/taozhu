@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../log.dart';
 
 /// 商品草稿（对齐后端 ai-parse DraftItem）
 class AiDraftItem {
@@ -223,52 +224,79 @@ String _visionPromptFor(String purpose) {
 
 /// 文字记账：描述 → 草稿明细
 Future<AiInvoice> aiParseText(String text, {String purpose = 'sale'}) async {
-  final cfg = await aiLoadConfig();
-  final p = _providerFor(cfg, 'textProviderId');
-  final raw = await _chatCompletion(p, 'text', [
-    {'role': 'user', 'content': '${_promptFor(purpose)}\n\n描述：$text'},
-  ]);
-  return _normalizeInvoice(raw);
+  try {
+    final cfg = await aiLoadConfig();
+    final p = _providerFor(cfg, 'textProviderId');
+    appLog('ai', '文字记账识别开始：${p.name}/${_modelFor(p, 'text')}（${text.length} 字）');
+    final raw = await _chatCompletion(p, 'text', [
+      {'role': 'user', 'content': '${_promptFor(purpose)}\n\n描述：$text'},
+    ]);
+    final inv = _normalizeInvoice(raw);
+    appLog('ai', '文字记账识别完成：${inv.items.length} 项、店铺「${inv.client}」');
+    return inv;
+  } catch (e) {
+    appLog('ai', '文字记账识别失败：${e.toString().split('\n').first}', level: 'error');
+    rethrow;
+  }
 }
 
 /// 拍照识别：图片字节 → 草稿明细（视觉模型）
 Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = 'sale'}) async {
-  final cfg = await aiLoadConfig();
-  final p = _providerFor(cfg, 'visionProviderId');
-  final b64 = base64Encode(bytes);
-  final raw = await _chatCompletion(p, 'vision', [
-    {
-      'role': 'user',
-      'content': [
-        {'type': 'text', 'text': _visionPromptFor(purpose)},
-        {'type': 'image_url', 'image_url': {'url': 'data:$mime;base64,$b64'}},
-      ],
-    },
-  ]);
-  return _normalizeInvoice(raw);
+  try {
+    final cfg = await aiLoadConfig();
+    final p = _providerFor(cfg, 'visionProviderId');
+    appLog('ai', '图片识别开始：${p.name}/${_modelFor(p, 'vision')}（${bytes.length} 字节 $mime）');
+    final b64 = base64Encode(bytes);
+    final raw = await _chatCompletion(p, 'vision', [
+      {
+        'role': 'user',
+        'content': [
+          {'type': 'text', 'text': _visionPromptFor(purpose)},
+          {'type': 'image_url', 'image_url': {'url': 'data:$mime;base64,$b64'}},
+        ],
+      },
+    ]);
+    final inv = _normalizeInvoice(raw);
+    appLog('ai', '图片识别完成：${inv.items.length} 项、店铺「${inv.client}」');
+    return inv;
+  } catch (e) {
+    appLog('ai', '图片识别失败：${e.toString().split('\n').first}', level: 'error');
+    rethrow;
+  }
 }
 
 /// 语音记账：音频字节 → 语音转文字（智谱 audio 接口）→ 草稿明细
 Future<AiInvoice> aiParseVoice(Uint8List bytes, String mime, {String purpose = 'sale'}) async {
-  final cfg = await aiLoadConfig();
-  final p = _providerFor(cfg, 'speechProviderId');
-  final url = '${p.baseUrl.replaceAll(RegExp(r'/+$'), '')}/audio/asr';
-  final req = http.MultipartRequest('POST', Uri.parse(url))
-    ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
-    ..headers['model'] = _modelFor(p, 'speech')
-    ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'voice.m4a', contentType: http.MediaType.parse(mime)));
-  final resp = await req.send().timeout(const Duration(seconds: 60));
-  final body = await resp.stream.bytesToString();
-  if (resp.statusCode != 200) throw Exception('AI 语音通道 ${resp.statusCode}: ${body.length > 120 ? body.substring(0, 120) : body}');
-  // 智谱 asr 返回 {text: "..."}
-  final d = jsonDecode(body) as Map<String, dynamic>;
-  final text = '${d['text'] ?? ''}'.trim();
-  if (text.isEmpty) throw Exception('语音未识别出文字');
-  final tp = _providerFor(cfg, 'textProviderId');
-  final raw = await _chatCompletion(tp, 'text', [
-    {'role': 'user', 'content': '${_promptFor(purpose)}\n\n描述：$text'},
-  ]);
-  return _normalizeInvoice(raw);
+  try {
+    final cfg = await aiLoadConfig();
+    final p = _providerFor(cfg, 'speechProviderId');
+    appLog('ai', '语音识别开始：${p.name}/${_modelFor(p, 'speech')}（${bytes.length} 字节 $mime）');
+    final url = '${p.baseUrl.replaceAll(RegExp(r'/+$'), '')}/audio/asr';
+    final req = http.MultipartRequest('POST', Uri.parse(url))
+      ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
+      ..headers['model'] = _modelFor(p, 'speech')
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'voice.m4a', contentType: http.MediaType.parse(mime)));
+    final resp = await req.send().timeout(const Duration(seconds: 60));
+    final body = await resp.stream.bytesToString();
+    if (resp.statusCode != 200) {
+      final err = 'AI 语音通道 ${resp.statusCode}: ${body.length > 120 ? body.substring(0, 120) : body}';
+      appLog('ai', '语音转文字失败：$err', level: 'error');
+      throw Exception(err);
+    }
+    final d = jsonDecode(body) as Map<String, dynamic>;
+    final text = '${d['text'] ?? ''}'.trim();
+    if (text.isEmpty) throw Exception('语音未识别出文字');
+    final tp = _providerFor(cfg, 'textProviderId');
+    final raw = await _chatCompletion(tp, 'text', [
+      {'role': 'user', 'content': '${_promptFor(purpose)}\n\n描述：$text'},
+    ]);
+    final inv = _normalizeInvoice(raw);
+    appLog('ai', '语音识别完成：转文字 ${text.length} 字、${inv.items.length} 项');
+    return inv;
+  } catch (e) {
+    appLog('ai', '语音识别失败：${e.toString().split('\n').first}', level: 'error');
+    rethrow;
+  }
 }
 
 AiInvoice _normalizeInvoice(String raw) {
@@ -308,9 +336,9 @@ AiInvoice _normalizeInvoice(String raw) {
 Future<String> aiTestCapability(String cap) async {
   final cfg = await aiLoadConfig();
   if (cap == 'vision') {
-    // 内置 1x1 白图测试视觉通道
+    // 64x64 实心蓝 PNG 测试视觉通道（此前 1x1 被部分服务商拒：图片输入格式/解析错误）
     final tiny = base64Decode(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
+        'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAf0lEQVR4nNXOQREAIAzAsFJlSMM5iNiDaxRk7XMpkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJkziJ83dg6gGBYwI/w6NL6gAAAABJRU5ErkJggg==');
     final p = _providerFor(cfg, 'visionProviderId');
     if (p.apiKey.trim().isEmpty) throw Exception('「${p.name}」未配置 Key，无法测试');
     final raw = await _chatCompletion(p, 'vision', [
