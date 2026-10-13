@@ -10,6 +10,10 @@ import 'log.dart';
 import 'system_proxy.dart';
 import 'version.dart';
 
+/// 全局共享 HTTP 客户端（连接池 keep-alive）：同一服务器连接复用，减少重复 DNS 解析与 TLS
+/// 握手（对齐参考实现 dio 的连接复用；http 顶层函数每次新建连接=弱网下"动不动解析失败"根因）。
+final http.Client _sharedHttpClient = http.Client();
+
 /// 设备唯一 id（首次生成存本地）：设备管理按台上报/区分（x-device-id 头）
 String? _devIdCache;
 Future<String> deviceId() async {
@@ -329,25 +333,28 @@ class Api {
     headers['x-client'] = kIsWeb ? 'taozhu-web' : 'taozhu-app'; // 操作端标识（审计/设备）
     headers['x-device-id'] = await deviceId(); // 设备唯一 id（设备管理按台上报）
 
-    // 发起一次请求（按方法分发）；8s 超时防止网络不可达时页面无限转圈
+    // 发起一次请求（按方法分发）；20s 超时防止网络不可达时页面无限转圈。
+    // 用全局共享 Client（连接池 keep-alive，对齐参考实现 dio 的连接复用）：
+    // 同一服务器连接复用 → 后续请求不再重新 DNS 解析 + TLS 握手（此前 http 顶层函数
+    // 每次新建连接=每次都重新解析，弱网下"动不动域名解析失败"根因之一）
     Future<http.Response> doReq() async {
       switch (method) {
         case 'POST':
-          return http.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
+          return _sharedHttpClient.post(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
               .timeout(const Duration(seconds: 20));
         case 'PUT':
-          return http.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
+          return _sharedHttpClient.put(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
               .timeout(const Duration(seconds: 20));
         case 'PATCH':
-          return http.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
+          return _sharedHttpClient.patch(Uri.parse(url), headers: headers, body: jsonEncode(body ?? {}))
               .timeout(const Duration(seconds: 20));
         case 'DELETE':
           return (body == null
-                  ? http.delete(Uri.parse(url), headers: headers)
-                  : http.delete(Uri.parse(url), headers: headers, body: jsonEncode(body)))
+                  ? _sharedHttpClient.delete(Uri.parse(url), headers: headers)
+                  : _sharedHttpClient.delete(Uri.parse(url), headers: headers, body: jsonEncode(body)))
               .timeout(const Duration(seconds: 20));
         default:
-          return http.get(Uri.parse(url), headers: headers)
+          return _sharedHttpClient.get(Uri.parse(url), headers: headers)
               .timeout(const Duration(seconds: 20));
       }
     }
