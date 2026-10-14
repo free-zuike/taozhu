@@ -319,7 +319,7 @@ class _ClientsPageState extends State<ClientsPage> {
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 initialValue: selStage == 'none' ? null : selUnit,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                     labelText: '抹零精度',
                     helperText: selStage == 'none' ? '不抹零=按原始金额显示（精度不生效）' : null),
                 items: const [
