@@ -310,6 +310,7 @@ class _StatementPageState extends State<StatementPage> {
         debtEnd: _debtEnd,
         debtUnit: _stmtUnit,
         roundMode: _roundTotals,
+        displayUnit: _stmtUnit, // 整页金额显示位数跟随店铺 round_unit（用户"0.00 仍是 2 位数"）
       );
 
   /// 当前选中成品样式（公共库模板；缺省第一条），应用排版工具条（标题对齐/字号）

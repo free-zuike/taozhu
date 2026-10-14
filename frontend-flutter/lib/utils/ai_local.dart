@@ -104,31 +104,68 @@ String _modelFor(AiProvider p, String cap) => cap == 'text'
         ? (p.visionModel.isNotEmpty ? p.visionModel : 'glm-4v-flash')
         : (p.audioModel.isNotEmpty ? p.audioModel : 'glm-4-voice');
 
-/// 直连服务商 chat/completions（OpenAI 兼容；智谱 GLM 同协议）
+/// 直连服务商 chat/completions（OpenAI 兼容；智谱 GLM 同协议）。
+/// 自适应参数剥离（对齐服务器 ai-parse 与参考项目）：不同模型对参数约束不同
+/// （推理模型锁 temperature、部分模型拒 max_tokens 等）——报错指明哪个参数非法
+/// （结构化 error.param 或文案点名）就剥掉该参数重试，最多 3 次。智谱 1210"参数有误"由此兜底。
+const _requiredKeys = {'model', 'messages', 'stream'};
+const _maxParamStrips = 3;
+
+String? _rejectedParam(Map<String, dynamic> payload, int statusCode, String body) {
+  if (statusCode < 400) return null;
+  try {
+    final parsed = jsonDecode(body);
+    if (parsed is Map) {
+      final err = parsed['error'];
+      if (err is Map) {
+        final param = err['param'];
+        if (param is String && payload.containsKey(param) && !_requiredKeys.contains(param)) {
+          return param;
+        }
+      }
+    }
+  } catch (_) {}
+  final low = body.toLowerCase();
+  for (final k in payload.keys) {
+    if (!_requiredKeys.contains(k) && low.contains(k.toLowerCase())) return k;
+  }
+  return null;
+}
+
 Future<String> _chatCompletion(AiProvider p, String cap, List<Map<String, dynamic>> messages) async {
   if (p.apiKey.trim().isEmpty) {
     throw Exception('「${p.name}」未配置 Key，请到 AI 识别设置添加');
   }
   final url = '${p.baseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions';
-  // 视觉模型（glm-4v 系）参数面窄：不带 temperature——智谱 1210"参数有误"疑似由此触发
-  //（文本/语音模型保持 temperature 0.1 与服务器 parsePhoto 对齐）
   final body = <String, dynamic>{
     'model': _modelFor(p, cap),
     'messages': messages,
-    if (cap != 'vision') 'temperature': 0.1,
+    // 视觉模型（glm-4v 系）参数面窄：temperature 若被拒由自适应剥离重试（对齐服务器/参考项目）
+    'temperature': 0.1,
   };
-  final resp = await http.post(
-    Uri.parse(url),
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${p.apiKey.trim()}'},
-    body: jsonEncode(body),
-  ).timeout(const Duration(seconds: 60));
-  if (resp.statusCode != 200) {
-    // 完整错误透出（智谱 error.message 是定位 1210 的关键，别截断）
-    throw Exception('AI 通道 ${resp.statusCode}: ${resp.body.length > 600 ? resp.body.substring(0, 600) : resp.body}');
+  for (var i = 0; i <= _maxParamStrips; i++) {
+    final resp = await http.post(
+      Uri.parse(url),
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${p.apiKey.trim()}'},
+      body: jsonEncode(body),
+    ).timeout(const Duration(seconds: 60));
+    if (resp.statusCode == 200) {
+      final d = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      final content = (d['choices'] as List?)?[0]?['message']?['content'];
+      return '${content ?? ''}'.trim();
+    }
+    final errBody = utf8.decode(resp.bodyBytes);
+    if (i == _maxParamStrips) {
+      // 完整错误透出（智谱 error.message 是定位 1210 的关键，别截断）
+      throw Exception('AI 通道 ${resp.statusCode}: ${errBody.length > 600 ? errBody.substring(0, 600) : errBody}');
+    }
+    final param = _rejectedParam(body, resp.statusCode, errBody);
+    if (param == null) {
+      throw Exception('AI 通道 ${resp.statusCode}: ${errBody.length > 600 ? errBody.substring(0, 600) : errBody}');
+    }
+    body.remove(param);
   }
-  final d = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
-  final content = (d['choices'] as List?)?[0]?['message']?['content'];
-  return '${content ?? ''}'.trim();
+  throw Exception('AI 通道请求失败（已按上游提示剥离参数重试仍失败）');
 }
 
 String _pick(Map<String, dynamic> o, List<String> keys) {

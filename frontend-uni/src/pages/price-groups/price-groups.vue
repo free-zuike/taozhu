@@ -6,6 +6,7 @@
     <view v-for="g in groups" :key="g.id" class="card">
       <view class="head">
         <text class="name">{{ g.name }}</text>
+        <text class="op" @click="summarize(g)">总结</text>
         <text class="op" @click="rename(g)">改名</text>
         <text class="del" @click="remove(g.id, g.name)">删除</text>
       </view>
@@ -111,6 +112,49 @@ function remove(id: string, name: string) {
       }
     },
   });
+}
+
+/// 从现有店铺销售记录总结每商品最近成交单价，填充该价格组售价（只补缺，不覆盖已设价）
+function summarize(g: Group) {
+  uni.showLoading({ title: '加载店铺…' });
+  request<{ clients: Array<{ id: string; name: string }> }>('/clients', 'GET')
+    .then((d) => {
+      uni.hideLoading();
+      const clients = d.clients || [];
+      const items = ['全部店铺', ...clients.map((c) => c.name)];
+      uni.showActionSheet({
+        itemList: items,
+        success: (r) => {
+          const idx = r.tapIndex;
+          const clientId = idx > 0 ? clients[idx - 1].id : '';
+          uni.showModal({
+            title: '从店铺总结售价',
+            content: `按商品最近成交单价填充「${g.name}」组价（只补缺，不覆盖已设价）。${idx === 0 ? '参考全部店铺' : '参考「' + items[idx] + '」'}，确定？`,
+            success: async (m) => {
+              if (!m.confirm) return;
+              try {
+                uni.showLoading({ title: '总结中…' });
+                const res = await request<{ added: number; updated: number; items: number; message?: string }>(`/price-groups/${g.id}/summarize`, 'POST', { client_id: clientId, mode: 'fill' });
+                uni.hideLoading();
+                if (res.added === 0 && res.updated === 0) {
+                  uni.showToast({ title: res.message || '该价格组已是最新', icon: 'none' });
+                } else {
+                  uni.showToast({ title: `新增 ${res.added}、更新 ${res.updated}`, icon: 'success' });
+                }
+                await load();
+              } catch (e) {
+                uni.hideLoading();
+                uni.showToast({ title: (e as Error).message || '总结失败', icon: 'none' });
+              }
+            },
+          });
+        },
+      });
+    })
+    .catch((e) => {
+      uni.hideLoading();
+      uni.showToast({ title: (e as Error).message || '加载店铺失败', icon: 'none' });
+    });
 }
 
   onHide(() => { offWs('*', load); });

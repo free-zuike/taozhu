@@ -268,6 +268,61 @@ export const DEFAULT_AI_CONFIG = {
 export const DEFAULT_TEXT_MODEL = 'glm-4-flash';
 export const DEFAULT_AUDIO_MODEL = 'glm-4-voice';
 
+// ── 自适应参数剥离（对齐参考项目 _post_chat_adaptive + _rejected_param）──────────
+// 不同模型对 OpenAI-compatible 参数有不同约束（推理模型锁 temperature、部分模型
+// 不支持 max_tokens/response_format 等）。与其猜哪个参数不行（如"视觉去 temperature"），
+// 不如听上游报错动态适配：报错指明哪个参数非法（结构化 error.param 或文案点名）就
+// 从请求里剥掉该参数重试，最多 _MAX_PARAM_STRIPS 次。智谱 1210"参数有误"由此兜底。
+const _REQUIRED_KEYS = new Set(['model', 'messages', 'stream']);
+const _MAX_PARAM_STRIPS = 3;
+
+function _rejectedParam(payload: Record<string, unknown>, statusCode: number, body: string): string | null {
+  if (statusCode < 400) return null;
+  // 1) 结构化：{"error": {"param": "temperature", ...}}
+  try {
+    const parsed = JSON.parse(body) as { error?: { param?: unknown } };
+    const param = parsed?.error?.param;
+    if (typeof param === 'string' && param in payload && !_REQUIRED_KEYS.has(param)) {
+      return param;
+    }
+  } catch { /* ignore */ }
+  // 2) 文案兜底：错误信息里点名了我们发出去的哪个可丢键
+  const low = body.toLowerCase();
+  for (const key of Object.keys(payload)) {
+    if (!_REQUIRED_KEYS.has(key) && low.includes(key.toLowerCase())) {
+      return key;
+    }
+  }
+  return null;
+}
+
+async function _postChatAdaptive(
+  url: string,
+  headers: Record<string, string>,
+  payload: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<Response> {
+  let currentPayload = { ...payload };
+  let response = await fetch(url, {
+    method: 'POST', headers, body: JSON.stringify(currentPayload),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  for (let i = 0; i < _MAX_PARAM_STRIPS; i++) {
+    if (response.ok) return response;
+    const errText = await response.clone().text();
+    const param = _rejectedParam(currentPayload, response.status, errText);
+    if (param === null) return response;
+    currentPayload = Object.fromEntries(
+      Object.entries(currentPayload).filter(([k]) => k !== param)
+    );
+    response = await fetch(url, {
+      method: 'POST', headers, body: JSON.stringify(currentPayload),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  }
+  return response;
+}
+
 /** 调用 OpenAI 兼容视觉模型做识别；endpoint 无 key 抛错带提示 */
 export async function parsePhoto(
   endpoint: CapabilityEndpoint,
@@ -281,23 +336,23 @@ export async function parsePhoto(
   const base64 = bytesToBase64(imageBytes);
   const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
   const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
-  const resp = await fetch(chatUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${endpoint.apiKey.trim()}` },
-    body: JSON.stringify({
-      model: endpoint.model || DEFAULT_AI_CONFIG.model,
-      // 视觉模型（glm-4v 系）参数面窄：不带 temperature——智谱 1210"参数有误"疑似由此触发
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:${mime || 'image/jpeg'};base64,${base64}` } },
-            { type: 'text', text: buildAiPrompt(purpose) },
-          ],
-        },
-      ],
-    }),
-  });
+  const resp = await _postChatAdaptive(chatUrl, {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${endpoint.apiKey.trim()}`,
+  }, {
+    model: endpoint.model || DEFAULT_AI_CONFIG.model,
+    // 视觉模型（glm-4v 系）参数面窄：temperature 若被拒由自适应剥离重试（对齐参考项目）
+    temperature: 0.1,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: `data:${mime || 'image/jpeg'};base64,${base64}` } },
+          { type: 'text', text: buildAiPrompt(purpose) },
+        ],
+      },
+    ],
+  }, 60000);
   if (!resp.ok) {
     const bodyText = await resp.text().catch(() => '');
     throw new Error(`AI 识别接口错误 HTTP ${resp.status}: ${bodyText.slice(0, 200)}`);
@@ -322,17 +377,16 @@ export async function parseText(
   if (!trimmed) return { client: '', date: '', items: [] };
   const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
   const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
-  const resp = await fetch(chatUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${endpoint.apiKey.trim()}` },
-    body: JSON.stringify({
-      model: endpoint.model || DEFAULT_TEXT_MODEL,
-      temperature: 0.1,
-      messages: [
-        { role: 'user', content: `${buildTextPrompt(purpose)}\n\n${trimmed}` },
-      ],
-    }),
-  });
+  const resp = await _postChatAdaptive(chatUrl, {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${endpoint.apiKey.trim()}`,
+  }, {
+    model: endpoint.model || DEFAULT_TEXT_MODEL,
+    temperature: 0.1,
+    messages: [
+      { role: 'user', content: `${buildTextPrompt(purpose)}\n\n${trimmed}` },
+    ],
+  }, 60000);
   if (!resp.ok) {
     const bodyText = await resp.text().catch(() => '');
     throw new Error(`AI 记账接口错误 HTTP ${resp.status}: ${bodyText.slice(0, 200)}`);
@@ -440,22 +494,22 @@ export async function testVisionChannel(
   const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
   const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
   const imageBytes = Uint8Array.from(atob(TEST_IMAGE_JPEG_B64), (ch) => ch.charCodeAt(0));
-  const resp = await fetch(chatUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${endpoint.apiKey.trim()}` },
-    body: JSON.stringify({
-      model: endpoint.model || DEFAULT_AI_CONFIG.model,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${TEST_IMAGE_JPEG_B64}` } },
-            { type: 'text', text: '描述这张图片' },
-          ],
-        },
-      ],
-    }),
-  });
+  const resp = await _postChatAdaptive(chatUrl, {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${endpoint.apiKey.trim()}`,
+  }, {
+    model: endpoint.model || DEFAULT_AI_CONFIG.model,
+    temperature: 0.1,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${TEST_IMAGE_JPEG_B64}` } },
+          { type: 'text', text: '描述这张图片' },
+        ],
+      },
+    ],
+  }, 60000);
   if (!resp.ok) {
     const bodyText = await resp.text().catch(() => '');
     throw new Error(`图片识别接口错误 HTTP ${resp.status}: ${bodyText.slice(0, 200)}`);

@@ -149,6 +149,7 @@ class TemplateData {
     this.debtEnd = 0,
     this.debtUnit = '',
     this.roundMode = false,
+    this.displayUnit = 'fen',
   });
   final List<Map<String, dynamic>> sales;
   final List<Map<String, dynamic>> payments;
@@ -162,6 +163,10 @@ class TemplateData {
   /// true=逐步舍入（每笔先按分舍入再累加，与账本/欠款口径一致）；false=原始金额直接累加。
   /// 合计/每日销售额/明细金额都跟随此口径（用户"合计口径切换逐步舍入或者原始金额，下边显示也要跟随"）
   final bool roundMode;
+  /// 页面金额显示精度（店铺 round_unit：yuan/jiao/fen；空=fen 两位小数）。
+  /// 对账单所有金额显示跟随（合计/每日/明细/小计/总计），仅显示精度不影响数值
+  /// （用户"金额显示的位数需要和店铺管理中设置的对应"）。
+  final String displayUnit;
 }
 
 // ── 渲染（纯函数，无 Flutter 依赖，可测试）─────────────────────────────
@@ -188,7 +193,7 @@ List<List<String>> _detailLines(TemplateData d) {
         orderDate,
         note.isEmpty ? '（无明细）' : note,
         '',
-        '¥${(_num(s['total']) * 100).round() / 100}',
+        _fmtMoneyU(_num(s['total']), d.displayUnit),
       ]);
       continue;
     }
@@ -199,7 +204,7 @@ List<List<String>> _detailLines(TemplateData d) {
         dstr,
         '${it['item_name'] ?? ''}',
         '${it['quantity'] ?? ''}${it['unit'] ?? ''}',
-        '¥${((_num(it['amount']) * 100).round()) / 100}',
+        _fmtMoneyU(_num(it['amount']), d.displayUnit),
       ]);
     }
   }
@@ -239,7 +244,22 @@ double _roundVal(TemplateData d, double v) {
   return (days: arr, total: total);
 }
 
-String _fmtMoney(double v) => '¥${((v * 100).round()) / 100}';
+String _fmtMoney(double v) => '¥${((v * 100).round() / 100).toStringAsFixed(2)}';
+
+/// 金额显示精度跟随店铺 round_unit（元=整元 0 位/角=1 位/分=2 位；空=分）。
+/// 仅显示精度，不改变数值（合计仍按真实金额累加后四舍五入显示）。
+String _fmtMoneyU(double v, String unit) {
+  if (unit == 'yuan') return '¥${v.round()}';
+  if (unit == 'jiao') return '¥${v.toStringAsFixed(1)}';
+  return _fmtMoney(v);
+}
+
+/// 多栏月账单用纯数字金额（无 ¥，对齐用户示例「总计 41349.81」），精度同上
+String _numU(double v, String unit) {
+  if (unit == 'yuan') return '${v.round()}';
+  if (unit == 'jiao') return v.toStringAsFixed(1);
+  return ((v * 100).round() / 100).toStringAsFixed(2);
+}
 
 /// 单文本变量替换（{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{月合计} + {N日}/{N日销售额}）
 /// 函数式变量（自动计算）：出货合计/收款合计/期末欠款/月合计/出货笔数；每日销售额 {1日}…{31日} 与可读别名 {1日销售额}…
@@ -259,7 +279,7 @@ String _replaceVars(String text, TemplateData d) {
   final segSum = (int from, int to) {
     var s = 0.0;
     for (var i = from; i <= to && i <= daily.days.length; i++) s += daily.days[i - 1];
-    return _fmtMoney(s);
+    return _fmtMoneyU(s, d.displayUnit);
   };
   var line = text
       .replaceAll('{店铺}', d.clientName)
@@ -268,11 +288,11 @@ String _replaceVars(String text, TemplateData d) {
       .replaceAll('{月}', '${fromM}')
       .replaceAll('{日}', '${now.day}')
       .replaceAll('{日期}', today)
-      .replaceAll('{出货合计}', _fmtMoney(saleTotal))
-      .replaceAll('{收款合计}', _fmtMoney(payTotal))
+      .replaceAll('{出货合计}', _fmtMoneyU(saleTotal, d.displayUnit))
+      .replaceAll('{收款合计}', _fmtMoneyU(payTotal, d.displayUnit))
       .replaceAll('{期末欠款}', d.debtUnit == 'yuan' ? '${d.debtEnd.round()}' : (d.debtUnit == 'jiao' ? d.debtEnd.toStringAsFixed(1) : _fmtMoney(d.debtEnd)))
       .replaceAll('{出货笔数}', '${d.sales.length}')
-      .replaceAll('{月合计}', _fmtMoney(daily.total))
+      .replaceAll('{月合计}', _fmtMoneyU(daily.total, d.displayUnit))
       .replaceAll('{1-10日合计}', segSum(1, 10))
       .replaceAll('{11-20日合计}', segSum(11, 20))
       .replaceAll('{21-30日合计}', segSum(21, 30))
@@ -280,7 +300,7 @@ String _replaceVars(String text, TemplateData d) {
   for (var dd = 1; dd <= 31; dd++) {
     // 超出当月天数（如 9 月 30 天时 31 日）→ 替换为空串，杜绝字面 {31日销售额} 残留
     // （用户"9月直接显示文字"——31日替换不到；按实际月份不显示）
-    final val = dd <= daily.days.length ? _fmtMoney(daily.days[dd - 1]) : '';
+    final val = dd <= daily.days.length ? _fmtMoneyU(daily.days[dd - 1], d.displayUnit) : '';
     line = line
         .replaceAll('{$dd日}', val)
         .replaceAll('{$dd日销售额}', val);
@@ -332,7 +352,7 @@ List<List<GridCell>> _finalizeRows(List<List<GridCell>> rows, TemplateData d) {
   while (rows.length >= 2 && _isTitleRow(rows[0]) && _isTitleRow(rows[1])) {
     rows.removeAt(0);
   }
-  final total = _fmtMoney(_dailyOf(d).total);
+  final total = _fmtMoneyU(_dailyOf(d).total, d.displayUnit);
   for (final row in rows) {
     if (row.isEmpty) continue;
     final label = row.first.text.trim();
@@ -378,7 +398,7 @@ double? _numOf(String t) {
 }
 
 /// 单格求值：普通文本 → 数值；=sum 公式 → 递归求值（visiting 防自引用环）
-double? _cellValue(List<List<GridCell>> rows, int r, int c, Set<String> visiting) {
+double? _cellValue(List<List<GridCell>> rows, int r, int c, Set<String> visiting, String unit) {
   if (r < 0 || r >= rows.length) return null;
   final row = rows[r];
   if (c < 0 || c >= row.length) return null;
@@ -388,7 +408,7 @@ double? _cellValue(List<List<GridCell>> rows, int r, int c, Set<String> visiting
   if (t.isEmpty) return 0;
   if (t.startsWith('=')) {
     visiting.add(key);
-    final ev = _evalFormula(t, rows, visiting);
+    final ev = _evalFormula(t, rows, visiting, unit);
     visiting.remove(key);
     return _numOf(ev);
   }
@@ -396,7 +416,7 @@ double? _cellValue(List<List<GridCell>> rows, int r, int c, Set<String> visiting
 }
 
 /// 解析并求值 =sum(...)（逗号多参 + 冒号区间；其它函数/非法格式原样保留，不误导）
-String _evalFormula(String text, List<List<GridCell>> rows, Set<String> visiting) {
+String _evalFormula(String text, List<List<GridCell>> rows, Set<String> visiting, String unit) {
   final m = RegExp(r'^=\s*([a-z]+)\s*\(([^)]*)\)\s*$', caseSensitive: false).firstMatch(text);
   if (m == null) return text;
   if (m.group(1)!.toLowerCase() != 'sum') return text;
@@ -412,7 +432,7 @@ String _evalFormula(String text, List<List<GridCell>> rows, Set<String> visiting
       if (a == null || b == null) return text;
       for (var r = a.$1; r <= b.$1; r++) {
         for (var cc = a.$2; cc <= b.$2; cc++) {
-          final v = _cellValue(rows, r, cc, visiting);
+          final v = _cellValue(rows, r, cc, visiting, unit);
           if (v == null) return text;
           total += v;
         }
@@ -420,21 +440,21 @@ String _evalFormula(String text, List<List<GridCell>> rows, Set<String> visiting
     } else {
       final c = _coordOf(p);
       if (c == null) return text;
-      final v = _cellValue(rows, c.$1, c.$2, visiting);
+      final v = _cellValue(rows, c.$1, c.$2, visiting, unit);
       if (v == null) return text;
       total += v;
     }
   }
-  return _fmtMoney(total);
+  return _fmtMoneyU(total, unit);
 }
 
 /// 全网格 =sum 公式求值（模板坐标，行不裁剪；在列剪枝/空行过滤之前执行）
-void _evalFormulas(List<List<GridCell>> rows) {
+void _evalFormulas(List<List<GridCell>> rows, String unit) {
   for (var r = 0; r < rows.length; r++) {
     for (var cc = 0; cc < rows[r].length; cc++) {
       final t = rows[r][cc].text.trim();
       if (!t.startsWith('=')) continue;
-      final ev = _evalFormula(t, rows, <String>{});
+      final ev = _evalFormula(t, rows, <String>{}, unit);
       if (ev != t) rows[r][cc].text = ev;
     }
   }
@@ -446,7 +466,10 @@ bool _isTotalRow(List<GridCell> row) =>
 
 /// 尾列剪枝（用户"没有 31 号最后那 2 列不需要显示"）：
 /// 从最右列起，若「日期行」（模板含 {N日销售额}/{月}月N日 变量的行）该列渲染后全空
-/// → 整列从所有行删除（表头/小计跟随删；标题跨列合并格 span 缩短；总计行非空金额格保留左移）。
+/// → 整列从所有行删除（表头/小计跟随删；标题跨列合并格 span 缩短；总计行金额格保留左移）。
+/// 两遍实现：先确定要删的列集合（连续尾列），再统一重建每行——避免逐列重建导致
+/// 总计行"金额格保留补位"后行宽比其它行多 1 格（9 月无 31 日时打印表格多出一列，
+/// 预览/编辑按行渲染看不出，打印 HTML 按最宽行排版就长出去一列）。
 void _pruneTailEmptyCols(List<List<GridCell>> rows, {required Set<int> dayRowIdx}) {
   if (dayRowIdx.isEmpty) return;
   final cols = rows.fold<int>(0, (m, r) {
@@ -456,6 +479,8 @@ void _pruneTailEmptyCols(List<List<GridCell>> rows, {required Set<int> dayRowIdx
     }
     return w > m ? w : m;
   });
+  // 第一遍：从右往左找连续"日期行全空"的列
+  final colsToDelete = <int>{};
   for (var cc = cols - 1; cc >= 0; cc--) {
     var allEmpty = true;
     for (final ri in dayRowIdx) {
@@ -477,29 +502,52 @@ void _pruneTailEmptyCols(List<List<GridCell>> rows, {required Set<int> dayRowIdx
       }
     }
     if (!allEmpty) break;
-    for (var ri2 = 0; ri2 < rows.length; ri2++) {
-      final row = rows[ri2];
-      final newRow = <GridCell>[];
-      final deferred = <GridCell>[];
-      var acc = 0;
-      for (final c in row) {
-        final sp = c.colSpan < 1 ? 1 : c.colSpan;
-        if (cc >= acc && cc < acc + sp) {
-          if (sp > 1) {
-            c.colSpan = sp - 1; // 标题等跨列合并格从右缩短
-            newRow.add(c);
-          } else if (_isTotalRow(row) && c.text.trim().isNotEmpty) {
-            deferred.add(c); // 总计行金额格保留，左移到行尾
-          }
-          // span==1 空文本/表头/小计格 → 随列删除
-        } else {
-          newRow.add(c);
-        }
-        acc += sp;
+    colsToDelete.add(cc);
+  }
+  if (colsToDelete.isEmpty) return;
+  final targetWidth = cols - colsToDelete.length;
+  // 第二遍：统一重建每行（命中删除列的格删除/缩短；总计行非空金额格保留补位）
+  for (var ri = 0; ri < rows.length; ri++) {
+    final row = rows[ri];
+    final newRow = <GridCell>[];
+    final deferred = <GridCell>[];
+    var acc = 0;
+    for (final c in row) {
+      final sp = c.colSpan < 1 ? 1 : c.colSpan;
+      var overlap = 0;
+      for (var i = acc; i < acc + sp; i++) {
+        if (colsToDelete.contains(i)) overlap++;
       }
-      newRow.addAll(deferred);
-      rows[ri2] = newRow;
+      if (overlap > 0) {
+        if (sp > 1) {
+          // 标题等跨列合并格：右端被删 → 缩短 span；整格都在删除列内 → 整格删
+          if (sp - overlap > 0) {
+            c.colSpan = sp - overlap;
+            newRow.add(c);
+          }
+        } else if (_isTotalRow(row) && c.text.trim().isNotEmpty) {
+          deferred.add(c); // 总计行金额格保留，左移到行尾
+        }
+        // span==1 空文本/表头/小计格 → 随列删除
+      } else {
+        newRow.add(c);
+      }
+      acc += sp;
     }
+    newRow.addAll(deferred);
+    // 金额格"保留补位"会使总计行比其它行多 1 格 → 从行尾修剪空文本格对齐
+    while (newRow.length > targetWidth) {
+      var removed = false;
+      for (var i = newRow.length - 1; i >= 0; i--) {
+        if (newRow[i].text.trim().isEmpty && newRow[i].colSpan == 1) {
+          newRow.removeAt(i);
+          removed = true;
+          break;
+        }
+      }
+      if (!removed) break; // 全非空（理论不会）：放弃修剪避免删错
+    }
+    rows[ri] = newRow;
   }
 }
 
@@ -554,7 +602,7 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10, bool withTi
       final day = cc * perCol + r + 1;
       if (day <= n) {
         line.add(GridCell('$y.$m.$day', 'center'));
-        line.add(GridCell(daily[day - 1].toStringAsFixed(2), 'right'));
+        line.add(GridCell(_numU(daily[day - 1], d.displayUnit), 'right'));
       } else {
         line.add(GridCell('', 'center'));
         line.add(GridCell('', 'right'));
@@ -572,14 +620,14 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10, bool withTi
     }
     grand += s;
     subtotal.add(GridCell('', 'right', true));
-    subtotal.add(GridCell(s.toStringAsFixed(2), 'right', true));
+    subtotal.add(GridCell(_numU(s, d.displayUnit), 'right', true));
   }
   rows.add(subtotal);
   // 底部总计（跨栏，示例「总计 41349.81」尾部对齐；加粗；「总计」标签居中美观）
   rows.add([
     GridCell('总计', 'center', true),
     for (var cc = 0; cc < cols * 2 - 2; cc++) GridCell('', ''),
-    GridCell(grand.toStringAsFixed(2), 'right', true),
+    GridCell(_numU(grand, d.displayUnit), 'right', true),
   ]);
   return rows;
 }
@@ -629,7 +677,7 @@ List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
     out.add(rendered);
   }
   // =sum(...) 公式求值（模板坐标，行未裁剪时索引一致）→ 尾列剪枝（无 31 日删末 2 列）
-  _evalFormulas(out);
+  _evalFormulas(out, d.displayUnit);
   if (!hasMonthBill) _pruneTailEmptyCols(out, dayRowIdx: dayRowIdx);
   // 整行渲染后全空（标准模板 9月31号那一行）→ 跳过不显示
   return [for (final r in out) if (r.any((c) => c.text.trim().isNotEmpty)) r];
@@ -657,9 +705,9 @@ List<List<GridCell>> _renderComps(XlsCfg cfg, TemplateData d) {
         break;
       case 'stats':
         rows.add([
-          GridCell('出货合计\n${_fmtMoney(saleTotal)}', 'center'),
-          GridCell('收款合计\n${_fmtMoney(payTotal)}', 'center'),
-          GridCell('期末欠款\n${_fmtMoney(d.debtEnd)}', 'center'),
+          GridCell('出货合计\n${_fmtMoneyU(saleTotal, d.displayUnit)}', 'center'),
+          GridCell('收款合计\n${_fmtMoneyU(payTotal, d.displayUnit)}', 'center'),
+          GridCell('期末欠款\n${_fmtMoneyU(d.debtEnd, d.displayUnit)}', 'center'),
         ]);
         break;
       case 'days':
@@ -668,9 +716,9 @@ List<List<GridCell>> _renderComps(XlsCfg cfg, TemplateData d) {
         for (var i = 0; i < daily.days.length; i++) {
           final v = daily.days[i];
           total += v;
-          rows.add([GridCell('${i + 1}日', 'left'), GridCell(_fmtMoney(v), 'right')]);
+          rows.add([GridCell('${i + 1}日', 'left'), GridCell(_fmtMoneyU(v, d.displayUnit), 'right')]);
         }
-        rows.add([GridCell('总计', 'right'), GridCell(_fmtMoney(total), 'right')]);
+        rows.add([GridCell('总计', 'right'), GridCell(_fmtMoneyU(total, d.displayUnit), 'right')]);
         break;
       case 'multi': // 多栏月账单（寻牛记式）
         rows.addAll(_multiColBill(d));
