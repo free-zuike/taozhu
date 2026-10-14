@@ -1642,7 +1642,7 @@ class _LedgerPageState extends State<LedgerPage> {
                         // 单店视图按该店铺 round_unit 显示位数（用户"当天总价跟店铺管理的位数"）；全部店铺混合走全局
                         _clientId == null
                             ? '${e.value.length} 件 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + Money.round((l['amount'] as num?)?.toDouble() ?? 0)))}'
-                            : '${e.value.length} 件 · 合计 ¥${fmtByUnit(e.value.fold<double>(0, (s, l) => s + Money.round((l['amount'] as num?)?.toDouble() ?? 0))), _clientUnit(_clientId!))}',
+                            : '${e.value.length} 件 · 合计 ¥${fmtByUnit(e.value.fold<double>(0, (s, l) => s + Money.round((l['amount'] as num?)?.toDouble() ?? 0)), _clientUnit(_clientId!))}',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSub),
                       ),
                       const SizedBox(width: 2),
