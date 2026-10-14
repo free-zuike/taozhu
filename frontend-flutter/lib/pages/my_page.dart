@@ -50,6 +50,7 @@ class _MyPageState extends State<MyPage> {
   static bool _downloading = false;
   String _base = '';
   String _role = ''; // admin=老板 / staff=店员（登录/启动时读取）
+  bool _loggedIn = false; // 是否已登录（未登录=本地模式：数据仅存本机，登录后云端同步）
   String _username = ''; // 当前账号显示名（/auth/me 刷新）
   String _avatarUrl = '';
   String _avatarToken = '';
@@ -80,6 +81,9 @@ class _MyPageState extends State<MyPage> {
     });
     Api.instance.getRole().then((r) {
       if (mounted) setState(() => _role = r);
+    });
+    Api.instance.hasToken().then((v) {
+      if (mounted) setState(() => _loggedIn = v);
     });
     // 主题跨端同步：进入我的页拉取服务器主题应用（Web/App 一致；本地有未同步修改时 pullTheme 内部跳过）
     ThemeConfig.instance.pullTheme();
@@ -1241,8 +1245,9 @@ class _MyPageState extends State<MyPage> {
                     side: BorderSide(color: c.danger),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  onPressed: _logout,
-                  child: const Text('退出登录'),
+                  onPressed: _loggedIn ? _logout : () => Navigator.of(context)
+                      .push(MaterialPageRoute(builder: (_) => const LoginPage())),
+                  child: Text(_loggedIn ? '退出登录' : '登录'),
                 ),
               ),
               const SizedBox(width: 12),
@@ -1363,6 +1368,19 @@ class _MyPageState extends State<MyPage> {
             overflow: TextOverflow.ellipsis,
             style: TextStyle(fontSize: 12, color: c.textSub),
           ),
+          // 未登录：本地模式引导（登录 = 云端同步开关，不强制——用户"不打算用云端同步也要能进去用"）
+          if (!_loggedIn) ...[
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const LoginPage())),
+              icon: const Icon(Icons.login, size: 18),
+              label: const Text('登录（启用云端同步）'),
+            ),
+            const SizedBox(height: 4),
+            Text('当前为本地模式：数据仅保存在本机；登录后可多端同步共享',
+                textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: c.textSub)),
+          ],
           // 统计三列（仅老板）：本地核算秒开；Web 直连核算
           if (_role != 'staff') ...[
             const SizedBox(height: 16),

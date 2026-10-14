@@ -167,7 +167,9 @@ class Api {
   /// true=成功；false=refresh 明确无效（400/401，清登录）。
   static Future<bool?> _doRefreshToken() async {
     final rt = await Api.instance.getRefreshToken();
-    if (rt.isEmpty) return false;
+    // 从未登录/本地模式/凭据已清（无 refresh）：按"未登录"处理而非"登录过期"——
+    // 不触发 _handleAuthExpired 强制跳登录页，本地可用逻辑不被登录门禁打断
+    if (rt.isEmpty) return null;
     try {
       final base = await Api.instance._base();
       if (base.isEmpty) return false;
@@ -192,6 +194,12 @@ class Api {
       // 网络/DNS/超时：不清 token、不清登录，返回 null 由调用方按网络错误处理（本地可用不丢）
       return null;
     }
+  }
+
+  /// 刷新失败（网络层）的可读提示：从未登录（无 refresh 凭据）→ 引导登录；已登录 → 网络问题
+  static Future<String> _authFailMsg() async {
+    final rt = await Api.instance.getRefreshToken();
+    return rt.isEmpty ? '未登录：该操作需登录，可在「我的」页登录' : '无法连接服务器（登录校验超时），请检查网络后重试';
   }
 
   /// 网络异常 → 中文可读文案（SocketException/超时等原始堆栈用户看不懂）。
@@ -275,7 +283,7 @@ class Api {
         await _handleAuthExpired();
         throw Exception('登录已过期，请重新登录');
       } else {
-        throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
+        throw Exception(await _authFailMsg());
       }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
@@ -476,7 +484,7 @@ class Api {
         await _handleAuthExpired();
         throw Exception('登录已过期，请重新登录');
       } else {
-        throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
+        throw Exception(await _authFailMsg());
       }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
@@ -589,7 +597,7 @@ class Api {
         await _handleAuthExpired();
         throw Exception('登录已过期，请重新登录');
       } else {
-        throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
+        throw Exception(await _authFailMsg());
       }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) {
@@ -652,7 +660,7 @@ class Api {
         await _handleAuthExpired();
         throw Exception('登录已过期，请重新登录');
       } else {
-        throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
+        throw Exception(await _authFailMsg());
       }
     }
     if (res.statusCode == 426) {

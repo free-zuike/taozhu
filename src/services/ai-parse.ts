@@ -286,7 +286,7 @@ export async function parsePhoto(
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${endpoint.apiKey.trim()}` },
     body: JSON.stringify({
       model: endpoint.model || DEFAULT_AI_CONFIG.model,
-      temperature: 0.1,
+      // 视觉模型（glm-4v 系）参数面窄：不带 temperature——智谱 1210"参数有误"疑似由此触发
       messages: [
         {
           role: 'user',
@@ -445,7 +445,6 @@ export async function testVisionChannel(
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${endpoint.apiKey.trim()}` },
     body: JSON.stringify({
       model: endpoint.model || DEFAULT_AI_CONFIG.model,
-      temperature: 0.1,
       messages: [
         {
           role: 'user',

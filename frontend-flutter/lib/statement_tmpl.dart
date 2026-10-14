@@ -326,25 +326,181 @@ bool _isTitleRow(List<GridCell> r) {
 
 /// 渲染后统一处理：
 /// ①标题去重（用户"还是2行标题/寻牛对账单去不掉"）：开头连续标题行只留一个（保留后出现的"店铺 N月份账单"）
-/// ②合计函数化（用户"合计用函数而非 {月合计} 变量，不知道的人没法设计模板"）：
-///   以"合计/总计"开头的标签行，其空金额格自动填月合计
+/// ②合计兜底（用户"合计用函数而非 {月合计} 变量"）：模板已用 =sum(...) 时自动算好（见 _evalFormulas）；
+///    仅当合计/总计标签行除标签外全空（旧模板/自定义未写公式）才补月合计。
 List<List<GridCell>> _finalizeRows(List<List<GridCell>> rows, TemplateData d) {
   while (rows.length >= 2 && _isTitleRow(rows[0]) && _isTitleRow(rows[1])) {
     rows.removeAt(0);
   }
   final total = _fmtMoney(_dailyOf(d).total);
   for (final row in rows) {
-    final label = row.isNotEmpty ? row.first.text.trim() : '';
+    if (row.isEmpty) continue;
+    final label = row.first.text.trim();
     if (label == '合计' || label == '总计') {
-      for (final c in row) {
-        if (c.text.trim().isEmpty) {
-          c.text = total;
-          break;
+      // 行内除标签外已有内容（=sum 已算/自定义文本）→ 不覆盖；全空才补月合计
+      final hasOther = row.skip(1).any((c) => c.text.trim().isNotEmpty);
+      if (!hasOther) {
+        for (final c in row) {
+          if (c.text.trim().isEmpty) {
+            c.text = total;
+            break;
+          }
         }
       }
     }
   }
   return rows;
+}
+
+// ── =sum(...) 单元格函数 ────────────────────────────────
+// 用户"不要 {1-10日合计}/{月合计} 变量，要 =sum(b2,b11) 这种函数"：
+// 模板合计格写 Excel 风格公式（大小写不敏感，支持逗号多参与 colon 区间），
+// 渲染时按**模板坐标**（第 1 行=1，A 列=1）对变量替换后的文本求值填入。
+
+/// 解析坐标引用（A1 → (0,0) 0基行/列）；非法返回 null
+(int, int)? _coordOf(String ref) {
+  final m = RegExp(r'^([a-z]+)(\d+)$', caseSensitive: false).firstMatch(ref);
+  if (m == null) return null;
+  var col = 0;
+  for (final ch in m.group(1)!.toLowerCase().codeUnits) {
+    col = col * 26 + (ch - 0x61 + 1);
+  }
+  return (int.parse(m.group(2)!) - 1, col - 1);
+}
+
+/// 文本 → 数值（千分位逗号/¥/元 前缀、空=0）；非数字返回 null
+double? _numOf(String t) {
+  final s = t.replaceAll(',', '').replaceAll('¥', '').replaceAll('元', '').trim();
+  if (s.isEmpty) return 0;
+  final n = double.tryParse(s);
+  if (n == null) return null;
+  return n;
+}
+
+/// 单格求值：普通文本 → 数值；=sum 公式 → 递归求值（visiting 防自引用环）
+double? _cellValue(List<List<GridCell>> rows, int r, int c, Set<String> visiting) {
+  if (r < 0 || r >= rows.length) return null;
+  final row = rows[r];
+  if (c < 0 || c >= row.length) return null;
+  final key = '$r,$c';
+  if (visiting.contains(key)) return null;
+  final t = row[c].text.trim();
+  if (t.isEmpty) return 0;
+  if (t.startsWith('=')) {
+    visiting.add(key);
+    final ev = _evalFormula(t, rows, visiting);
+    visiting.remove(key);
+    return _numOf(ev);
+  }
+  return _numOf(t);
+}
+
+/// 解析并求值 =sum(...)（逗号多参 + 冒号区间；其它函数/非法格式原样保留，不误导）
+String _evalFormula(String text, List<List<GridCell>> rows, Set<String> visiting) {
+  final m = RegExp(r'^=\s*([a-z]+)\s*\(([^)]*)\)\s*$', caseSensitive: false).firstMatch(text);
+  if (m == null) return text;
+  if (m.group(1)!.toLowerCase() != 'sum') return text;
+  double total = 0;
+  for (final part in m.group(2)!.split(',')) {
+    final p = part.trim();
+    if (p.isEmpty) continue;
+    if (p.contains(':')) {
+      final seg = p.split(':');
+      if (seg.length != 2) return text;
+      final a = _coordOf(seg[0]);
+      final b = _coordOf(seg[1]);
+      if (a == null || b == null) return text;
+      for (var r = a.$1; r <= b.$1; r++) {
+        for (var cc = a.$2; cc <= b.$2; cc++) {
+          final v = _cellValue(rows, r, cc, visiting);
+          if (v == null) return text;
+          total += v;
+        }
+      }
+    } else {
+      final c = _coordOf(p);
+      if (c == null) return text;
+      final v = _cellValue(rows, c.$1, c.$2, visiting);
+      if (v == null) return text;
+      total += v;
+    }
+  }
+  return _fmtMoney(total);
+}
+
+/// 全网格 =sum 公式求值（模板坐标，行不裁剪；在列剪枝/空行过滤之前执行）
+void _evalFormulas(List<List<GridCell>> rows) {
+  for (var r = 0; r < rows.length; r++) {
+    for (var cc = 0; cc < rows[r].length; cc++) {
+      final t = rows[r][cc].text.trim();
+      if (!t.startsWith('=')) continue;
+      final ev = _evalFormula(t, rows, <String>{});
+      if (ev != t) rows[r][cc].text = ev;
+    }
+  }
+}
+
+/// 合计/总计标签行（尾列剪枝时保留其非空金额格并左移）
+bool _isTotalRow(List<GridCell> row) =>
+    row.isNotEmpty && (row.first.text.trim() == '合计' || row.first.text.trim() == '总计');
+
+/// 尾列剪枝（用户"没有 31 号最后那 2 列不需要显示"）：
+/// 从最右列起，若「日期行」（模板含 {N日销售额}/{月}月N日 变量的行）该列渲染后全空
+/// → 整列从所有行删除（表头/小计跟随删；标题跨列合并格 span 缩短；总计行非空金额格保留左移）。
+void _pruneTailEmptyCols(List<List<GridCell>> rows, {required Set<int> dayRowIdx}) {
+  if (dayRowIdx.isEmpty) return;
+  final cols = rows.fold<int>(0, (m, r) {
+    var w = 0;
+    for (final c in r) {
+      w += c.colSpan < 1 ? 1 : c.colSpan;
+    }
+    return w > m ? w : m;
+  });
+  for (var cc = cols - 1; cc >= 0; cc--) {
+    var allEmpty = true;
+    for (final ri in dayRowIdx) {
+      if (ri >= rows.length) continue;
+      final row = rows[ri];
+      var acc = 0;
+      GridCell? hit;
+      for (final c in row) {
+        final sp = c.colSpan < 1 ? 1 : c.colSpan;
+        if (cc >= acc && cc < acc + sp) {
+          hit = c;
+          break;
+        }
+        acc += sp;
+      }
+      if (hit != null && hit.text.trim().isNotEmpty) {
+        allEmpty = false;
+        break;
+      }
+    }
+    if (!allEmpty) break;
+    for (var ri2 = 0; ri2 < rows.length; ri2++) {
+      final row = rows[ri2];
+      final newRow = <GridCell>[];
+      final deferred = <GridCell>[];
+      var acc = 0;
+      for (final c in row) {
+        final sp = c.colSpan < 1 ? 1 : c.colSpan;
+        if (cc >= acc && cc < acc + sp) {
+          if (sp > 1) {
+            c.colSpan = sp - 1; // 标题等跨列合并格从右缩短
+            newRow.add(c);
+          } else if (_isTotalRow(row) && c.text.trim().isNotEmpty) {
+            deferred.add(c); // 总计行金额格保留，左移到行尾
+          }
+          // span==1 空文本/表头/小计格 → 随列删除
+        } else {
+          newRow.add(c);
+        }
+        acc += sp;
+      }
+      newRow.addAll(deferred);
+      rows[ri2] = newRow;
+    }
+  }
 }
 
 /// 正文行渲染（含 {明细}/{旬段表} 特殊块）
@@ -431,33 +587,33 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10, bool withTi
 List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
   final out = <List<GridCell>>[];
   final daily = _dailyOf(d);
+  // 日期行索引（模板期含 {N日销售额}/{月}月N日 变量的行；尾列剪枝按此判定"该列是否空"）
+  final dayRowIdx = <int>{};
+  final dayVarRe = RegExp(r'\{\d{1,2}日销售额\}|\{月\}月\d{1,2}日');
+  final hasMonthBill = cfg.grid.any((r) => r.any((c) => c.text.contains('{月账单}')));
+  final maxDay = daily.days.length;
+  String trimDay(String text) {
+    // 销售额格：{N日销售额} → 超天数清空
+    var t = text.replaceAllMapped(RegExp(r'\{(\d{1,2})日销售额\}'), (m) {
+      final n = int.tryParse(m.group(1)!) ?? 0;
+      return n > maxDay ? '' : m.group(0)!;
+    });
+    // 日期格：{月}月N日 → 超天数清空（保留表头等非日期格）
+    t = t.replaceAllMapped(RegExp(r'\{月\}月(\d{1,2})日'), (m) {
+      final n = int.tryParse(m.group(1)!) ?? 0;
+      return n > maxDay ? '' : m.group(0)!;
+    });
+    return t;
+  }
   for (var ri = 0; ri < cfg.grid.length; ri++) {
     final row = cfg.grid[ri];
-    // {月账单} 单元格 → 整行展开为多栏月账单
+    // {月账单} 单元格 → 整行展开为多栏月账单（动态栏数，无需尾列剪枝）
     if (row.any((c) => c.text.contains('{月账单}'))) {
-      // {月账单} 在模板首行（全模板仅此一行内容）→ 自带标题行「店铺 x月份账单」；
-      // 模板已在 {月账单} 上方放标题行（对账单头）→ 不重复，标题由模板行提供（用户"头部一行"）
       final onlyRow = cfg.grid.length <= 1;
       out.addAll(_multiColBill(d, withTitle: onlyRow));
       continue;
     }
-    // 逐格按实际月份裁剪：行内含超天数日期的格子（如 9月30天 → 31日）清空
-    // ——多栏模板每行有 {1日}{11日}{21日}{31日销售额}，此前整行 every 判断会漏 31 日（用户"多栏还有31号"）。
-    // 标准模板每日一行（{月}月31日 + {31日销售额} 全超天数）→ 渲染后整行全空，跳过（整行消失）
-    final maxDay = daily.days.length;
-    String trimDay(String text) {
-      // 销售额格：{N日销售额} → 超天数清空
-      var t = text.replaceAllMapped(RegExp(r'\{(\d{1,2})日销售额\}'), (m) {
-        final n = int.tryParse(m.group(1)!) ?? 0;
-        return n > maxDay ? '' : m.group(0)!;
-      });
-      // 日期格：{月}月N日 → 超天数清空（保留表头等非日期格）
-      t = t.replaceAllMapped(RegExp(r'\{月\}月(\d{1,2})日'), (m) {
-        final n = int.tryParse(m.group(1)!) ?? 0;
-        return n > maxDay ? '' : m.group(0)!;
-      });
-      return t;
-    }
+    if (row.any((c) => dayVarRe.hasMatch(c.text))) dayRowIdx.add(ri);
     final rendered = [
       for (var cc = 0; cc < row.length; cc++)
         GridCell(
@@ -470,11 +626,13 @@ List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
           row[cc].borderTop, row[cc].borderRight, row[cc].borderBottom, row[cc].borderLeft,
         ),
     ];
-    // 整行渲染后全空（标准模板 9月31号那一行）→ 跳过不显示
-    if (rendered.every((c) => c.text.trim().isEmpty)) continue;
     out.add(rendered);
   }
-  return out;
+  // =sum(...) 公式求值（模板坐标，行未裁剪时索引一致）→ 尾列剪枝（无 31 日删末 2 列）
+  _evalFormulas(out);
+  if (!hasMonthBill) _pruneTailEmptyCols(out, dayRowIdx: dayRowIdx);
+  // 整行渲染后全空（标准模板 9月31号那一行）→ 跳过不显示
+  return [for (final r in out) if (r.any((c) => c.text.trim().isNotEmpty)) r];
 }
 
 List<List<GridCell>> _renderComps(XlsCfg cfg, TemplateData d) {
@@ -631,23 +789,24 @@ List<List<GridCell>> defaultTemplateGrid() => _defaultTemplate().grid;
 XlsCfg _defaultTemplate() => XlsCfg()
   ..name = '标准'
   ..grid = [
-    // 标题行：colSpan=2 合并整行居中
-    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey', 1, 2)],
+    // 标题行：colSpan=2 合并整行居中，无底色（用户"不要背景颜色"）
+    [GridCell('{店铺} {月}月份账单', 'center', true, '', 1, 2)],
     // 表头无底色（用户"日期营业额那行文字有底部颜色要去掉"）
     [GridCell('日期', 'center', true), GridCell('营业额', 'center', true)],
     for (var d = 1; d <= 31; d++)
       [GridCell('{月}月$d日', 'center'), GridCell('{$d日销售额}', 'right')],
-    // 合计（居中标签；金额渲染时自动计算，用户"合计用函数而非 {月合计} 变量"）
-    [GridCell('合计', 'center', true), GridCell('{月合计}', 'right', true)],
+    // 合计 = 函数 =sum(B3:B33)（用户"要 =sum(b2,b11) 这种函数，不要 {月合计} 变量"）
+    [GridCell('合计', 'center', true), GridCell('=sum(b3:b33)', 'right', true)],
   ];
 
 /// 「多栏」= 多栏月账单（寻牛记式：每栏 10 天，31 天 → 4 栏，最后一栏 1 天），展开为可编辑网格。
 XlsCfg _multiColTemplate() => XlsCfg()
   ..name = '多栏'
   // 展开网格（编辑/设计器直接可见可改，不再是 {月账单} 占位文本——用户"多栏编辑显示的是{月账单}"）；
-  // 渲染时 _renderGrid 按当月天数自动裁剪空栏（无 31 号则 31 那两列不显示——用户定稿）
+  // 渲染时按当月天数尾列剪枝（无 31 号删末 2 列——用户定稿），合计用 =sum() 函数（用户"不要变量"）
   ..grid = [
-    [GridCell('{店铺} {月}月份账单', 'center', true, 'grey', 1, 8)],
+    // 标题行：colSpan=8 合并整行居中，无底色（用户"不要背景颜色"）
+    [GridCell('{店铺} {月}月份账单', 'center', true, '', 1, 8)],
     [
       for (var cc = 0; cc < 4; cc++) ...[
         GridCell('日期', 'center', true),
@@ -667,20 +826,22 @@ XlsCfg _multiColTemplate() => XlsCfg()
             GridCell('', 'right'),
           ],
       ],
+    // 小计 = 每栏函数（第 4 栏 = 31 日单格；无 31 日时该列被尾列剪枝整列删除）
     [
       GridCell('小计', 'center', true),
-      GridCell('{1-10日合计}', 'right', true),
+      GridCell('=sum(b3:b12)', 'right', true),
       GridCell('', ''),
-      GridCell('{11-20日合计}', 'right', true),
+      GridCell('=sum(d3:d12)', 'right', true),
       GridCell('', ''),
-      GridCell('{21-30日合计}', 'right', true),
+      GridCell('=sum(f3:f12)', 'right', true),
       GridCell('', ''),
-      GridCell('{31日销售额}', 'right', true),
+      GridCell('=sum(h3:h3)', 'right', true),
     ],
+    // 总计 = 各栏小计之和（引用小计行；无 31 日时 4 栏小计格随列删除，剩余自动左移补位）
     [
       GridCell('总计', 'center', true),
       for (var i = 0; i < 6; i++) GridCell('', ''),
-      GridCell('{月合计}', 'right', true),
+      GridCell('=sum(b13,d13,f13,h13)', 'right', true),
     ],
   ];
 

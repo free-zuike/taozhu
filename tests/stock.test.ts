@@ -85,19 +85,21 @@ describe('库存（stocks）', () => {
     expect(await stockQty()).toBe(40);
   });
 
-  it('盘点设置库存与阈值；below=1 预警过滤', async () => {
-    // 用真实商品盘点
+  it('盘点仅设阈值；below=1 预警过滤（库存=计算值）', async () => {
+    // 每用例独立空库：先造进货流水，库存 = 计算值（手工写的 quantity 不再生效）
+    await call(env, 'POST', '/api/v1/purchases', token, { items: [{ price_id: priceId, quantity: 3 }] });
     const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
       items: Array<{ id: string }>;
     };
     const itemId = items.items[0].id;
     await call(env, 'PUT', '/api/v1/stocks', token, {
-      rows: [{ item_id: itemId, unit: '斤', quantity: 5, min_stock: 10 }],
+      rows: [{ item_id: itemId, unit: '斤', quantity: 99, min_stock: 10 }],
     });
     const all = (await (await call(env, 'GET', '/api/v1/stocks', token)).json()) as {
       stocks: Array<{ quantity: number; min_stock: number; low: boolean }>;
     };
-    expect(all.stocks[0].quantity).toBe(5);
+    // 手工写入 quantity=99 无效：库存 = 进货流水 3
+    expect(all.stocks[0].quantity).toBe(3);
     expect(all.stocks[0].min_stock).toBe(10);
     expect(all.stocks[0].low).toBe(true);
     expect(all.stocks[0].cost_price).toBe(1); // 白菜当前进价
@@ -107,27 +109,34 @@ describe('库存（stocks）', () => {
     expect(below.stocks.length).toBe(1);
   });
 
-  it('盘点负数拒绝 400；单行 PATCH 调整', async () => {
+  it('阈值负数拒绝 400；单行 PATCH 只改阈值', async () => {
     const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
       items: Array<{ id: string }>;
     };
+    const itemId = items.items[0].id;
     const bad = await call(env, 'PUT', '/api/v1/stocks', token, {
-      rows: [{ item_id: items.items[0].id, unit: '斤', quantity: -3 }],
+      rows: [{ item_id: itemId, unit: '斤', min_stock: -3 }],
     });
     expect(bad.status).toBe(400);
+    // 先造流水 → 计算库存
+    await call(env, 'POST', '/api/v1/purchases', token, { items: [{ price_id: priceId, quantity: 8 }] });
     await call(env, 'PUT', '/api/v1/stocks', token, {
-      rows: [{ item_id: items.items[0].id, unit: '斤', quantity: 8, min_stock: 2 }],
+      rows: [{ item_id: itemId, unit: '斤', quantity: 8, min_stock: 2 }],
     });
     const d = (await (await call(env, 'GET', '/api/v1/stocks', token)).json()) as {
       stocks: Array<{ id: string; quantity: number; min_stock: number }>;
     };
+    expect(d.stocks[0].quantity).toBe(8); // 计算库存（流水）
     const id = d.stocks[0].id;
-    const patch = await call(env, 'PATCH', `/api/v1/stocks/${id}`, token, { quantity: 20 });
+    const patch = await call(env, 'PATCH', `/api/v1/stocks/${id}`, token, { quantity: 20, min_stock: 6 });
     expect(patch.status).toBe(200);
     const after = (await (await call(env, 'GET', '/api/v1/stocks', token)).json()) as {
-      stocks: Array<{ quantity: number }>;
+      stocks: Array<{ quantity: number; min_stock: number }>;
     };
-    expect(after.stocks[0].quantity).toBe(20);
+    expect(after.stocks[0].quantity).toBe(8); // 数量仍为计算值，不随 PATCH 改变
+    expect(after.stocks[0].min_stock).toBe(6);
+    const neg = await call(env, 'PATCH', `/api/v1/stocks/${id}`, token, { min_stock: -1 });
+    expect(neg.status).toBe(400);
   });
 
   it('未登录访问库存 → 401', async () => {

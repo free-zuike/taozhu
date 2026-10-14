@@ -110,17 +110,21 @@ Future<String> _chatCompletion(AiProvider p, String cap, List<Map<String, dynami
     throw Exception('「${p.name}」未配置 Key，请到 AI 识别设置添加');
   }
   final url = '${p.baseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions';
+  // 视觉模型（glm-4v 系）参数面窄：不带 temperature——智谱 1210"参数有误"疑似由此触发
+  //（文本/语音模型保持 temperature 0.1 与服务器 parsePhoto 对齐）
+  final body = <String, dynamic>{
+    'model': _modelFor(p, cap),
+    'messages': messages,
+    if (cap != 'vision') 'temperature': 0.1,
+  };
   final resp = await http.post(
     Uri.parse(url),
     headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${p.apiKey.trim()}'},
-    body: jsonEncode({
-      'model': _modelFor(p, cap),
-      'messages': messages,
-      'temperature': 0.1, // 对齐服务器 parsePhoto（智谱视觉不允许的额外参数/顺序会 1210 参数有误）
-    }),
+    body: jsonEncode(body),
   ).timeout(const Duration(seconds: 60));
   if (resp.statusCode != 200) {
-    throw Exception('AI 通道 ${resp.statusCode}: ${resp.body.length > 120 ? resp.body.substring(0, 120) : resp.body}');
+    // 完整错误透出（智谱 error.message 是定位 1210 的关键，别截断）
+    throw Exception('AI 通道 ${resp.statusCode}: ${resp.body.length > 600 ? resp.body.substring(0, 600) : resp.body}');
   }
   final d = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
   final content = (d['choices'] as List?)?[0]?['message']?['content'];

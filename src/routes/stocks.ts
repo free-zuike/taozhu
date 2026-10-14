@@ -2,7 +2,7 @@
  *  日常变动由 进货(+) / 出货(−) 单据在事务内自动增减（见 sales/purchases）。 */
 import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
-import { stockUpsert } from '../lib/stock';
+import { stockUpsert, stockUpsertMin } from '../lib/stock';
 import { chunkQuery } from '../lib/query';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
@@ -12,31 +12,52 @@ export const stocksRouter = new Hono<{ Bindings: Env; Variables: V }>();
 stocksRouter.use('*', authMiddleware());
 
 // GET /stocks?q=&below=1 — 库存列表（含商品名；below=1 仅低于阈值）
+// 库存 = 计算值：Σ进货(+)/出货(−) 流水按 商品+单位 累计（用户"库存应该是计算出来的不是写入数据库"）；
+// 不再读取 stocks.quantity（旧盘点/手动填写残留=没进货却显示正数根因）；阈值 min_stock 保留。
 stocksRouter.get('/', async (c) => {
   const canSeeCost = c.get('user').role === 'admin';
   const q = c.req.query('q')?.trim() ?? '';
   const belowOnly = c.req.query('below') === '1';
-  let sql = `SELECT st.id, st.item_id, st.unit, st.quantity, st.min_stock, i.name AS item_name, i.count_unit,
-      (SELECT p.purchase_price FROM item_prices p WHERE p.item_id = st.item_id AND p.unit = st.unit AND p.active = 1 LIMIT 1) AS cost_price
-    FROM stocks st JOIN items i ON i.id = st.item_id
-    WHERE i.deleted_at IS NULL`;
-  const params: string[] = [];
-  if (q) { sql += ' AND i.name LIKE ?'; params.push(`%${q}%`); }
-  if (belowOnly) { sql += ' AND st.quantity < st.min_stock'; }
-  sql += ' ORDER BY i.name, st.unit';
-  const rows = await c.env.DB.prepare(sql).bind(...params).all<{
-    id: string; item_id: string; unit: string; quantity: number; min_stock: number; item_name: string; count_unit: string | null; cost_price: number | null;
-  }>();
+  // 库存 = 计算值：Σ进货(+)/出货(−) 流水按 商品+单位 累计（用户"库存应该是计算出来的不是写入数据库"）；
+  // 与 /rebuild 同构（一层 UNION ALL + GROUP BY，兼容 FakeD1/生产），商品名/阈值/进价在 JS 侧合并，
+  // stocks.quantity 不再读取（旧盘点/手动填写残留=没进货却显示正数根因），min_stock 阈值保留。
+  const agg = await c.env.DB.prepare(
+    `SELECT item_id, unit, SUM(qty) AS quantity FROM (
+       SELECT item_id, unit, COALESCE(quantity, 0) AS qty FROM purchase_items
+       UNION ALL
+       SELECT item_id, unit, -COALESCE(quantity, 0) AS qty FROM sale_items
+     ) GROUP BY item_id, unit`,
+  ).all<{ item_id: string; unit: string; quantity: number }>();
+  const itemIds = [...new Set(agg.results.map((r) => r.item_id))];
+  const [itemRows, stockRows, priceRows] = await Promise.all([
+    itemIds.length
+      ? chunkQuery(itemIds, (chunk) =>
+          c.env.DB.prepare(
+            `SELECT id, name, count_unit FROM items WHERE id IN (${chunk.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+          ).bind(...chunk).all<{ id: string; name: string; count_unit: string | null }>().then((r) => r.results))
+      : Promise.resolve([] as Array<{ id: string; name: string; count_unit: string | null }>),
+    c.env.DB.prepare('SELECT item_id, unit, id, min_stock FROM stocks').all<{ item_id: string; unit: string; id: string; min_stock: number }>(),
+    c.env.DB.prepare('SELECT item_id, unit, purchase_price FROM item_prices WHERE active = 1').all<{ item_id: string; unit: string; purchase_price: number }>(),
+  ]);
+  const itemName = new Map(itemRows.map((x) => [x.id, x.name]));
+  const itemCountUnit = new Map(itemRows.map((x) => [x.id, x.count_unit ?? '']));
+  const stockCfg = new Map(stockRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, x]));
+  const costMap = new Map(priceRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, Number(x.purchase_price) || 0]));
+  const merged = agg.results
+    .map((r) => ({ ...r, item_name: itemName.get(r.item_id) ?? '', count_unit: itemCountUnit.get(r.item_id) ?? '' }))
+    .filter((r) => r.item_name !== '') // 商品已删除（deleted_at）→ 不显示
+    .filter((r) => !q || r.item_name.includes(q))
+    .sort((a, b) => a.item_name.localeCompare(b.item_name) || a.unit.localeCompare(b.unit));
   // 建议预警阈值 = 近 30 天平均每笔出货量 × 40%（无出货记录则 0）。
   // 前端仅"阈值未手动设置（min_stock=0）且库存 ≥1"时自动填充，不覆盖用户手设值。
-  const keys = rows.results.map((r) => `${r.item_id}\u0000${r.unit}`);
+  const keys = merged.map((r) => `${r.item_id}\u0000${r.unit}`);
   let suggest = new Map<string, number>();
   if (keys.length > 0) {
     const ph = new Set(keys);
-    const itemIds = [...ph].map((k) => k.split('\u0000')[0]);
-    const units = [...ph].map((k) => k.split('\u0000')[1]);
+    const sid = [...ph].map((k) => k.split('\u0000')[0]);
+    const sunit = [...ph].map((k) => k.split('\u0000')[1]);
     // 按 商品+单位 近 30 天出货行均值（避免跨单位混算；商品行自带日期，不再 JOIN 单据头）
-    const avgRows = await chunkQuery(itemIds, (chunk) =>
+    const avgRows = await chunkQuery(sid, (chunk) =>
       c.env.DB.prepare(
         `SELECT si.item_id, si.unit, AVG(si.quantity) AS avg_qty
          FROM sale_items si
@@ -49,14 +70,21 @@ stocksRouter.get('/', async (c) => {
       Math.round((Number(r.avg_qty) || 0) * 0.4 * 100) / 100,
     ]));
   }
+  const rows = merged
+    .map((r) => {
+      const cfg = stockCfg.get(`${r.item_id}\u0000${r.unit}`);
+      return { ...r, id: cfg?.id ?? null, min_stock: cfg?.min_stock ?? 0 };
+    })
+    .filter((r) => !belowOnly || (Number(r.quantity) || 0) <= (Number(r.min_stock) || 0));
   return c.json({
-    stocks: rows.results.map((r) => ({
-      id: r.id, item_id: r.item_id, item_name: r.item_name, unit: r.unit, count_unit: r.count_unit ?? '',
+    stocks: rows.map((r) => ({
+      id: r.id ?? '', item_id: r.item_id, item_name: r.item_name, unit: r.unit, count_unit: r.count_unit,
       // 负数库存（卖出多于进）按 0 展示：没有就是 0；两位小数防浮点尾数（1.7000000000000002 斤）
-      quantity: Math.round(Math.max(Number(r.quantity) || 0, 0) * 100) / 100, min_stock: r.min_stock,
+      quantity: Math.round(Math.max(Number(r.quantity) || 0, 0) * 100) / 100,
+      min_stock: Number(r.min_stock) || 0,
       suggest_min: suggest.get(`${r.item_id}\u0000${r.unit}`) ?? 0,
-      cost_price: canSeeCost ? (r.cost_price ?? 0) : 0,
-      low: (Number(r.quantity) || 0) < r.min_stock,
+      cost_price: canSeeCost ? (costMap.get(`${r.item_id}\u0000${r.unit}`) ?? 0) : 0,
+      low: (Number(r.quantity) || 0) <= (Number(r.min_stock) || 0),
     })),
     can_see_cost: canSeeCost,
   });
@@ -85,7 +113,8 @@ stocksRouter.get('/trace', async (c) => {
   return c.json({ rows: out.results });
 });
 
-// PUT /stocks — 盘点/批量设置（body: {rows:[{item_id, unit, quantity, min_stock?}]}）
+// PUT /stocks — 盘点/批量设置预警阈值（库存=流水自动计算，quantity 不再写入——旧盘点
+// 残留=没进货却显示正数根因；此接口仅用 min_stock）
 stocksRouter.put('/', adminOnly(), async (c) => {
   const body = await c.req.json().catch(() => null) as {
     rows?: Array<{ item_id?: string; unit?: string; quantity?: number; min_stock?: number }>;
@@ -96,12 +125,11 @@ stocksRouter.put('/', adminOnly(), async (c) => {
     const itemId = r.item_id;
     const unit = r.unit?.trim();
     if (!itemId || !unit) return null;
-    const quantity = Number(r.quantity);
     const minStock = Number(r.min_stock) || 0;
-    if (!Number.isFinite(quantity) || quantity < 0) return null;
-    return stockUpsert(c.env.DB, itemId, unit, Math.round(quantity * 100) / 100, minStock);
+    if (!Number.isFinite(minStock) || minStock < 0) return null;
+    return stockUpsertMin(c.env.DB, itemId, unit, minStock);
   }).filter((s): s is NonNullable<typeof s> => s !== null);
-  if (batch.length === 0) return c.json({ error: '盘点数据不合法（需 item_id/unit/数量≥0）' }, 400);
+  if (batch.length === 0) return c.json({ error: '盘点数据不合法（需 item_id/unit/阈值≥0）' }, 400);
   await c.env.DB.batch(batch);
   return c.json({ ok: true, updated: batch.length });
 });
@@ -136,18 +164,16 @@ stocksRouter.post('/rebuild', adminOnly(), async (c) => {
   return c.json({ ok: true, rebuilt: batch.length });
 });
 
-// PATCH /stocks/:id — 调整单行库存/阈值
+// PATCH /stocks/:id — 调整预警阈值（库存=流水自动计算，quantity 不再写入）
 stocksRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json().catch(() => null) as { quantity?: number; min_stock?: number } | null;
-  const cur = await c.env.DB.prepare('SELECT * FROM stocks WHERE id = ?').bind(id)
-    .first<{ quantity: number; min_stock: number }>();
+  const body = await c.req.json().catch(() => null) as { min_stock?: number } | null;
+  const cur = await c.env.DB.prepare('SELECT id, min_stock FROM stocks WHERE id = ?').bind(id)
+    .first<{ id: string; min_stock: number }>();
   if (!cur) return c.json({ error: '库存记录不存在' }, 404);
-  const quantity = body?.quantity !== undefined ? Number(body.quantity) : cur.quantity;
-  if (!Number.isFinite(quantity) || quantity < 0) return c.json({ error: '库存数量不能为负数' }, 400);
   const minStock = body?.min_stock !== undefined ? Number(body.min_stock) : cur.min_stock;
   if (!Number.isFinite(minStock) || minStock < 0) return c.json({ error: '预警阈值不能为负数' }, 400);
-  await c.env.DB.prepare('UPDATE stocks SET quantity = ?, min_stock = ? WHERE id = ?')
-    .bind(Math.round(quantity * 100) / 100, Math.round(minStock * 100) / 100, id).run();
+  await c.env.DB.prepare('UPDATE stocks SET min_stock = ? WHERE id = ?')
+    .bind(Math.round(minStock * 100) / 100, id).run();
   return c.json({ ok: true });
 });

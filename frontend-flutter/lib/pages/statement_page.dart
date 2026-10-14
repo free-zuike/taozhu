@@ -828,6 +828,21 @@ class _StatementPageState extends State<StatementPage> {
     for (final row in trows) {
       sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
     }
+    // 合并 colSpan/rowSpan 区（标题跨列居中——Excel 与打印/预览一致，用户"打印时标题只占第一格"）
+    for (var ri = 0; ri < trows.length; ri++) {
+      var col = 0;
+      for (final c in trows[ri]) {
+        if (c.colSpan > 1 || c.rowSpan > 1) {
+          final endRow = ri + (c.rowSpan > 1 ? c.rowSpan - 1 : 0);
+          final endCol = col + (c.colSpan > 1 ? c.colSpan - 1 : 0);
+          sheet.merge(
+            CellIndex.indexByColumnRow(columnIndex: col, rowIndex: ri),
+            CellIndex.indexByColumnRow(columnIndex: endCol, rowIndex: endRow),
+          );
+        }
+        col += c.colSpan < 1 ? 1 : c.colSpan;
+      }
+    }
     return excel;
   }
 
@@ -2102,7 +2117,10 @@ class _StatementPageState extends State<StatementPage> {
           if (c.bg == 'grey') 'g',
         ].join(' ');
         final align = c.align == 'right' ? ' style="text-align:right"' : (c.align == 'center' ? ' style="text-align:center"' : '');
-        buf.write('<td$align${cls.isNotEmpty ? ' class="$cls"' : ''}>${c.text.isEmpty ? '&nbsp;' : c.text}</td>');
+        // 合并单元格：colSpan/rowSpan >1 输出 colspan/rowspan（用户"打印时标题只占第一格、合并居中不生效"）
+        final cspan = c.colSpan > 1 ? ' colspan="${c.colSpan}"' : '';
+        final rspan = c.rowSpan > 1 ? ' rowspan="${c.rowSpan}"' : '';
+        buf.write('<td$align$cspan$rspan${cls.isNotEmpty ? ' class="$cls"' : ''}>${c.text.isEmpty ? '&nbsp;' : c.text}</td>');
       }
       buf.writeln('</tr>');
     }

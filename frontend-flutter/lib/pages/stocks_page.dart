@@ -176,9 +176,8 @@ class _StocksPageState extends State<StocksPage> {
     return '0';
   }
 
-  /// 单行编辑：数量 / 预警阈值
+  /// 单行编辑：仅预警阈值（库存=本地计算 Σ进货−Σ出货，不再手动填写数量）
   Future<void> _edit(Map<String, dynamic> s) async {
-    final qtyCtrl = TextEditingController(text: '${s['quantity']}');
     final minCtrl = TextEditingController(text: '${s['min_stock']}');
     final ok = await showDialog<bool>(
       context: context,
@@ -187,9 +186,10 @@ class _StocksPageState extends State<StocksPage> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            NumberPadField(
-              controller: qtyCtrl,
-              label: '库存数量',
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('当前库存：${fmtQty(s['quantity'] as num?)} ${s['unit']}（按进货−出货自动计算）',
+                  style: const TextStyle(fontSize: 13)),
             ),
             const SizedBox(height: 8),
             NumberPadField(
@@ -204,15 +204,23 @@ class _StocksPageState extends State<StocksPage> {
         ],
       ),
     );
-    if (ok != true) return;
-    final qty = double.tryParse(qtyCtrl.text.trim());
+    if (ok != true || !mounted) return;
     final min = double.tryParse(minCtrl.text.trim());
-    if (qty == null || qty < 0 || min == null || min < 0) {
-      toast(context, '数量与阈值须为非负数字');
+    if (min == null || min < 0) {
+      toast(context, '阈值须为非负数字');
       return;
     }
     try {
-      await Api.instance.patch('/stocks/${s['id']}', {'quantity': qty, 'min_stock': min});
+      if ('${s['id']}'.isNotEmpty) {
+        await Api.instance.patch('/stocks/${s['id']}', {'min_stock': min});
+      } else {
+        // 未配置过阈值的商品（计算型列表无 stocks 行）→ 批量端点按商品+单位创建阈值
+        await Api.instance.put('/stocks', {
+          'rows': [
+            {'item_id': s['item_id'], 'unit': s['unit'], 'min_stock': min},
+          ],
+        });
+      }
       toast(context, '已保存');
       SyncService.notifyStockChanged(); // 我的页低库存红字实时刷新
       _refresh();
@@ -251,10 +259,9 @@ class _StocksPageState extends State<StocksPage> {
         toast(context, '暂无商品，请先添加商品与价格');
         return;
       }
-      // 弹层内用本地可变状态
+      // 弹层内用本地可变状态：库存为计算值只读展示，仅编辑预警阈值
       final ctrls = rows
           .map((r) => {
-                'qty': TextEditingController(text: '${r['quantity']}'),
                 'min': TextEditingController(text: '${r['min_stock']}'),
               })
           .toList();
@@ -275,15 +282,15 @@ class _StocksPageState extends State<StocksPage> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text('${rows[i]['item_name']}（${rows[i]['unit']}）',
-                            style: const TextStyle(fontSize: 13)),
-                      ),
-                      SizedBox(
-                        width: 84,
-                        child: NumberPadField(
-                          controller: ctrls[i]['qty']!,
-                          label: '库存',
-                          decoration: const InputDecoration(labelText: '库存', isDense: true),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('${rows[i]['item_name']}（${rows[i]['unit']}）',
+                                style: const TextStyle(fontSize: 13)),
+                            Text('库存 ${fmtQty((rows[i]['quantity'] as num?)?.toDouble() ?? 0)}',
+                                style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.outline)),
+                          ],
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -313,33 +320,30 @@ class _StocksPageState extends State<StocksPage> {
       );
       if (saved != true) {
         for (final c in ctrls) {
-          c['qty']!.dispose();
           c['min']!.dispose();
         }
         return;
       }
       final payload = <Map<String, dynamic>>[];
       for (var i = 0; i < rows.length; i++) {
-        final qty = double.tryParse(ctrls[i]['qty']!.text.trim());
         final min = double.tryParse(ctrls[i]['min']!.text.trim());
-        if (qty == null || qty < 0) continue;
-        payload.add({
-          'item_id': rows[i]['item_id'],
-          'unit': rows[i]['unit'],
-          'quantity': qty,
-          'min_stock': (min == null || min < 0) ? 0 : min,
-        });
+        if (min != null && min >= 0) {
+          payload.add({
+            'item_id': rows[i]['item_id'],
+            'unit': rows[i]['unit'],
+            'min_stock': min,
+          });
+        }
       }
       for (final c in ctrls) {
-        c['qty']!.dispose();
         c['min']!.dispose();
       }
       if (payload.isEmpty) {
-        toast(context, '没有有效的盘点数据');
+        toast(context, '没有有效的阈值数据');
         return;
       }
       await Api.instance.put('/stocks', {'rows': payload});
-      toast(context, '盘点已保存');
+      toast(context, '阈值已保存（库存按进货−出货自动计算）');
       SyncService.notifyStockChanged(); // 我的页低库存红字实时刷新
       _refresh();
     } catch (e) {

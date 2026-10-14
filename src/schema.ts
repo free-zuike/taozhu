@@ -257,11 +257,12 @@ export async function ensureSchema(db: D1Database): Promise<void> {
   return withSchemaLock(async () => {
     if (schemaReady) return;
     // 已初始化库：只查一次标记即返回（冷启动首请求不再跑下方 20+ 次 PRAGMA/ALTER 迁移链）
+    // 注意：短路值必须与末尾写入值一致，否则新增列的迁移永远不跑（生产曾缺 round_carry/price_group_id → 全接口 500）
     try {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '8') {
+      if (meta?.value === '9') {
         schemaReady = true;
         return;
       }

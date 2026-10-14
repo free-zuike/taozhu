@@ -86,16 +86,14 @@ class _TaoZhuAppState extends State<TaoZhuApp> {
   // 有 token（可同步）或本地已有数据（离线可用）→ 直接进主界面；两者都没有才进登录页。
   late final Future<bool> _enterFuture = _canEnter();
 
-  /// 是否有资格直接进入主界面：已登录（有 token）或本地已有业务数据（离线秒开）。
-  /// 本地有数据但未登录：仍进主界面离线可用，同步/写操作时引导登录（不再强制登录页）。
+  /// 是否有资格直接进入主界面：
+  /// - 原生（App）：**始终进入**（登录 = 云端同步开关，不是门禁——用户"不打算用云端同步、只本地使用，
+  ///   也要能进去用"）；未登录为本地模式，数据仅存本机，登录后可同步。
+  /// - Web：无本地库，未登录无法使用 → 登录页。
   static Future<bool> _canEnter() async {
     if (await Api.instance.hasToken()) return true;
-    try {
-      for (final s in ['clients', 'items', 'sale_items', 'purchase_items', 'payments']) {
-        if ((await LocalDb.getAll(s)).isNotEmpty) return true;
-      }
-    } catch (_) {}
-    return false;
+    if (kIsWeb) return false;
+    return true;
   }
 
   @override

@@ -26,6 +26,19 @@ export function stockUpsert(
   ).bind(randomId(), itemId, unit, quantity, minStock);
 }
 
+/** 仅设预警阈值（库存=流水计算，quantity 不再手工写入：GET 计算型后不读取 stocks.quantity） */
+export function stockUpsertMin(
+  db: D1Database,
+  itemId: string,
+  unit: string,
+  minStock: number,
+): D1PreparedStatement {
+  return db.prepare(
+    `INSERT INTO stocks (id, item_id, unit, quantity, min_stock) VALUES (?, ?, ?, 0, ?)
+     ON CONFLICT(item_id, unit) DO UPDATE SET min_stock = excluded.min_stock`,
+  ).bind(randomId(), itemId, unit, minStock);
+}
+
 /**
  * 进销单位换算后的库存联动（通用，按字段折算、不含商品名逻辑）：
  * - 商品配了计数单位 count_unit 且与行单位不同，且本行折合数 count_qty（或价格行 per×quantity）≠ quantity
