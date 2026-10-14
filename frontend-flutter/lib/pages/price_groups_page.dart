@@ -53,10 +53,16 @@ class _PriceGroupsPageState extends State<PriceGroupsPage> {
     try {
       final d = await Api.instance.get('/price-groups');
       final rows = ((d['price_groups'] as List?) ?? []).cast<Map<String, dynamic>>();
-      await LocalDb.upsertList('price_groups', rows);
+      // 本地已删除但尚未推送落地的组：过滤掉再展示/写库，防止"删了又出现"
+      // （删除推送未落地时服务端还是未删状态，拉回会覆盖本地 deleteOne）
+      final hideIds = await SyncService.pendingDeletedIds('price_group');
+      final visible = hideIds.isEmpty
+          ? rows
+          : rows.where((r) => !hideIds.contains('${r['id']}')).toList();
+      await LocalDb.upsertList('price_groups', visible);
       if (!mounted) return;
       setState(() {
-        _groups = rows.where((x) => '${x['deleted_at'] ?? ''}'.isEmpty).toList()
+        _groups = visible.where((x) => '${x['deleted_at'] ?? ''}'.isEmpty).toList()
           ..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
         _loading = false;
       });

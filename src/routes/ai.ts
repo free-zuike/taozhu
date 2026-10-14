@@ -40,8 +40,11 @@ aiRouter.post('/parse-photo', async (c) => {
   }
   if (!file) return c.json({ error: '请选择图片上传' }, 400);
   if (file.size === 0) return c.json({ error: '图片为空' }, 400);
-  // 限制 10MB
-  if (file.size > 10 * 1024 * 1024) return c.json({ error: '图片过大（上限 10MB）' }, 400);
+  // 智谱视觉对图片字节数有上限（实测几 MB 即 1210"图片输入格式/解析错误"）；前端已压缩
+  // （App aiPreparePhoto / 小程序 compressImage），超限直接拒并提示而非透传智谱再报错
+  if (file.size > 1536 * 1024) {
+    return c.json({ error: '图片过大（智谱识别上限约 1.5MB）：请重新拍照或换压缩后的图片再试' }, 400);
+  }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   // 魔数识别真实格式（multipart Content-Type 可能被前端标错，如 PNG 标成 JPEG → 智谱 1210）

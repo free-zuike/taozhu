@@ -1660,9 +1660,13 @@ class _LedgerPageState extends State<LedgerPage> {
     );
   }
 
-  /// 店铺显示精度（round_unit：yuan/jiao；fen/空=null 走全局 fmtMoney）
+  /// 店铺显示精度：**只有选了抹零**（txn/day/total）才按 round_unit 显示位数；
+  /// 不抹零（none/默认）= 原始显示（全局 fmtMoney，用户"不抹零不就是原始显示吗"）。
+  /// 所有店铺 round_unit 默认 'yuan'——若直接按它显示会把没设抹零的店也变整元（用户"所有店铺都变了"）。
   String? _clientUnit(String clientId) {
     final c = _clients.where((x) => '${x['id']}' == clientId).firstOrNull;
+    final stage = '${c?['round_stage'] ?? ''}';
+    if (stage != 'txn' && stage != 'day' && stage != 'total') return null;
     final u = '${c?['round_unit'] ?? ''}';
     return (u == 'yuan' || u == 'jiao') ? u : null;
   }

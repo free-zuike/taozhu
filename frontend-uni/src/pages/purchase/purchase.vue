@@ -540,7 +540,15 @@ function aiPhoto() {
       aiBusy.value = true;
       aiTip.value = 'AI 识别中…';
       try {
-        const d = await uploadAi<{ items?: Array<Record<string, any>>; date?: string }>(`/ai/parse-photo?purpose=purchase`, 'photo', fp);
+        // 压缩：智谱对图片字节数有上限（真实照片 2-6MB 直接 1210"图片输入格式/解析错误"）
+        let up = fp;
+        try {
+          const cp = await new Promise<{ tempFilePath: string }>((resolve, reject) => {
+            uni.compressImage({ src: fp, quality: 80, success: resolve, fail: reject });
+          });
+          if (cp.tempFilePath) up = cp.tempFilePath;
+        } catch (_) { /* H5 等平台不支持 compressImage → 原图 */ }
+        const d = await uploadAi<{ items?: Array<Record<string, any>>; date?: string }>(`/ai/parse-photo?purpose=purchase`, 'photo', up);
         // AI 识别批次：记录本次填充的行 id（提交后逐行挂行级附件"批对批"，多页送货单各自对应）
         const rowIds = fillFromDrafts(d.items || [], String(d.date ?? ''));
         if (rowIds.length > 0) pendingGroups.value.push({ fp, rowIds });

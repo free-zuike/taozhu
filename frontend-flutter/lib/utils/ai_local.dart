@@ -297,10 +297,10 @@ String? _sniffImageMime(Uint8List bytes) {
   return null;
 }
 
-/// AI 拍照识别前处理：魔数嗅探真实格式 + 超大图缩放重编码 JPEG。
-/// 智谱 glm-4v 对 HEIC/超大/解析异常图报 1210"图片输入格式/解析错误"——统一先转
-/// JPEG（兼容性最好）并压缩到长边 2048 内、体积更小再发。无法解码抛中文提示。
-/// 返回 {bytes, mime}：压缩后更小才用 JPEG；否则原字节 + 修正后的真实 mime。
+/// AI 拍照识别前处理：魔数嗅探真实格式 + 压缩重编码 JPEG。
+/// 智谱 glm-4v 对图片字节数有上限（实测 ~500KB 内安全，几 MB 直接 1210"图片输入格式/解析错误"），
+/// 真实单据照片 2-6MB 必超——统一压缩到长边 1536、质量 80（真实照片 ≈ 200-400KB，安全）。
+/// HEIC/无法解码抛中文提示。返回 {bytes, mime}：压缩后更小才用 JPEG；否则原字节 + 修正后的真实 mime。
 Future<({Uint8List bytes, String mime})> aiPreparePhoto(Uint8List bytes, String fallbackMime) async {
   final real = _sniffImageMime(bytes) ??
       (fallbackMime.startsWith('image/') ? fallbackMime : '');
@@ -313,18 +313,22 @@ Future<({Uint8List bytes, String mime})> aiPreparePhoto(Uint8List bytes, String 
       throw Exception('图片无法解析，请换一张（iPhone 的 HEIC 请先转成 JPG）');
     }
     img.Image out = decoded;
-    if (decoded.width > 2048 || decoded.height > 2048 || bytes.length > 4 * 1024 * 1024) {
+    if (decoded.width > 1536 || decoded.height > 1536 || bytes.length > 1024 * 1024) {
       final scale = decoded.width >= decoded.height
-          ? 2048 / decoded.width
-          : 2048 / decoded.height;
+          ? 1536 / decoded.width
+          : 1536 / decoded.height;
       out = img.copyResize(
         decoded,
-        width: (decoded.width * scale).round().clamp(1, 2048),
-        height: (decoded.height * scale).round().clamp(1, 2048),
+        width: (decoded.width * scale).round().clamp(1, 1536),
+        height: (decoded.height * scale).round().clamp(1, 1536),
         interpolation: img.Interpolation.linear,
       );
     }
-    final jpg = img.encodeJpg(out, quality: 82);
+    var jpg = img.encodeJpg(out, quality: 80);
+    // 极少数照片压缩后仍超 1MB（如高噪点截图）→ 再降一档质量兜底
+    if (jpg.length > 1024 * 1024) {
+      jpg = img.encodeJpg(out, quality: 55);
+    }
     if (jpg.length < bytes.length) {
       return (bytes: Uint8List.fromList(jpg), mime: 'image/jpeg');
     }

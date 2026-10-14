@@ -201,6 +201,12 @@ class _ClientsPageState extends State<ClientsPage> {
     return _clientDebt['${c['id']}'] ?? server;
   }
 
+  /// 店铺是否启用抹零（txn/day/total）；不抹零（none）= 原始金额显示
+  bool _isRound(Map<String, dynamic> c) {
+    final stage = '${c['round_stage'] ?? ''}';
+    return stage == 'txn' || stage == 'day' || stage == 'total';
+  }
+
   /// 记账起始日：本地聚合优先（原生），服务端字段兜底（Web 直连 /clients 返回 first_book_date）
   String _firstDateOf(Map<String, dynamic> c) {
     final local = _clientFirstDate['${c['id']}'];
@@ -293,7 +299,8 @@ class _ClientsPageState extends State<ClientsPage> {
                       style: TextStyle(color: _c.textSub, fontSize: 12)),
                 ),
               ],
-              // 店铺结账抹零方式/精度：按店配置可随时改（不写死），欠款按此口径计算
+              // 店铺结账抹零方式/精度：按店配置可随时改（不写死），欠款按此口径计算；
+              // 不抹零（none）= 原始金额显示，抹零精度无意义 → 禁用且不显示默认值（用户"不抹零就不该有抹零精度"）
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 initialValue: selStage,
@@ -304,18 +311,25 @@ class _ClientsPageState extends State<ClientsPage> {
                   DropdownMenuItem(value: 'day', child: Text('按天抹零（每日出货合计向下取整）')),
                   DropdownMenuItem(value: 'total', child: Text('结账抹零（结账总额向下取整）')),
                 ],
-                onChanged: (v) => setDlg(() => selStage = v ?? 'none'),
+                onChanged: (v) => setDlg(() {
+                  selStage = v ?? 'none';
+                  if (selStage == 'none') selUnit = 'yuan'; // 不抹零时精度不生效，保存用默认值
+                }),
               ),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                initialValue: selUnit,
-                decoration: const InputDecoration(labelText: '抹零精度'),
+                initialValue: selStage == 'none' ? null : selUnit,
+                decoration: const InputDecoration(
+                    labelText: '抹零精度',
+                    helperText: selStage == 'none' ? '不抹零=按原始金额显示（精度不生效）' : null),
                 items: const [
                   DropdownMenuItem(value: 'yuan', child: Text('元（向下取整到元）')),
                   DropdownMenuItem(value: 'jiao', child: Text('角（向下取整到角）')),
                   DropdownMenuItem(value: 'fen', child: Text('分（向下取整到分）')),
                 ],
-                onChanged: (v) => setDlg(() => selUnit = v ?? 'yuan'),
+                onChanged: selStage == 'none'
+                    ? null
+                    : (v) => setDlg(() => selUnit = v ?? 'yuan'),
               ),
               const SizedBox(height: 8),
               // 进位临界：欠款/结账逐笔舍入按该店进位（0.5=四舍五入、0.6=5舍6入）；未配置跟随全局
@@ -588,11 +602,15 @@ class _ClientsPageState extends State<ClientsPage> {
                                 Container(width: 1, height: 28, color: _c.divider),
                                 Expanded(
                                   child: Column(children: [
-                                    Text('¥${fmtByUnit(_debt(c), '${c['round_unit'] ?? 'fen'}')}',
-                                        style: TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w700,
-                                            color: _debt(c) > 0 ? _c.danger : _c.success)),
+                                    Text(
+                                      // 欠款显示按抹零方式：不抹零=原始金额（2 位），抹零=按精度（元/角/分）
+                                      _isRound(c)
+                                          ? '¥${fmtByUnit(_debt(c), '${c['round_unit'] ?? 'fen'}')}'
+                                          : '¥${fmtMoney(_debt(c))}',
+                                      style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700,
+                                          color: _debt(c) > 0 ? _c.danger : _c.success)),
                                     const SizedBox(height: 2),
                                     Text('欠款', style: TextStyle(fontSize: 11, color: _c.textSub)),
                                   ]),
