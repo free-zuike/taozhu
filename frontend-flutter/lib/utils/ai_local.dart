@@ -156,13 +156,18 @@ Future<String> _chatCompletion(AiProvider p, String cap, List<Map<String, dynami
       return '${content ?? ''}'.trim();
     }
     final errBody = utf8.decode(resp.bodyBytes);
+    // 诊断：记录直连请求的关键信息（模型/地址/请求体规模/智谱完整响应）——Web 同代码走服务器正常、
+    // App 本地直连报错时凭此定位（模型名/图片参数/网络分发等）
+    appLog('ai', 'AI 直连失败 [${p.name}/${_modelFor(p, cap)}] ${p.baseUrl} reqBytes=${jsonEncode(body).length}'
+        ' → HTTP ${resp.statusCode}: $errBody', level: 'error');
+    final brief = 'AI 通道 ${resp.statusCode}（${p.name}/${_modelFor(p, cap)}）:'
+        ' ${errBody.length > 600 ? errBody.substring(0, 600) : errBody}';
     if (i == _maxParamStrips) {
-      // 完整错误透出（智谱 error.message 是定位 1210 的关键，别截断）
-      throw Exception('AI 通道 ${resp.statusCode}: ${errBody.length > 600 ? errBody.substring(0, 600) : errBody}');
+      throw Exception(brief);
     }
     final param = _rejectedParam(body, resp.statusCode, errBody);
     if (param == null) {
-      throw Exception('AI 通道 ${resp.statusCode}: ${errBody.length > 600 ? errBody.substring(0, 600) : errBody}');
+      throw Exception(brief);
     }
     body.remove(param);
   }

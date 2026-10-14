@@ -349,7 +349,13 @@ export async function applyChange(
   try {
     switch (entity_type) {
       case 'client':
-        if (action === 'delete') break; // 店铺为软删（deleted_at），不做物理删除
+        if (action === 'delete') {
+          // 店铺软删（与 DELETE /clients/:id 一致）。此前直接 break=空操作 → App 删除推送后
+          // 服务端未删 → pull 拉回旧值（用户"删除会恢复"根因，价格组/商品同样存在）
+          await db.prepare('UPDATE clients SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL')
+            .bind(new Date().toISOString(), id).run();
+          break;
+        }
         await db.prepare(
           `INSERT INTO clients (id, name, contact, phone, note, start_date, end_date, month_start_day, round_stage, round_unit, round_carry, category_id, price_group_id, deleted_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -365,7 +371,13 @@ export async function applyChange(
           p.category_id ?? null, p.price_group_id ?? null, p.deleted_at ?? null).run();
         break;
       case 'item': {
-        if (action === 'delete') break; // 商品为软删（deleted_at），不做物理删除
+        if (action === 'delete') {
+          // 商品软删（与 DELETE /items/:id 一致）：停用价格行，保留行被引用不误删
+          await db.prepare('UPDATE items SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL')
+            .bind(new Date().toISOString(), id).run();
+          await db.prepare('UPDATE item_prices SET active = 0 WHERE item_id = ?').bind(id).run();
+          break;
+        }
         await db.prepare(
           `INSERT INTO items (id, name, category, category_id, deleted_at) VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET name = excluded.name, category = excluded.category,
@@ -396,7 +408,15 @@ export async function applyChange(
         break;
       }
       case 'price_group':
-        if (action === 'delete') break; // 价格组为软删（deleted_at），不做物理删除
+        if (action === 'delete') {
+          // 价格组软删（与 DELETE /price-groups/:id 一致）：deleted_at 置当前时间 + 店铺引用清空。
+          // 此前直接 break=空操作 → App 删除推送后服务端未删 → pull 拉回（用户"价格组删了又恢复"实测根因）
+          const deletedAt = new Date().toISOString();
+          await db.prepare('UPDATE price_groups SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL')
+            .bind(deletedAt, id).run();
+          await db.prepare('UPDATE clients SET price_group_id = NULL WHERE price_group_id = ?').bind(id).run();
+          break;
+        }
         await db.prepare(
           `INSERT INTO price_groups (id, name, sort, deleted_at) VALUES (?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort = excluded.sort, deleted_at = excluded.deleted_at`,

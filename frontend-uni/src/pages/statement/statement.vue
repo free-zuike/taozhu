@@ -27,8 +27,13 @@
       <button class="btn-save" :disabled="loading" @click="load">{{ loading ? '生成中…' : '生成对账单' }}</button>
 
       <view v-if="loaded">
-        <!-- 对账单表格（对齐 App 标准模板：标题「店铺 X月份账单」+ 按日分组明细 + 旬段小计） -->
-        <view class="card stmt-tbl">
+        <!-- 模板切换（对齐 App 内置模板：标准 / 多栏） -->
+        <view class="seg tpl-seg">
+          <view :class="['seg-item', { active: tpl === 'std' }]" @click="tpl = 'std'">标准</view>
+          <view :class="['seg-item', { active: tpl === 'multi' }]" @click="tpl = 'multi'">多栏</view>
+        </view>
+        <!-- 标准模板：标题 + 按日分组明细 + 旬段小计 -->
+        <view v-if="tpl === 'std'" class="card stmt-tbl">
           <view class="t-title">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
           <view class="t-sub">{{ from }} 至 {{ to }}</view>
           <view class="t-head">
@@ -39,25 +44,46 @@
           <view v-for="g in dayGroups" :key="g.day" class="t-group">
             <view class="t-day">
               <text class="t-day-label">{{ g.label }}</text>
-              <text class="t-day-total">小计 ¥{{ fmtAmount(g.total) }}</text>
+              <text class="t-day-total">小计 ¥{{ stmtFmt(g.total) }}</text>
             </view>
             <view v-for="(l, i) in g.rows" :key="i" class="t-row">
               <text class="c-date">{{ l.date.slice(5) }}</text>
               <text class="c-detail" :class="{ 't-pay': l.kind === 'pay' }">{{ l.kind === 'pay' ? '收·' + l.detail : l.detail }}</text>
-              <text class="c-amt">{{ l.kind === 'pay' ? '−¥' + fmtAmount(l.amount) : '¥' + fmtAmount(l.amount) }}</text>
+              <text class="c-amt">{{ l.kind === 'pay' ? '−¥' + stmtFmt(l.amount) : '¥' + stmtFmt(l.amount) }}</text>
             </view>
           </view>
           <!-- 旬段小计（对齐 App：1-10 / 11-20 / 21 日以后） -->
-          <view class="t-total"><text>1-10 日合计</text><text>¥{{ fmtAmount(segTotal(1, 10)) }}</text></view>
-          <view class="t-total"><text>11-20 日合计</text><text>¥{{ fmtAmount(segTotal(11, 20)) }}</text></view>
-          <view class="t-total"><text>21 日以后合计</text><text>¥{{ fmtAmount(segTotal(21, 31)) }}</text></view>
-          <view class="t-total"><text>出货合计</text><text>¥{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
-          <view class="t-total"><text>收款合计</text><text>¥{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
-          <view class="t-total"><text>期末欠款</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ fmtAmount(debt) }}</text></view>
+          <view class="t-total"><text>1-10 日合计</text><text>¥{{ stmtFmt(segTotal(1, 10)) }}</text></view>
+          <view class="t-total"><text>11-20 日合计</text><text>¥{{ stmtFmt(segTotal(11, 20)) }}</text></view>
+          <view class="t-total"><text>21 日以后合计</text><text>¥{{ stmtFmt(segTotal(21, 31)) }}</text></view>
+          <view class="t-total"><text>出货合计</text><text>¥{{ stmtFmt(saleTotal) }}（{{ sales.length }} 笔）</text></view>
+          <view class="t-total"><text>收款合计</text><text>¥{{ stmtFmt(payTotal) }}（{{ payments.length }} 笔）</text></view>
+          <view class="t-total"><text>期末欠款</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ stmtFmt(debt) }}</text></view>
         </view>
-        <view class="stat"><text>出货合计</text><text class="red">¥{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
-        <view class="stat"><text>收款合计</text><text class="green">¥{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
-        <view class="stat"><text>期末欠款（累计）</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ fmtAmount(debt) }}</text></view>
+        <!-- 多栏模板：寻牛记式每栏 10 天（日期+营业额 双列，栏底小计，底部总计；对齐 App 多栏月账单） -->
+        <view v-if="tpl === 'multi'" class="card stmt-tbl">
+          <view class="t-title">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
+          <view class="m-row m-head">
+            <view v-for="ci in multi.cols" :key="ci" class="m-col">
+              <text class="m-date">日期</text><text class="m-amt">营业额</text>
+            </view>
+          </view>
+          <view v-for="(row, ri) in multi.rows" :key="ri" class="m-row">
+            <view v-for="(cell, ci) in row" :key="ci" class="m-col">
+              <text class="m-date">{{ cell.day ? multi.y + '.' + multi.m + '.' + cell.day : '' }}</text>
+              <text class="m-amt">{{ cell.amt }}</text>
+            </view>
+          </view>
+          <view class="m-row m-sub">
+            <view v-for="(s, ci) in multi.subtotals" :key="ci" class="m-col">
+              <text class="m-date"></text><text class="m-amt bold">{{ s }}</text>
+            </view>
+          </view>
+          <view class="m-total"><text>总计</text><text class="bold">{{ multi.grand }}</text></view>
+        </view>
+        <view class="stat"><text>出货合计</text><text class="red">¥{{ stmtFmt(saleTotal) }}（{{ sales.length }} 笔）</text></view>
+        <view class="stat"><text>收款合计</text><text class="green">¥{{ stmtFmt(payTotal) }}（{{ payments.length }} 笔）</text></view>
+        <view class="stat"><text>期末欠款（累计）</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ stmtFmt(debt) }}</text></view>
         <button class="btn-copy" @click="copy">复制对账文本</button>
         <button class="btn-copy" @click="copyCsv">复制 CSV（粘到 Excel）</button>
         <button class="btn-copy" @click="share">分享对账单（生成链接）</button>
@@ -96,12 +122,70 @@ import { ref, computed } from 'vue';
 ;
 ;
 import { request, getToken, getApiBase } from '../../api';
-import { roundAmount, fmtAmount, initRounding } from '../../utils/money';
+import { roundAmount, fmtAmount, fmtByUnit, initRounding } from '../../utils/money';
 
-const clients = ref<Array<{ id: string; name: string }>>([]);
+const clients = ref<Array<{ id: string; name: string; round_stage?: string; round_unit?: string }>>([]);
 const clientNames = ref<string[]>(['全部店铺']);
 const clientName = ref('全部店铺');
 let clientId = '';
+
+// 对账单模板（对齐 App 内置模板切换）：标准=按日明细表；多栏=每栏 10 天的寻牛记式月账单
+const tpl = ref<'std' | 'multi'>('std');
+
+/// 当前店铺抹零显示精度：只有选了抹零（每单/按天/结账）才按精度；不抹零=实际金额（全局口径）
+const roundUnit = computed(() => {
+  const c = clients.value.find((x) => x.id === clientId);
+  const stage = String(c?.round_stage || 'none');
+  if (stage !== 'txn' && stage !== 'day' && stage !== 'total') return '';
+  return String(c?.round_unit || '');
+});
+
+/// 对账单金额显示（对齐 App 按店铺抹零方式：不抹零=fmtAmount；抹零=fmtByUnit）
+const stmtFmt = (v: number) => (roundUnit.value ? fmtByUnit(v, roundUnit.value) : fmtAmount(v));
+
+/// 多栏月账单：每日营业额（出货，不含收款）→ 每栏 10 天平铺 + 栏底小计 + 总计
+const dailyAmt = computed(() => {
+  const days: number[] = [];
+  for (const s of sales.value) {
+    const d = String(s.happened_at || '').slice(0, 10);
+    if (d.length < 10) continue;
+    const day = Number(d.slice(8, 10));
+    days[day] = (days[day] || 0) + roundAmount(Number(s.amount ?? s.total) || 0);
+  }
+  return days; // 下标即日号 1..31
+});
+
+function monthDays(y: number, m: number): number {
+  return new Date(y, m, 0).getDate();
+}
+
+const multi = computed(() => {
+  const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
+  const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
+  const n = from.value ? monthDays(y, m) : 31;
+  const cols = Math.max(1, Math.ceil(n / 10));
+  const rows: Array<Array<{ day: number; amt: string }>> = [];
+  for (let r = 0; r < 10; r++) {
+    const cells: Array<{ day: number; amt: string }> = [];
+    for (let c = 0; c < cols; c++) {
+      const day = c * 10 + r + 1;
+      cells.push({
+        day: day <= n ? day : 0,
+        amt: day <= n ? String(roundAmount(dailyAmt.value[day] || 0).toFixed(roundUnit.value === 'yuan' ? 0 : roundUnit.value === 'jiao' ? 1 : 2)) : '',
+      });
+    }
+    rows.push(cells);
+  }
+  const subtotals: string[] = [];
+  let grand = 0;
+  for (let c = 0; c < cols; c++) {
+    let s = 0;
+    for (let dd = c * 10; dd < (c + 1) * 10 && dd < n; dd++) s += dailyAmt.value[dd + 1] || 0;
+    grand += s;
+    subtotals.push(roundAmount(s).toFixed(roundUnit.value === 'yuan' ? 0 : roundUnit.value === 'jiao' ? 1 : 2));
+  }
+  return { y, m, cols, rows, subtotals, grand: roundAmount(grand).toFixed(roundUnit.value === 'yuan' ? 0 : roundUnit.value === 'jiao' ? 1 : 2) };
+});
 
 const period = ref<'month' | 'last' | 'custom'>('month');
 const from = ref('');
@@ -478,6 +562,18 @@ async function delShare(s: ShareItem) {
 .t-head, .t-row { display: flex; align-items: center; padding: 12rpx 24rpx; }
 .t-head { background: var(--input-bg); font-size: 24rpx; color: var(--text-sub); font-weight: 600; }
 .t-row { border-bottom: 1rpx solid var(--divider); font-size: 26rpx; color: var(--text-main); }
+/* 模板切换（标准/多栏） */
+.tpl-seg { margin-bottom: 20rpx; }
+/* 多栏月账单（寻牛记式：每栏 日期+营业额 双列） */
+.m-row { display: flex; border-bottom: 1rpx solid var(--divider); }
+.m-head { background: var(--input-bg); font-weight: 600; color: var(--text-sub); font-size: 22rpx; }
+.m-col { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 10rpx 2rpx; border-left: 1rpx solid var(--divider); }
+.m-col:first-child { border-left: none; }
+.m-date { font-size: 20rpx; color: var(--text-sub); }
+.m-amt { font-size: 24rpx; color: var(--text-main); }
+.m-amt.bold { font-weight: 700; }
+.m-sub { background: var(--primary-soft); }
+.m-total { display: flex; justify-content: space-between; padding: 14rpx 24rpx; font-weight: 700; font-size: 26rpx; border-top: 1rpx solid var(--divider); }
 .c-date { width: 110rpx; flex-shrink: 0; font-size: 24rpx; color: var(--text-sub); }
 .c-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .c-amt { width: 150rpx; flex-shrink: 0; text-align: right; }

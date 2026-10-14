@@ -150,4 +150,24 @@ describe('价格组总结（summarize）', () => {
     const badClient = await call(env, 'POST', `/api/v1/price-groups/${groupId}/summarize`, token, { client_id: 'nope' });
     expect(badClient.status).toBe(404);
   });
+
+  it('同步推送 delete 变更 → 服务端软删价格组并清店铺引用（App 删除恢复根因）', async () => {
+    // 建组 + 店铺绑定该组
+    const g = (await (await call(env, 'POST', '/api/v1/price-groups', token, { name: '待删组' })).json()) as { id: string };
+    await call(env, 'PATCH', `/api/v1/clients/${clientA}`, token, { price_group_id: g.id });
+    // 模拟 App 本地删除的队列推送（action=delete，payload 空）
+    const push = (await (await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'test-dev',
+      changes: [{ entity_type: 'price_group', entity_sync_id: g.id, action: 'delete', payload: {}, updated_at: new Date().toISOString() }],
+    })).json()) as { accepted: number };
+    expect(push.accepted).toBe(1);
+    // 列表不再返回该组
+    const list = (await (await call(env, 'GET', '/api/v1/price-groups', token)).json()) as { price_groups: Array<{ id: string }> };
+    expect(list.price_groups.find((x) => x.id === g.id)).toBeFalsy();
+    // 店铺引用已清空
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as {
+      clients: Array<{ id: string; price_group_id?: string }>;
+    };
+    expect(clients.clients.find((x) => x.id === clientA)?.price_group_id || '').toBe('');
+  });
 });

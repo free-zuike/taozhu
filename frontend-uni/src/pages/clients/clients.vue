@@ -63,10 +63,11 @@
             <text class="value">{{ stageLabel(form.roundStage) }}</text>
           </view>
         </picker>
-        <picker class="field" mode="selector" :range="unitNames" @change="onUnitChange">
+        <!-- 不抹零=按实际金额显示，抹零精度不生效（对齐 App：不抹零时精度不可选） -->
+        <picker class="field" mode="selector" :range="unitNames" :disabled="form.roundStage === 'none'" @change="onUnitChange">
           <view class="field-inner">
             <text class="label">抹零精度</text>
-            <text class="value">{{ unitLabel(form.roundUnit) }}</text>
+            <text class="value" :class="{ placeholder: form.roundStage === 'none' }">{{ form.roundStage === 'none' ? '不抹零，精度不生效' : unitLabel(form.roundUnit) }}</text>
           </view>
         </picker>
         <picker class="field" mode="selector" :range="carryNames" @change="onCarryChange">
@@ -130,8 +131,9 @@ const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categ
 // 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
 const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
-// 店铺结账抹零方式/精度（对齐 App 店铺编辑：none/txn/day/total + yuan/jiao/fen，随时可改）
-const stageNames = ['不抹零', '每单抹零', '按天抹零', '结账抹零'];
+// 店铺结账抹零方式/精度（对齐 App 店铺编辑：none/txn/day/total + yuan/jiao/fen，随时可改；
+// 不抹零=按实际金额显示，抹零精度不生效——用户"不抹零就不该有抹零精度"）
+const stageNames = ['不抹零（按实际金额显示）', '每单抹零', '按天抹零', '结账抹零'];
 const stageValues = ['none', 'txn', 'day', 'total'];
 const unitNames = ['元', '角', '分'];
 const unitValues = ['yuan', 'jiao', 'fen'];

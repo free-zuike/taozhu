@@ -300,16 +300,16 @@ class _ClientsPageState extends State<ClientsPage> {
                 ),
               ],
               // 店铺结账抹零方式/精度：按店配置可随时改（不写死），欠款按此口径计算；
-              // 不抹零（none）= 原始金额显示，抹零精度无意义 → 禁用且不显示默认值（用户"不抹零就不该有抹零精度"）
+              // 不抹零=按实际金额显示，抹零精度无意义 → 禁用且不显示默认值（用户"不抹零就不该有抹零精度"）
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 initialValue: selStage,
-                decoration: const InputDecoration(labelText: '抹零方式'),
+                decoration: const InputDecoration(labelText: '抹零方式', hintText: '不抹零=账单按实际金额显示'),
                 items: const [
-                  DropdownMenuItem(value: 'none', child: Text('不抹零（按舍入逐笔算欠款）')),
+                  DropdownMenuItem(value: 'none', child: Text('不抹零（按实际金额显示）')),
                   DropdownMenuItem(value: 'txn', child: Text('每单抹零（每张出货单合计向下取整）')),
-                  DropdownMenuItem(value: 'day', child: Text('按天抹零（每日出货合计向下取整）')),
-                  DropdownMenuItem(value: 'total', child: Text('结账抹零（结账总额向下取整）')),
+                  DropdownMenuItem(value: 'day', child: Text('按天抹零（每天合计向下取整）')),
+                  DropdownMenuItem(value: 'total', child: Text('结账抹零（月末一次向下取整）')),
                 ],
                 onChanged: (v) => setDlg(() {
                   selStage = v ?? 'none';
@@ -321,11 +321,11 @@ class _ClientsPageState extends State<ClientsPage> {
                 initialValue: selStage == 'none' ? null : selUnit,
                 decoration: InputDecoration(
                     labelText: '抹零精度',
-                    helperText: selStage == 'none' ? '不抹零=按原始金额显示（精度不生效）' : null),
+                    helperText: selStage == 'none' ? '不抹零=按实际金额显示（精度不生效）' : '取整到：元（不要小数）/ 角 / 分'),
                 items: const [
-                  DropdownMenuItem(value: 'yuan', child: Text('元（向下取整到元）')),
-                  DropdownMenuItem(value: 'jiao', child: Text('角（向下取整到角）')),
-                  DropdownMenuItem(value: 'fen', child: Text('分（向下取整到分）')),
+                  DropdownMenuItem(value: 'yuan', child: Text('元（账单金额不要小数）')),
+                  DropdownMenuItem(value: 'jiao', child: Text('角（显示到 1 位小数）')),
+                  DropdownMenuItem(value: 'fen', child: Text('分（显示到 2 位小数）')),
                 ],
                 onChanged: selStage == 'none'
                     ? null
