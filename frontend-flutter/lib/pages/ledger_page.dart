@@ -1638,8 +1638,11 @@ class _LedgerPageState extends State<LedgerPage> {
                           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.textMain)),
                       const Spacer(),
                       Text(
-                        // 合计按"每笔舍入后累加"（与单笔显示一致）：digits=0/1 时原始浮点累加再舍入会与每笔金额对不上
-                        '${e.value.length} 件 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + Money.round((l['amount'] as num?)?.toDouble() ?? 0)))}',
+                        // 合计按"每笔舍入后累加"（与单笔显示一致）：digits=0/1 时原始浮点累加再舍入会与每笔金额对不上；
+                        // 单店视图按该店铺 round_unit 显示位数（用户"当天总价跟店铺管理的位数"）；全部店铺混合走全局
+                        _clientId == null
+                            ? '${e.value.length} 件 · 合计 ¥${fmtMoney(e.value.fold<double>(0, (s, l) => s + Money.round((l['amount'] as num?)?.toDouble() ?? 0)))}'
+                            : '${e.value.length} 件 · 合计 ¥${fmtByUnit(e.value.fold<double>(0, (s, l) => s + Money.round((l['amount'] as num?)?.toDouble() ?? 0))), _clientUnit(_clientId!))}',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textSub),
                       ),
                       const SizedBox(width: 2),
@@ -1655,6 +1658,20 @@ class _LedgerPageState extends State<LedgerPage> {
       ),
     ),
     );
+  }
+
+  /// 店铺显示精度（round_unit：yuan/jiao；fen/空=null 走全局 fmtMoney）
+  String? _clientUnit(String clientId) {
+    final c = _clients.where((x) => '${x['id']}' == clientId).firstOrNull;
+    final u = '${c?['round_unit'] ?? ''}';
+    return (u == 'yuan' || u == 'jiao') ? u : null;
+  }
+
+  /// 交易行金额：按该行所属店铺 round_unit 显示（用户"商品的重量*售价的价格按店铺管理的位数"）
+  String _fmtLineAmt(num v, Map<String, dynamic> l) {
+    final cid = '${(l['order'] as Map?)?['client_id'] ?? l['client_id'] ?? ''}';
+    final unit = _clientUnit(cid);
+    return unit == null ? fmtMoney(v) : fmtByUnit(v, unit);
   }
 
   Widget _saleLineTile(TaozhuColors c, Map<String, dynamic> l) {
@@ -1820,7 +1837,7 @@ class _LedgerPageState extends State<LedgerPage> {
                       ],
                     ),
                   ),
-                  Text('¥${fmtMoney((l['amount'] as num?)?.toDouble() ?? 0)}',
+                  Text('¥${_fmtLineAmt((l['amount'] as num?)?.toDouble() ?? 0, l)}',
                       style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: c.danger)),
                 ],
               ),

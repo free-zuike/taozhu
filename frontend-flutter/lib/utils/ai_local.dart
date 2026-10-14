@@ -5,6 +5,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../log.dart';
 
@@ -281,6 +282,60 @@ Future<AiInvoice> aiParseText(String text, {String purpose = 'sale'}) async {
   }
 }
 
+/// 按文件魔数识别真实图片格式（不信调用方 mime，防 HEIC/PNG 标错触发智谱 1210"图片输入格式/解析错误"）。
+/// 支持 JPEG/PNG/WEBP/GIF；HEIC（ISO BMFF）识别为不支持返回 null。
+String? _sniffImageMime(Uint8List bytes) {
+  if (bytes.length < 12) return null;
+  if (bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff) return 'image/jpeg';
+  if (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4e && bytes[3] == 0x47 &&
+      bytes[4] == 0x0d && bytes[5] == 0x0a && bytes[6] == 0x1a && bytes[7] == 0x0a) return 'image/png';
+  if (bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46 &&
+      bytes[8] == 0x57 && bytes[9] == 0x45 && bytes[10] == 0x42 && bytes[11] == 0x50) return 'image/webp';
+  if (bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38) return 'image/gif';
+  // HEIC：ISO BMFF（....ftyp + 品牌 heic/heix/hevc/mif1）——无法解析，返回 null 走提示
+  if (bytes[4] == 0x66 && bytes[5] == 0x74 && bytes[6] == 0x79 && bytes[7] == 0x70) return null;
+  return null;
+}
+
+/// AI 拍照识别前处理：魔数嗅探真实格式 + 超大图缩放重编码 JPEG。
+/// 智谱 glm-4v 对 HEIC/超大/解析异常图报 1210"图片输入格式/解析错误"——统一先转
+/// JPEG（兼容性最好）并压缩到长边 2048 内、体积更小再发。无法解码抛中文提示。
+/// 返回 {bytes, mime}：压缩后更小才用 JPEG；否则原字节 + 修正后的真实 mime。
+Future<({Uint8List bytes, String mime})> aiPreparePhoto(Uint8List bytes, String fallbackMime) async {
+  final real = _sniffImageMime(bytes) ??
+      (fallbackMime.startsWith('image/') ? fallbackMime : '');
+  if (real.isEmpty) {
+    throw Exception('图片格式不支持：请用 JPG/PNG 图片（iPhone 的 HEIC 请先转成 JPG）');
+  }
+  try {
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) {
+      throw Exception('图片无法解析，请换一张（iPhone 的 HEIC 请先转成 JPG）');
+    }
+    img.Image out = decoded;
+    if (decoded.width > 2048 || decoded.height > 2048 || bytes.length > 4 * 1024 * 1024) {
+      final scale = decoded.width >= decoded.height
+          ? 2048 / decoded.width
+          : 2048 / decoded.height;
+      out = img.copyResize(
+        decoded,
+        width: (decoded.width * scale).round().clamp(1, 2048),
+        height: (decoded.height * scale).round().clamp(1, 2048),
+        interpolation: img.Interpolation.linear,
+      );
+    }
+    final jpg = img.encodeJpg(out, quality: 82);
+    if (jpg.length < bytes.length) {
+      return (bytes: Uint8List.fromList(jpg), mime: 'image/jpeg');
+    }
+    return (bytes: bytes, mime: real);
+  } on img.ImageException {
+    throw Exception('图片无法解析，请换一张（iPhone 的 HEIC 请先转成 JPG）');
+  } catch (_) {
+    throw Exception('图片无法解析，请换一张（iPhone 的 HEIC 请先转成 JPG）');
+  }
+}
+
 /// 拍照识别：图片字节 → 草稿明细（视觉模型）
 Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = 'sale'}) async {
   try {
@@ -288,13 +343,15 @@ Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = '
     final p = _providerFor(cfg, 'visionProviderId');
     appLog('ai', '图片识别开始：${p.name}/${_modelFor(p, 'vision')}（${bytes.length} 字节 $mime）');
     final b64 = base64Encode(bytes);
+    // 视觉请求格式对齐参考实现（system 指令 + user 内 text 在前、image_url 在后）：
+    // 智谱 glm-4v 对 content 顺序敏感，image_url 在前=1210"图片输入格式/解析错误"（实测全图报错）
     final raw = await _chatCompletion(p, 'vision', [
+      {'role': 'system', 'content': _visionPromptFor(purpose)},
       {
         'role': 'user',
         'content': [
-          // image_url 在前、text 在后（对齐服务器 parsePhoto：顺序颠倒=智谱 1210 参数有误）
+          {'type': 'text', 'text': '请识别这张图片中的单据（购货单/小票/价签/进货单）。'},
           {'type': 'image_url', 'image_url': {'url': 'data:$mime;base64,$b64'}},
-          {'type': 'text', 'text': _visionPromptFor(purpose)},
         ],
       },
     ]);
@@ -387,8 +444,8 @@ Future<String> aiTestCapability(String cap) async {
       {
         'role': 'user',
         'content': [
-          {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,$tiny'}},
           {'type': 'text', 'text': '这是什么？一句话回答'},
+          {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,$tiny'}},
         ],
       },
     ]);

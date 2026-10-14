@@ -343,12 +343,15 @@ export async function parsePhoto(
     model: endpoint.model || DEFAULT_AI_CONFIG.model,
     // 视觉模型（glm-4v 系）参数面窄：temperature 若被拒由自适应剥离重试（对齐参考项目）
     temperature: 0.1,
+    // 视觉消息格式对齐参考项目：system 指令 + user 内 text 在前、image_url 在后——
+    // 智谱 glm-4v 对 content 顺序敏感，image_url 在前实测全图报 1210"图片输入格式/解析错误"
     messages: [
+      { role: 'system', content: buildAiPrompt(purpose) },
       {
         role: 'user',
         content: [
+          { type: 'text', text: '请识别这张图片中的单据（购货单/小票/价签/进货单）。' },
           { type: 'image_url', image_url: { url: `data:${mime || 'image/jpeg'};base64,${base64}` } },
-          { type: 'text', text: buildAiPrompt(purpose) },
         ],
       },
     ],
@@ -504,8 +507,8 @@ export async function testVisionChannel(
       {
         role: 'user',
         content: [
-          { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${TEST_IMAGE_JPEG_B64}` } },
           { type: 'text', text: '描述这张图片' },
+          { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${TEST_IMAGE_JPEG_B64}` } },
         ],
       },
     ],

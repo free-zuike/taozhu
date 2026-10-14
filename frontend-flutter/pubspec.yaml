@@ -1,7 +1,7 @@
 name: taozhu_app
 description: 陶朱 - 通用进销存记账（Flutter 真原生）
 publish_to: 'none'
-version: 0.17.412
+version: 0.17.413
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -13,6 +13,8 @@ dependencies:
   shared_preferences: ^2.2.0
   intl: ^0.20.3
   image_picker: ^1.1.2
+  # AI 拍照识别前处理：解码/缩放/重编码 JPEG（智谱视觉模型对 HEIC/超大图解析失败 → 1210）
+  image: ^4.2.0
   # file_selector（Flutter 官方）：选文件读文本，Android compileSdk 要求温和（34 即可），
   # 替代 file_picker 8.x（其 androidx 传递依赖硬要求 compileSdk 36 致 CI checkReleaseAarMetadata 失败）
   file_selector: ^1.0.3

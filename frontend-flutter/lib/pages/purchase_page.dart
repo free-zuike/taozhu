@@ -185,20 +185,24 @@ class _PurchasePageState extends State<PurchasePage> {
   /// App 本地优先：识别即挂载（副本+引用表+入队上传），打开凭证查看器立即可见——
   /// 不再用"预览卡片等提交后再挂"的形态；Web 无本地库暂存原图，保存成功后用服务端返回的单据 id 直传。
   Future<void> _parseBytes(Uint8List bytes, String mime) async {
-    final ext = mime.contains('png') ? 'png' : (mime.contains('webp') ? 'webp' : 'jpg');
+    // AI 预处理：魔数嗅探真实格式 + 超大图压缩转 JPEG（智谱 1210"图片输入格式/解析错误"兜底）
+    final prep = await aiPreparePhoto(bytes, mime);
+    final pb = prep.bytes;
+    final pm = prep.mime;
+    final ext = pm.contains('png') ? 'png' : (pm.contains('webp') ? 'webp' : 'jpg');
     toast(context, '识别中…');
     // App 本地直连 AI 服务商（用户要求：参考项目本地直连，不经服务器代理）；Web 保持服务器（CORS 限制）
     if (kIsWeb) {
-      final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', bytes, 'photo.$ext', mime);
+      final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', pb, 'photo.$ext', pm);
       final rowIds = _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
-      setState(() => _pendingPhoto = bytes);
-      _pendingGroups.add({'file': '${md5.convert(bytes).toString()}.jpg', 'rowIds': rowIds, 'bytes': bytes});
+      setState(() => _pendingPhoto = pb);
+      _pendingGroups.add({'file': '${md5.convert(pb).toString()}.jpg', 'rowIds': rowIds, 'bytes': pb});
       toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
       return;
     }
-    final inv = await aiParsePhoto(bytes, mime, purpose: 'purchase');
+    final inv = await aiParsePhoto(pb, pm, purpose: 'purchase');
     final rowIds = _fillFromDrafts(_draftsToMaps(inv), inv.date);
-    await _attachRecognized(bytes);
+    await _attachRecognized(bytes); // 凭证保留原图
     toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
   }
 

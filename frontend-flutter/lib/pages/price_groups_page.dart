@@ -38,11 +38,13 @@ class _PriceGroupsPageState extends State<PriceGroupsPage> {
   }
 
   Future<void> _load({bool network = false}) async {
-    // ① 本地库秒开（页面加载零网络请求）
+    // ① 本地库秒开（页面加载零网络请求）；价格组是软删同步实体——本地镜像可能含
+    // deleted_at 非空的已删组（删除后 pull 回本地），读取必须过滤（用户"删除了就出现"）
     final local = await LocalDb.getAll('price_groups');
     if (mounted) {
       setState(() {
-        _groups = local..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
+        _groups = local.where((x) => '${x['deleted_at'] ?? ''}'.isEmpty).toList()
+          ..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
         _loading = false;
       });
     }
@@ -54,7 +56,8 @@ class _PriceGroupsPageState extends State<PriceGroupsPage> {
       await LocalDb.upsertList('price_groups', rows);
       if (!mounted) return;
       setState(() {
-        _groups = rows..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
+        _groups = rows.where((x) => '${x['deleted_at'] ?? ''}'.isEmpty).toList()
+          ..sort((a, b) => ((a['sort'] as num?)?.toInt() ?? 0).compareTo((b['sort'] as num?)?.toInt() ?? 0));
         _loading = false;
       });
     } catch (_) {
