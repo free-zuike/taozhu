@@ -150,15 +150,19 @@ double roundMoney(double value, double carry, int digits) {
   return (sign * out) / f;
 }
 
-/// 店铺结账抹零配置（对齐后端 RoundStage/RoundUnit）：
+/// 店铺结账抹零配置（对齐后端 RoundStage/RoundUnit/RoundCarry）：
 /// stage：none=不抹零（逐笔舍入）；txn=每张出货单合计向下抹零；day=每日出货合计向下抹零；total=全部一次向下抹零。
-/// unit：向下取整档位（yuan=元/jiao=角/fen=分）。非法值回退默认，配置来自旧端/手工改库时兜底。
-({String stage, String unit}) normalizeRoundConfig(Object? stage, Object? unit) {
+/// unit：向下取整档位（yuan=元/jiao=角/fen=分）。
+/// carry：店铺级进位临界（0.5=四舍五入/0.6=5舍6入）；null=未配置，欠款逐笔舍入跟随全局。
+/// 非法值回退默认，配置来自旧端/手工改库时兜底。
+({String stage, String unit, double? carry}) normalizeRoundConfig(Object? stage, Object? unit, [Object? carry]) {
   final s = '${stage ?? ''}';
   final u = '${unit ?? ''}';
+  final c = carry == null ? null : double.tryParse('$carry');
   return (
     stage: (s == 'txn' || s == 'day' || s == 'total') ? s : 'none',
     unit: (u == 'jiao' || u == 'fen') ? u : 'yuan',
+    carry: (c != null && c > 0 && c <= 1) ? c : null,
   );
 }
 
@@ -171,13 +175,14 @@ double floorToUnit(double value, String unit) {
 
 /// 出货侧按店铺抹零配置的欠款口径（对齐后端 salesSideRounded）：
 /// rows 为 sale_items 行（本地镜像，含 sale_id/happened_at/amount）。
-/// 组内一律「每笔先 Money.round 再累加」，组合计再向下取整到 unit。
-double salesSideRoundedLocal(List<Map<String, dynamic>> rows, String stage, String unit) {
+/// 组内一律「每笔按店铺 carry（null=全局）舍入再累加」，组合计再向下取整到 unit。
+double salesSideRoundedLocal(List<Map<String, dynamic>> rows, String stage, String unit, [double? carry]) {
+  final round = (double v) => roundMoney(v, carry ?? Money.carry, Money.digits);
   if (stage == 'none') {
-    return rows.fold(0.0, (s, x) => s + Money.round((x['amount'] as num?)?.toDouble() ?? 0));
+    return rows.fold(0.0, (s, x) => s + round((x['amount'] as num?)?.toDouble() ?? 0));
   }
   if (stage == 'total') {
-    final total = rows.fold(0.0, (s, x) => s + Money.round((x['amount'] as num?)?.toDouble() ?? 0));
+    final total = rows.fold(0.0, (s, x) => s + round((x['amount'] as num?)?.toDouble() ?? 0));
     return floorToUnit(total, unit);
   }
   final keyOf = stage == 'txn'
@@ -186,16 +191,17 @@ double salesSideRoundedLocal(List<Map<String, dynamic>> rows, String stage, Stri
   final groups = <String, double>{};
   for (final x in rows) {
     final k = keyOf(x);
-    groups[k] = (groups[k] ?? 0) + Money.round((x['amount'] as num?)?.toDouble() ?? 0);
+    groups[k] = (groups[k] ?? 0) + round((x['amount'] as num?)?.toDouble() ?? 0);
   }
   return groups.values.fold(0.0, (s, v) => s + floorToUnit(v, unit));
 }
 
 /// 本地全量出货行按各店抹零配置分别算出货侧欠款合计（对齐后端 salesAggByConfig）。
-/// cfgById 由本地 clients 镜像构建（同步 payload 已含 round_stage/round_unit）；查不到配置的店按 none。
+/// cfgById 由本地 clients 镜像构建（同步 payload 已含 round_stage/round_unit/round_carry）；
+/// 查不到配置的店按 none（跟随全局）。
 Map<String, double> salesSideRoundedByClient(
   List<Map<String, dynamic>> saleRows,
-  Map<String, ({String stage, String unit})> cfgById,
+  Map<String, ({String stage, String unit, double? carry})> cfgById,
 ) {
   final byClient = <String, List<Map<String, dynamic>>>{};
   for (final x in saleRows) {
@@ -203,8 +209,8 @@ Map<String, double> salesSideRoundedByClient(
   }
   final out = <String, double>{};
   for (final e in byClient.entries) {
-    final cfg = cfgById[e.key] ?? (stage: 'none', unit: 'yuan');
-    out[e.key] = salesSideRoundedLocal(e.value, cfg.stage, cfg.unit);
+    final cfg = cfgById[e.key] ?? (stage: 'none', unit: 'yuan', carry: null);
+    out[e.key] = salesSideRoundedLocal(e.value, cfg.stage, cfg.unit, cfg.carry);
   }
   return out;
 }

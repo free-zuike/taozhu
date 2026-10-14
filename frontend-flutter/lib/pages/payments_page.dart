@@ -72,8 +72,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
       // 本地计算各店应收（欠款）：Σ出货（按各店抹零配置） − Σ收款（每笔先舍入再累加，与服务端 /clients debt 口径一致）
       final s = <String, double>{};
       final p = <String, double>{};
-      final cfgById = <String, ({String stage, String unit})>{
-        for (final c in localClients) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+      final cfgById = <String, ({String stage, String unit, double? carry})>{
+        for (final c in localClients) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit'], c['round_carry']),
       };
       s.addAll(salesSideRoundedByClient(await LocalDb.getAll('sale_items'), cfgById));
       for (final x in await LocalDb.getAll('payments')) {

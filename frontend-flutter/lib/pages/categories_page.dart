@@ -294,9 +294,20 @@ class _CategoriesPageState extends State<CategoriesPage> {
     final ids = <String>{'${c['id']}'};
     for (final ch in _childrenOf('${c['id']}')) ids.add('${ch['id']}');
     final isItem = _type == 'item';
-    final src = isItem
-        ? await LocalDb.getAllByName('items')
-        : await LocalDb.getAllByName('clients');
+    List<Map<String, dynamic>> src;
+    if (kIsWeb) {
+      // Web 无本地库：直连服务器（用户"Web 分类查看商品都显示暂无商品"）
+      try {
+        final d = await Api.instance.get(isItem ? '/items?limit=1000' : '/clients');
+        src = ((d[isItem ? 'items' : 'clients'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } catch (_) {
+        src = [];
+      }
+    } else if (isItem) {
+      src = await LocalDb.getAllByName('items');
+    } else {
+      src = await LocalDb.getAllByName('clients');
+    }
     final rows = src.where((x) => ids.contains('${x['category_id'] ?? ''}')).toList();
     if (!mounted) return;
     if (rows.isEmpty) { toast(context, '该分类下暂无${isItem ? '商品' : '店铺'}'); return; }

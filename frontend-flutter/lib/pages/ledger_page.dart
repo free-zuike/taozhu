@@ -177,15 +177,15 @@ class _LedgerPageState extends State<LedgerPage> {
         if (selId != null) {
           // 单店视图：按该店自身抹零配置
           final me = await LocalDb.getOne('clients', selId);
-          final cfg = normalizeRoundConfig(me?['round_stage'], me?['round_unit']);
+          final cfg = normalizeRoundConfig(me?['round_stage'], me?['round_unit'], me?['round_carry']);
           _mUnit = cfg.unit; // 未回款显示精度跟随该店抹零精度（元/角/分）
-          debt = salesSideRoundedLocal(debtRows, cfg.stage, cfg.unit) - paidDebt;
+          debt = salesSideRoundedLocal(debtRows, cfg.stage, cfg.unit, cfg.carry) - paidDebt;
         } else {
           // 全部店铺视图：各店按自身配置分别算出货侧再累加（None 店=逐笔舍入，行为不变）
           _mUnit = 'fen'; // 多店混精度无法统一，欠款显示到分
-          final cfgById = <String, ({String stage, String unit})>{
+          final cfgById = <String, ({String stage, String unit, double? carry})>{
             for (final c in await LocalDb.getAllByName('clients'))
-              '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+              '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit'], c['round_carry']),
           };
           debt = salesSideRoundedByClient(debtRows, cfgById).values.fold(0.0, (a, b) => a + b) - paidDebt;
         }
@@ -488,6 +488,18 @@ class _LedgerPageState extends State<LedgerPage> {
       } catch (_) {}
     }
     // ② 云端批量 counts（一次一个实体；仅同步完成后台刷新或 Web 直连时执行，页面加载不发请求）
+    // 本地删除走变更流异步（云端引用还没删），直接覆盖会把刚删的附件数"复活"回图标——
+    // 合并时跳过「本地已无引用且存在删除墓碑」的实体（删除意图=权威，云端旧值不覆盖）
+    final tombstoned = <String>{};
+    if (!kIsWeb) {
+      try {
+        for (final t in await LocalDb.getAll('deleted_attachments')) {
+          final e = '${t['entity'] ?? ''}';
+          final i = '${t['entity_id'] ?? ''}';
+          if (e.isNotEmpty && i.isNotEmpty) tombstoned.add('$e/$i');
+        }
+      } catch (_) {}
+    }
     if (withCloud || kIsWeb) {
       Future<void> fetch(String entity, List<String> ids) async {
         if (ids.isEmpty) return;
@@ -498,7 +510,11 @@ class _LedgerPageState extends State<LedgerPage> {
           final m = (d['counts'] as Map?) ?? {};
           for (final e in m.entries) {
             final n = (e.value as num?)?.toInt() ?? 0;
-            if (n > 0) counts[entity]!['${e.key}'] = n;
+            if (n > 0) {
+              final id = '${e.key}';
+              if (counts[entity]![id] == null && tombstoned.contains('$entity/$id')) continue;
+              counts[entity]![id] = n;
+            }
           }
         } catch (_) {}
       }
@@ -571,8 +587,8 @@ class _LedgerPageState extends State<LedgerPage> {
   Map<String, ({int count, double debt})> _localStats(
       List<Map<String, dynamic>> sales, List<Map<String, dynamic>> pays,
       List<Map<String, dynamic>> clients) {
-    final cfgById = <String, ({String stage, String unit})>{
-      for (final c in clients) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+    final cfgById = <String, ({String stage, String unit, double? carry})>{
+      for (final c in clients) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit'], c['round_carry']),
     };
     final saleByClient = <String, List<Map<String, dynamic>>>{};
     final saleCnt = <String, int>{};
@@ -583,7 +599,7 @@ class _LedgerPageState extends State<LedgerPage> {
     }
     final saleSum = <String, double>{};
     for (final e in saleByClient.entries) {
-      final cfg = cfgById[e.key] ?? (stage: 'none', unit: 'yuan');
+      final cfg = cfgById[e.key] ?? (stage: 'none', unit: 'yuan', carry: null);
       // 整单视图：每张单的 total 即出货合计（单内行金额），按店配置分组（txn=单合计/day=日合计/total=一次）向下取整
       saleSum[e.key] = salesSideRoundedLocal(
         e.value.map((o) => <String, dynamic>{
@@ -591,7 +607,7 @@ class _LedgerPageState extends State<LedgerPage> {
           'happened_at': o['happened_at'],
           'amount': o['total'],
         }).toList(),
-        cfg.stage, cfg.unit,
+        cfg.stage, cfg.unit, cfg.carry,
       );
     }
     final paySum = <String, double>{};

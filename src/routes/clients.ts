@@ -41,9 +41,9 @@ clientsRouter.get('/', async (c) => {
     ? await c.env.DB.prepare(`${sql} AND c.name LIKE ? ORDER BY c.name`).bind(`%${q}%`).all()
     : await c.env.DB.prepare(`${sql} ORDER BY c.name`).all();
   const money = await getRoundingConfig(c.env.DB);
-  // 各店抹零配置（无配置=不抹零，保持历史口径）
-  const cfgRows = await c.env.DB.prepare('SELECT id, round_stage, round_unit FROM clients WHERE deleted_at IS NULL').all<{ id: string; round_stage: string | null; round_unit: string | null }>();
-  const roundCfg = new Map(cfgRows.results.map((r) => [r.id, normalizeRoundConfig(r.round_stage, r.round_unit)]));
+  // 各店抹零配置（无配置=不抹零，保持历史口径；round_carry NULL=跟随全局）
+  const cfgRows = await c.env.DB.prepare('SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL').all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>();
+  const roundCfg = new Map(cfgRows.results.map((r) => [r.id, normalizeRoundConfig(r.round_stage, r.round_unit, r.round_carry)]));
   const [debtRows, payRows2] = await Promise.all([
     c.env.DB.prepare(`SELECT client_id AS cid, sale_id, happened_at, amount FROM sale_items`).all<{ cid: string; sale_id: string; happened_at: string | null; amount: number }>(),
     c.env.DB.prepare(`SELECT client_id AS cid, amount, waived FROM payments`).all<{ cid: string; amount: number; waived: number }>(),
@@ -57,7 +57,7 @@ clientsRouter.get('/', async (c) => {
   for (const [cid, rows] of byClient) {
     const cfg = roundCfg.get(cid);
     const sales = cfg && cfg.stage !== 'none'
-      ? salesSideRounded(rows, cfg.stage, cfg.unit, money)
+      ? salesSideRounded(rows, cfg.stage, cfg.unit, cfg.carry, money)
       : rows.reduce((s, x) => s + roundMoney(x.amount, money), 0);
     debtMap.set(cid, sales);
   }
@@ -71,6 +71,7 @@ clientsRouter.get('/', async (c) => {
       start_date: row.start_date ?? '', end_date: row.end_date ?? '',
       month_start_day: row.month_start_day ?? 1,
       round_stage: row.round_stage ?? 'none', round_unit: row.round_unit ?? 'yuan',
+      round_carry: row.round_carry ?? null,
       first_book_date: row.first_book_date ?? '',
       category_id: row.category_id ?? '', category_name: row.category_name ?? '',
       price_group_id: row.price_group_id ?? '',
@@ -93,6 +94,7 @@ clientsRouter.get('/:id', async (c) => {
       start_date: row.start_date ?? '', end_date: row.end_date ?? '',
       month_start_day: row.month_start_day ?? 1,
       round_stage: row.round_stage ?? 'none', round_unit: row.round_unit ?? 'yuan',
+      round_carry: row.round_carry ?? null,
       category_id: row.category_id ?? '', price_group_id: row.price_group_id ?? '',
     },
   });
@@ -100,7 +102,7 @@ clientsRouter.get('/:id', async (c) => {
 
 // POST /clients — 新建店铺
 clientsRouter.post('/', adminOnly(), async (c) => {
-  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string; start_date?: string; end_date?: string; month_start_day?: number; round_stage?: string; round_unit?: string; price_group_id?: string } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string; start_date?: string; end_date?: string; month_start_day?: number; round_stage?: string; round_unit?: string; round_carry?: number; price_group_id?: string } | null;
   const name = body?.name?.trim();
   if (!name) return c.json({ error: '店铺名称必填' }, 400);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
@@ -109,18 +111,18 @@ clientsRouter.post('/', adminOnly(), async (c) => {
   if (pgErr) return c.json({ error: pgErr }, 400);
   const msd = normalizeStartDay(body?.month_start_day);
   if (msd === null) return c.json({ error: '每月起始日须为 1-28 的整数' }, 400);
-  const rc = normalizeRoundConfig(body?.round_stage, body?.round_unit);
+  const rc = normalizeRoundConfig(body?.round_stage, body?.round_unit, body?.round_carry);
   const id = randomId();
-  await c.env.DB.prepare('INSERT INTO clients (id, name, contact, phone, note, category_id, start_date, end_date, month_start_day, round_stage, round_unit, price_group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, name, body?.contact?.trim() ?? '', body?.phone?.trim() ?? '', body?.note?.trim() ?? '', body?.category_id ?? null, body?.start_date?.trim() ?? null, body?.end_date?.trim() ?? null, msd, rc.stage, rc.unit, body?.price_group_id?.trim() ?? null).run();
+  await c.env.DB.prepare('INSERT INTO clients (id, name, contact, phone, note, category_id, start_date, end_date, month_start_day, round_stage, round_unit, round_carry, price_group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, name, body?.contact?.trim() ?? '', body?.phone?.trim() ?? '', body?.note?.trim() ?? '', body?.category_id ?? null, body?.start_date?.trim() ?? null, body?.end_date?.trim() ?? null, msd, rc.stage, rc.unit, rc.carry, body?.price_group_id?.trim() ?? null).run();
   await recordChange(c.env.DB, { entity_type: 'client', entity_sync_id: id, payload: await buildPayload(c.env.DB, 'client', id), updated_by_username: c.get('user').username });
-  return c.json({ id, name, contact: body?.contact?.trim() ?? '', phone: body?.phone?.trim() ?? '', note: body?.note?.trim() ?? '', category_id: body?.category_id ?? '', start_date: body?.start_date?.trim() ?? '', end_date: body?.end_date?.trim() ?? '', month_start_day: msd, round_stage: rc.stage, round_unit: rc.unit, price_group_id: body?.price_group_id?.trim() ?? '', debt: 0 }, 201);
+  return c.json({ id, name, contact: body?.contact?.trim() ?? '', phone: body?.phone?.trim() ?? '', note: body?.note?.trim() ?? '', category_id: body?.category_id ?? '', start_date: body?.start_date?.trim() ?? '', end_date: body?.end_date?.trim() ?? '', month_start_day: msd, round_stage: rc.stage, round_unit: rc.unit, round_carry: rc.carry, price_group_id: body?.price_group_id?.trim() ?? '', debt: 0 }, 201);
 });
 
 // PATCH /clients/:id
 clientsRouter.patch('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string | null; start_date?: string | null; end_date?: string | null; month_start_day?: number; round_stage?: string; round_unit?: string; price_group_id?: string | null } | null;
+  const body = await c.req.json().catch(() => null) as { name?: string; contact?: string; phone?: string; note?: string; category_id?: string | null; start_date?: string | null; end_date?: string | null; month_start_day?: number; round_stage?: string; round_unit?: string; round_carry?: number | null; price_group_id?: string | null } | null;
   const client = await c.env.DB.prepare('SELECT * FROM clients WHERE id = ? AND deleted_at IS NULL').bind(id).first<ClientRow>();
   if (!client) return c.json({ error: '店铺不存在' }, 404);
   const catErr = await categoryErr(c.env.DB, body?.category_id);
@@ -132,8 +134,9 @@ clientsRouter.patch('/:id', adminOnly(), async (c) => {
   const rc = normalizeRoundConfig(
     body?.round_stage !== undefined ? body.round_stage : client.round_stage,
     body?.round_unit !== undefined ? body.round_unit : client.round_unit,
+    body?.round_carry !== undefined ? body.round_carry : client.round_carry,
   );
-  await c.env.DB.prepare('UPDATE clients SET name = ?, contact = ?, phone = ?, note = ?, category_id = ?, start_date = ?, end_date = ?, month_start_day = ?, round_stage = ?, round_unit = ?, price_group_id = ? WHERE id = ?')
+  await c.env.DB.prepare('UPDATE clients SET name = ?, contact = ?, phone = ?, note = ?, category_id = ?, start_date = ?, end_date = ?, month_start_day = ?, round_stage = ?, round_unit = ?, round_carry = ?, price_group_id = ? WHERE id = ?')
     .bind(
       body?.name?.trim() || client.name,
       body?.contact?.trim() ?? client.contact ?? '',
@@ -145,6 +148,7 @@ clientsRouter.patch('/:id', adminOnly(), async (c) => {
       msd,
       rc.stage,
       rc.unit,
+      rc.carry,
       body?.price_group_id !== undefined ? (body.price_group_id?.trim() ?? null) : (client as ClientRow & { price_group_id?: string | null }).price_group_id,
       id,
     ).run();

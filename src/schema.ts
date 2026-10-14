@@ -23,6 +23,7 @@ const DDL: string[] = [
     month_start_day INTEGER NOT NULL DEFAULT 1,
     round_stage TEXT NOT NULL DEFAULT 'none',
     round_unit TEXT NOT NULL DEFAULT 'yuan',
+    round_carry REAL,
     category_id TEXT,
     deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -394,8 +395,8 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     await ensureColumn(db, 'users', 'avatar_version', 'INTEGER NOT NULL DEFAULT 0');
     await ensureColumn(db, 'users', 'totp_secret', 'TEXT');
     await ensureColumn(db, 'users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
-    // 双 token：refresh_iat = 当前有效 refresh token 的签发时刻（秒）。/auth/refresh 轮换时
-    // 校验 payload.iat === refresh_iat（旧 refresh 立即作废防重放）；改密码/踢下线时清空即全部作废
+    // 双 token：refresh_iat = 会话锚点（登录/刷新时更新）。撤销=改密码时清空（NULL）→ 全部
+    // refresh 作废；不做单次轮换比对（多端共用账号时 A 端刷新会使 B 端旧 refresh 失效→频繁掉登录）
     await ensureColumn(db, 'users', 'refresh_iat', 'INTEGER');
     // v0.17.18.0：users 显示名 display_name（登录账号不可改，用户名=显示名可改；默认取登录账号 @ 前部分）
     if (await ensureColumn(db, 'users', 'display_name', 'TEXT')) {
@@ -483,6 +484,8 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.323.0：店铺级结账抹零（stage：none/txn/day/total；unit：yuan/jiao/fen）
     await ensureColumn(db, 'clients', 'round_stage', "TEXT NOT NULL DEFAULT 'none'");
     await ensureColumn(db, 'clients', 'round_unit', "TEXT NOT NULL DEFAULT 'yuan'");
+    // v0.17.409.0：店铺级进位临界（round_carry 0.5 四舍五入/0.6 5舍6入；NULL=跟随全局，兼容旧库不突变欠款）
+    await ensureColumn(db, 'clients', 'round_carry', 'REAL');
     // payments 平账减免列（waived：欠款 = Σsales − Σ(amount+waived)）
     await ensureColumn(db, 'payments', 'waived', 'REAL NOT NULL DEFAULT 0');
     // v0.16.26.0：支付表幂等键 sync_key（sales/purchases 头表已物理删除，行级携带 sync_key）

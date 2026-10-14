@@ -32,7 +32,7 @@ export interface JwtPayload {
 }
 
 /** 签发 token（access 默认 24h；refresh 传 typ='refresh' 30 天；兼容旧调用默认 7 天单 token）。
- *  iatSec 可选：外部指定签发时刻（/auth/refresh 需将 iat 落库 refresh_iat 供防重放比对）。 */
+ *  iatSec 可选：外部指定签发时刻（/auth/refresh 用于 refresh 令牌的 30 天窗口起点）。 */
 export async function signToken(
   secret: string,
   payload: Omit<JwtPayload, 'iat' | 'exp' | 'typ'> & { typ?: 'access' | 'refresh' },

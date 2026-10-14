@@ -149,9 +149,9 @@ class _ClientsPageState extends State<ClientsPage> {
       final s = <String, double>{};
       final p = <String, double>{};
       try {
-        // 各店抹零配置（同步 payload 已含 round_stage/round_unit；旧端/手工改库缺省=不抹零逐笔舍入）
-        final cfgById = <String, ({String stage, String unit})>{
-          for (final c in local) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+        // 各店抹零配置（同步 payload 已含 round_stage/round_unit/round_carry；旧端/手工改库缺省=不抹零跟随全局）
+        final cfgById = <String, ({String stage, String unit, double? carry})>{
+          for (final c in local) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit'], c['round_carry']),
         };
         // 出货侧按各店自身抹零配置分组（none=逐笔先舍入再累加；txn/day/total=组合计向下取整），
         // 与服务端 /clients debt 口径一致——勿原始 SUM 后一次舍入（尾数进位放大 427.8 vs 428）
@@ -225,9 +225,10 @@ class _ClientsPageState extends State<ClientsPage> {
         text: '${(((c?['month_start_day'] as num?) ?? 1)).toInt()}');
     String? selTopId;
     String? selSubId;
-    // 店铺结账抹零配置（round_stage/round_unit；编辑时取当前值，新增默认不抹零）
+    // 店铺结账抹零配置（round_stage/round_unit/round_carry；编辑时取当前值，新增默认跟随全局）
     String selStage = c?['round_stage'] as String? ?? 'none';
     String selUnit = c?['round_unit'] as String? ?? 'yuan';
+    double? selCarry = (c?['round_carry'] as num?)?.toDouble() ?? Money.carry;
     // 价格组（店铺等级→取价档；记单按等级带出该商品组价）
     String selGroup = c?['price_group_id'] as String? ?? '';
     // 编辑时按当前分类反推一级/二级
@@ -317,6 +318,18 @@ class _ClientsPageState extends State<ClientsPage> {
                 onChanged: (v) => setDlg(() => selUnit = v ?? 'yuan'),
               ),
               const SizedBox(height: 8),
+              // 进位临界：欠款/结账逐笔舍入按该店进位（0.5=四舍五入、0.6=5舍6入）；未配置跟随全局
+              DropdownButtonFormField<String>(
+                initialValue: (selCarry == 0.5 || selCarry == 0.6) ? '${selCarry}' : null,
+                decoration: const InputDecoration(labelText: '进位临界', helperText: '欠款逐笔按此进位'),
+                hint: const Text('跟随全局'),
+                items: const [
+                  DropdownMenuItem(value: '0.5', child: Text('四舍五入（尾数≥5 进）')),
+                  DropdownMenuItem(value: '0.6', child: Text('5舍6入（尾数 5 舍、≥6 进）')),
+                ],
+                onChanged: (v) => setDlg(() => selCarry = v == null ? null : double.tryParse(v)),
+              ),
+              const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 initialValue: selGroup.isEmpty ? null : selGroup,
                 decoration: const InputDecoration(labelText: '价格组（等级，可选）'),
@@ -354,12 +367,12 @@ class _ClientsPageState extends State<ClientsPage> {
         if (c == null) {
           await Api.instance.post('/clients', {
             'name': name, 'month_start_day': msd, 'category_id': categoryId ?? '',
-            'round_stage': selStage, 'round_unit': selUnit, 'price_group_id': selGroup,
+            'round_stage': selStage, 'round_unit': selUnit, 'round_carry': selCarry, 'price_group_id': selGroup,
           });
         } else {
           await Api.instance.patch('/clients/${c['id']}', {
             'name': name, 'month_start_day': msd, 'category_id': categoryId ?? '',
-            'round_stage': selStage, 'round_unit': selUnit, 'price_group_id': selGroup,
+            'round_stage': selStage, 'round_unit': selUnit, 'round_carry': selCarry, 'price_group_id': selGroup,
           });
         }
         toast(context, '已保存');
@@ -376,7 +389,7 @@ class _ClientsPageState extends State<ClientsPage> {
       final payload = {
         'id': id, 'name': name, 'contact': '', 'phone': '', 'note': '',
         'start_date': '', 'end_date': '', 'month_start_day': msd,
-        'round_stage': selStage, 'round_unit': selUnit,
+        'round_stage': selStage, 'round_unit': selUnit, 'round_carry': selCarry,
         'category_id': categoryId ?? '', 'price_group_id': selGroup, 'deleted_at': null,
       };
       await LocalDb.upsertOne('clients', payload);
@@ -388,6 +401,7 @@ class _ClientsPageState extends State<ClientsPage> {
       payload['category_id'] = categoryId ?? '';
       payload['round_stage'] = selStage;
       payload['round_unit'] = selUnit;
+      payload['round_carry'] = selCarry;
       payload['price_group_id'] = selGroup;
       await LocalDb.upsertOne('clients', payload);
       await SyncService.enqueueChange(entityType: 'client', entitySyncId: '${c['id']}', payload: payload);

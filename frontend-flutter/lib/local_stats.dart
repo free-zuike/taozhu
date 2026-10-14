@@ -17,16 +17,16 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
   if (!isBuy) {
     // 未回款 = 截止 end 累计出货（按各店抹零配置分组向下取整） − 累计收款（逐笔先舍入再累加），
     // 与服务端 /stats/summary debt 口径一致
-    final cfgById = <String, ({String stage, String unit})>{
+    final cfgById = <String, ({String stage, String unit, double? carry})>{
       for (final c in await LocalDb.getAllByName('clients'))
-        '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+        '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit'], c['round_carry']),
     };
     final debtRows = rows.where((r) {
       final h = '${r['happened_at'] ?? ''}';
       return (sel.isEmpty || '${r['client_id'] ?? ''}' == sel) && h.isNotEmpty && h.compareTo(end) <= 0;
     }).toList();
     final saleDebt = sel.isNotEmpty
-        ? salesSideRoundedLocal(debtRows, cfgById[sel]?.stage ?? 'none', cfgById[sel]?.unit ?? 'yuan')
+        ? salesSideRoundedLocal(debtRows, cfgById[sel]?.stage ?? 'none', cfgById[sel]?.unit ?? 'yuan', cfgById[sel]?.carry)
         : salesSideRoundedByClient(debtRows, cfgById).values.fold(0.0, (a, b) => a + b);
     final paidDebt = pays.where((p) {
       final h = '${p['happened_at'] ?? ''}';
@@ -183,14 +183,14 @@ Future<Map<String, dynamic>> localMonthly(String year, String? clientId, {String
 }
 
 /// 按店结账（与 /stats/clients 同形；含欠款与毛利）。
-/// 欠款=各店按自身抹零配置（round_stage/round_unit）算出货侧累计 − 收款逐笔舍入（与服务端 /stats/clients 口径一致）
+/// 欠款=各店按自身抹零配置（round_stage/round_unit/round_carry）算出货侧累计 − 收款逐笔舍入（与服务端 /stats/clients 口径一致）
 Future<Map<String, dynamic>> localClientStats(String start, String end) async {
   final rows = await LocalDb.getAll('sale_items');
   final pays = await LocalDb.getAll('payments');
   final clients = await LocalDb.getAllByName('clients');
   final nameOf = {for (final c in clients) '${c['id']}': '${c['name'] ?? ''}'};
-  final cfgById = <String, ({String stage, String unit})>{
-    for (final c in clients) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit']),
+  final cfgById = <String, ({String stage, String unit, double? carry})>{
+    for (final c in clients) '${c['id']}': normalizeRoundConfig(c['round_stage'], c['round_unit'], c['round_carry']),
   };
   final allSales = salesSideRoundedByClient(rows, cfgById);
   final agg = <String, Map<String, double>>{};

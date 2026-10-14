@@ -49,15 +49,16 @@ class _StocksPageState extends State<StocksPage> {
   }
 
   Future<void> _load({bool network = false, String q = '', bool below = false}) async {
-    // 原生：零网络读本地库镜像（fullSync 写入的 stocks 行），离线/慢网秒开
+    // 原生：库存=本地计算（Σ进货−Σ出货，用户"库存应该是计算出来的不是写入数据库"——
+    // 服务端 stocks 表写库残留=没进货却显示正数根因）；min_stock 阈值配置保留
     if (!kIsWeb) {
       try {
-        var local = await LocalDb.getAll('stocks');
+        var local = await _computedStocks();
         if (q.isNotEmpty) {
           local = local.where((s) => '${s['item_name'] ?? ''}'.contains(q)).toList();
         }
         if (below) {
-          local = local.where((s) => ((s['low'] == true))).toList();
+          local = local.where(_isLow).toList();
         }
         local.sort((a, b) => '${a['item_name'] ?? ''}'.compareTo('${b['item_name'] ?? ''}'));
         if (mounted) {
@@ -107,6 +108,53 @@ class _StocksPageState extends State<StocksPage> {
       // 离线：本地镜像/缓存已展示，错误已记日志，不再弹提示
       setState(() => _loading = false);
     }
+  }
+
+  /// 库存本地计算（用户"库存应该是计算出来的不是写入数据库"）：Σ进货 − Σ出货（按商品×单位），
+  /// 不依赖服务端 stocks 表数量；min_stock 阈值配置保留（stocks 表里用户设的）
+  Future<List<Map<String, dynamic>>> _computedStocks() async {
+    final buys = await LocalDb.getAll('purchase_items');
+    final sells = await LocalDb.getAll('sale_items');
+    final cfg = <String, Map<String, dynamic>>{};
+    try {
+      for (final s in await LocalDb.getAll('stocks')) {
+        cfg['${s['item_id']}|${s['unit']}'] = s;
+      }
+    } catch (_) {}
+    final agg = <String, double>{};
+    void add(List<Map<String, dynamic>> rows, double sign) {
+      for (final r in rows) {
+        final itemId = '${r['item_id'] ?? ''}';
+        final unit = '${r['unit'] ?? ''}';
+        if (itemId.isEmpty || unit.isEmpty) continue;
+        agg['$itemId|$unit'] =
+            (agg['$itemId|$unit'] ?? 0) + sign * ((r['quantity'] as num?)?.toDouble() ?? 0);
+      }
+    }
+    add(buys, 1);
+    add(sells, -1);
+    final items = await LocalDb.getAllByName('items');
+    final nameOf = {for (final i in items) '${i['id']}': '${i['name'] ?? ''}'};
+    final out = <Map<String, dynamic>>[];
+    for (final e in agg.entries) {
+      final itemId = e.key.split('|').first;
+      final c = cfg[e.key];
+      out.add({
+        'item_id': itemId,
+        'unit': e.key.split('|').last,
+        'item_name': nameOf[itemId] ?? '',
+        'quantity': e.value,
+        'min_stock': (c?['min_stock'] as num?)?.toDouble() ?? 0,
+      });
+    }
+    return out;
+  }
+
+  /// 低库存统一判定（用户"剩余0阈值0有些红有些绿"不一致）：剩余 ≤ 阈值 → 预警红
+  static bool _isLow(Map<String, dynamic> s) {
+    final q = (s['quantity'] as num?)?.toDouble() ?? 0;
+    final m = (s['min_stock'] as num?)?.toDouble() ?? 0;
+    return q <= m;
   }
 
   Future<void> _refresh() async {
@@ -336,12 +384,32 @@ class _StocksPageState extends State<StocksPage> {
     return out;
   }
 
-  /// 点商品卡：查看该商品进货/出货明细（数量来源追溯）+ 调整库存在弹层内
+  /// 点商品卡：查看该商品进货/出货明细（数量来源追溯）+ 调整库存在弹层内。
+  /// **本地获取**（用户"点击后显示特别慢应该通过本地获取"）：按 item_id 本地聚合进货/出货行；
+  /// 出货行补店铺名（用户"出货记录应该添加出货店铺"）
   Future<void> _viewTrace(Map<String, dynamic> s) async {
     var rows = <Map<String, dynamic>>[];
     try {
-      final d = await Api.instance.get('/stocks/trace?item_id=${s['item_id']}');
-      rows = ((d['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final buys = await LocalDb.getAll('purchase_items');
+      final sells = await LocalDb.getAll('sale_items');
+      final clients = await LocalDb.getAllByName('clients');
+      final cName = {for (final c in clients) '${c['id']}': '${c['name'] ?? ''}'};
+      for (final b in buys) {
+        if ('${b['item_id'] ?? ''}' != '${s['item_id']}') continue;
+        rows.add({
+          'kind': 'in', 'happened_at': '${b['happened_at'] ?? ''}', 'unit': '${b['unit'] ?? ''}',
+          'quantity': b['quantity'], 'count_qty': b['count_qty'], 'client': '',
+        });
+      }
+      for (final x in sells) {
+        if ('${x['item_id'] ?? ''}' != '${s['item_id']}') continue;
+        rows.add({
+          'kind': 'out', 'happened_at': '${x['happened_at'] ?? ''}', 'unit': '${x['unit'] ?? ''}',
+          'quantity': x['quantity'], 'count_qty': x['count_qty'],
+          'client': cName['${x['client_id'] ?? ''}'] ?? '',
+        });
+      }
+      rows.sort((a, b) => '${a['happened_at']}'.compareTo('${b['happened_at']}'));
     } catch (_) {
       rows = [];
     }
@@ -410,6 +478,9 @@ class _StocksPageState extends State<StocksPage> {
                             children: [
                               Text('${r['happened_at'] ?? ''}',
                                   style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                              if (!isIn && '${r['client'] ?? ''}'.isNotEmpty)
+                                Text('店铺：${r['client']}', maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 12, color: Colors.grey)),
                               if ('${r['note'] ?? ''}'.isNotEmpty)
                                 Text('${r['note']}', maxLines: 1, overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(fontSize: 12)),
@@ -529,7 +600,7 @@ class _StocksPageState extends State<StocksPage> {
     final othersText = others.isNotEmpty
         ? '\n另有 ${others.map((o) => '${fmtQty(o['quantity'] as num?)} ${o['unit']}').join('、')}'
         : '';
-    final low = (s['low'] == true);
+    final low = _isLow(s);
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 3),
       elevation: 0,

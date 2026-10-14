@@ -43,6 +43,7 @@ export interface ClientRow {
   month_start_day: number;
   round_stage: string | null;
   round_unit: string | null;
+  round_carry: number | null;
   category_id: string | null;
   price_group_id?: string | null;
   deleted_at: string | null;

@@ -2059,27 +2059,55 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
-  /// 按当前样式打印（对账单统一打印入口）：渲染当前选中模板行集合 → base64 编码 → 服务端 /print/template 按其排版输出
+  /// 按当前样式打印（对账单统一打印入口）：**本地生成打印页 HTML**（离线可用，不依赖服务端
+  /// 渲染——用户"打印需要网络？没有网络就打不开"）；保存后用浏览器打开即可打印
   Future<void> _printCurrent() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
-    final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
-    final trows = renderTemplateRows(_curPubTpl, _td(clientName));
-    final rowsJson = jsonEncode([
-      for (final row in trows) [for (final c in row) [c.text, c.align, c.bold, c.bg, c.rowSpan, c.colSpan]],
-    ]);
-    final rowsB64 = base64Url.encode(utf8.encode(rowsJson));
-    final title = Uri.encodeQueryComponent('$clientName 对账单');
     try {
-      final base = await Api.instance.getBase();
-      final token = await Api.instance.getTokenValue() ?? '';
-      final cid = _clientId ?? '';
-      await openPrintUrl('$base/api/v1/print/template?title=$title&rows=$rowsB64&token=$token&client_id=$cid');
+      final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
+      final trows = renderTemplateRows(_curPubTpl, _td(clientName));
+      final html = _rowsToHtml(trows, clientName);
+      final name = '对账单-${clientName.replaceAll(' ', '')}.html';
+      await saveBytes(utf8.encode(html), name, 'text/html', '对账单打印页');
+      if (kIsWeb) {
+        // Web：data URL 打开本地生成的打印页（自带自动打印脚本）
+        final dataUrl = 'data:text/html;charset=utf-8,${Uri.encodeComponent(html)}';
+        openPrintUrl(dataUrl);
+      } else {
+        toast(context, '打印页已生成保存，用浏览器打开即可打印（离线可用）');
+      }
     } catch (e) {
-      toast(context, '打印打开失败：${e.toString().replaceFirst('Exception: ', '')}');
+      toast(context, '打印页生成失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
+  }
+
+  /// 渲染行集合 → 自包含打印 HTML（表格；离线可用）
+  String _rowsToHtml(List<List<GridCell>> rows, String title) {
+    final buf = StringBuffer();
+    buf.writeln('<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">');
+    buf.writeln('<title>$title 对账单</title>');
+    buf.writeln(
+        '<style>body{font-family:SimSun,serif;margin:24px;}h2{text-align:center;}table{border-collapse:collapse;width:100%;font-size:13px;}td{border:1px solid #666;padding:4px 8px;}td.b{font-weight:700;}td.g{background:#f2f2f2;}@media print{@page{margin:12mm;}}</style>');
+    buf.writeln('</head><body onload="window.print()">');
+    buf.writeln('<h2>$title 对账单</h2>');
+    buf.writeln('<table>');
+    for (final row in rows) {
+      buf.write('<tr>');
+      for (final c in row) {
+        final cls = [
+          if (c.bold) 'b',
+          if (c.bg == 'grey') 'g',
+        ].join(' ');
+        final align = c.align == 'right' ? ' style="text-align:right"' : (c.align == 'center' ? ' style="text-align:center"' : '');
+        buf.write('<td$align${cls.isNotEmpty ? ' class="$cls"' : ''}>${c.text.isEmpty ? '&nbsp;' : c.text}</td>');
+      }
+      buf.writeln('</tr>');
+    }
+    buf.writeln('</table></body></html>');
+    return buf.toString();
   }
 
   double _num(Object? v) => (v is num ? v.toDouble() : double.tryParse('$v') ?? 0);

@@ -290,24 +290,61 @@ String _replaceVars(String text, TemplateData d) {
 
 /// 模板统一渲染入口：comps → grid → content → 默认（fields+days）
 /// 返回表格行集合（每行 = 单元格列表）；预览/导出/打印共用。
+/// 统一后处理：标题去重（多余标题行自动去掉）+ 合计函数化（合计/总计行自动填月合计）。
 List<List<GridCell>> renderTemplateRows(XlsCfg cfg, TemplateData d) {
-  if (cfg.comps.isNotEmpty) return _renderComps(cfg, d);
-  if (cfg.grid.isNotEmpty) return _renderGrid(cfg, d);
-  if (cfg.content.trim().isNotEmpty) {
+  List<List<GridCell>> rows;
+  if (cfg.comps.isNotEmpty) {
+    rows = _renderComps(cfg, d);
+  } else if (cfg.grid.isNotEmpty) {
+    rows = _renderGrid(cfg, d);
+  } else if (cfg.content.trim().isNotEmpty) {
     final day = _dailyOf(d);
-    return [
+    rows = [
       for (final raw in cfg.content.split('\n'))
         [GridCell(_replaceContentLine(raw, d, day), 'left')],
     ];
+  } else {
+    // 默认模板：标题 + 信息字段 + 按日金额表（对应"标准"模板）
+    final fallback = XlsCfg()
+      ..comps = [
+        TmplComp(type: 'title', text: cfg.title.isEmpty ? '对账单' : cfg.title, align: 'center'),
+        TmplComp(type: 'fields'),
+        TmplComp(type: 'days'),
+      ];
+    rows = _renderComps(fallback, d);
   }
-  // 默认模板：标题 + 信息字段 + 按日金额表（对应"标准"模板）
-  final fallback = XlsCfg()
-    ..comps = [
-      TmplComp(type: 'title', text: cfg.title.isEmpty ? '对账单' : cfg.title, align: 'center'),
-      TmplComp(type: 'fields'),
-      TmplComp(type: 'days'),
-    ];
-  return _renderComps(fallback, d);
+  return _finalizeRows(rows, d);
+}
+
+/// 标题行判定：整行合并、居中加粗、文本含店铺/对账单/月份账单（渲染后用于去重多余标题）
+bool _isTitleRow(List<GridCell> r) {
+  if (r.length != 1) return false;
+  final t = r.first.text.trim();
+  return r.first.bold && r.first.align == 'center' &&
+      (t.contains('对账单') || t.contains('月份账单') || t.contains('{店铺}'));
+}
+
+/// 渲染后统一处理：
+/// ①标题去重（用户"还是2行标题/寻牛对账单去不掉"）：开头连续标题行只留一个（保留后出现的"店铺 N月份账单"）
+/// ②合计函数化（用户"合计用函数而非 {月合计} 变量，不知道的人没法设计模板"）：
+///   以"合计/总计"开头的标签行，其空金额格自动填月合计
+List<List<GridCell>> _finalizeRows(List<List<GridCell>> rows, TemplateData d) {
+  while (rows.length >= 2 && _isTitleRow(rows[0]) && _isTitleRow(rows[1])) {
+    rows.removeAt(0);
+  }
+  final total = _fmtMoney(_dailyOf(d).total);
+  for (final row in rows) {
+    final label = row.isNotEmpty ? row.first.text.trim() : '';
+    if (label == '合计' || label == '总计') {
+      for (final c in row) {
+        if (c.text.trim().isEmpty) {
+          c.text = total;
+          break;
+        }
+      }
+    }
+  }
+  return rows;
 }
 
 /// 正文行渲染（含 {明细}/{旬段表} 特殊块）
@@ -594,14 +631,14 @@ List<List<GridCell>> defaultTemplateGrid() => _defaultTemplate().grid;
 XlsCfg _defaultTemplate() => XlsCfg()
   ..name = '标准'
   ..grid = [
-    // 标题行：colSpan=2 合并整行居中（用户"合并居中就是标题行"——否则只占首列宽度看似偏左）
+    // 标题行：colSpan=2 合并整行居中
     [GridCell('{店铺} {月}月份账单', 'center', true, 'grey', 1, 2)],
-    [GridCell('日期', 'center', true, 'grey'), GridCell('营业额', 'center', true, 'grey')],
-    // 日期格用 $d 构建时插值（{月} 是渲染时替换的模板变量；$d = 1日/2日… 固定数字，不是变量）
+    // 表头无底色（用户"日期营业额那行文字有底部颜色要去掉"）
+    [GridCell('日期', 'center', true), GridCell('营业额', 'center', true)],
     for (var d = 1; d <= 31; d++)
       [GridCell('{月}月$d日', 'center'), GridCell('{$d日销售额}', 'right')],
-    // 合计（无旬段小计——用户"标准不需要1-10日合计这种，有总金额就可以了"；合计行不加背景——用户"总金额背景去掉"）
-    [GridCell('合计', 'right', true), GridCell('{月合计}', 'right', true)],
+    // 合计（居中标签；金额渲染时自动计算，用户"合计用函数而非 {月合计} 变量"）
+    [GridCell('合计', 'center', true), GridCell('{月合计}', 'right', true)],
   ];
 
 /// 「多栏」= 多栏月账单（寻牛记式：每栏 10 天，31 天 → 4 栏，最后一栏 1 天），展开为可编辑网格。
@@ -613,8 +650,8 @@ XlsCfg _multiColTemplate() => XlsCfg()
     [GridCell('{店铺} {月}月份账单', 'center', true, 'grey', 1, 8)],
     [
       for (var cc = 0; cc < 4; cc++) ...[
-        GridCell('日期', 'center', true, 'grey'),
-        GridCell('营业额', 'center', true, 'grey'),
+        GridCell('日期', 'center', true),
+        GridCell('营业额', 'center', true),
       ],
     ],
     for (var r = 0; r < 10; r++)
@@ -623,6 +660,11 @@ XlsCfg _multiColTemplate() => XlsCfg()
           if (cc * 10 + r + 1 <= 31) ...[
             GridCell('{月}月${cc * 10 + r + 1}日', 'center'),
             GridCell('{${cc * 10 + r + 1}日销售额}', 'right'),
+          ] else ...[
+            // 第 4 栏只有 31 日一天（31 天月）：其余行补齐空格（保留表格线成矩形，
+            // 勿缺列——参差行会让预览/打印/Excel 出现重复格或整块空白（用户"31 日下表格线空白"））
+            GridCell('', 'center'),
+            GridCell('', 'right'),
           ],
       ],
     [

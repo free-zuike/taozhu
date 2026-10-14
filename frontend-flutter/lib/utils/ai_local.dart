@@ -116,7 +116,7 @@ Future<String> _chatCompletion(AiProvider p, String cap, List<Map<String, dynami
     body: jsonEncode({
       'model': _modelFor(p, cap),
       'messages': messages,
-      'temperature': 0.2,
+      'temperature': 0.1, // 对齐服务器 parsePhoto（智谱视觉不允许的额外参数/顺序会 1210 参数有误）
     }),
   ).timeout(const Duration(seconds: 60));
   if (resp.statusCode != 200) {
@@ -251,8 +251,9 @@ Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = '
       {
         'role': 'user',
         'content': [
-          {'type': 'text', 'text': _visionPromptFor(purpose)},
+          // image_url 在前、text 在后（对齐服务器 parsePhoto：顺序颠倒=智谱 1210 参数有误）
           {'type': 'image_url', 'image_url': {'url': 'data:$mime;base64,$b64'}},
+          {'type': 'text', 'text': _visionPromptFor(purpose)},
         ],
       },
     ]);
@@ -345,8 +346,8 @@ Future<String> aiTestCapability(String cap) async {
       {
         'role': 'user',
         'content': [
+          {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,$tiny'}},
           {'type': 'text', 'text': '这是什么？一句话回答'},
-          {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,$tiny'}},
         ],
       },
     ]);

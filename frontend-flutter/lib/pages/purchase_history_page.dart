@@ -222,6 +222,18 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       } catch (_) {}
     }
     // ② 云端批量 counts（Web 直连或显式 withCloud 时精确覆盖；紧凑超时防弱网拖慢图标）
+    // 本地删除走变更流异步（云端引用还在），直接覆盖会把刚删的附件数"复活"回图标——
+    // 合并时跳过「本地已无引用且存在删除墓碑」的实体（删除意图=权威，云端旧值不覆盖）
+    final tombstoned = <String>{};
+    if (!kIsWeb) {
+      try {
+        for (final t in await LocalDb.getAll('deleted_attachments')) {
+          final e = '${t['entity'] ?? ''}';
+          final i = '${t['entity_id'] ?? ''}';
+          if (e.isNotEmpty && i.isNotEmpty) tombstoned.add('$e/$i');
+        }
+      } catch (_) {}
+    }
     Future<void> fetchCounts(String entity, List<String> ids, Map<String, int> into) async {
       if (ids.isEmpty || (!withCloud && !kIsWeb)) return;
       try {
@@ -233,7 +245,11 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         setState(() {
           for (final e in m.entries) {
             final n = (e.value as num?)?.toInt() ?? 0;
-            if (n > 0) into['${e.key}'] = n;
+            if (n > 0) {
+              final id = '${e.key}';
+              if (into[id] == null && tombstoned.contains('$entity/$id')) continue;
+              into[id] = n;
+            }
           }
         });
       } catch (_) {}

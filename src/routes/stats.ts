@@ -54,9 +54,9 @@ statsRouter.get('/overview', async (c) => {
     db.prepare(`SELECT client_id, sale_id, happened_at, amount FROM sale_items`).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
     db.prepare(`SELECT client_id, amount, waived FROM payments`).all<{ client_id: string; amount: number; waived: number }>(),
     db.prepare(`SELECT id, name FROM clients WHERE deleted_at IS NULL`).all<{ id: string; name: string }>(),
-    db.prepare(`SELECT id, round_stage, round_unit FROM clients WHERE deleted_at IS NULL`).all<{ id: string; round_stage: string | null; round_unit: string | null }>(),
+    db.prepare(`SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
   ]);
-  const roundCfgMap = new Map(cfgRows.results.map((r) => [r.id, normalizeRoundConfig(r.round_stage, r.round_unit)]));
+  const roundCfgMap = new Map(cfgRows.results.map((r) => [r.id, normalizeRoundConfig(r.round_stage, r.round_unit, r.round_carry)]));
   const salesMap = new Map<string, number>();
   const paidMap = new Map<string, number>();
   const saleByClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
@@ -66,8 +66,8 @@ statsRouter.get('/overview', async (c) => {
     saleByClient.set(x.client_id, arr);
   }
   for (const [cid, rows] of saleByClient) {
-    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const };
-    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, money));
+    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const, carry: null };
+    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, cfg.carry, money));
   }
   for (const x of cPays.results) {
     paidMap.set(x.client_id, (paidMap.get(x.client_id) ?? 0) + r((Number(x.amount) || 0) + (Number(x.waived) || 0)));
@@ -120,11 +120,11 @@ statsRouter.get('/clients', async (c) => {
       `SELECT client_id AS cid, amount, waived FROM payments WHERE 1=1 ${cond}`,
     ).bind(...params).all<{ cid: string; amount: number; waived: number }>(),
     c.env.DB.prepare(`SELECT id, name FROM clients WHERE deleted_at IS NULL`).all<{ id: string; name: string }>(),
-    c.env.DB.prepare(`SELECT id, round_stage, round_unit FROM clients WHERE deleted_at IS NULL`).all<{ id: string; round_stage: string | null; round_unit: string | null }>(),
+    c.env.DB.prepare(`SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
   ]);
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const roundCfgMap = new Map(cfgRows.results.map((r2) => [r2.id, normalizeRoundConfig(r2.round_stage, r2.round_unit)]));
+  const roundCfgMap = new Map(cfgRows.results.map((r2) => [r2.id, normalizeRoundConfig(r2.round_stage, r2.round_unit, r2.round_carry)]));
   const salesMap = new Map<string, number>();
   const grossMap = new Map<string, number>();
   const paidMap = new Map<string, number>();
@@ -137,8 +137,8 @@ statsRouter.get('/clients', async (c) => {
     saleByClient.set(x.cid, arr);
   }
   for (const [cid, rows] of saleByClient) {
-    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const };
-    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, money));
+    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const, carry: null };
+    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, cfg.carry, money));
   }
   for (const x of payRows.results) {
     const id = x.cid;
@@ -352,7 +352,7 @@ statsRouter.get('/summary', async (c) => {
   // 收款侧仍逐笔舍入（实收无抹零）。
   const debtParams: unknown[] = clientId ? [end, clientId] : [end];
   const [debtSaleRows, debtPayRows, roundRows] = kind === 'purchase'
-    ? [{ results: [] as Array<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }> }, { results: [] as Array<{ amount: number; waived: number }> }, { results: [] as Array<{ id: string; round_stage: string | null; round_unit: string | null }> }]
+    ? [{ results: [] as Array<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }> }, { results: [] as Array<{ amount: number; waived: number }> }, { results: [] as Array<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }> }]
     : await Promise.all([
         db.prepare(
           `SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
@@ -362,20 +362,20 @@ statsRouter.get('/summary', async (c) => {
         ).bind(...debtParams).all<{ amount: number; waived: number }>(),
         db.prepare(
           clientId
-            ? `SELECT id, round_stage, round_unit FROM clients WHERE id = ?`
-            : `SELECT id, round_stage, round_unit FROM clients WHERE deleted_at IS NULL`,
-        ).bind(...(clientId ? [clientId] : [])).all<{ id: string; round_stage: string | null; round_unit: string | null }>(),
+            ? `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE id = ?`
+            : `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`,
+        ).bind(...(clientId ? [clientId] : [])).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
       ]);
   const allPaid = debtPayRows.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
   let allSales: number;
   if (kind === 'purchase') {
     allSales = 0;
   } else if (clientId) {
-    const cfg = normalizeRoundConfig(roundRows.results[0]?.round_stage, roundRows.results[0]?.round_unit);
-    allSales = salesSideRounded(debtSaleRows.results, cfg.stage, cfg.unit, money);
+    const cfg = normalizeRoundConfig(roundRows.results[0]?.round_stage, roundRows.results[0]?.round_unit, roundRows.results[0]?.round_carry);
+    allSales = salesSideRounded(debtSaleRows.results, cfg.stage, cfg.unit, cfg.carry, money);
   } else {
     // 全店：按各店抹零配置分别算出货侧再累加（None 店=逐笔舍入，行为不变）
-    const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit)]));
+    const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
     allSales = salesAggByConfig(debtSaleRows.results, cfgMap, money);
   }
 
@@ -527,10 +527,10 @@ statsRouter.get('/category-statement', async (c) => {
       `SELECT id, name FROM clients WHERE category_id = ? AND deleted_at IS NULL ORDER BY name`,
     ).bind(categoryId).all<{ id: string; name: string }>(),
     c.env.DB.prepare(
-      `SELECT id, round_stage, round_unit FROM clients WHERE category_id = ? AND deleted_at IS NULL`,
-    ).bind(categoryId).all<{ id: string; round_stage: string | null; round_unit: string | null }>(),
+      `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE category_id = ? AND deleted_at IS NULL`,
+    ).bind(categoryId).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
   ]);
-  const roundCfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit)]));
+  const roundCfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
   // 区间出货/期末欠款出货侧均按各店自身抹零配置分组（None 店=逐笔舍入，历史口径不变）
   const salesMap = new Map<string, number>();
   const paidMap = new Map<string, number>();
@@ -542,8 +542,8 @@ statsRouter.get('/category-statement', async (c) => {
     saleByClient.set(x.client_id, arr);
   }
   for (const [cid, rows] of saleByClient) {
-    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const };
-    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, money));
+    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const, carry: null };
+    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, cfg.carry, money));
   }
   for (const x of payRows.results) {
     const id = x.client_id;
@@ -558,8 +558,8 @@ statsRouter.get('/category-statement', async (c) => {
     debtByClient.set(x.cid, arr);
   }
   for (const [cid, rows] of debtByClient) {
-    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const };
-    debtMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, money));
+    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const, carry: null };
+    debtMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, cfg.carry, money));
   }
   for (const x of debtPayRows.results) {
     // 收款整笔 r(amount + waived) 后扣减（与区间统计/账本单笔显示一致；勿拆开各自舍入）

@@ -38,14 +38,17 @@ authRouter.post('/bootstrap', async (c) => {
   const refresh = await signToken(c.env.JWT_SECRET, { sub: id, username, role: 'admin', typ: 'refresh' }, 30 * 24 * 3600, nowSec);
   try {
     await db.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, id).run();
-  } catch (_) { /* 老库缺列（迁移尚未执行）时降级：refresh 防重放不比对，登录不受影响 */ }
+  } catch (_) { /* 老库缺列（迁移尚未执行）时降级：refresh 锚点不落库，登录不受影响 */ }
   return c.json({ token: access, refresh_token: refresh, user: { id, username, display_name: displayName, role: 'admin' } }, 201);
 });
 
 // POST /auth/refresh — 刷新访问令牌（双 token 静默续期）：
-// access 过期后前端带 refresh_token 换新（新 access + 新 refresh，旧 refresh 轮换即作废）。
-// 防重放：服务端 users.refresh_iat 必须等于该 refresh 的签发时刻（payload.iat）；
-// 改密码/踢下线时清空 refresh_iat 即全部作废。旧版单 token（无 refresh_token）不受影响。
+// 每次刷新签发新 access + 新 refresh（30 天滑动窗口，活跃设备不会过期）。
+// 不做「单次轮换即作废」比对：App/小程序/网页多端共用同一账号时，A 端刷新会使 B 端旧
+// refresh 立即失效 → 隔几天就强制重新登录（用户实测反馈）。refresh 令牌本身 30 天有效，
+// 被盗的暴露面与登录态窗口一致（TLS 传输，可接受）。
+// 撤销：users.refresh_iat 仅作"会话锚点"——登录/刷新时更新；改密码时清空（NULL）= 全部
+// refresh 作废，所有端需重新登录。旧版单 token（无 refresh_token）不受影响。
 authRouter.post('/refresh', async (c) => {
   const body = await c.req.json().catch(() => null) as { refresh_token?: string } | null;
   const rt = body?.refresh_token ?? '';
@@ -56,16 +59,18 @@ authRouter.post('/refresh', async (c) => {
   }
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(r.payload.sub).first<UserRow>();
   if (!user) return c.json({ error: '用户不存在，请重新登录' }, 401);
-  const storedIat = user.refresh_iat as number | null;
-  if (storedIat !== null && storedIat !== r.payload.iat) {
-    return c.json({ error: '刷新令牌已失效，请重新登录' }, 401);
+  // 会话已撤销（改密码后 refresh_iat=null）→ 旧 refresh 一律作废；NULL 也可能是老库缺列/旧版
+  // 单 token 会话，同样需重新登录一次
+  const storedIat = user.refresh_iat as number | null | undefined;
+  if (storedIat === null) {
+    return c.json({ error: '登录已失效，请重新登录' }, 401);
   }
   const nowSec = Math.floor(Date.now() / 1000);
   const access = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'access' }, 24 * 3600, nowSec);
   const refresh = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'refresh' }, 30 * 24 * 3600, nowSec);
   try {
     await c.env.DB.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, user.id).run();
-  } catch (_) { /* 老库缺列时降级：刷新仍成功，防重放下次再比对 */ }
+  } catch (_) { /* 老库缺列时降级：刷新仍成功，锚点下次再更新 */ }
   return c.json({ token: access, refresh_token: refresh });
 });
 
@@ -109,13 +114,13 @@ authRouter.post('/login', async (c) => {
     const devVer = c.req.header('x-app-version') ?? '';
     await upsertDevice(c.env.DB, user.id, devId, `${platform}端`, platform, devIp, devVer);
   } catch (_) { /* 设备记录失败不阻断登录 */ }
-  // 双 token 签发（access 24h + refresh 30 天）；refresh_iat 落库：轮换/作废时按签发时刻比对（旧 refresh 立即失效）
+  // 双 token 签发（access 24h + refresh 30 天）；refresh_iat 落库=会话锚点（改密码清空时全部作废）
   const nowSec = Math.floor(Date.now() / 1000);
   const access = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'access' }, 24 * 3600, nowSec);
   const refresh = await signToken(c.env.JWT_SECRET, { sub: user.id, username: user.username, role: user.role, typ: 'refresh' }, 30 * 24 * 3600, nowSec);
   try {
     await c.env.DB.prepare('UPDATE users SET refresh_iat = ? WHERE id = ?').bind(nowSec, user.id).run();
-  } catch (_) { /* 老库缺列（迁移尚未执行）时降级：refresh 防重放不比对，登录不受影响 */ }
+  } catch (_) { /* 老库缺列（迁移尚未执行）时降级：refresh 锚点不落库，登录不受影响 */ }
   return c.json({ token: access, refresh_token: refresh, user: { id: user.id, username: user.username, role: user.role } });
 });
 

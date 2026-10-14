@@ -69,6 +69,12 @@
             <text class="value">{{ unitLabel(form.roundUnit) }}</text>
           </view>
         </picker>
+        <picker class="field" mode="selector" :range="carryNames" @change="onCarryChange">
+          <view class="field-inner">
+            <text class="label">进位临界</text>
+            <text class="value">{{ carryLabel(form.roundCarry) }}</text>
+          </view>
+        </picker>
         <picker class="field" mode="selector" :range="groupNames" @change="onGroupChange">
           <view class="field-inner">
             <text class="label">价格组（等级）</text>
@@ -106,6 +112,7 @@ interface Client {
   month_start_day?: number;
   round_stage?: string;
   round_unit?: string;
+  round_carry?: string | number | null;
   price_group_id?: string;
 }
 
@@ -119,7 +126,7 @@ const filteredClients = computed(() => {
 });
 const showForm = ref(false);
 const saving = ref(false);
-const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', priceGroupId: '', priceGroupName: '' });
+const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' });
 // 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
 const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
@@ -137,6 +144,15 @@ function onStageChange(e: { detail: { value: number } }) {
 
 function onUnitChange(e: { detail: { value: number } }) {
   form.value.roundUnit = unitValues[e.detail.value] || 'yuan';
+}
+
+// 进位临界（欠款/结账逐笔按该店进位；空=跟随全局）：0.5 四舍五入 / 0.6 5舍6入
+const carryNames = ['跟随全局', '四舍五入（0.5）', '5舍6入（0.6）'];
+const carryValues = ['', '0.5', '0.6'];
+const carryLabel = (v: string) => (v ? (v === '0.5' ? '四舍五入（0.5）' : '5舍6入（0.6）') : '跟随全局');
+
+function onCarryChange(e: { detail: { value: number } }) {
+  form.value.roundCarry = carryValues[e.detail.value] || '';
 }
 
 // 价格组（店铺等级→取价档；记单按等级带出该商品组价）
@@ -220,7 +236,7 @@ async function load() {
 }
 
 function openAdd() {
-  form.value = { name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', priceGroupId: '', priceGroupName: '' };
+  form.value = { name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' };
   showForm.value = true;
 }
 
@@ -235,6 +251,7 @@ function openEdit(c: Client) {
     categoryName: (c.category_id ? (c.category_name || '') : ''),
     roundStage: c.round_stage || 'none',
     roundUnit: c.round_unit || 'yuan',
+    roundCarry: c.round_carry != null ? String(c.round_carry) : '',
     priceGroupId: c.price_group_id || '',
     priceGroupName: (c.price_group_id ? priceGroups.value.find((g) => g.id === c.price_group_id)?.name || '' : ''),
   };
@@ -248,7 +265,7 @@ async function save() {
   }
   saving.value = true;
   try {
-    const body: Record<string, string> = {
+    const body: Record<string, string | number | null> = {
       name: form.value.name.trim(),
       contact: form.value.contact.trim(),
       phone: form.value.phone.trim(),
@@ -256,6 +273,7 @@ async function save() {
       category_id: form.value.categoryId,
       round_stage: form.value.roundStage,
       round_unit: form.value.roundUnit,
+      round_carry: form.value.roundCarry ? Number(form.value.roundCarry) : null,
       price_group_id: form.value.priceGroupId,
     };
     if (form.value.editId) {
