@@ -465,6 +465,22 @@ class _MyPageState extends State<MyPage> {
   /// 退出登录：只清登录态（token/缓存），保留本地库与待同步队列——
   /// 同一账号重登离线秒开、本地数据不丢；串号由登录时账号检测+切换账号全清兜底
   Future<void> _logout() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('退出登录'),
+        content: const Text('仅清除登录状态，本地数据与离线记录全部保留——重新登录同账号即可离线秒开，无需重新下载。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFF56C6C)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('退出登录'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
     await Api.instance.clearAuthOnly();
     if (!mounted) return;
     Navigator.of(context)

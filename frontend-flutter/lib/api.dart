@@ -115,8 +115,9 @@ class Api {
     }
   }
 
-  /// 只清登录态（token/角色/账号/头像/缓存），保留本地数据库与待同步队列：
-  /// 「退出登录」用——同一账号重登仍离线秒开；本地库清空由「切换账号」负责（防串号）。
+  /// 只清登录态（token/角色/账号/头像），**保留本地数据库与接口缓存（本地快照）**：
+  /// 「退出登录」用——同一账号重登仍离线秒开、本地可用逻辑不丢（用户"退出登录再重新登录
+  /// 失去了本地可用的逻辑"）；换账号由 clearLocalData 负责清缓存防串号。
   Future<void> clearAuthOnly() async {
     final p = await SharedPreferences.getInstance();
     p.remove(_tokenKey);
@@ -124,14 +125,24 @@ class Api {
     p.remove(_accountKey);
     p.remove(_avatarKey);
     p.remove(_refreshTokenKey);
-    final keys = p.getKeys().where((k) => k.startsWith(_cachePrefix)).toList();
-    for (final k in keys) {
-      await p.remove(k);
-    }
     // 保留 _usernameKey：本地库在，重登同账号显示名不丢；切换账号清库时一并清
+    // 保留 taozhu_cache_*：接口缓存=离线可用快照，退出/失效重登不应丢失（换账号才清）
   }
 
   static const _refreshTokenKey = 'taozhu_refresh_token';
+
+  /// 登录失效全局处理（对齐参考实现：401 刷新确认无效 → 自动登出，无需用户手动退出登录）：
+  /// 清登录态（**保留本地库与接口缓存**，重新登录离线可用不丢）→ 回调 UI 跳登录页。
+  /// 防并发：同一失效期只触发一次（多请求同时 401 只跳一次）；重新登录成功后 resetAuthExpired。
+  static void Function()? onAuthExpired;
+  static bool _authExpiredFired = false;
+  static void resetAuthExpired() => _authExpiredFired = false;
+  static Future<void> _handleAuthExpired() async {
+    if (_authExpiredFired) return;
+    _authExpiredFired = true;
+    await Api.instance.clearAuthOnly();
+    onAuthExpired?.call();
+  }
 
   Future<void> setRefreshToken(String rt) async {
     (await SharedPreferences.getInstance()).setString(_refreshTokenKey, rt);
@@ -261,7 +272,7 @@ class Api {
         res = await http.get(Uri.parse(url), headers: headers);
         if (res.statusCode == 404) return null;
       } else if (refreshed == false) {
-        await clearToken();
+        await _handleAuthExpired();
         throw Exception('登录已过期，请重新登录');
       } else {
         throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
@@ -408,7 +419,7 @@ class Api {
         if (nt != null && nt.isNotEmpty) headers['Authorization'] = 'Bearer $nt';
         res = await retry();
       } else if (refreshed == false) {
-        await clearToken();
+        await _handleAuthExpired();
         throw Exception('登录已过期，请重新登录');
       } else {
         // refresh 网络失败：不清登录，按网络错误提示（保留 token，网络恢复后自动重试）
@@ -462,7 +473,7 @@ class Api {
         if (nt != null && nt.isNotEmpty) headers['Authorization'] = 'Bearer $nt';
         res = await http.get(Uri.parse(url), headers: headers);
       } else if (refreshed == false) {
-        await clearToken();
+        await _handleAuthExpired();
         throw Exception('登录已过期，请重新登录');
       } else {
         throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
@@ -575,7 +586,7 @@ class Api {
           throw Exception(_friendlyNetError(e, path));
         }
       } else if (refreshed == false) {
-        await clearToken();
+        await _handleAuthExpired();
         throw Exception('登录已过期，请重新登录');
       } else {
         throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');
@@ -638,7 +649,7 @@ class Api {
           throw Exception(_friendlyNetError(e, path));
         }
       } else if (refreshed == false) {
-        await clearToken();
+        await _handleAuthExpired();
         throw Exception('登录已过期，请重新登录');
       } else {
         throw Exception('无法连接服务器（登录校验超时），请检查网络后重试');

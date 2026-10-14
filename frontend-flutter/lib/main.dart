@@ -13,8 +13,32 @@ import 'utils/money.dart';
 import 'pages/login_page.dart';
 import 'widgets/bottom_shell.dart';
 
+/// 全局导航 Key：登录失效自动跳登录页用（后台请求/同步线程 401 也能主线程导航）
+final navigatorKey = GlobalKey<NavigatorState>();
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 登录失效（401 + refresh 确认无效）→ 自动登出回登录页（对齐参考实现：无需用户手动退出登录；
+  // 只清登录态，本地库与接口缓存保留——重新登录离线可用不丢）
+  Api.onAuthExpired = () {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final nav = navigatorKey.currentState;
+      if (nav == null) return;
+      final ctx = navigatorKey.currentContext;
+      if (ctx != null && ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(
+            content: Text('登录已过期，请重新登录', textAlign: TextAlign.center),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      nav.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+        (r) => false,
+      );
+    });
+  };
   // 跟随系统代理：所有 HTTP 请求统一走系统代理（Windows 读注册表/Android 读系统属性），
   // 启动即读 + 每 30s 重读（跟随代理软件开关变化）。Web 端浏览器自带代理，不注册。
   if (!kIsWeb) {
@@ -97,6 +121,7 @@ class _TaoZhuAppState extends State<TaoZhuApp> {
           child: MaterialApp(
           title: '陶朱',
           debugShowCheckedModeBanner: false,
+          navigatorKey: navigatorKey,
           themeMode: mode,
           theme: buildLightTheme(preset.lightPrimary),
           darkTheme: buildDarkTheme(preset.darkPrimary),

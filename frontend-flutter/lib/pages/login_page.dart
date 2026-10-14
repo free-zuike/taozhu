@@ -99,6 +99,7 @@ class _LoginPageState extends State<LoginPage> {
           await Api.instance.setAvatar(mu['avatar'] != null);
         }
       } catch (_) {}
+      Api.resetAuthExpired(); // 登录成功后复位失效标志——下次登录态失效可再次自动跳转
       if (!mounted) return;
       appLog('auth', '登录成功', level: 'info');
       // 金额舍入口径初始化：读本地缓存 + 后台拉服务器配置（记单/统计/收款本地计算用同口径）
