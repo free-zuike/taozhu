@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:excel/excel.dart' hide Border;
+import 'package:excel/excel.dart' as exc hide Border; // excel 包 Border 被上方 hide，别名访问（用户"excel 打印无边框"→逐格加细边框）
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -818,14 +819,17 @@ class _StatementPageState extends State<StatementPage> {
         col += c.colSpan < 1 ? 1 : c.colSpan;
       }
     }
-    // 逐格样式（加粗/底纹/对齐/字号/数字格式）——与预览/打印同源；金额格两位小数显示
+    // 逐格样式（边框/加粗/底纹/对齐/字号/数字格式）——与预览/打印同源；金额格两位小数显示。
+    // 统一印刷体式：宋体 SimSun + 细边框（对齐 HTML 打印页 td 1px #666——用户"excel 打印不显示边框/和打印页不是一套"）。
+    // 注意：不要因"左对齐且无样式"跳过——边框必须全格都画，否则表格线缺（打印页 td 全有边框）。
+    final cellBorder = exc.Border(borderStyle: BorderStyle.Thin);
     for (var ri = 0; ri < trows.length; ri++) {
       final row = trows[ri];
       var col = 0;
       for (final c in row) {
-        if (c.align == 'left' && !c.bold && c.bg.isEmpty) continue;
         final isNum = double.tryParse(c.text.trim().replaceAll(',', '')) != null;
         sheet.cell(CellIndex.indexByColumnRow(columnIndex: col, rowIndex: ri)).cellStyle = CellStyle(
+              fontFamily: '宋体',
               horizontalAlign: c.align == 'center'
                   ? HorizontalAlign.Center
                   : (c.align == 'right' ? HorizontalAlign.Right : HorizontalAlign.Left),
@@ -834,11 +838,16 @@ class _StatementPageState extends State<StatementPage> {
               fontSize: c.bold ? _tplFontSize.toInt() + 2 : _tplFontSize.toInt(),
               // 金额格显示两位小数（NumFormat 枚举，非字符串）
               numberFormat: isNum ? NumFormat.standard_2 : NumFormat.standard_0,
+              leftBorder: cellBorder,
+              rightBorder: cellBorder,
+              topBorder: cellBorder,
+              bottomBorder: cellBorder,
             );
         col += c.colSpan < 1 ? 1 : c.colSpan;
       }
     }
-    // 列宽（日期列 12 / 金额列 14——用户"宽度设置一下，显示不全我怎么查看打印"）
+    // 列宽：多栏（≥6 列）压缩到一页打印——8 列总宽不超 A4 可用宽度，31 号栏不会挤到第二页
+    // （用户"31号那2栏和之前的不是一页了，我要一页打印出来"）；标准 2 列维持宽松
     final colCount = trows.fold<int>(0, (m, r) {
       var w = 0;
       for (final c in r) {
@@ -846,8 +855,14 @@ class _StatementPageState extends State<StatementPage> {
       }
       return w > m ? w : m;
     });
+    final compact = colCount >= 6; // 多栏 8 列
     for (var cc = 0; cc < colCount; cc++) {
-      sheet.setColumnWidth(cc, cc.isEven ? 12 : 14);
+      if (compact) {
+        // 日期列 8 / 金额列 10（8 列总宽 = 4*8 + 4*10 = 72 字符，A4 纵向可放下）
+        sheet.setColumnWidth(cc, cc.isEven ? 8 : 10);
+      } else {
+        sheet.setColumnWidth(cc, cc.isEven ? 12 : 14);
+      }
     }
     return excel;
   }
@@ -2091,15 +2106,16 @@ class _StatementPageState extends State<StatementPage> {
       final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
       final trows = renderTemplateRows(_curPubTpl, _td(clientName));
       final html = _rowsToHtml(trows, clientName);
-      final name = '对账单-${clientName.replaceAll(' ', '')}.html';
-      await saveBytes(utf8.encode(html), name, 'text/html', '对账单打印页');
       if (kIsWeb) {
-        // Web：data URL 打开本地生成的打印页（自带自动打印脚本）
+        // Web：不生成/不下载文件，data URL 直接打开隐藏 iframe 自动打印（用户"html 页面能不能不生成，直接打印"）
         final dataUrl = 'data:text/html;charset=utf-8,${Uri.encodeComponent(html)}';
         openPrintUrl(dataUrl);
-      } else {
-        toast(context, '打印页已生成保存，用浏览器打开即可打印（离线可用）');
+        return;
       }
+      // 原生端：保存打印页 HTML → 用浏览器打开即可打印（离线可用；平台无直接打印 API）
+      final name = '对账单-${clientName.replaceAll(' ', '')}.html';
+      await saveBytes(utf8.encode(html), name, 'text/html', '对账单打印页');
+      toast(context, '打印页已生成保存，用浏览器打开即可打印（离线可用）');
     } catch (e) {
       toast(context, '打印页生成失败：${e.toString().replaceFirst('Exception: ', '')}');
     }

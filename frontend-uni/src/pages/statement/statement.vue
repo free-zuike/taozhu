@@ -503,11 +503,31 @@ async function exportXlsx() {
     }
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    // 标题行合并整行居中（用户"导出的 excel 标题要合并居中"）：1 行跨 colN 列 + 居中加粗样式
+    // 标题行合并整行居中（用户"导出的 excel 标题要合并居中"）：1 行跨 colN 列
     const colN = tpl.value === 'multi' ? multi.value.cols * 2 : 2;
     ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: colN - 1 } }];
-    const hcell = ws[XLSX.utils.encode_cell({ r: 0, c: 0 })];
-    if (hcell) hcell.s = { font: { bold: true, sz: 14 }, alignment: { horizontal: 'center' } };
+    // 全表样式统一（用户"excel 和打印页不是一套/字体字号格式不一致/金额不居中/表头不居中"：对齐 App：
+    // 宋体 + 细边框（打印页 td 1px #666）+ 标题合并居中加粗 + 表头加粗 + 金额/日期一律居中）
+    const border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+    const ref = ws['!ref'] || 'A1';
+    const rng = XLSX.utils.decode_range(ref);
+    for (let rr = rng.s.r; rr <= rng.e.r; rr++) {
+      for (let cc = rng.s.c; cc <= rng.e.c; cc++) {
+        const addr = XLSX.utils.encode_cell({ r: rr, c: cc });
+        const cell = ws[addr];
+        if (!cell) continue;
+        if (rr === 0) {
+          // 标题行：居中加粗大字（合并跨整行）
+          cell.s = { font: { name: '宋体', bold: true, sz: 14 }, alignment: { horizontal: 'center', vertical: 'center' }, border };
+        } else if (rr === 1) {
+          // 表头（日期/营业额）：加粗居中，无底色（用户"日期营业额那栏不要背景颜色"）
+          cell.s = { font: { name: '宋体', bold: true, sz: 12 }, alignment: { horizontal: 'center', vertical: 'center' }, border };
+        } else {
+          // 正文（日期/金额/小计/合计/总计）：居中（用户"金额那里不居中，第一栏金额和第二栏日期挨着"）
+          cell.s = { font: { name: '宋体', sz: 11 }, alignment: { horizontal: 'center', vertical: 'center' }, border };
+        }
+      }
+    }
     // 合计/小计/总计用 Excel 公式（对齐 App 模板 =sum(...)：不是死数字，改动自动重算）
     // 公式文本不带 = 前缀（SheetJS 原样写入 <f>，带 = 会变成 ==SUM 非法公式——openpyxl 验证）
     const fSum = (ref: string) => `SUM(${ref})`;
@@ -532,12 +552,14 @@ async function exportXlsx() {
       if (cell) cell.f = fSum(`B3:B${sumIdx}`);
     }
     XLSX.utils.book_append_sheet(wb, ws, '对账单');
-    // 列宽（金额列留足宽度，较长数字不挤压显示 ####；金额纯数字不带 ¥ 符号）
+    // 列宽：多栏（≥6 列）压缩到一页打印（用户"31号那2栏和之前的不在一页，要一页打印"）——
+    // 8 列总宽 = 4*8 + 4*10 = 72 字符不超 A4；标准 2 列维持宽松
     const ws2 = wb.Sheets['对账单'];
     const widths: Array<{ wch: number }> = [];
-    for (let c = 0; c < colN; c++) widths.push({ wch: c % 2 === 0 ? 12 : 14 });
+    const compact = colN >= 6;
+    for (let c = 0; c < colN; c++) widths.push({ wch: compact ? (c % 2 === 0 ? 8 : 10) : (c % 2 === 0 ? 12 : 14) });
     if (ws2) ws2['!cols'] = widths;
-    // cellStyles: 保留标题/合并样式
+    // cellStyles: 保留标题/表头/边框样式
     const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true }) as ArrayBuffer;
     const fileName = `${clientName.value.replace(/\s+/g, '')}-对账单.xlsx`;
     // #ifdef MP-WEIXIN

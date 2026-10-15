@@ -13,9 +13,10 @@ export function setHubEnv(env: { SYNC_HUB: DurableObjectNamespace }): void {
 /** 广播一次同步通知（变更流已写入后调用；失败静默，不影响主流程）
  *  type: sync=业务实体变更（默认）/ profile_change=用户资料（显示名/头像）变更 / ai_config=AI 配置变更
  *        theme_config=主题配置变更 / audit=操作审计变更（删除单条）/ devices=设备列表变更（删除设备）
+ *        stmt_templates=对账单模板列表变更（App 设计器保存后其他端重新拉取）
  *  data: 可选负载（rounding=carry/digits、theme_config=preset 等）——客户端收到后**直接应用，不再 GET 回读**（ws 也是推送） */
 export async function notifyClients(
-  type: 'sync' | 'profile_change' | 'ai_config' | 'theme_config' | 'rounding' | 'audit' | 'devices' = 'sync',
+  type: 'sync' | 'profile_change' | 'ai_config' | 'theme_config' | 'rounding' | 'audit' | 'devices' | 'stmt_templates' = 'sync',
   data?: Record<string, unknown>,
 ): Promise<void> {
   const hub = hubEnv?.SYNC_HUB;

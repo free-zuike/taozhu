@@ -205,3 +205,39 @@ describe('金额舍入配置（/settings/rounding）', () => {
     expect(list.sales[0].items[0].amount).toBe(1.235);
   });
 });
+
+describe('对账单模板跨端同步（/api/v1/stmt-templates）', () => {
+  let env: Parameters<typeof call>[0];
+  let token: string;
+  beforeEach(async () => { env = (await setup()).env; token = await boot(env); });
+
+  it('初始无云端模板：返回空列表 + current 空', async () => {
+    const res = await call(env, 'GET', '/api/v1/stmt-templates', token);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { templates: unknown[]; current: string };
+    expect(body.templates).toEqual([]);
+    expect(body.current).toBe('');
+  });
+
+  it('老板保存模板列表 + 当前名 → 回读一致（一次设计两端共用）', async () => {
+    const tpls = [
+      { name: '标准', title: '对账单', grid: [{ cells: [['{店铺} {月}月份账单', 'center', true]] }] },
+      { name: '多栏', title: '对账单', grid: [] },
+    ];
+    const put = await call(env, 'PUT', '/api/v1/stmt-templates', token, { templates: tpls, current: '标准' });
+    expect(put.status).toBe(200);
+    const get = (await (await call(env, 'GET', '/api/v1/stmt-templates', token)).json()) as {
+      templates: Array<{ name: string }>;
+      current: string;
+    };
+    expect(get.templates.map((t) => t.name)).toEqual(['标准', '多栏']);
+    expect(get.current).toBe('标准');
+  });
+
+  it('普通店员只读、不可写；非法请求 400', async () => {
+    const st = await staffToken(env, token);
+    expect((await call(env, 'GET', '/api/v1/stmt-templates', st)).status).toBe(200);
+    expect((await call(env, 'PUT', '/api/v1/stmt-templates', st, { templates: [] })).status).toBe(403);
+    expect((await call(env, 'PUT', '/api/v1/stmt-templates', token, { templates: 'not-array' })).status).toBe(400);
+  });
+});

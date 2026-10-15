@@ -608,10 +608,10 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10, bool withTi
       final day = cc * perCol + r + 1;
       if (day <= n) {
         line.add(GridCell('$y.$m.$day', 'center'));
-        line.add(GridCell(_numU(daily[day - 1], d.displayUnit), 'right'));
+        line.add(GridCell(_numU(daily[day - 1], d.displayUnit), 'center'));
       } else {
         line.add(GridCell('', 'center'));
-        line.add(GridCell('', 'right'));
+        line.add(GridCell('', 'center'));
       }
     }
     rows.add(line);
@@ -625,15 +625,15 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10, bool withTi
       s += daily[dd];
     }
     grand += s;
-    subtotal.add(GridCell('', 'right', true));
-    subtotal.add(GridCell(_numU(s, d.displayUnit), 'right', true));
+    subtotal.add(GridCell('', 'center', true));
+    subtotal.add(GridCell(_numU(s, d.displayUnit), 'center', true));
   }
   rows.add(subtotal);
   // 底部总计（跨栏，示例「总计 41349.81」尾部对齐；加粗；「总计」标签居中美观）
   rows.add([
     GridCell('总计', 'center', true),
     for (var cc = 0; cc < cols * 2 - 2; cc++) GridCell('', ''),
-    GridCell(_numU(grand, d.displayUnit), 'right', true),
+    GridCell(_numU(grand, d.displayUnit), 'center', true),
   ]);
   return rows;
 }
@@ -723,9 +723,9 @@ List<List<GridCell>> _renderComps(XlsCfg cfg, TemplateData d) {
         for (var i = 0; i < daily.days.length; i++) {
           final v = daily.days[i];
           total += v;
-          rows.add([GridCell('${i + 1}日', 'left'), GridCell(_fmtMoneyU(v, d.displayUnit), 'right')]);
+          rows.add([GridCell('${i + 1}日', 'left'), GridCell(_fmtMoneyU(v, d.displayUnit), 'center')]);
         }
-        rows.add([GridCell('总计', 'right'), GridCell(_fmtMoneyU(total, d.displayUnit), 'right')]);
+        rows.add([GridCell('总计', 'center'), GridCell(_fmtMoneyU(total, d.displayUnit), 'center')]);
         break;
       case 'multi': // 多栏月账单（寻牛记式）
         rows.addAll(_multiColBill(d));
@@ -742,7 +742,7 @@ List<List<GridCell>> _renderComps(XlsCfg cfg, TemplateData d) {
             GridCell(r[0], 'left'),
             GridCell(r[1], 'left'),
             GridCell(r[2], 'center'),
-            GridCell(r[3], 'right'),
+            GridCell(r[3], 'center'),
           ]);
         }
         break;
@@ -849,9 +849,9 @@ XlsCfg _defaultTemplate() => XlsCfg()
     // 表头无底色（用户"日期营业额那行文字有底部颜色要去掉"）
     [GridCell('日期', 'center', true), GridCell('营业额', 'center', true)],
     for (var d = 1; d <= 31; d++)
-      [GridCell('{月}月$d日', 'center'), GridCell('{$d日销售额}', 'right')],
+      [GridCell('{月}月$d日', 'center'), GridCell('{$d日销售额}', 'center')],
     // 合计 = 函数 =sum(B3:B33)（用户"要 =sum(b2,b11) 这种函数，不要 {月合计} 变量"）
-    [GridCell('合计', 'center', true), GridCell('=sum(b3:b33)', 'right', true)],
+    [GridCell('合计', 'center', true), GridCell('=sum(b3:b33)', 'center', true)],
   ];
 
 /// 「多栏」= 多栏月账单（寻牛记式：每栏 10 天，31 天 → 4 栏，最后一栏 1 天），展开为可编辑网格。
@@ -873,30 +873,30 @@ XlsCfg _multiColTemplate() => XlsCfg()
         for (var cc = 0; cc < 4; cc++)
           if (cc * 10 + r + 1 <= 31) ...[
             GridCell('{月}月${cc * 10 + r + 1}日', 'center'),
-            GridCell('{${cc * 10 + r + 1}日销售额}', 'right'),
+            GridCell('{${cc * 10 + r + 1}日销售额}', 'center'),
           ] else ...[
             // 第 4 栏只有 31 日一天（31 天月）：其余行补齐空格（保留表格线成矩形，
             // 勿缺列——参差行会让预览/打印/Excel 出现重复格或整块空白（用户"31 日下表格线空白"））
             GridCell('', 'center'),
-            GridCell('', 'right'),
+            GridCell('', 'center'),
           ],
       ],
     // 小计 = 每栏函数（第 4 栏 = 31 日单格；无 31 日时该列被尾列剪枝整列删除）
     [
       GridCell('小计', 'center', true),
-      GridCell('=sum(b3:b12)', 'right', true),
+      GridCell('=sum(b3:b12)', 'center', true),
       GridCell('', ''),
-      GridCell('=sum(d3:d12)', 'right', true),
+      GridCell('=sum(d3:d12)', 'center', true),
       GridCell('', ''),
-      GridCell('=sum(f3:f12)', 'right', true),
+      GridCell('=sum(f3:f12)', 'center', true),
       GridCell('', ''),
-      GridCell('=sum(h3:h3)', 'right', true),
+      GridCell('=sum(h3:h3)', 'center', true),
     ],
     // 总计 = 各栏小计之和（引用小计行；无 31 日时 4 栏小计格随列删除，剩余自动左移补位）
     [
       GridCell('总计', 'center', true),
       for (var i = 0; i < 6; i++) GridCell('', ''),
-      GridCell('=sum(b13,d13,f13,h13)', 'right', true),
+      GridCell('=sum(b13,d13,f13,h13)', 'center', true),
     ],
   ];
 
@@ -916,3 +916,4 @@ Future<List<XlsCfg>> resetTemplates() async {
   await p.setString('taozhu_stmt_xls_name', '标准');
   return [_defaultTemplate(), _multiColTemplate()];
 }
+

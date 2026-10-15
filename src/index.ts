@@ -20,6 +20,7 @@ import { stocksRouter } from './routes/stocks';
 import { backupRouter, getBackupTime, isBackupTime, performBackup } from './routes/backup';
 import { shareRouter, renderShareHtml } from './routes/share';
 import { printRouter } from './routes/print';
+import { stmtTemplatesRouter } from './routes/stmt-templates';
 import { syncRouter } from './routes/sync';
 import { meRouter } from './routes/me';
 import { auditRouter } from './routes/audit';
@@ -86,6 +87,7 @@ app.route('/api/v1/me', meRouter);
 app.route('/api/v1/audit', auditRouter);
 app.route('/api/v1/devices', devicesRouter);
 app.route('/api/v1/print', printRouter);
+app.route('/api/v1/stmt-templates', stmtTemplatesRouter);
 
 // 实时同步 WebSocket（token 走查询参数：浏览器 WebSocket 无法自定义请求头）。
 // 必须注册在 syncRouter 挂载之前：否则会被 syncRouter 的 authMiddleware 先拦截（无 Authorization 头 → 401）。
