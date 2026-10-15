@@ -244,13 +244,14 @@ double _roundVal(TemplateData d, double v) {
   return (days: arr, total: total);
 }
 
-String _fmtMoney(double v) => '¥${((v * 100).round() / 100).toStringAsFixed(2)}';
+String _fmtMoney(double v) => '${((v * 100).round() / 100).toStringAsFixed(2)}';
 
 /// 金额显示精度跟随店铺 round_unit（元=整元 0 位/角=1 位/分=2 位；空=分）。
 /// 仅显示精度，不改变数值（合计仍按真实金额累加后四舍五入显示）。
+/// 金额纯数字不带 ¥（用户"不需要显示金额符号￥，会显示不全"——模板内金额统一无符号）
 String _fmtMoneyU(double v, String unit) {
-  if (unit == 'yuan') return '¥${v.round()}';
-  if (unit == 'jiao') return '¥${v.toStringAsFixed(1)}';
+  if (unit == 'yuan') return '${v.round()}';
+  if (unit == 'jiao') return v.toStringAsFixed(1);
   return _fmtMoney(v);
 }
 
@@ -265,7 +266,8 @@ String _numU(double v, String unit) {
 /// 函数式变量（自动计算）：出货合计/收款合计/期末欠款/月合计/出货笔数；每日销售额 {1日}…{31日} 与可读别名 {1日销售额}…
 String _replaceVars(String text, TemplateData d) {
   final now = DateTime.now();
-  final today = '${now.year}年${now.month}月${now.day}日';
+  // 日期点分格式（用户定稿"年月日改成 ."，示例 2026.10.16）
+  final today = '${now.year}.${now.month}.${now.day}';
   // 账单月份 = 数据区间 from 的月份（用户"店铺 x月份账单"标题跟随所选账期的年月，非当前自然月）
   final fromY = int.tryParse(d.from.length >= 4 ? d.from.substring(0, 4) : '') ?? now.year;
   final fromM = int.tryParse(d.from.length >= 7 ? d.from.substring(5, 7) : '') ?? now.month;
@@ -303,7 +305,9 @@ String _replaceVars(String text, TemplateData d) {
     final val = dd <= daily.days.length ? _fmtMoneyU(daily.days[dd - 1], d.displayUnit) : '';
     line = line
         .replaceAll('{$dd日}', val)
-        .replaceAll('{$dd日销售额}', val);
+        .replaceAll('{$dd日销售额}', val)
+        // 日期格 {月}月N日（{月} 已替换为数字）→ 点分带年 2026.10.16（用户"年月日改成 ."）
+        .replaceAll('${fromM}月$dd日', '${fromY}.${fromM}.$dd');
   }
   return line;
 }
@@ -311,12 +315,14 @@ String _replaceVars(String text, TemplateData d) {
 /// 模板统一渲染入口：comps → grid → content → 默认（fields+days）
 /// 返回表格行集合（每行 = 单元格列表）；预览/导出/打印共用。
 /// 统一后处理：标题去重（多余标题行自动去掉）+ 合计函数化（合计/总计行自动填月合计）。
-List<List<GridCell>> renderTemplateRows(XlsCfg cfg, TemplateData d) {
+/// [evalSum] 是否把 =sum(...) 公式求值为文本（预览/打印=true 显示值；导出 Excel=false 保留公式原文，
+/// 由导出层写成公式单元格——用户"导出的 excel 合计应是公式不是死数字"）
+List<List<GridCell>> renderTemplateRows(XlsCfg cfg, TemplateData d, {bool evalSum = true}) {
   List<List<GridCell>> rows;
   if (cfg.comps.isNotEmpty) {
     rows = _renderComps(cfg, d);
   } else if (cfg.grid.isNotEmpty) {
-    rows = _renderGrid(cfg, d);
+    rows = _renderGrid(cfg, d, evalSum: evalSum);
   } else if (cfg.content.trim().isNotEmpty) {
     final day = _dailyOf(d);
     rows = [
@@ -632,7 +638,7 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10, bool withTi
   return rows;
 }
 
-List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
+List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d, {bool evalSum = true}) {
   final out = <List<GridCell>>[];
   final daily = _dailyOf(d);
   // 日期行索引（模板期含 {N日销售额}/{月}月N日 变量的行；尾列剪枝按此判定"该列是否空"）
@@ -677,7 +683,8 @@ List<List<GridCell>> _renderGrid(XlsCfg cfg, TemplateData d) {
     out.add(rendered);
   }
   // =sum(...) 公式求值（模板坐标，行未裁剪时索引一致）→ 尾列剪枝（无 31 日删末 2 列）
-  _evalFormulas(out, d.displayUnit);
+  // 导出 Excel 时 evalSum=false：保留公式原文（合计格 =sum(...) 由导出层写成 Excel 公式）
+  if (evalSum) _evalFormulas(out, d.displayUnit);
   if (!hasMonthBill) _pruneTailEmptyCols(out, dayRowIdx: dayRowIdx);
   // 整行渲染后全空（标准模板 9月31号那一行）→ 跳过不显示
   return [for (final r in out) if (r.any((c) => c.text.trim().isNotEmpty)) r];

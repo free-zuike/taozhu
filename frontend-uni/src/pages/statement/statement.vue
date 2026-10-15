@@ -51,59 +51,61 @@
             <view :class="['tb-item', { active: fontSize === 14 }]" @click="fontSize = 14">大</view>
           </view>
         </view>
-        <!-- 成品预览（对齐 App 标准模板：标题 + 日期/营业额表头 + 1..当月天数 逐行 + 合计行；表格带格线、金额纯数字无 ¥） -->
+        <!-- 成品预览（对齐 App 标准模板：标题 + 日期/营业额表头 + 逐日行 + 合计；view+flex 模拟表格——
+        小程序 WXML 不支持 table 语义（会竖排），用行内 flex 单元格横排渲染，每格四边浅灰线同 App） -->
         <view v-if="tpl === 'std'" class="card stmt-tbl">
           <view class="t-title" :style="titleStyle">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
           <view class="t-sub">{{ from }} 至 {{ to }}</view>
-          <table class="tbl">
-            <thead><tr><th class="h">日期</th><th class="h">营业额</th></tr></thead>
-            <tbody>
-              <tr v-for="d in dailyRows" :key="d.day">
-                <td class="c">{{ d.label }}</td><td class="c amt">{{ stmtFmt(d.amt) }}</td>
-              </tr>
-            </tbody>
-            <tfoot><tr><td class="c">合计</td><td class="c amt">{{ stmtFmt(saleTotal) }}</td></tr></tfoot>
-          </table>
+          <view class="tbl">
+            <view class="tbl-row tbl-head">
+              <view class="tbl-cell">日期</view>
+              <view class="tbl-cell amt">营业额</view>
+            </view>
+            <view v-for="d in dailyRows" :key="d.day" class="tbl-row">
+              <view class="tbl-cell">{{ d.label }}</view>
+              <view class="tbl-cell amt">{{ stmtFmt(d.amt) }}</view>
+            </view>
+            <view class="tbl-row tbl-foot">
+              <view class="tbl-cell">合计</view>
+              <view class="tbl-cell amt">{{ stmtFmt(saleTotal) }}</view>
+            </view>
+          </view>
         </view>
         <!-- 多栏模板（对齐 App 展开网格：每栏「日期|营业额」左右两列，31 天→4 栏=8 列；月末补空格保矩形；栏底小计+底部总计） -->
         <view v-else class="card stmt-tbl">
           <view class="t-title" :style="titleStyle">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
           <view class="t-sub">{{ from }} 至 {{ to }}</view>
-          <table class="tbl multi">
-            <thead>
-              <tr>
-                <template v-for="ci in multi.cols" :key="'h'+ci">
-                  <th class="h">日期</th><th class="h">营业额</th>
-                </template>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, ri) in multi.rows" :key="'r'+ri">
-                <template v-for="(cell, ci) in row" :key="'c'+ci">
-                  <td :class="'c ' + (cell.isAmt ? 'amt' : '')">{{ cell.isAmt ? cell.amt : cell.label }}</td>
-                </template>
-              </tr>
-            </tbody>
-            <tfoot>
-              <tr>
-                <template v-for="ci in multi.cols" :key="'s'+ci">
-                  <td class="c">小计</td><td class="c amt bold">{{ multi.subtotals[ci - 1] }}</td>
-                </template>
-              </tr>
-              <tr>
-                <td class="c">总计</td>
-                <td :colspan="multi.totalColspan" class="c amt bold">{{ multi.grand }}</td>
-              </tr>
-            </tfoot>
-          </table>
+          <view class="tbl">
+            <view class="tbl-row tbl-head">
+              <template v-for="ci in multi.cols" :key="'h'+ci">
+                <view class="tbl-cell">日期</view>
+                <view class="tbl-cell amt">营业额</view>
+              </template>
+            </view>
+            <view v-for="(row, ri) in multi.rows" :key="'r'+ri" class="tbl-row">
+              <template v-for="(cell, ci) in row" :key="'c'+ci">
+                <view :class="['tbl-cell', cell.isAmt ? 'amt' : '']">{{ cell.isAmt ? cell.amt : cell.label }}</view>
+              </template>
+            </view>
+            <view class="tbl-row tbl-foot">
+              <template v-for="ci in multi.cols" :key="'s'+ci">
+                <view class="tbl-cell">小计</view>
+                <view class="tbl-cell amt">{{ multi.subtotals[ci - 1] }}</view>
+              </template>
+            </view>
+            <view class="tbl-row tbl-foot">
+              <view class="tbl-cell">总计</view>
+              <view class="tbl-cell amt" :style="{ flex: multi.totalColspan + 1 }">{{ multi.grand }}</view>
+            </view>
+          </view>
         </view>
-        <!-- 统计卡（对齐 App：出货合计/收款合计 并排卡片 + 期末欠款卡片；合计按全局口径 fmtAmount，欠款按店铺抹零精度） -->
+        <!-- 统计卡（对齐 App：出货合计/收款合计 并排卡片 + 期末欠款卡片；金额纯数字不带 ¥，用户"不需要显示金额符号￥"） -->
         <view class="stat-row2">
-          <view class="stat-card"><text class="stat-card-tx">出货合计</text><text class="stat-card-num red">¥{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
-          <view class="stat-card"><text class="stat-card-tx">收款合计（实收）</text><text class="stat-card-num green">¥{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
+          <view class="stat-card"><text class="stat-card-tx">出货合计</text><text class="stat-card-num red">{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
+          <view class="stat-card"><text class="stat-card-tx">收款合计（实收）</text><text class="stat-card-num green">{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
         </view>
-        <view v-if="waivedTotal > 0" class="stat-card"><text class="stat-card-tx">减免合计（平账）</text><text class="stat-card-num orange">¥{{ fmtAmount(waivedTotal) }}</text></view>
-        <view class="stat-card"><text class="stat-card-tx">期末欠款（累计）</text><text :class="['stat-card-num', debt > 0 ? 'red' : 'green']">¥{{ stmtFmt(debt) }}</text></view>
+        <view v-if="waivedTotal > 0" class="stat-card"><text class="stat-card-tx">减免合计（平账）</text><text class="stat-card-num orange">{{ fmtAmount(waivedTotal) }}</text></view>
+        <view class="stat-card"><text class="stat-card-tx">期末欠款（累计）</text><text :class="['stat-card-num', debt > 0 ? 'red' : 'green']">{{ stmtFmt(debt) }}</text></view>
         <button class="btn-copy" @click="exportXlsx">导出 Excel（生成文件）</button>
         <button class="btn-copy" @click="openTpl">模板设置</button>
         <button class="btn-copy" @click="printStmt">打印（按当前模板）</button>
@@ -199,18 +201,19 @@ const multi = computed(() => {
   const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
   const n = from.value ? monthDays(y, m) : 31;
   const cols = Math.max(1, Math.ceil(n / 10));
-  const rows: Array<Array<{ isAmt: boolean; label: string; amt: string }>> = [];
+  const rows: Array<Array<{ isAmt: boolean; label: string; amt: string; day: number }>> = [];
   for (let r = 0; r < 10; r++) {
-    const cells: Array<{ isAmt: boolean; label: string; amt: string }> = [];
+    const cells: Array<{ isAmt: boolean; label: string; amt: string; day: number }> = [];
     for (let c = 0; c < cols; c++) {
       const day = c * 10 + r + 1;
       if (day <= n) {
-        cells.push({ isAmt: false, label: `${m}月${day}日`, amt: '' });
-        cells.push({ isAmt: true, label: '', amt: stmtFmt(dailyAmt.value[day] || 0) });
+        // 日期点分带年（用户定稿 2026.10.16）
+        cells.push({ isAmt: false, label: `${y}.${m}.${day}`, amt: '', day });
+        cells.push({ isAmt: true, label: '', amt: stmtFmt(dailyAmt.value[day] || 0), day });
       } else {
         // 31 天月第 4 栏超出部分补空格格（对齐 App：保留表格线成矩形）
-        cells.push({ isAmt: false, label: '', amt: '' });
-        cells.push({ isAmt: true, label: '', amt: '' });
+        cells.push({ isAmt: false, label: '', amt: '', day: 0 });
+        cells.push({ isAmt: true, label: '', amt: '', day: 0 });
       }
     }
     rows.push(cells);
@@ -272,14 +275,15 @@ function cyclePeriod(startDay: number, anchor: Date): [string, string] {
 const saleTotal = ref(0);
 const payTotal = ref(0);
 
-/// 标准模板逐日金额表（对齐 App 标准模板：1..当月天数 逐行 日期+营业额，无数据日金额 0）
+/// 标准模板逐日金额表（对齐 App 标准模板：1..当月天数 逐行 日期+营业额，无数据日金额 0；
+/// 日期点分带年格式 2026.10.16——用户定稿"年月日改成 ."，模板内金额纯数字无 ¥）
 const dailyRows = computed(() => {
   const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
   const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
   const n = from.value ? monthDays(y, m) : 31;
   const rows: Array<{ day: number; label: string; amt: number }> = [];
   for (let d = 1; d <= n; d++) {
-    rows.push({ day: d, label: `${m}月${d}日`, amt: dailyAmt.value[d] || 0 });
+    rows.push({ day: d, label: `${y}.${m}.${d}`, amt: dailyAmt.value[d] || 0 });
   }
   return rows;
 });
@@ -450,31 +454,78 @@ function copyCsv() {
 }
 
 /// 导出对账单为真正的 Excel 文件（用户要求，替代剪贴板 CSV）：SheetJS 生成 .xlsx →
-/// 微信端写临时文件分享到聊天/文件、H5 端浏览器直接下载。工作表=标准模板同构
-/// （标题 + 周期 + 出货/收款明细 + 汇总）
+/// 微信端写临时文件分享到聊天/文件、H5 端浏览器直接下载。
+/// 内容=当前模板成品（对齐 App「导出 Excel」：导出用当前选中模板渲染）——
+/// 标准=标题+日期/营业额 1..月末逐日（无交易日期也显示 0）+合计；多栏=每栏「日期|营业额」+小计+总计。
 async function exportXlsx() {
   if (!loaded.value) {
     uni.showToast({ title: '请先生成对账单', icon: 'none' });
     return;
   }
   try {
+    // Excel 金额一律纯数字（去 ¥/￥/千分位逗号/空格，防任何带符号残留；用户"不需要显示金额符号￥"）
+    const toNum = (v: unknown) => {
+      const n = Number(String(v ?? '').replace(/[¥￥,，\s]/g, ''));
+      return Number.isFinite(n) ? n : 0;
+    };
     const aoa: Array<Array<string | number>> = [
       [`${clientName.value} ${from.value.slice(5, 7)}月份账单`],
       [`周期：${from.value} 至 ${to.value}`],
-      [],
-      ['日期', '摘要', '金额'],
     ];
-    for (const s of sales.value) {
-      aoa.push([String(s.happened_at || '').slice(0, 10), s.item_name || '出货',
-        Number((s.amount ?? s.total) || 0)]);
+    const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
+    if (tpl.value === 'multi') {
+      const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
+      const hdr: string[] = [];
+      for (let c = 0; c < multi.value.cols; c++) hdr.push('日期', '营业额');
+      aoa.push(hdr);
+      for (const row of multi.value.rows) {
+        // 日期点分年格式（用户定稿 2026.10.16）："10月16日" → "2026.10.16"
+        aoa.push(row.map((cell) => (cell.isAmt ? toNum(cell.amt) : (cell.day ? `${y}.${m}.${cell.day}` : ''))));
+      }
+      const sub: Array<string | number> = [];
+      for (const s of multi.value.subtotals) sub.push('小计', toNum(s));
+      aoa.push(sub);
+      aoa.push(['总计', '', '', '', '', '', '', toNum(multi.value.grand)]);
+    } else {
+      const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
+      aoa.push(['日期', '营业额']);
+      for (const d of dailyRows.value) aoa.push([`${y}.${m}.${d.day}`, d.amt]);
+      aoa.push(['合计', saleTotal.value]);
     }
-    for (const p of payments.value) {
-      aoa.push([String(p.happened_at || '').slice(0, 10), `收款${p.method ? ' ' + p.method : ''}`,
-        Number(p.amount || 0)]);
-    }
-    aoa.push([], ['出货合计', '', saleTotal.value], ['收款合计', '', payTotal.value], ['期末欠款', '', debt.value]);
+    aoa.push([]);
+    aoa.push(['出货合计', '', saleTotal.value]);
+    aoa.push(['收款合计', '', payTotal.value]);
+    aoa.push(['期末欠款', '', debt.value]);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), '对账单');
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    // 合计/小计/总计用 Excel 公式（对齐 App 模板 =sum(...)：不是死数字，改动自动重算）
+    if (tpl.value === 'multi') {
+      const subIdx = 3 + multi.value.rows.length; // 小计行 aoa 索引（0标题 1周期 2表头 3.. 逐日）
+      const subExcelRow = subIdx + 1;
+      for (let c = 0; c < multi.value.cols; c++) {
+        const col = c * 2 + 1;
+        const cell = ws[XLSX.utils.encode_cell({ r: subIdx, c: col })];
+        if (cell) cell.f = `=SUM(${XLSX.utils.encode_col(col)}4:${XLSX.utils.encode_col(col)}${subIdx})`;
+      }
+      const gcell = ws[XLSX.utils.encode_cell({ r: subIdx + 1, c: multi.value.cols * 2 - 1 })];
+      if (gcell) {
+        const refs: string[] = [];
+        for (let c = 0; c < multi.value.cols; c++) refs.push(`${XLSX.utils.encode_col(c * 2 + 1)}${subExcelRow}`);
+        gcell.f = `=SUM(${refs.join(',')})`;
+      }
+    } else {
+      const n = dailyRows.value.length;
+      const sumIdx = 3 + n; // 合计行 aoa 索引
+      const cell = ws[XLSX.utils.encode_cell({ r: sumIdx, c: 1 })];
+      if (cell) cell.f = `=SUM(B4:B${sumIdx})`;
+    }
+    XLSX.utils.book_append_sheet(wb, ws, '对账单');
+    // 列宽（金额列留足宽度，较长数字不挤压显示 ####；金额纯数字不带 ¥ 符号）
+    const ws2 = wb.Sheets['对账单'];
+    const widths: Array<{ wch: number }> = [];
+    const colN = tpl.value === 'multi' ? multi.value.cols * 2 : 2;
+    for (let c = 0; c < colN; c++) widths.push({ wch: c % 2 === 0 ? 12 : 14 });
+    if (ws2) ws2['!cols'] = widths;
     const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
     const fileName = `${clientName.value.replace(/\s+/g, '')}-对账单.xlsx`;
     // #ifdef MP-WEIXIN
@@ -534,9 +585,9 @@ async function printStmt() {
   for (const p of payments.value) {
     rows.push(`<tr>${td('')}${td(`${p.client_name || ''}${p.method ? ' ' + p.method : ''}`, ' colspan="2"')}${td(fmtAmount(Number(p.amount || 0)), ' style="text-align:right"')}</tr>`);
   }
-  rows.push(`<tr>${td('出货合计', ' class="b"')}${td(`¥${fmtAmount(saleTotal.value)}（${sales.value.length} 笔）`, ' colspan="3"')}</tr>`);
-  rows.push(`<tr>${td('收款合计', ' class="b"')}${td(`¥${fmtAmount(payTotal.value)}（${payments.value.length} 笔）`, ' colspan="3"')}</tr>`);
-  rows.push(`<tr>${td('期末欠款', ' class="b"')}${td(`¥${fmtAmount(debt.value)}`, ' colspan="3"')}</tr>`);
+  rows.push(`<tr>${td('出货合计', ' class="b"')}${td(`${fmtAmount(saleTotal.value)}（${sales.value.length} 笔）`, ' colspan="3"')}</tr>`);
+  rows.push(`<tr>${td('收款合计', ' class="b"')}${td(`${fmtAmount(payTotal.value)}（${payments.value.length} 笔）`, ' colspan="3"')}</tr>`);
+  rows.push(`<tr>${td('期末欠款', ' class="b"')}${td(`${fmtAmount(debt.value)}`, ' colspan="3"')}</tr>`);
   rows.push('</table>');
   const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <title>${esc(clientName.value)} 对账单</title>
@@ -732,12 +783,13 @@ async function delShare(s: ShareItem) {
 .orange { color: #f59e0b; }
 /* 成品预览卡片（对齐 App：白卡 + 边框含预览表格） */
 .preview-card { background: var(--card-bg); border: var(--card-border); border-radius: 16rpx; padding: 16rpx; margin-top: 16rpx; }
-/* 成品表格（对齐 App：带格线、加粗表头、金额右对齐纯数字） */
-.tbl { width: 100%; border-collapse: collapse; font-size: 24rpx; margin-top: 8rpx; }
-.tbl th.h, .tbl .c { border: 1rpx solid #d9d9d9; padding: 8rpx 6rpx; text-align: center; color: var(--text-main); }
-.tbl th.h { font-weight: 600; color: var(--text-sub); }
-.tbl .c.amt { text-align: right; }
-.tbl tfoot .c { font-weight: 700; }
+/* 成品表格（view+flex 模拟，小程序不支持 table 语义；每格四边浅灰线、金额右对齐纯数字，对齐 App） */
+.tbl { margin-top: 8rpx; border-top: 1rpx solid #d9d9d9; border-left: 1rpx solid #d9d9d9; }
+.tbl-row { display: flex; }
+.tbl-cell { flex: 1; min-width: 0; border-right: 1rpx solid #d9d9d9; border-bottom: 1rpx solid #d9d9d9; padding: 8rpx 6rpx; text-align: center; font-size: 24rpx; color: var(--text-main); }
+.tbl-cell.amt { text-align: right; }
+.tbl-head .tbl-cell { font-weight: 600; color: var(--text-sub); }
+.tbl-foot .tbl-cell { font-weight: 700; color: var(--text-main); }
 /* 模板切换（标准/多栏） */
 .tpl-seg { margin-bottom: 20rpx; }
 /* 多栏月账单（寻牛记式：每栏 日期+营业额 双列） */

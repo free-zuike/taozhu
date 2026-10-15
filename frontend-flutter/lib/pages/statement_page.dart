@@ -825,9 +825,14 @@ class _StatementPageState extends State<StatementPage> {
     excel.rename('Sheet1', '对账单'); // excel 4.x rename 直接改名（返回 void），默认 sheet 恒存在
     final sheet = excel['对账单'];
     // 公共库渲染：每格变量替换后逐行写入（内容与预览/打印同源；用户"打印显示的还是之前的"→统一模板源）
-    final trows = renderTemplateRows(cfg, _td(clientName));
+    // 导出保留 =sum 公式原文（evalSum:false）→ 写 FormulaCellValue（Excel 打开是公式可重算，
+    // 用户"导出的 excel 合计应是公式不是死数字"）；其余格写文本
+    final trows = renderTemplateRows(cfg, _td(clientName), evalSum: false);
     for (final row in trows) {
-      sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
+      sheet.appendRow([
+        for (final c in row)
+          c.text.trim().startsWith('=') ? FormulaCellValue(c.text) : TextCellValue(c.text),
+      ]);
     }
     // 合并 colSpan/rowSpan 区（标题跨列居中——Excel 与打印/预览一致，用户"打印时标题只占第一格"）
     for (var ri = 0; ri < trows.length; ri++) {
@@ -2010,17 +2015,17 @@ class _StatementPageState extends State<StatementPage> {
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: _statCard('出货合计', '¥${fmtMoney(_saleTotal)}', c.danger)),
+                Expanded(child: _statCard('出货合计', '${fmtMoney(_saleTotal)}', c.danger)),
                 const SizedBox(width: 12),
-                Expanded(child: _statCard('收款合计（实收）', '¥${fmtMoney(_payTotal)}', c.success)),
+                Expanded(child: _statCard('收款合计（实收）', '${fmtMoney(_payTotal)}', c.success)),
               ],
             ),
             if (_waivedTotal > 0) ...[
               const SizedBox(height: 12),
-              _statCard('减免合计（平账）', '¥${fmtMoney(_waivedTotal)}', c.warning),
+              _statCard('减免合计（平账）', '${fmtMoney(_waivedTotal)}', c.warning),
             ],
             const SizedBox(height: 12),
-            _statCard('期末欠款（累计）', '¥${fmtByUnit(_debtEnd, _stmtUnit)}',
+            _statCard('期末欠款（累计）', '${fmtByUnit(_debtEnd, _stmtUnit)}',
                 _debtEnd > 0 ? c.danger : c.success),
             const SizedBox(height: 12),
             // 出货/收款明细已移除：对账单聚焦统计 + 成品预览，逐笔明细通过模板 {明细} 变量/导出查看
@@ -2108,7 +2113,7 @@ class _StatementPageState extends State<StatementPage> {
     buf.writeln(
         '<style>body{font-family:SimSun,serif;margin:24px;}h2{text-align:center;}table{border-collapse:collapse;width:100%;font-size:13px;}td{border:1px solid #666;padding:4px 8px;}td.b{font-weight:700;}td.g{background:#f2f2f2;}@media print{@page{margin:12mm;}}</style>');
     buf.writeln('</head><body onload="window.print()">');
-    buf.writeln('<h2>$title 对账单</h2>');
+    // 不再输出独立 h2 标题（用户"转 PDF 双标题"：表格内模板首行已是居中加粗标题，h2 会重复）
     buf.writeln('<table>');
     for (final row in rows) {
       buf.write('<tr>');
