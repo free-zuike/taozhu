@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:excel/excel.dart' hide Border;
-import 'package:excel/excel.dart' as exc hide Border; // excel 包 Border 被上方 hide，别名访问（用户"excel 打印无边框"→逐格加细边框）
+import 'package:excel/excel.dart' hide Border, BorderStyle;
+// 前缀导入保留 excel 的 Border/BorderStyle（上方 hide 只挡无前缀名——用户"excel 打印无边框"→逐格加细边框）
+import 'package:excel/excel.dart' as exc;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -822,7 +823,7 @@ class _StatementPageState extends State<StatementPage> {
     // 逐格样式（边框/加粗/底纹/对齐/字号/数字格式）——与预览/打印同源；金额格两位小数显示。
     // 统一印刷体式：宋体 SimSun + 细边框（对齐 HTML 打印页 td 1px #666——用户"excel 打印不显示边框/和打印页不是一套"）。
     // 注意：不要因"左对齐且无样式"跳过——边框必须全格都画，否则表格线缺（打印页 td 全有边框）。
-    final cellBorder = exc.Border(borderStyle: BorderStyle.Thin);
+    final cellBorder = exc.Border(borderStyle: exc.BorderStyle.Thin);
     for (var ri = 0; ri < trows.length; ri++) {
       final row = trows[ri];
       var col = 0;
