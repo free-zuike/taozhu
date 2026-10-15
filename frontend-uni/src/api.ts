@@ -117,14 +117,20 @@ export function getDeviceId(): string {
 
 /** 通用请求：成功返回 data；失败 reject Error（message 为后端 error 字段或通用文案）。
  *  access 过期（401）→ 静默刷新换新 token 重放一次（单例防并发；刷新失败才跳登录页） */
-/** 记录错误日志（本机 storage 上限 100 条；我的页 → 错误日志查看，对齐 App logs_page） */
-function logApiError(path: string, msg: string) {
+/** 应用日志（对齐 App log.dart：level error/info/debug + tag 分类，本机 storage 滚动上限 300 条；
+ *  我的页 → 日志 查看，可筛选级别）。tag 对齐 App：sync/op/net/http/db/ai 等 */
+export function appLog(tag: string, msg: string, level: 'error' | 'info' | 'debug' = 'info') {
   try {
     const raw = (uni.getStorageSync('taozhu_logs') as string) || '';
-    const arr = (raw ? (JSON.parse(raw) as Array<{ t: string; path: string; msg: string }>) : []);
-    arr.push({ t: new Date().toLocaleString('zh-CN'), path, msg: msg.slice(0, 200) });
-    uni.setStorageSync('taozhu_logs', JSON.stringify(arr.slice(-100)));
+    const arr = (raw ? (JSON.parse(raw) as Array<Record<string, string>>) : []);
+    arr.push({ t: new Date().toISOString(), l: level, g: tag, m: String(msg).slice(0, 300) });
+    uni.setStorageSync('taozhu_logs', JSON.stringify(arr.slice(-300)));
   } catch (_) {}
+}
+
+/** 兼容旧请求失败日志：path+msg → appLog(http/net, error)（旧数据格式 {t,path,msg} 由日志页兼容解析） */
+function logApiError(path: string, msg: string) {
+  appLog(path.startsWith('/sync') ? 'sync' : 'net', `${path}：${msg}`, 'error');
 }
 
 export function request<T = any>(path: string, method: UniMethod = 'GET', data?: Record<string, unknown> | string | ArrayBuffer): Promise<T> {

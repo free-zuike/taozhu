@@ -106,7 +106,7 @@ const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 ;
 ;
-import { request, getToken } from '../../api';
+import { request, getToken, appLog } from '../../api';
 import { fmtAmount, fmtByUnit } from '../../utils/money';
 
 interface Client {
@@ -309,8 +309,10 @@ async function save() {
     };
     if (form.value.editId) {
       await request(`/clients/${form.value.editId}`, 'PATCH', body);
+      appLog('op', `店铺 保存：「${form.value.name.trim()}」`, 'info');
     } else {
       await request('/clients', 'POST', body);
+      appLog('op', `店铺 新增：「${form.value.name.trim()}」`, 'info');
     }
     uni.showToast({ title: '已保存', icon: 'success' });
     showForm.value = false;
@@ -324,7 +326,9 @@ async function save() {
 
 async function remove(id: string) {
   try {
+    const c = clients.value.find((x) => x.id === id);
     await request(`/clients/${id}`, 'DELETE');
+    if (c) appLog('op', `店铺 删除：「${c.name}」`, 'info');
     uni.showToast({ title: '已删除', icon: 'success' });
     await load();
   } catch (e) {

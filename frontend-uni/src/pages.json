@@ -67,6 +67,12 @@
 			}
 		},
 		{
+			"path": "pages/statement/statement-template",
+			"style": {
+				"navigationBarTitleText": "对账单模板"
+			}
+		},
+		{
 			"path": "pages/users/users",
 			"style": {
 				"navigationBarTitleText": "账号管理"

@@ -78,7 +78,7 @@
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE864;</text></view><view class="r-body"><text class="r-tx">数据备份</text><text class="r-sub">导出全库存档 / 从备份合并恢复</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="go('/pages/logs/logs')">
-        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE160;</text></view><view class="r-body"><text class="r-tx">错误日志</text><text class="r-sub">请求失败记录，排障用</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE160;</text></view><view class="r-body"><text class="r-tx">日志</text><text class="r-sub">同步/操作/错误/网络记录，排障用</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/ai-settings/ai-settings')">
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE65F;</text></view><view class="r-body"><text class="r-tx">AI 识别设置</text><text class="r-sub">配置 AI 记账 Key 与模型</text></view><text class="r-arrow">›</text>

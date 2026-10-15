@@ -34,8 +34,8 @@
         <!-- 对账单样式（对齐 App：样式 chips 切换 + 排版工具条 标题对齐/字号） -->
         <view class="tpl-title">对账单样式</view>
         <view class="tpl-chips">
-          <view :class="['chip', { active: tpl === 'std' }]" @click="tpl = 'std'">标准</view>
-          <view :class="['chip', { active: tpl === 'multi' }]" @click="tpl = 'multi'">多栏</view>
+          <view :class="['chip', { active: tpl === 'std' }]" @click="setTpl('std')">标准</view>
+          <view :class="['chip', { active: tpl === 'multi' }]" @click="setTpl('multi')">多栏</view>
         </view>
         <view class="toolbar">
           <text class="tb-label">标题：</text>
@@ -51,40 +51,51 @@
             <view :class="['tb-item', { active: fontSize === 14 }]" @click="fontSize = 14">大</view>
           </view>
         </view>
-        <!-- 成品预览（对齐 App 标准模板：标题 + 日期/营业额表头 + 1..31 日逐行 + 月合计；金额纯数字无 ¥） -->
+        <!-- 成品预览（对齐 App 标准模板：标题 + 日期/营业额表头 + 1..当月天数 逐行 + 合计行；表格带格线、金额纯数字无 ¥） -->
         <view v-if="tpl === 'std'" class="card stmt-tbl">
           <view class="t-title" :style="titleStyle">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
           <view class="t-sub">{{ from }} 至 {{ to }}</view>
-          <view class="t-head">
-            <text class="c-date">日期</text>
-            <text class="c-amt">营业额</text>
-          </view>
-          <view v-for="d in dailyRows" :key="d.day" class="t-row">
-            <text class="c-date">{{ d.label }}</text>
-            <text class="c-amt">{{ stmtFmt(d.amt) }}</text>
-          </view>
-          <view class="t-total"><text>月合计</text><text>{{ stmtFmt(saleTotal) }}</text></view>
+          <table class="tbl">
+            <thead><tr><th class="h">日期</th><th class="h">营业额</th></tr></thead>
+            <tbody>
+              <tr v-for="d in dailyRows" :key="d.day">
+                <td class="c">{{ d.label }}</td><td class="c amt">{{ stmtFmt(d.amt) }}</td>
+              </tr>
+            </tbody>
+            <tfoot><tr><td class="c">合计</td><td class="c amt">{{ stmtFmt(saleTotal) }}</td></tr></tfoot>
+          </table>
         </view>
-        <!-- 多栏模板：寻牛记式每栏 10 天（日期+营业额 双列，栏底小计，底部总计；对齐 App 多栏月账单） -->
+        <!-- 多栏模板（对齐 App 展开网格：每栏「日期|营业额」左右两列，31 天→4 栏=8 列；月末补空格保矩形；栏底小计+底部总计） -->
         <view v-else class="card stmt-tbl">
           <view class="t-title" :style="titleStyle">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
-          <view class="m-row m-head">
-            <view v-for="ci in multi.cols" :key="ci" class="m-col">
-              <text class="m-date">日期</text><text class="m-amt">营业额</text>
-            </view>
-          </view>
-          <view v-for="(row, ri) in multi.rows" :key="ri" class="m-row">
-            <view v-for="(cell, ci) in row" :key="ci" class="m-col">
-              <text class="m-date">{{ cell.day ? multi.y + '.' + multi.m + '.' + cell.day : '' }}</text>
-              <text class="m-amt">{{ cell.amt }}</text>
-            </view>
-          </view>
-          <view class="m-row m-sub">
-            <view v-for="(s, ci) in multi.subtotals" :key="ci" class="m-col">
-              <text class="m-date"></text><text class="m-amt bold">{{ s }}</text>
-            </view>
-          </view>
-          <view class="m-total"><text>总计</text><text class="bold">{{ multi.grand }}</text></view>
+          <view class="t-sub">{{ from }} 至 {{ to }}</view>
+          <table class="tbl multi">
+            <thead>
+              <tr>
+                <template v-for="ci in multi.cols" :key="'h'+ci">
+                  <th class="h">日期</th><th class="h">营业额</th>
+                </template>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, ri) in multi.rows" :key="'r'+ri">
+                <template v-for="(cell, ci) in row" :key="'c'+ci">
+                  <td :class="'c ' + (cell.isAmt ? 'amt' : '')">{{ cell.isAmt ? cell.amt : cell.label }}</td>
+                </template>
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr>
+                <template v-for="ci in multi.cols" :key="'s'+ci">
+                  <td class="c">小计</td><td class="c amt bold">{{ multi.subtotals[ci - 1] }}</td>
+                </template>
+              </tr>
+              <tr>
+                <td class="c">总计</td>
+                <td :colspan="multi.totalColspan" class="c amt bold">{{ multi.grand }}</td>
+              </tr>
+            </tfoot>
+          </table>
         </view>
         <!-- 统计卡（对齐 App：出货合计/收款合计 并排卡片 + 期末欠款卡片；合计按全局口径 fmtAmount，欠款按店铺抹零精度） -->
         <view class="stat-row2">
@@ -93,7 +104,8 @@
         </view>
         <view v-if="waivedTotal > 0" class="stat-card"><text class="stat-card-tx">减免合计（平账）</text><text class="stat-card-num orange">¥{{ fmtAmount(waivedTotal) }}</text></view>
         <view class="stat-card"><text class="stat-card-tx">期末欠款（累计）</text><text :class="['stat-card-num', debt > 0 ? 'red' : 'green']">¥{{ stmtFmt(debt) }}</text></view>
-        <button class="btn-copy" @click="copyCsv">复制 CSV（粘到 Excel）</button>
+        <button class="btn-copy" @click="exportXlsx">导出 Excel（生成文件）</button>
+        <button class="btn-copy" @click="openTpl">模板设置</button>
         <button class="btn-copy" @click="printStmt">打印（按当前模板）</button>
         <button class="btn-copy" @click="share">分享对账单（生成链接）</button>
         <button class="btn-copy" @click="manageShares">我的分享</button>
@@ -129,16 +141,30 @@ const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 ;
 ;
-import { request, getToken, getApiBase } from '../../api';
+import { request, getToken, getApiBase, appLog } from '../../api';
 import { roundAmount, fmtAmount, fmtByUnit, initRounding } from '../../utils/money';
+// @ts-ignore 迷你版（体积小，小程序可用）：真 xlsx 文件生成，替代剪贴板 CSV
+import * as XLSX from 'xlsx/dist/xlsx.mini.min.js';
 
 const clients = ref<Array<{ id: string; name: string; round_stage?: string; round_unit?: string; month_start_day?: number }>>([]);
 const clientNames = ref<string[]>(['全部店铺']);
 const clientName = ref('全部店铺');
 let clientId = '';
 
-// 对账单模板（对齐 App 内置模板切换）：标准=按日明细表；多栏=每栏 10 天的寻牛记式月账单
-const tpl = ref<'std' | 'multi'>('std');
+// 对账单模板（对齐 App 内置模板切换：标准=单栏逐日金额表；多栏=每栏 10 天寻牛记式月账单；
+// 初始按模板设置页选择（storage），默认标准）
+const tpl = ref<'std' | 'multi'>((uni.getStorageSync('taozhu_stmt_tpl') as string) === 'multi' ? 'multi' : 'std');
+
+function setTpl(t: 'std' | 'multi') {
+  tpl.value = t;
+  uni.setStorageSync('taozhu_stmt_tpl', t);
+  appLog('op', `对账单模板 切换：「${t === 'std' ? '标准' : '多栏'}」`, 'info');
+}
+
+/// 模板设置（对齐 App「模板设置」按钮 → 独立页：选择/查看/恢复默认）
+function openTpl() {
+  uni.navigateTo({ url: '/pages/statement/statement-template' });
+}
 
 /// 当前店铺抹零显示精度：只有选了抹零（每单/按天/结账）才按精度；不抹零=实际金额（全局口径）
 const roundUnit = computed(() => {
@@ -167,20 +193,25 @@ function monthDays(y: number, m: number): number {
   return new Date(y, m, 0).getDate();
 }
 
+/// 多栏月账单（对齐 App：每栏「日期|营业额」左右两列，31 天→4 栏=8 列；月末补空格保矩形；日期「M月D日」）
 const multi = computed(() => {
   const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
   const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
   const n = from.value ? monthDays(y, m) : 31;
   const cols = Math.max(1, Math.ceil(n / 10));
-  const rows: Array<Array<{ day: number; amt: string }>> = [];
+  const rows: Array<Array<{ isAmt: boolean; label: string; amt: string }>> = [];
   for (let r = 0; r < 10; r++) {
-    const cells: Array<{ day: number; amt: string }> = [];
+    const cells: Array<{ isAmt: boolean; label: string; amt: string }> = [];
     for (let c = 0; c < cols; c++) {
       const day = c * 10 + r + 1;
-      cells.push({
-        day: day <= n ? day : 0,
-        amt: day <= n ? String(roundAmount(dailyAmt.value[day] || 0).toFixed(roundUnit.value === 'yuan' ? 0 : roundUnit.value === 'jiao' ? 1 : 2)) : '',
-      });
+      if (day <= n) {
+        cells.push({ isAmt: false, label: `${m}月${day}日`, amt: '' });
+        cells.push({ isAmt: true, label: '', amt: stmtFmt(dailyAmt.value[day] || 0) });
+      } else {
+        // 31 天月第 4 栏超出部分补空格格（对齐 App：保留表格线成矩形）
+        cells.push({ isAmt: false, label: '', amt: '' });
+        cells.push({ isAmt: true, label: '', amt: '' });
+      }
     }
     rows.push(cells);
   }
@@ -190,9 +221,9 @@ const multi = computed(() => {
     let s = 0;
     for (let dd = c * 10; dd < (c + 1) * 10 && dd < n; dd++) s += dailyAmt.value[dd + 1] || 0;
     grand += s;
-    subtotals.push(roundAmount(s).toFixed(roundUnit.value === 'yuan' ? 0 : roundUnit.value === 'jiao' ? 1 : 2));
+    subtotals.push(stmtFmt(s));
   }
-  return { y, m, cols, rows, subtotals, grand: roundAmount(grand).toFixed(roundUnit.value === 'yuan' ? 0 : roundUnit.value === 'jiao' ? 1 : 2) };
+  return { y, m, cols, rows, subtotals, grand: stmtFmt(grand), totalColspan: cols * 2 - 2 };
 });
 
 const period = ref<'month' | 'last' | 'cycle' | 'cycleLast' | 'custom'>('month');
@@ -322,13 +353,22 @@ function applyPeriod(p: 'month' | 'last' | 'cycle' | 'cycleLast' | 'custom') {
     to.value = today();
   }
   // custom：保留当前起止日期，由用户改日期（对齐 App：自定义时才显示日期选择）
+  // 切换账期后立即重新生成（对齐 App _applyPeriod 末尾 _load）
+  if (loaded.value) load();
 }
 
 function onClient(e: { detail: { value: number } }) {
   const idx = e.detail.value;
-  if (idx <= 0) { clientId = ''; clientName.value = '全部店铺'; return; }
-  const c = clients.value[idx - 1];
-  if (c) { clientId = c.id; clientName.value = c.name; }
+  if (idx <= 0) { clientId = ''; clientName.value = '全部店铺'; } else {
+    const c = clients.value[idx - 1];
+    if (c) { clientId = c.id; clientName.value = c.name; }
+  }
+  // 切换店铺立即按新店铺重新生成（对齐 App onChanged 切店即 _load——之前切换后仍显示旧店铺数据）
+  load();
+}
+
+function onClientPick() {
+  void 0; // 占位（picker @change 走 onClient）
 }
 
 async function load() {
@@ -352,6 +392,7 @@ async function load() {
     saleTotal.value = sales.value.reduce((s, x) => s + roundAmount(Number((x.amount ?? x.total) || 0)), 0);
     payTotal.value = payments.value.reduce((s, x) => s + roundAmount(Number(x.amount || 0)), 0);
     loaded.value = true;
+    appLog('op', `生成对账单：${clientName.value} ${from.value} 至 ${to.value}（出货 ${sales.value.length} 笔 / 收款 ${payments.value.length} 笔）`, 'info');
   } catch (e) {
     uni.showToast({ title: (e as Error).message || '生成失败', icon: 'none' });
   } finally {
@@ -395,7 +436,6 @@ function copyCsv() {
   }
   const lines: string[] = ['\uFEFF类型,日期,店铺,金额,明细'];
   for (const s of sales.value) {
-    // 行级主结构：该行即一条商品（item_name×qty）；整单兼容：items 数组拼明细
     const rowAmount = Number((s.amount ?? s.total) || 0);
     const rowDetail = s.item_name
         ? `${s.item_name}${s.quantity ?? ''}${s.unit ?? ''}`
@@ -409,48 +449,134 @@ function copyCsv() {
   uni.showToast({ title: 'CSV 已复制（带表头）', icon: 'success' });
 }
 
-// 打印对账单：构造行集（标题+汇总+出货/收款明细）→ base64 → 服务端 /print/template 渲染打印页
-// （对齐 App：服务端自包含 HTML + 自动打印；小程序无法直接唤浏览器，复制链接后用户浏览器打开打印）
+/// 导出对账单为真正的 Excel 文件（用户要求，替代剪贴板 CSV）：SheetJS 生成 .xlsx →
+/// 微信端写临时文件分享到聊天/文件、H5 端浏览器直接下载。工作表=标准模板同构
+/// （标题 + 周期 + 出货/收款明细 + 汇总）
+async function exportXlsx() {
+  if (!loaded.value) {
+    uni.showToast({ title: '请先生成对账单', icon: 'none' });
+    return;
+  }
+  try {
+    const aoa: Array<Array<string | number>> = [
+      [`${clientName.value} ${from.value.slice(5, 7)}月份账单`],
+      [`周期：${from.value} 至 ${to.value}`],
+      [],
+      ['日期', '摘要', '金额'],
+    ];
+    for (const s of sales.value) {
+      aoa.push([String(s.happened_at || '').slice(0, 10), s.item_name || '出货',
+        Number((s.amount ?? s.total) || 0)]);
+    }
+    for (const p of payments.value) {
+      aoa.push([String(p.happened_at || '').slice(0, 10), `收款${p.method ? ' ' + p.method : ''}`,
+        Number(p.amount || 0)]);
+    }
+    aoa.push([], ['出货合计', '', saleTotal.value], ['收款合计', '', payTotal.value], ['期末欠款', '', debt.value]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), '对账单');
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+    const fileName = `${clientName.value.replace(/\s+/g, '')}-对账单.xlsx`;
+    // #ifdef MP-WEIXIN
+    try {
+      const fs = uni.getFileSystemManager();
+      const filePath = `${((uni as any).env?.USER_DATA_PATH) || ''}/${fileName}`;
+      fs.writeFileSync(filePath, out);
+      (globalThis as any).wx?.shareFileMessage?.({
+        filePath,
+        fileName,
+        success: () => uni.showToast({ title: `已分享「${fileName}」`, icon: 'success' }),
+        fail: () => uni.showToast({ title: '分享失败', icon: 'none' }),
+      });
+      appLog('op', `导出对账单 Excel：${clientName.value} ${from.value} 至 ${to.value}`, 'info');
+      return;
+    } catch (e2) {
+      uni.showToast({ title: '生成 Excel 失败', icon: 'none' });
+      return;
+    }
+    // #endif
+    // H5/其他端：浏览器直接下载
+    XLSX.writeFile(wb, fileName);
+    appLog('op', `导出对账单 Excel：${clientName.value} ${from.value} 至 ${to.value}`, 'info');
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '生成 Excel 失败', icon: 'none' });
+  }
+}
+
+// 打印对账单：生成与 App《_rowsToHtml》同构的自包含打印页 HTML（SimSun 表格、自动打印脚本）
+// → 微信端存 .html 文件分享到聊天（收到后用浏览器打开即自动打印/可另存 PDF）；H5 端打开服务端打印页。
+// 对齐 App"本地生成打印页→浏览器打开即可打印（离线可用）"
 async function printStmt() {
   if (!loaded.value) {
     uni.showToast({ title: '请先生成对账单', icon: 'none' });
     return;
   }
-  const rows: unknown[] = [
+  const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const rows: string[] = [];
+  rows.push(`<h2 style="text-align:center">${esc(clientName.value)} 对账单</h2>`);
+  rows.push('<table>');
+  // 打印页单元格：attr 支持 class="b"/class="b g"/style/colspan 等（class 与基础 c 合并）
+  const td = (text: unknown, attr = '') => {
+    const cls = (attr.match(/class="([^"]*)"/) || [, ''])[1] as string;
+    const rest = attr.replace(/class="[^"]*"/, '').trim();
+    return `<td class="c${cls ? ' ' + cls : ''}"${rest ? ' ' + rest : ''}>${esc(text)}</td>`;
+  };
+  rows.push(`<tr>${td('店铺', ' class="b"')}${td(clientName.value, ' colspan="3"')}</tr>`);
+  rows.push(`<tr>${td('周期', ' class="b"')}${td(`${from.value} 至 ${to.value}`, ' colspan="3"')}</tr>`);
+  rows.push(`<tr>${td('出货明细', ' class="b g" colspan="4"')}</tr>`);
+  rows.push(`<tr>${td('日期', ' class="b"')}${td('商品/店铺', ' class="b" colspan="2"')}${td('金额', ' class="b" style="text-align:right"')}</tr>`);
+  for (const s of sales.value) {
+    const name = s.item_name ? `${s.item_name}${s.quantity ?? ''}${s.unit ?? ''} ${s.client_name || ''}` : (s.client_name || '出货');
+    rows.push(`<tr>${td('')}${td(name, ' colspan="2"')}${td(fmtAmount(Number((s.amount ?? s.total) || 0)), ' style="text-align:right"')}</tr>`);
+  }
+  rows.push(`<tr>${td('收款明细', ' class="b g" colspan="4"')}</tr>`);
+  rows.push(`<tr>${td('日期', ' class="b"')}${td('店铺/方式', ' class="b" colspan="2"')}${td('金额', ' class="b" style="text-align:right"')}</tr>`);
+  for (const p of payments.value) {
+    rows.push(`<tr>${td('')}${td(`${p.client_name || ''}${p.method ? ' ' + p.method : ''}`, ' colspan="2"')}${td(fmtAmount(Number(p.amount || 0)), ' style="text-align:right"')}</tr>`);
+  }
+  rows.push(`<tr>${td('出货合计', ' class="b"')}${td(`¥${fmtAmount(saleTotal.value)}（${sales.value.length} 笔）`, ' colspan="3"')}</tr>`);
+  rows.push(`<tr>${td('收款合计', ' class="b"')}${td(`¥${fmtAmount(payTotal.value)}（${payments.value.length} 笔）`, ' colspan="3"')}</tr>`);
+  rows.push(`<tr>${td('期末欠款', ' class="b"')}${td(`¥${fmtAmount(debt.value)}`, ' colspan="3"')}</tr>`);
+  rows.push('</table>');
+  const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>${esc(clientName.value)} 对账单</title>
+<style>body{font-family:SimSun,serif;margin:24px;}h2{text-align:center;}table{border-collapse:collapse;width:100%;font-size:13px;}td{border:1px solid #666;padding:4px 8px;}td.b{font-weight:700;}td.g{background:#f2f2f2;}@media print{@page{margin:12mm;}}</style>
+</head><body onload="window.print()">${rows.join('')}</body></html>`;
+  const fileName = `${clientName.value.replace(/\s+/g, '')}-对账单.html`;
+  // #ifdef MP-WEIXIN
+  try {
+    const fs = uni.getFileSystemManager();
+    const filePath = `${((uni as any).env?.USER_DATA_PATH) || ''}/${fileName}`;
+    fs.writeFileSync(filePath, html, 'utf8');
+    (globalThis as any).wx?.shareFileMessage?.({
+      filePath,
+      fileName,
+      success: () => uni.showToast({ title: `已分享打印页「${fileName}」`, icon: 'success' }),
+      fail: () => uni.showToast({ title: '分享失败，请重试', icon: 'none' }),
+    });
+    appLog('op', `打印对账单：${clientName.value} ${from.value} 至 ${to.value}`, 'info');
+    return;
+  } catch (e2) {
+    uni.showToast({ title: '生成打印页失败', icon: 'none' });
+    return;
+  }
+  // #endif
+  // H5/其他端：服务端渲染打印页 → 复制链接浏览器打开（对齐原逻辑）
+  const rowsData: unknown[] = [
     [['对账单', 'center', true, '', 1, 4]],
     [['店铺', 'left', true, '', 1, 1], [clientName.value, 'left', false, '', 1, 3]],
     [['周期', 'left', true, '', 1, 1], [`${from.value} 至 ${to.value}`, 'left', false, '', 1, 3]],
   ];
-  // 出货明细
-  rows.push([['出货明细', 'left', true, 'grey', 1, 4]]);
-  rows.push([['日期', 'left', true, '', 1, 1], ['商品/店铺', 'left', true, '', 1, 2], ['金额', 'right', true, '', 1, 1]]);
-  for (const s of sales.value) {
-    const name = s.item_name ? `${s.item_name}${s.quantity ?? ''}${s.unit ?? ''} ${s.client_name || ''}` : (s.client_name || '出货');
-    rows.push([['', '', false, '', 1, 1], [name, 'left', false, '', 1, 2], [fmtAmount(Number((s.amount ?? s.total) || 0)), 'right', false, '', 1, 1]]);
-  }
-  // 收款明细
-  rows.push([['收款明细', 'left', true, 'grey', 1, 4]]);
-  rows.push([['日期', 'left', true, '', 1, 1], ['店铺/方式', 'left', true, '', 1, 2], ['金额', 'right', true, '', 1, 1]]);
-  for (const p of payments.value) {
-    rows.push([['', '', false, '', 1, 1], [`${p.client_name || ''}${p.method ? ' ' + p.method : ''}`, 'left', false, '', 1, 2], [fmtAmount(Number(p.amount || 0)), 'right', false, '', 1, 1]]);
-  }
-  // 汇总
-  rows.push([['出货合计', 'left', true, '', 1, 1], [`¥${fmtAmount(saleTotal.value)}（${sales.value.length} 笔）`, 'left', false, '', 1, 3]]);
-  rows.push([['收款合计', 'left', true, '', 1, 1], [`¥${fmtAmount(payTotal.value)}（${payments.value.length} 笔）`, 'left', false, '', 1, 3]]);
-  rows.push([['期末欠款', 'left', true, '', 1, 1], [`¥${fmtAmount(debt.value)}`, 'left', false, '', 1, 3]]);
-
-  const rowsJson = JSON.stringify(rows);
-  // base64url（UTF-8 → base64 → base64url，与 App 一致；小程序无 btoa/TextEncoder，用 theme 自实现）
-  const b64 = utf8ToBase64(rowsJson).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const token = getToken() || '';
-  const base = getApiBase();
-  const title = encodeURIComponent(`${clientName.value} 对账单`);
-  const url = `${base}/api/v1/print/template?title=${title}&rows=${b64}&token=${token}${clientId ? `&client_id=${clientId}` : ''}`;
+  rowsData.push([['出货合计', 'left', true, '', 1, 1], [`¥${fmtAmount(saleTotal.value)}（${sales.value.length} 笔）`, 'left', false, '', 1, 3]]);
+  rowsData.push([['收款合计', 'left', true, '', 1, 1], [`¥${fmtAmount(payTotal.value)}（${payments.value.length} 笔）`, 'left', false, '', 1, 3]]);
+  rowsData.push([['期末欠款', 'left', true, '', 1, 1], [`¥${fmtAmount(debt.value)}`, 'left', false, '', 1, 3]]);
+  const b64 = utf8ToBase64(JSON.stringify(rowsData)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const url = `${getApiBase()}/api/v1/print/template?title=${encodeURIComponent(`${clientName.value} 对账单`)}&rows=${b64}&token=${getToken() || ''}${clientId ? `&client_id=${clientId}` : ''}`;
   uni.setClipboardData({
     data: url,
     success: () => uni.showModal({
       title: '打印页链接已复制',
-      content: '请用浏览器打开该链接，页面会自动弹出打印（可另存为 PDF）。\n已复制到剪贴板。',
+      content: '请用浏览器打开该链接，页面会自动弹出打印（可另存为 PDF）。',
       showCancel: false,
     }),
   });
@@ -606,6 +732,12 @@ async function delShare(s: ShareItem) {
 .orange { color: #f59e0b; }
 /* 成品预览卡片（对齐 App：白卡 + 边框含预览表格） */
 .preview-card { background: var(--card-bg); border: var(--card-border); border-radius: 16rpx; padding: 16rpx; margin-top: 16rpx; }
+/* 成品表格（对齐 App：带格线、加粗表头、金额右对齐纯数字） */
+.tbl { width: 100%; border-collapse: collapse; font-size: 24rpx; margin-top: 8rpx; }
+.tbl th.h, .tbl .c { border: 1rpx solid #d9d9d9; padding: 8rpx 6rpx; text-align: center; color: var(--text-main); }
+.tbl th.h { font-weight: 600; color: var(--text-sub); }
+.tbl .c.amt { text-align: right; }
+.tbl tfoot .c { font-weight: 700; }
 /* 模板切换（标准/多栏） */
 .tpl-seg { margin-bottom: 20rpx; }
 /* 多栏月账单（寻牛记式：每栏 日期+营业额 双列） */
