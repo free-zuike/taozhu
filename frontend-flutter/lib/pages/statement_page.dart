@@ -384,6 +384,17 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
+  /// 单格文本 → 单元格值：=sum 公式 → FormulaCellValue（写公式体，剥离 = 前缀）；
+  /// 纯数字文本 → DoubleCellValue（Excel SUM 才能求和——用户"公式结果是0"根因：整格写成文本，
+  /// SUM 忽略文本单元格返回 0）；其余（日期/标签/空）→ TextCellValue
+  CellValue _cellValueOf(String text) {
+    final t = text.trim();
+    if (t.startsWith('=')) return FormulaCellValue(t.substring(1));
+    final n = double.tryParse(t.replaceAll(',', ''));
+    if (n != null) return DoubleCellValue(n);
+    return TextCellValue(text);
+  }
+
   /// 导出对账单（模板化：默认当前选中样式 → 预览 → 导出；样式在页面上方 chips 切换）
   Future<void> _exportTpl() async {
     if (!_loaded) {
@@ -459,70 +470,9 @@ class _StatementPageState extends State<StatementPage> {
     // 弹窗所选样式同步回页面（下次生成仍用该样式）
     if (selName != _selTplName) setState(() => _selTplName = selName);
     final sel = templates.firstWhere((t) => t.name == selName, orElse: () => templates.first);
-    final excel = Excel.createExcel();
-    excel.rename('Sheet1', '对账单');
-    final sheet = excel['对账单'];
-    // 导出保留 =sum 公式原文（evalSum:false）→ 写 FormulaCellValue（用户"导出的 excel 合计应是公式不是死数字"）；
-    // 与模板设置「保存并导出」(_buildExcel) 同源同行为，预览/打印仍显示求值结果
-    final trows = renderTemplateRows(sel, _td(clientName), evalSum: false);
-    var ri = 0;
-    for (final row in trows) {
-      sheet.appendRow([
-        for (final c in row)
-          // excel 包 FormulaCellValue 直接写公式体，剥离前缀 =（模板 =sum(...) 渲染为 =SUM 合法公式）
-          c.text.trim().startsWith('=') ? FormulaCellValue(c.text.trim().substring(1)) : TextCellValue(c.text),
-      ]);
-      // 合并单元格（模板 colSpan/rowSpan → Excel 合并区域；被覆盖格文本为空自动并入）
-      for (var cc = 0; cc < row.length; cc++) {
-        final c = row[cc];
-        if (c.colSpan > 1 || c.rowSpan > 1) {
-          final endCol = cc + c.colSpan - 1;
-          final endRow = ri + c.rowSpan - 1;
-          // 未 append 的行先用占位补齐，保证 merge 范围合法
-          for (var fillR = ri + 1; fillR <= endRow; fillR++) {
-            if (fillR >= sheet.maxRows) {
-              sheet.appendRow([for (var k = 0; k <= endCol; k++) TextCellValue('')]);
-            } else {
-              for (var k = 0; k <= endCol; k++) {
-                final cellIdx = CellIndex.indexByColumnRow(columnIndex: k, rowIndex: fillR);
-                if (sheet.cell(cellIdx).value == null) {
-                  sheet.cell(cellIdx).value = TextCellValue('');
-                }
-              }
-            }
-          }
-          sheet.merge(
-            CellIndex.indexByColumnRow(columnIndex: cc, rowIndex: ri),
-            CellIndex.indexByColumnRow(columnIndex: endCol, rowIndex: endRow),
-          );
-        }
-      }
-      // 样式（加粗/底纹/对齐/字号）→ 单元格 cellStyle，与预览/打印同源
-      for (var cc = 0; cc < row.length; cc++) {
-        final c = row[cc];
-        if (c.align == 'left' && !c.bold && c.bg.isEmpty) continue;
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: cc, rowIndex: ri)).cellStyle = CellStyle(
-              horizontalAlign: c.align == 'center'
-                  ? HorizontalAlign.Center
-                  : (c.align == 'right' ? HorizontalAlign.Right : HorizontalAlign.Left),
-              bold: c.bold,
-              backgroundColorHex: c.bg == 'grey' ? ExcelColor.grey100 : ExcelColor.none,
-              fontSize: c.bold ? _tplFontSize.toInt() + 2 : _tplFontSize.toInt(),
-            );
-      }
-      ri++;
-    }
-    // 列宽（日期列 12 / 金额列 14；多栏模板 8 列也按奇偶循环——用户"宽度设置一下，显示不全我怎么查看打印"）
-    final colCount = trows.fold<int>(0, (m, r) {
-      var w = 0;
-      for (final c in r) {
-        w += c.colSpan < 1 ? 1 : c.colSpan;
-      }
-      return w > m ? w : m;
-    });
-    for (var cc = 0; cc < colCount; cc++) {
-      sheet.setColumnWidth(cc, cc.isEven ? 12 : 14);
-    }
+    // 统一走 _buildExcel（唯一 Excel 生成实现：公式/数值/文本写格 + 合并 + 列宽 + 样式；
+    // 与模板设置「保存并导出」同源——用户"导出 Excel 总是不同错误"根因是两套实现只改了一处）
+    final excel = _buildExcel(sel, clientName);
     final bytes = excel.encode();
     if (bytes == null) {
       toast(context, '导出失败，请重试');
@@ -835,21 +785,22 @@ class _StatementPageState extends State<StatementPage> {
     if (kIsWeb) toast(context, '对账单已导出（浏览器下载）');
   }
 
-  /// 按排版配置生成 Excel：公共库模板渲染（renderTemplateRows，与成品预览/打印同源）逐行写入
+  /// 按排版配置生成 Excel：公共库模板渲染（renderTemplateRows，与成品预览/打印同源）逐行写入。
+  /// **唯一**的 Excel 生成入口：页面「导出 Excel」(_exportTpl) 与模板设置「保存并导出」都调用本方法，
+  /// 避免两套手写实现各改一处（用户"公式结果是0/总是不同错误"——历史根因：分成两套代码只改了一处）。
   Excel _buildExcel(XlsCfg cfg, String clientName) {
     final excel = Excel.createExcel();
     // 复用默认空 sheet 并改名，避免多余的 Sheet1（v0.17.142：导出只留一个"对账单"页）
     excel.rename('Sheet1', '对账单'); // excel 4.x rename 直接改名（返回 void），默认 sheet 恒存在
     final sheet = excel['对账单'];
-    // 公共库渲染：每格变量替换后逐行写入（内容与预览/打印同源；用户"打印显示的还是之前的"→统一模板源）
-    // 导出保留 =sum 公式原文（evalSum:false）→ 写 FormulaCellValue（Excel 打开是公式可重算，
-    // 用户"导出的 excel 合计应是公式不是死数字"）；其余格写文本
+    // 公共库渲染：导出保留 =sum 公式原文（evalSum:false）→ 公式格写 FormulaCellValue；
+    // 金额格写 DoubleCellValue（纯文本数字 SUM 结果是 0——用户"公式最后显示的结果是0"根因）；
+    // 其余（日期/标签/空）写文本。预览/打印仍用 evalSum:true 显示求值结果。
     final trows = renderTemplateRows(cfg, _td(clientName), evalSum: false);
     for (final row in trows) {
       sheet.appendRow([
         for (final c in row)
-          // excel 包 FormulaCellValue 直接写公式体，剥离前缀 =（模板 =sum(...) 渲染为 =SUM 合法公式）
-          c.text.trim().startsWith('=') ? FormulaCellValue(c.text.trim().substring(1)) : TextCellValue(c.text),
+          _cellValueOf(c.text),
       ]);
     }
     // 合并 colSpan/rowSpan 区（标题跨列居中——Excel 与打印/预览一致，用户"打印时标题只占第一格"）
@@ -867,7 +818,27 @@ class _StatementPageState extends State<StatementPage> {
         col += c.colSpan < 1 ? 1 : c.colSpan;
       }
     }
-    // 列宽（日期列 12 / 金额列 14，与 _exportTpl 一致——用户"宽度显示不全"）
+    // 逐格样式（加粗/底纹/对齐/字号/数字格式）——与预览/打印同源；金额格两位小数显示
+    for (var ri = 0; ri < trows.length; ri++) {
+      final row = trows[ri];
+      var col = 0;
+      for (final c in row) {
+        if (c.align == 'left' && !c.bold && c.bg.isEmpty) continue;
+        final isNum = double.tryParse(c.text.trim().replaceAll(',', '')) != null;
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: col, rowIndex: ri)).cellStyle = CellStyle(
+              horizontalAlign: c.align == 'center'
+                  ? HorizontalAlign.Center
+                  : (c.align == 'right' ? HorizontalAlign.Right : HorizontalAlign.Left),
+              bold: c.bold,
+              backgroundColorHex: c.bg == 'grey' ? ExcelColor.grey100 : ExcelColor.none,
+              fontSize: c.bold ? _tplFontSize.toInt() + 2 : _tplFontSize.toInt(),
+              // 金额格显示两位小数（NumFormat 枚举，非字符串）
+              numberFormat: isNum ? NumFormat.standard_2 : NumFormat.standard_0,
+            );
+        col += c.colSpan < 1 ? 1 : c.colSpan;
+      }
+    }
+    // 列宽（日期列 12 / 金额列 14——用户"宽度设置一下，显示不全我怎么查看打印"）
     final colCount = trows.fold<int>(0, (m, r) {
       var w = 0;
       for (final c in r) {
@@ -877,17 +848,6 @@ class _StatementPageState extends State<StatementPage> {
     });
     for (var cc = 0; cc < colCount; cc++) {
       sheet.setColumnWidth(cc, cc.isEven ? 12 : 14);
-    }
-    // 标题行（第一行合并整行居中）→ 单元格样式：居中加粗（用户"导出的 excel 标题要合并居中"）
-    if (trows.isNotEmpty && trows.first.isNotEmpty) {
-      final h = trows.first.first;
-      if (h.bold || h.colSpan > 1) {
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0)).cellStyle = CellStyle(
-          horizontalAlign: HorizontalAlign.Center,
-          bold: true,
-          fontSize: 14,
-        );
-      }
     }
     return excel;
   }

@@ -71,33 +71,36 @@
             </view>
           </view>
         </view>
-        <!-- 多栏模板（对齐 App 展开网格：每栏「日期|营业额」左右两列，31 天→4 栏=8 列；月末补空格保矩形；栏底小计+底部总计） -->
+        <!-- 多栏模板（对齐 App 展开网格：每栏「日期|营业额」左右两列，31 天→4 栏=8 列；月末补空格保矩形；栏底小计+底部总计）
+        多栏 8 列在小屏挤 → scroll-view 横向滚动（对齐 App SingleChildScrollView horizontal，可左右滑动看到全部列） -->
         <view v-else class="card stmt-tbl">
           <view class="t-title" :style="titleStyle">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
           <view class="t-sub">{{ from }} 至 {{ to }}</view>
-          <view class="tbl">
-            <view class="tbl-row tbl-head">
-              <template v-for="ci in multi.cols" :key="'h'+ci">
-                <view class="tbl-cell">日期</view>
-                <view class="tbl-cell amt">营业额</view>
-              </template>
+          <scroll-view scroll-x class="tbl-scroll" enhanced :show-scrollbar="true">
+            <view class="tbl tbl-multi">
+              <view class="tbl-row tbl-head">
+                <template v-for="ci in multi.cols" :key="'h'+ci">
+                  <view class="tbl-cell">日期</view>
+                  <view class="tbl-cell amt">营业额</view>
+                </template>
+              </view>
+              <view v-for="(row, ri) in multi.rows" :key="'r'+ri" class="tbl-row">
+                <template v-for="(cell, ci) in row" :key="'c'+ci">
+                  <view :class="['tbl-cell', cell.isAmt ? 'amt' : '']">{{ cell.isAmt ? cell.amt : cell.label }}</view>
+                </template>
+              </view>
+              <view class="tbl-row tbl-foot">
+                <template v-for="ci in multi.cols" :key="'s'+ci">
+                  <view class="tbl-cell">小计</view>
+                  <view class="tbl-cell amt">{{ multi.subtotals[ci - 1] }}</view>
+                </template>
+              </view>
+              <view class="tbl-row tbl-foot">
+                <view class="tbl-cell">总计</view>
+                <view class="tbl-cell amt" :style="{ flex: multi.totalColspan + 1 }">{{ multi.grand }}</view>
+              </view>
             </view>
-            <view v-for="(row, ri) in multi.rows" :key="'r'+ri" class="tbl-row">
-              <template v-for="(cell, ci) in row" :key="'c'+ci">
-                <view :class="['tbl-cell', cell.isAmt ? 'amt' : '']">{{ cell.isAmt ? cell.amt : cell.label }}</view>
-              </template>
-            </view>
-            <view class="tbl-row tbl-foot">
-              <template v-for="ci in multi.cols" :key="'s'+ci">
-                <view class="tbl-cell">小计</view>
-                <view class="tbl-cell amt">{{ multi.subtotals[ci - 1] }}</view>
-              </template>
-            </view>
-            <view class="tbl-row tbl-foot">
-              <view class="tbl-cell">总计</view>
-              <view class="tbl-cell amt" :style="{ flex: multi.totalColspan + 1 }">{{ multi.grand }}</view>
-            </view>
-          </view>
+          </scroll-view>
         </view>
         <!-- 统计卡（对齐 App：出货合计/收款合计 并排卡片 + 期末欠款卡片；金额纯数字不带 ¥，用户"不需要显示金额符号￥"） -->
         <view class="stat-row2">
@@ -145,8 +148,9 @@ import { ref, computed } from 'vue';
 ;
 import { request, getToken, getApiBase, appLog } from '../../api';
 import { roundAmount, fmtAmount, fmtByUnit, initRounding } from '../../utils/money';
-// @ts-ignore 迷你版（体积小，小程序可用）：真 xlsx 文件生成，替代剪贴板 CSV
-import * as XLSX from 'xlsx/dist/xlsx.mini.min.js';
+// @ts-ignore 定点样式版（xlsx-js-style：官方 xlsx 0.18.5 写入端不支持 cell.s 样式——合并居中/底色全部丢失，
+// 用户"小程序的 excel 全部都没有合并居中"根因；换 xlsx-js-style 后样式可写，与 App 导出一致）
+import * as XLSX from 'xlsx-js-style';
 
 const clients = ref<Array<{ id: string; name: string; round_stage?: string; round_unit?: string; month_start_day?: number }>>([]);
 const clientNames = ref<string[]>(['全部店铺']);
@@ -584,7 +588,7 @@ async function printStmt() {
   ];
   if (tpl.value === 'multi') {
     const hdr: PrintCell[] = [];
-    for (let c = 0; c < multi.value.cols; c++) hdr.push(['日期', 'center', true, 'grey', 1, 1], ['营业额', 'center', true, 'grey', 1, 1]);
+    for (let c = 0; c < multi.value.cols; c++) hdr.push(['日期', 'center', true, '', 1, 1], ['营业额', 'center', true, '', 1, 1]);
     trows.push(hdr);
     for (const row of multi.value.rows) {
       const cells: PrintCell[] = [];
@@ -610,7 +614,7 @@ async function printStmt() {
     last.push([multi.value.grand, 'right', true, '', 1, 1]);
     trows.push(last);
   } else {
-    trows.push([['日期', 'center', true, 'grey', 1, 1], ['营业额', 'center', true, 'grey', 1, 1]]);
+    trows.push([['日期', 'center', true, '', 1, 1], ['营业额', 'center', true, '', 1, 1]]);
     for (const d of dailyRows.value) {
       trows.push([[d.label, 'center', false, '', 1, 1], [String(d.amt), 'right', false, '', 1, 1]]);
     }
@@ -834,6 +838,10 @@ async function delShare(s: ShareItem) {
 .tbl-cell.amt { text-align: right; }
 .tbl-head .tbl-cell { font-weight: 600; color: var(--text-sub); }
 .tbl-foot .tbl-cell { font-weight: 700; color: var(--text-main); }
+/* 多栏（8 列）横向滚动容器：内容按固定格宽扩展，Scroll 可全部看到（对齐 App SingleChildScrollView；31 号不挤） */
+.tbl-scroll { width: 100%; white-space: nowrap; }
+.tbl-multi .tbl-cell { flex: none; width: 110rpx; min-width: 110rpx; white-space: nowrap; }
+.tbl-multi .tbl-cell.amt { width: 130rpx; min-width: 130rpx; }
 /* 模板切换（标准/多栏） */
 .tpl-seg { margin-bottom: 20rpx; }
 /* 多栏月账单（寻牛记式：每栏 日期+营业额 双列） */

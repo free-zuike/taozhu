@@ -594,11 +594,11 @@ List<List<GridCell>> _multiColBill(TemplateData d, {int perCol = 10, bool withTi
     if (withTitle)
       // 标题（店铺 + N月份账单，居中加粗）
       [GridCell('${d.clientName}${m}月份账单', 'center', true)],
-    // 表头：每栏「日期 营业额」加粗底纹
+    // 表头：每栏「日期 营业额」加粗**无底色**（用户"日期营业额那行文字不要底部颜色"——标准与多栏一致）
     [
       for (var cc = 0; cc < cols; cc++) ...[
-        GridCell('日期', 'center', true, 'grey'),
-        GridCell('营业额', 'center', true, 'grey'),
+        GridCell('日期', 'center', true),
+        GridCell('营业额', 'center', true),
       ],
     ],
   ];
