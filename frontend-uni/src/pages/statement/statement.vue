@@ -12,9 +12,13 @@
       <view class="seg">
         <view :class="['seg-item', { active: period === 'month' }]" @click="applyPeriod('month')">本月</view>
         <view :class="['seg-item', { active: period === 'last' }]" @click="applyPeriod('last')">上月</view>
+        <view v-if="msd > 1" :class="['seg-item', { active: period === 'cycle' }]" @click="applyPeriod('cycle')">账期本期</view>
+        <view v-if="msd > 1" :class="['seg-item', { active: period === 'cycleLast' }]" @click="applyPeriod('cycleLast')">账期上期</view>
+        <view :class="['seg-item', { active: period === 'custom' }]" @click="applyPeriod('custom')">自定义</view>
       </view>
 
-      <view class="dates">
+      <!-- 自定义账期时才显示日期选择（对齐 App：本月/上月/账期本期/账期上期自动算起止） -->
+      <view v-if="period === 'custom'" class="dates">
         <picker class="ipt" mode="date" fields="month" :value="from.slice(0, 7)" @change="onFrom">
           <view class="date-pick">{{ from.slice(0, 7) }}</view>
         </picker>
@@ -27,42 +31,43 @@
       <button class="btn-save" :disabled="loading" @click="load">{{ loading ? '生成中…' : '生成对账单' }}</button>
 
       <view v-if="loaded">
-        <!-- 模板切换（对齐 App 内置模板：标准 / 多栏） -->
-        <view class="seg tpl-seg">
-          <view :class="['seg-item', { active: tpl === 'std' }]" @click="tpl = 'std'">标准</view>
-          <view :class="['seg-item', { active: tpl === 'multi' }]" @click="tpl = 'multi'">多栏</view>
+        <!-- 对账单样式（对齐 App：样式 chips 切换 + 排版工具条 标题对齐/字号） -->
+        <view class="tpl-title">对账单样式</view>
+        <view class="tpl-chips">
+          <view :class="['chip', { active: tpl === 'std' }]" @click="tpl = 'std'">标准</view>
+          <view :class="['chip', { active: tpl === 'multi' }]" @click="tpl = 'multi'">多栏</view>
         </view>
-        <!-- 标准模板：标题 + 按日分组明细 + 旬段小计 -->
+        <view class="toolbar">
+          <text class="tb-label">标题：</text>
+          <view class="tb-seg">
+            <view :class="['tb-item', { active: titleAlign === 'left' }]" @click="titleAlign = 'left'">左对齐</view>
+            <view :class="['tb-item', { active: titleAlign === 'center' }]" @click="titleAlign = 'center'">居中</view>
+            <view :class="['tb-item', { active: titleAlign === 'right' }]" @click="titleAlign = 'right'">右对齐</view>
+          </view>
+          <text class="tb-label">字号：</text>
+          <view class="tb-seg">
+            <view :class="['tb-item', { active: fontSize === 10 }]" @click="fontSize = 10">小</view>
+            <view :class="['tb-item', { active: fontSize === 12 }]" @click="fontSize = 12">中</view>
+            <view :class="['tb-item', { active: fontSize === 14 }]" @click="fontSize = 14">大</view>
+          </view>
+        </view>
+        <!-- 成品预览（对齐 App 标准模板：标题 + 日期/营业额表头 + 1..31 日逐行 + 月合计；金额纯数字无 ¥） -->
         <view v-if="tpl === 'std'" class="card stmt-tbl">
-          <view class="t-title">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
+          <view class="t-title" :style="titleStyle">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
           <view class="t-sub">{{ from }} 至 {{ to }}</view>
           <view class="t-head">
             <text class="c-date">日期</text>
-            <text class="c-detail">摘要</text>
-            <text class="c-amt">金额</text>
+            <text class="c-amt">营业额</text>
           </view>
-          <view v-for="g in dayGroups" :key="g.day" class="t-group">
-            <view class="t-day">
-              <text class="t-day-label">{{ g.label }}</text>
-              <text class="t-day-total">小计 ¥{{ stmtFmt(g.total) }}</text>
-            </view>
-            <view v-for="(l, i) in g.rows" :key="i" class="t-row">
-              <text class="c-date">{{ l.date.slice(5) }}</text>
-              <text class="c-detail" :class="{ 't-pay': l.kind === 'pay' }">{{ l.kind === 'pay' ? '收·' + l.detail : l.detail }}</text>
-              <text class="c-amt">{{ l.kind === 'pay' ? '−¥' + stmtFmt(l.amount) : '¥' + stmtFmt(l.amount) }}</text>
-            </view>
+          <view v-for="d in dailyRows" :key="d.day" class="t-row">
+            <text class="c-date">{{ d.label }}</text>
+            <text class="c-amt">{{ stmtFmt(d.amt) }}</text>
           </view>
-          <!-- 旬段小计（对齐 App：1-10 / 11-20 / 21 日以后） -->
-          <view class="t-total"><text>1-10 日合计</text><text>¥{{ stmtFmt(segTotal(1, 10)) }}</text></view>
-          <view class="t-total"><text>11-20 日合计</text><text>¥{{ stmtFmt(segTotal(11, 20)) }}</text></view>
-          <view class="t-total"><text>21 日以后合计</text><text>¥{{ stmtFmt(segTotal(21, 31)) }}</text></view>
-          <view class="t-total"><text>出货合计</text><text>¥{{ stmtFmt(saleTotal) }}（{{ sales.length }} 笔）</text></view>
-          <view class="t-total"><text>收款合计</text><text>¥{{ stmtFmt(payTotal) }}（{{ payments.length }} 笔）</text></view>
-          <view class="t-total"><text>期末欠款</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ stmtFmt(debt) }}</text></view>
+          <view class="t-total"><text>月合计</text><text>{{ stmtFmt(saleTotal) }}</text></view>
         </view>
         <!-- 多栏模板：寻牛记式每栏 10 天（日期+营业额 双列，栏底小计，底部总计；对齐 App 多栏月账单） -->
-        <view v-if="tpl === 'multi'" class="card stmt-tbl">
-          <view class="t-title">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
+        <view v-else class="card stmt-tbl">
+          <view class="t-title" :style="titleStyle">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
           <view class="m-row m-head">
             <view v-for="ci in multi.cols" :key="ci" class="m-col">
               <text class="m-date">日期</text><text class="m-amt">营业额</text>
@@ -81,14 +86,17 @@
           </view>
           <view class="m-total"><text>总计</text><text class="bold">{{ multi.grand }}</text></view>
         </view>
-        <view class="stat"><text>出货合计</text><text class="red">¥{{ stmtFmt(saleTotal) }}（{{ sales.length }} 笔）</text></view>
-        <view class="stat"><text>收款合计</text><text class="green">¥{{ stmtFmt(payTotal) }}（{{ payments.length }} 笔）</text></view>
-        <view class="stat"><text>期末欠款（累计）</text><text :class="debt > 0 ? 'red' : 'green'">¥{{ stmtFmt(debt) }}</text></view>
-        <button class="btn-copy" @click="copy">复制对账文本</button>
+        <!-- 统计卡（对齐 App：出货合计/收款合计 并排卡片 + 期末欠款卡片；合计按全局口径 fmtAmount，欠款按店铺抹零精度） -->
+        <view class="stat-row2">
+          <view class="stat-card"><text class="stat-card-tx">出货合计</text><text class="stat-card-num red">¥{{ fmtAmount(saleTotal) }}（{{ sales.length }} 笔）</text></view>
+          <view class="stat-card"><text class="stat-card-tx">收款合计（实收）</text><text class="stat-card-num green">¥{{ fmtAmount(payTotal) }}（{{ payments.length }} 笔）</text></view>
+        </view>
+        <view v-if="waivedTotal > 0" class="stat-card"><text class="stat-card-tx">减免合计（平账）</text><text class="stat-card-num orange">¥{{ fmtAmount(waivedTotal) }}</text></view>
+        <view class="stat-card"><text class="stat-card-tx">期末欠款（累计）</text><text :class="['stat-card-num', debt > 0 ? 'red' : 'green']">¥{{ stmtFmt(debt) }}</text></view>
         <button class="btn-copy" @click="copyCsv">复制 CSV（粘到 Excel）</button>
+        <button class="btn-copy" @click="printStmt">打印（按当前模板）</button>
         <button class="btn-copy" @click="share">分享对账单（生成链接）</button>
         <button class="btn-copy" @click="manageShares">我的分享</button>
-        <button class="btn-copy" @click="printStmt">打印（生成打印页，浏览器打开）</button>
       </view>
     </view>
 
@@ -124,7 +132,7 @@ import { ref, computed } from 'vue';
 import { request, getToken, getApiBase } from '../../api';
 import { roundAmount, fmtAmount, fmtByUnit, initRounding } from '../../utils/money';
 
-const clients = ref<Array<{ id: string; name: string; round_stage?: string; round_unit?: string }>>([]);
+const clients = ref<Array<{ id: string; name: string; round_stage?: string; round_unit?: string; month_start_day?: number }>>([]);
 const clientNames = ref<string[]>(['全部店铺']);
 const clientName = ref('全部店铺');
 let clientId = '';
@@ -187,7 +195,7 @@ const multi = computed(() => {
   return { y, m, cols, rows, subtotals, grand: roundAmount(grand).toFixed(roundUnit.value === 'yuan' ? 0 : roundUnit.value === 'jiao' ? 1 : 2) };
 });
 
-const period = ref<'month' | 'last' | 'custom'>('month');
+const period = ref<'month' | 'last' | 'cycle' | 'cycleLast' | 'custom'>('month');
 const from = ref('');
 const to = ref('');
 const loading = ref(false);
@@ -196,50 +204,58 @@ const sales = ref<Array<Record<string, any>>>([]);
 const payments = ref<Array<Record<string, any>>>([]);
 const debt = ref(0);
 
+// 排版工具条（对齐 App：标题对齐 + 字号；标题字号 = 正文 +2）
+const titleAlign = ref<'left' | 'center' | 'right'>('center');
+const fontSize = ref<10 | 12 | 14>(12);
+const titleStyle = computed(() => ({
+  textAlign: titleAlign.value,
+  fontSize: `${(fontSize.value + 2) * 2}rpx`,
+}));
+
+/// 选中店铺的每月起始日（1=自然月，对齐 App _msd）
+const msd = computed(() => {
+  if (clientId) {
+    const c = clients.value.find((x) => x.id === clientId);
+    const v = Number(c?.month_start_day || 0);
+    if (v >= 1 && v <= 28) return v;
+  }
+  return 1;
+});
+
+/// 结账周期（按起始日）：[起始日, 次月起始日-1]；起始日=1 时按自然月（对齐 App _cyclePeriod）
+function cyclePeriod(startDay: number, anchor: Date): [string, string] {
+  const p = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  if (startDay <= 1) {
+    return [
+      p(new Date(anchor.getFullYear(), anchor.getMonth(), 1)),
+      p(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0)),
+    ];
+  }
+  const thisStart = new Date(anchor.getFullYear(), anchor.getMonth(), startDay);
+  const [s, e] = anchor.getDate() >= startDay
+      ? [thisStart, new Date(anchor.getFullYear(), anchor.getMonth() + 1, startDay)]
+      : [new Date(anchor.getFullYear(), anchor.getMonth() - 1, startDay), thisStart];
+  return [p(s), p(new Date(e.getTime() - 86400000))];
+}
+
 const saleTotal = ref(0);
 const payTotal = ref(0);
 
-/// 对账单表格数据（对齐 App 标准模板：按日分组出货/收款明细 + 每日小计）
-const dayGroups = computed(() => {
-  type Row = { date: string; detail: string; amount: number; kind: 'sale' | 'pay' };
-  type Group = { day: string; label: string; total: number; rows: Row[] };
-  const map = new Map<string, Group>();
-  const push = (date: unknown, detail: string, amount: unknown, kind: 'sale' | 'pay') => {
-    const d = String(date || '').slice(0, 10);
-    if (d.length < 10) return;
-    const g = map.get(d) || { day: d, label: '', total: 0, rows: [] };
-    g.total += roundAmount(Number(amount) || 0);
-    g.rows.push({ date: d, detail, amount: Number(amount) || 0, kind });
-    map.set(d, g);
-  };
-  for (const s of sales.value) {
-    const detail = s.item_name
-      ? `${s.item_name}${s.quantity ?? ''}${s.unit ?? ''}${s.client_name ? ' ' + s.client_name : ''}`
-      : (s.client_name || '出货');
-    push(s.happened_at, detail, s.amount ?? s.total, 'sale');
+/// 标准模板逐日金额表（对齐 App 标准模板：1..当月天数 逐行 日期+营业额，无数据日金额 0）
+const dailyRows = computed(() => {
+  const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
+  const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
+  const n = from.value ? monthDays(y, m) : 31;
+  const rows: Array<{ day: number; label: string; amt: number }> = [];
+  for (let d = 1; d <= n; d++) {
+    rows.push({ day: d, label: `${m}月${d}日`, amt: dailyAmt.value[d] || 0 });
   }
-  for (const p of payments.value) {
-    push(p.happened_at,
-      `${p.client_name || ''}${p.method ? ' ' + p.method : ''}${Number(p.waived) > 0 ? '（平账 ' + fmtAmount(p.waived) + '）' : ''}`,
-      p.amount, 'pay');
-  }
-  const list = [...map.values()].sort((a, b) => a.day.localeCompare(b.day));
-  const WEEKS = ['日', '一', '二', '三', '四', '五', '六'];
-  for (const g of list) {
-    const dt = new Date(`${g.day}T00:00:00`);
-    g.label = `${Number(g.day.slice(5, 7))}月${Number(g.day.slice(8, 10))}日 周${WEEKS[dt.getDay()]}`;
-  }
-  return list;
+  return rows;
 });
 
-/// 旬段小计（1-10 / 11-20 / 21 日以后；对齐 App 旬段合计）
-const segTotal = (from: number, to: number) =>
-  dayGroups.value
-    .filter((g) => {
-      const d = Number(g.day.slice(8, 10));
-      return d >= from && d <= to;
-    })
-    .reduce((s, g) => s + g.total, 0);
+/// 减免合计（平账）：收款里 waive 部分（对齐 App _waivedTotal）
+const waivedTotal = computed(() =>
+  payments.value.reduce((s, p) => s + roundAmount(Number(p.waived || 0)), 0));
 
 onShow(async () => {
   onWs('*', load);
@@ -286,7 +302,7 @@ function monthEnd(ym: string): string {
   return `${y}-${String(m).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
 }
 
-function applyPeriod(p: 'month' | 'last') {
+function applyPeriod(p: 'month' | 'last' | 'cycle' | 'cycleLast' | 'custom') {
   period.value = p;
   const now = new Date();
   const p2 = (n: number) => String(n).padStart(2, '0');
@@ -295,10 +311,17 @@ function applyPeriod(p: 'month' | 'last') {
     const last = new Date(now.getFullYear(), now.getMonth(), 0);
     from.value = `${first.getFullYear()}-${p2(first.getMonth() + 1)}-${p2(first.getDate())}`;
     to.value = `${last.getFullYear()}-${p2(last.getMonth() + 1)}-${p2(last.getDate())}`;
-  } else {
+  } else if (p === 'cycle' || p === 'cycleLast') {
+    // 按店铺结账周期（month_start_day）：本期/上期（对齐 App _applyPeriod）
+    const anchor = p === 'cycle' ? now : new Date(now.getFullYear(), now.getMonth() - 1, Math.min(now.getDate(), 28));
+    const [s, e] = cyclePeriod(msd.value, anchor);
+    from.value = s;
+    to.value = e;
+  } else if (p === 'month') {
     from.value = `${now.getFullYear()}-${p2(now.getMonth() + 1)}-01`;
     to.value = today();
   }
+  // custom：保留当前起止日期，由用户改日期（对齐 App：自定义时才显示日期选择）
 }
 
 function onClient(e: { detail: { value: number } }) {
@@ -563,6 +586,26 @@ async function delShare(s: ShareItem) {
 /* 表头无底色（对齐 App：用户"日期营业额那行文字有底部颜色要去掉"） */
 .t-head { font-size: 24rpx; color: var(--text-sub); font-weight: 600; border-bottom: 1rpx solid var(--divider); }
 .t-row { border-bottom: 1rpx solid var(--divider); font-size: 26rpx; color: var(--text-main); }
+/* 对账单样式 chips（对齐 App ChoiceChip：胶囊、选中主题色） */
+.tpl-title { font-size: 30rpx; font-weight: 600; margin: 24rpx 0 12rpx; color: var(--text-main); }
+.tpl-chips { display: flex; gap: 16rpx; margin-bottom: 16rpx; }
+.chip { padding: 10rpx 30rpx; border-radius: 999rpx; font-size: 24rpx; color: var(--text-sub); background: var(--card-bg); border: 1rpx solid var(--divider); }
+.chip.active { color: #fff; background: var(--primary); border-color: var(--primary); }
+/* 排版工具条（对齐 App：标题对齐 + 字号） */
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12rpx; margin-bottom: 16rpx; }
+.tb-label { font-size: 24rpx; color: var(--text-sub); }
+.tb-seg { display: flex; background: var(--input-bg); border-radius: 10rpx; overflow: hidden; }
+.tb-item { padding: 8rpx 20rpx; font-size: 24rpx; color: var(--text-sub); }
+.tb-item.active { background: var(--primary); color: #fff; }
+/* 统计卡（对齐 App _statCard：圆角卡片、标签在上金额在下） */
+.stat-row2 { display: flex; gap: 16rpx; margin-top: 20rpx; }
+.stat-card { flex: 1; background: var(--card-bg); border: var(--card-border); border-radius: 16rpx; padding: 20rpx 24rpx; display: flex; flex-direction: column; gap: 8rpx; margin-top: 16rpx; }
+.stat-row2 .stat-card { margin-top: 16rpx; }
+.stat-card-tx { font-size: 24rpx; color: var(--text-sub); }
+.stat-card-num { font-size: 30rpx; font-weight: 700; color: var(--text-main); }
+.orange { color: #f59e0b; }
+/* 成品预览卡片（对齐 App：白卡 + 边框含预览表格） */
+.preview-card { background: var(--card-bg); border: var(--card-border); border-radius: 16rpx; padding: 16rpx; margin-top: 16rpx; }
 /* 模板切换（标准/多栏） */
 .tpl-seg { margin-bottom: 20rpx; }
 /* 多栏月账单（寻牛记式：每栏 日期+营业额 双列） */

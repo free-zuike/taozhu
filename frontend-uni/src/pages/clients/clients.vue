@@ -45,32 +45,35 @@
     </view>
     <view v-if="clients.length === 0" class="empty">暂无饭店，点上方新增</view>
 
-    <!-- 新增/编辑弹层 -->
+    <!-- 新增/编辑弹层（对齐 App 编辑店铺对话框：居中弹窗、字段与选项文案一致，不做自由设计） -->
     <view v-if="showForm" class="mask" @click="showForm = false">
-      <view class="sheet" @click.stop>
-        <view class="sheet-title">{{ form.editId ? '编辑饭店' : '新增饭店' }}</view>
-        <input class="ipt" v-model="form.name" placeholder="饭店名（必填）" />
+      <view class="dlg" @click.stop>
+        <view class="dlg-title">{{ form.editId ? '编辑店铺' : '新增店铺' }}</view>
+        <input class="ipt" v-model="form.name" placeholder="店铺名称 *" />
         <input class="ipt" v-model="form.monthStartDay" type="number" placeholder="每月起始日（1-28，1=自然月）" />
-        <picker class="field" mode="selector" :range="catNames" @change="onCatChange">
+        <picker class="field" mode="selector" :range="topCatNames" @change="onTopCatChange">
           <view class="field-inner">
-            <text class="label">分类</text>
-            <text :class="['value', { placeholder: !form.categoryId }]">{{ form.categoryName || '未分类（可后续在分类管理添加店铺分类）' }}</text>
+            <text class="label">分类（可选）</text>
+            <text :class="['value', { placeholder: !form.topCatId }]">{{ form.topCatName || '选择分类' }}</text>
           </view>
         </picker>
-        <input class="ipt" v-model="form.contact" placeholder="联系人" />
-        <input class="ipt" v-model="form.phone" placeholder="电话" />
-        <input class="ipt" v-model="form.note" placeholder="备注" />
+        <picker v-if="subCatNames.length > 0" class="field" mode="selector" :range="subCatNames" @change="onSubCatChange">
+          <view class="field-inner">
+            <text class="label">子分类（可选）</text>
+            <text :class="['value', { placeholder: !form.subCatId }]">{{ form.subCatName || '如 火锅店/中餐' }}</text>
+          </view>
+        </picker>
         <picker class="field" mode="selector" :range="stageNames" @change="onStageChange">
           <view class="field-inner">
             <text class="label">抹零方式</text>
             <text class="value">{{ stageLabel(form.roundStage) }}</text>
           </view>
         </picker>
-        <!-- 不抹零=按实际金额显示，抹零精度不生效（对齐 App：不抹零时精度不可选） -->
+        <!-- 不抹零=按实际金额显示，抹零精度不生效 → 置灰不可选（对齐 App） -->
         <picker class="field" mode="selector" :range="unitNames" :disabled="form.roundStage === 'none'" @change="onUnitChange">
           <view class="field-inner">
             <text class="label">抹零精度</text>
-            <text class="value" :class="{ placeholder: form.roundStage === 'none' }">{{ form.roundStage === 'none' ? '不抹零，精度不生效' : unitLabel(form.roundUnit) }}</text>
+            <text class="value" :class="{ placeholder: form.roundStage === 'none' }">{{ form.roundStage === 'none' ? '不抹零=按实际金额显示（精度不生效）' : unitLabel(form.roundUnit) }}</text>
           </view>
         </picker>
         <picker class="field" mode="selector" :range="carryNames" @change="onCarryChange">
@@ -81,11 +84,14 @@
         </picker>
         <picker class="field" mode="selector" :range="groupNames" @change="onGroupChange">
           <view class="field-inner">
-            <text class="label">价格组（等级）</text>
+            <text class="label">价格组（等级，可选）</text>
             <text :class="['value', { placeholder: !form.priceGroupId }]">{{ form.priceGroupName || '不设=按默认价' }}</text>
           </view>
         </picker>
-        <button class="btn-save" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+        <view class="dlg-ops">
+          <view class="dlg-btn" @click="showForm = false">取消</view>
+          <view class="dlg-btn save" :class="{ disabled: saving }" @click="save">{{ saving ? '保存中…' : '保存' }}</view>
+        </view>
       </view>
     </view>
   </view>
@@ -130,18 +136,17 @@ const filteredClients = computed(() => {
 });
 const showForm = ref(false);
 const saving = ref(false);
-const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', monthStartDay: '1', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' });
+const form = ref({ name: '', editId: '', monthStartDay: '1', topCatId: '', topCatName: '', subCatId: '', subCatName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' });
 // 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
 const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
-// 店铺结账抹零方式/精度（对齐 App 店铺编辑：none/txn/day/total + yuan/jiao/fen，随时可改；
-// 不抹零=按实际金额显示，抹零精度不生效——用户"不抹零就不该有抹零精度"）
-const stageNames = ['不抹零（按实际金额显示）', '每单抹零', '按天抹零', '结账抹零'];
+// 店铺结账抹零方式/精度（对齐 App 店铺编辑选项文案：none/txn/day/total + yuan/jiao/fen）
+const stageNames = ['不抹零（按实际金额显示）', '每单抹零（每张出货单合计向下取整）', '按天抹零（每天合计向下取整）', '结账抹零（月末一次向下取整）'];
 const stageValues = ['none', 'txn', 'day', 'total'];
-const unitNames = ['元', '角', '分'];
+const unitNames = ['元（账单金额不要小数）', '角（显示到 1 位小数）', '分（显示到 2 位小数）'];
 const unitValues = ['yuan', 'jiao', 'fen'];
-const stageLabel = (v: string) => stageNames[stageValues.indexOf(v)] ?? '不抹零';
-const unitLabel = (v: string) => unitNames[unitValues.indexOf(v)] ?? '元';
+const stageLabel = (v: string) => stageNames[stageValues.indexOf(v)] ?? '不抹零（按实际金额显示）';
+const unitLabel = (v: string) => unitNames[unitValues.indexOf(v)] ?? '元（账单金额不要小数）';
 
 function onStageChange(e: { detail: { value: number } }) {
   form.value.roundStage = stageValues[e.detail.value] || 'none';
@@ -151,10 +156,10 @@ function onUnitChange(e: { detail: { value: number } }) {
   form.value.roundUnit = unitValues[e.detail.value] || 'yuan';
 }
 
-// 进位临界（欠款/结账逐笔按该店进位；空=跟随全局）：0.5 四舍五入 / 0.6 5舍6入
-const carryNames = ['跟随全局', '四舍五入（0.5）', '5舍6入（0.6）'];
+// 进位临界（欠款/结账逐笔按该店进位；空=跟随全局）：0.5 四舍五入 / 0.6 5舍6入（对齐 App 文案）
+const carryNames = ['跟随全局', '四舍五入（尾数≥5 进）', '5舍6入（尾数 5 舍、≥6 进）'];
 const carryValues = ['', '0.5', '0.6'];
-const carryLabel = (v: string) => (v ? (v === '0.5' ? '四舍五入（0.5）' : '5舍6入（0.6）') : '跟随全局');
+const carryLabel = (v: string) => (v ? (v === '0.5' ? '四舍五入（尾数≥5 进）' : '5舍6入（尾数 5 舍、≥6 进）') : '跟随全局');
 
 function onCarryChange(e: { detail: { value: number } }) {
   form.value.roundCarry = carryValues[e.detail.value] || '';
@@ -191,35 +196,47 @@ function bookDays(c: Client): number {
   return days < 1 ? 1 : days;
 }
 
-// 店铺分类（type=client，两级平铺；选项显示"一级/二级"）
+// 店铺分类（type=client，两级：先选一级，再选子分类——对齐 App 编辑对话框两级下拉）
 const cats = ref<Array<{ id: string; name: string; parent_id: string | null }>>([]);
-const catNames = ref<string[]>([]);
-const catIds = ref<string[]>([]);
+const topCatNames = ref<string[]>([]);
+const topCatIds = ref<string[]>([]);
+const subCatNames = ref<string[]>([]);
+const subCatIds = ref<string[]>([]);
+
+function subCatsOf(topId: string): Array<{ id: string; name: string }> {
+  return cats.value.filter((c) => c.parent_id === topId).map((c) => ({ id: c.id, name: c.name }));
+}
+
+function refreshSubCats() {
+  const subs = form.value.topCatId ? subCatsOf(form.value.topCatId) : [];
+  subCatNames.value = subs.map((s) => s.name);
+  subCatIds.value = subs.map((s) => s.id);
+}
 
 async function loadCats() {
   try {
     const d = await request<{ categories: Array<{ id: string; name: string; parent_id: string | null }> }>('/categories?type=client', 'GET').catch(() => null);
     cats.value = d?.categories || [];
-    const nameOf = (id: string) => cats.value.find((c) => c.id === id)?.name || '';
-    catNames.value = ['未分类'];
-    catIds.value = [''];
-    for (const c of cats.value) {
-      if (!c.parent_id) {
-        catNames.value.push(c.name);
-        catIds.value.push(c.id);
-      } else {
-        catNames.value.push(`${nameOf(c.parent_id)}/${c.name}`);
-        catIds.value.push(c.id);
-      }
-    }
+    const tops = cats.value.filter((c) => !c.parent_id);
+    topCatNames.value = ['不设分类', ...tops.map((c) => c.name)];
+    topCatIds.value = ['', ...tops.map((c) => c.id)];
+    refreshSubCats();
   } catch (e) {
     // 分类加载失败不阻塞（未分类保存）
   }
 }
 
-function onCatChange(e: { detail: { value: number } }) {
-  form.value.categoryId = catIds.value[e.detail.value] || '';
-  form.value.categoryName = catNames.value[e.detail.value] || '';
+function onTopCatChange(e: { detail: { value: number } }) {
+  form.value.topCatId = topCatIds.value[e.detail.value] || '';
+  form.value.topCatName = topCatNames.value[e.detail.value] || '';
+  form.value.subCatId = '';
+  form.value.subCatName = '';
+  refreshSubCats();
+}
+
+function onSubCatChange(e: { detail: { value: number } }) {
+  form.value.subCatId = subCatIds.value[e.detail.value] || '';
+  form.value.subCatName = subCatNames.value[e.detail.value] || '';
 }
 
 onShow(async () => {
@@ -241,32 +258,36 @@ async function load() {
 }
 
 function openAdd() {
-  form.value = { name: '', contact: '', phone: '', note: '', editId: '', monthStartDay: '1', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' };
+  form.value = { name: '', editId: '', monthStartDay: '1', topCatId: '', topCatName: '', subCatId: '', subCatName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' };
+  refreshSubCats();
   showForm.value = true;
 }
 
 function openEdit(c: Client) {
+  // 反推一级/子分类（对齐 App：curId 有父级 → 一级=父、子=cur；否则一级=cur）
+  const cur = cats.value.find((x) => x.id === c.category_id);
+  const top = cur && cur.parent_id ? cats.value.find((x) => x.id === cur.parent_id) : cur;
   form.value = {
     name: c.name || '',
-    contact: c.contact || '',
-    phone: c.phone || '',
-    note: c.note || '',
     editId: c.id,
     monthStartDay: String(Number(c.month_start_day) || 1),
-    categoryId: c.category_id || '',
-    categoryName: (c.category_id ? (c.category_name || '') : ''),
+    topCatId: top?.id || '',
+    topCatName: top?.name || '',
+    subCatId: cur && cur.parent_id ? cur.id : '',
+    subCatName: cur && cur.parent_id ? cur.name : '',
     roundStage: c.round_stage || 'none',
     roundUnit: c.round_unit || 'yuan',
     roundCarry: c.round_carry != null ? String(c.round_carry) : '',
     priceGroupId: c.price_group_id || '',
     priceGroupName: (c.price_group_id ? priceGroups.value.find((g) => g.id === c.price_group_id)?.name || '' : ''),
   };
+  refreshSubCats();
   showForm.value = true;
 }
 
 async function save() {
   if (!form.value.name.trim()) {
-    uni.showToast({ title: '请填写饭店名', icon: 'none' });
+    uni.showToast({ title: '请填写店铺名称', icon: 'none' });
     return;
   }
   const msd = Number(form.value.monthStartDay);
@@ -276,13 +297,11 @@ async function save() {
   }
   saving.value = true;
   try {
+    const categoryId = form.value.subCatId || form.value.topCatId;
     const body: Record<string, string | number | null> = {
       name: form.value.name.trim(),
       month_start_day: msd,
-      contact: form.value.contact.trim(),
-      phone: form.value.phone.trim(),
-      note: form.value.note.trim(),
-      category_id: form.value.categoryId,
+      category_id: categoryId,
       round_stage: form.value.roundStage,
       round_unit: form.value.roundUnit,
       round_carry: form.value.roundCarry ? Number(form.value.roundCarry) : null,
@@ -545,9 +564,13 @@ async function importClientTrades(c: Client) {
 .stat-divider { width: 1rpx; height: 36rpx; background: var(--divider); }
 .stat-start { display: block; margin-top: 12rpx; font-size: 22rpx; color: var(--text-sub); }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
-.mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: flex-end; z-index: 100; }
-.sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
-.sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
+/* 编辑弹层（对齐 App 编辑对话框：居中卡片） */
+.mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.dlg { width: 640rpx; max-width: 90%; max-height: 82vh; overflow-y: auto; background: var(--sheet-bg); border-radius: 24rpx; padding: 36rpx 32rpx; box-sizing: border-box; }
+.dlg-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
+.dlg-ops { display: flex; gap: 20rpx; margin-top: 8rpx; }
+.dlg-btn { flex: 1; text-align: center; padding: 20rpx 0; border-radius: 12rpx; font-size: 30rpx; background: var(--input-bg); color: var(--text-main); }
+.dlg-btn.save { background: var(--primary); color: #fff; }
+.dlg-btn.disabled { opacity: 0.6; }
 .ipt { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 28rpx; }
-.btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
 </style>
