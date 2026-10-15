@@ -462,10 +462,16 @@ class _StatementPageState extends State<StatementPage> {
     final excel = Excel.createExcel();
     excel.rename('Sheet1', '对账单');
     final sheet = excel['对账单'];
-    final trows = renderTemplateRows(sel, _td(clientName));
+    // 导出保留 =sum 公式原文（evalSum:false）→ 写 FormulaCellValue（用户"导出的 excel 合计应是公式不是死数字"）；
+    // 与模板设置「保存并导出」(_buildExcel) 同源同行为，预览/打印仍显示求值结果
+    final trows = renderTemplateRows(sel, _td(clientName), evalSum: false);
     var ri = 0;
     for (final row in trows) {
-      sheet.appendRow([for (final c in row) TextCellValue(c.text)]);
+      sheet.appendRow([
+        for (final c in row)
+          // excel 包 FormulaCellValue 直接写公式体，剥离前缀 =（模板 =sum(...) 渲染为 =SUM 合法公式）
+          c.text.trim().startsWith('=') ? FormulaCellValue(c.text.trim().substring(1)) : TextCellValue(c.text),
+      ]);
       // 合并单元格（模板 colSpan/rowSpan → Excel 合并区域；被覆盖格文本为空自动并入）
       for (var cc = 0; cc < row.length; cc++) {
         final c = row[cc];
@@ -505,6 +511,17 @@ class _StatementPageState extends State<StatementPage> {
             );
       }
       ri++;
+    }
+    // 列宽（日期列 12 / 金额列 14；多栏模板 8 列也按奇偶循环——用户"宽度设置一下，显示不全我怎么查看打印"）
+    final colCount = trows.fold<int>(0, (m, r) {
+      var w = 0;
+      for (final c in r) {
+        w += c.colSpan < 1 ? 1 : c.colSpan;
+      }
+      return w > m ? w : m;
+    });
+    for (var cc = 0; cc < colCount; cc++) {
+      sheet.setColumnWidth(cc, cc.isEven ? 12 : 14);
     }
     final bytes = excel.encode();
     if (bytes == null) {
@@ -831,7 +848,8 @@ class _StatementPageState extends State<StatementPage> {
     for (final row in trows) {
       sheet.appendRow([
         for (final c in row)
-          c.text.trim().startsWith('=') ? FormulaCellValue(c.text) : TextCellValue(c.text),
+          // excel 包 FormulaCellValue 直接写公式体，剥离前缀 =（模板 =sum(...) 渲染为 =SUM 合法公式）
+          c.text.trim().startsWith('=') ? FormulaCellValue(c.text.trim().substring(1)) : TextCellValue(c.text),
       ]);
     }
     // 合并 colSpan/rowSpan 区（标题跨列居中——Excel 与打印/预览一致，用户"打印时标题只占第一格"）
@@ -847,6 +865,28 @@ class _StatementPageState extends State<StatementPage> {
           );
         }
         col += c.colSpan < 1 ? 1 : c.colSpan;
+      }
+    }
+    // 列宽（日期列 12 / 金额列 14，与 _exportTpl 一致——用户"宽度显示不全"）
+    final colCount = trows.fold<int>(0, (m, r) {
+      var w = 0;
+      for (final c in r) {
+        w += c.colSpan < 1 ? 1 : c.colSpan;
+      }
+      return w > m ? w : m;
+    });
+    for (var cc = 0; cc < colCount; cc++) {
+      sheet.setColumnWidth(cc, cc.isEven ? 12 : 14);
+    }
+    // 标题行（第一行合并整行居中）→ 单元格样式：居中加粗（用户"导出的 excel 标题要合并居中"）
+    if (trows.isNotEmpty && trows.first.isNotEmpty) {
+      final h = trows.first.first;
+      if (h.bold || h.colSpan > 1) {
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0)).cellStyle = CellStyle(
+          horizontalAlign: HorizontalAlign.Center,
+          bold: true,
+          fontSize: 14,
+        );
       }
     }
     return excel;

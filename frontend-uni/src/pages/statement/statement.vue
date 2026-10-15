@@ -468,9 +468,11 @@ async function exportXlsx() {
       const n = Number(String(v ?? '').replace(/[¥￥,，\s]/g, ''));
       return Number.isFinite(n) ? n : 0;
     };
+    // 内容结构：0=标题行（合并整行居中，用 !merges 跨列）→ 表头 → 逐日 → 小计/合计 → 总计。
+    // 不含"周期"行与"出货合计/收款合计/期末欠款"统计行（用户"多出一行周期/总计下边又多了几行"→去掉，
+    // 对齐 App 模板渲染结果）；日期点分带年（用户定稿 2026.10.16），金额纯数字。
     const aoa: Array<Array<string | number>> = [
       [`${clientName.value} ${from.value.slice(5, 7)}月份账单`],
-      [`周期：${from.value} 至 ${to.value}`],
     ];
     const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
     if (tpl.value === 'multi') {
@@ -482,8 +484,11 @@ async function exportXlsx() {
         // 日期点分年格式（用户定稿 2026.10.16）："10月16日" → "2026.10.16"
         aoa.push(row.map((cell) => (cell.isAmt ? toNum(cell.amt) : (cell.day ? `${y}.${m}.${cell.day}` : ''))));
       }
-      const sub: Array<string | number> = [];
-      for (const s of multi.value.subtotals) sub.push('小计', toNum(s));
+      const sub: Array<string | number> = ['小计'];
+      multi.value.subtotals.forEach((s, i) => {
+        if (i > 0) sub.push('');
+        sub.push(toNum(s));
+      });
       aoa.push(sub);
       aoa.push(['总计', '', '', '', '', '', '', toNum(multi.value.grand)]);
     } else {
@@ -492,41 +497,44 @@ async function exportXlsx() {
       for (const d of dailyRows.value) aoa.push([`${y}.${m}.${d.day}`, d.amt]);
       aoa.push(['合计', saleTotal.value]);
     }
-    aoa.push([]);
-    aoa.push(['出货合计', '', saleTotal.value]);
-    aoa.push(['收款合计', '', payTotal.value]);
-    aoa.push(['期末欠款', '', debt.value]);
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(aoa);
+    // 标题行合并整行居中（用户"导出的 excel 标题要合并居中"）：1 行跨 colN 列 + 居中加粗样式
+    const colN = tpl.value === 'multi' ? multi.value.cols * 2 : 2;
+    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: colN - 1 } }];
+    const hcell = ws[XLSX.utils.encode_cell({ r: 0, c: 0 })];
+    if (hcell) hcell.s = { font: { bold: true, sz: 14 }, alignment: { horizontal: 'center' } };
     // 合计/小计/总计用 Excel 公式（对齐 App 模板 =sum(...)：不是死数字，改动自动重算）
+    // 公式文本不带 = 前缀（SheetJS 原样写入 <f>，带 = 会变成 ==SUM 非法公式——openpyxl 验证）
+    const fSum = (ref: string) => `SUM(${ref})`;
     if (tpl.value === 'multi') {
-      const subIdx = 3 + multi.value.rows.length; // 小计行 aoa 索引（0标题 1周期 2表头 3.. 逐日）
+      const subIdx = 2 + multi.value.rows.length; // 小计行 aoa 索引（0标题 1表头 2.. 逐日）
       const subExcelRow = subIdx + 1;
       for (let c = 0; c < multi.value.cols; c++) {
         const col = c * 2 + 1;
         const cell = ws[XLSX.utils.encode_cell({ r: subIdx, c: col })];
-        if (cell) cell.f = `=SUM(${XLSX.utils.encode_col(col)}4:${XLSX.utils.encode_col(col)}${subIdx})`;
+        if (cell) cell.f = fSum(`${XLSX.utils.encode_col(col)}3:${XLSX.utils.encode_col(col)}${subIdx}`);
       }
       const gcell = ws[XLSX.utils.encode_cell({ r: subIdx + 1, c: multi.value.cols * 2 - 1 })];
       if (gcell) {
         const refs: string[] = [];
         for (let c = 0; c < multi.value.cols; c++) refs.push(`${XLSX.utils.encode_col(c * 2 + 1)}${subExcelRow}`);
-        gcell.f = `=SUM(${refs.join(',')})`;
+        gcell.f = fSum(refs.join(','));
       }
     } else {
       const n = dailyRows.value.length;
-      const sumIdx = 3 + n; // 合计行 aoa 索引
+      const sumIdx = 2 + n; // 合计行 aoa 索引
       const cell = ws[XLSX.utils.encode_cell({ r: sumIdx, c: 1 })];
-      if (cell) cell.f = `=SUM(B4:B${sumIdx})`;
+      if (cell) cell.f = fSum(`B3:B${sumIdx}`);
     }
     XLSX.utils.book_append_sheet(wb, ws, '对账单');
     // 列宽（金额列留足宽度，较长数字不挤压显示 ####；金额纯数字不带 ¥ 符号）
     const ws2 = wb.Sheets['对账单'];
     const widths: Array<{ wch: number }> = [];
-    const colN = tpl.value === 'multi' ? multi.value.cols * 2 : 2;
     for (let c = 0; c < colN; c++) widths.push({ wch: c % 2 === 0 ? 12 : 14 });
     if (ws2) ws2['!cols'] = widths;
-    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+    // cellStyles: 保留标题/合并样式
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true }) as ArrayBuffer;
     const fileName = `${clientName.value.replace(/\s+/g, '')}-对账单.xlsx`;
     // #ifdef MP-WEIXIN
     try {
@@ -556,42 +564,80 @@ async function exportXlsx() {
 
 // 打印对账单：生成与 App《_rowsToHtml》同构的自包含打印页 HTML（SimSun 表格、自动打印脚本）
 // → 微信端存 .html 文件分享到聊天（收到后用浏览器打开即自动打印/可另存 PDF）；H5 端打开服务端打印页。
-// 对齐 App"本地生成打印页→浏览器打开即可打印（离线可用）"
+// 内容=当前模板成品（对齐 App 打印：标准=标题+日期/营业额逐日+合计；多栏=每栏「日期|营业额」+小计+总计）。
+// 无独立 h2 标题、无"出货合计/收款合计/期末欠款"统计行（用户"web打印依然是两个标题行/总计下边又多出几行"→
+// 表格首行即模板标题唯一标题，与 App 打印页完全一致）。
 async function printStmt() {
   if (!loaded.value) {
     uni.showToast({ title: '请先生成对账单', icon: 'none' });
     return;
   }
   const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // 模板行集合 [文本, 对齐, 加粗, 底纹, rowspan, colspan]（与服务端 /print/template 同构，H5 直接复用）
+  type PrintCell = [string, string, boolean, string, number, number];
+  const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
+  const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
+  const colN = tpl.value === 'multi' ? multi.value.cols * 2 : 2;
+  const title = `${clientName.value} ${m}月份账单`;
+  const trows: PrintCell[][] = [
+    [[title, 'center', true, '', 1, colN]],
+  ];
+  if (tpl.value === 'multi') {
+    const hdr: PrintCell[] = [];
+    for (let c = 0; c < multi.value.cols; c++) hdr.push(['日期', 'center', true, 'grey', 1, 1], ['营业额', 'center', true, 'grey', 1, 1]);
+    trows.push(hdr);
+    for (const row of multi.value.rows) {
+      const cells: PrintCell[] = [];
+      for (const cell of row) {
+        if (cell.isAmt) {
+          if (cell.amt !== '' && cell.amt !== null && cell.amt !== undefined) cells.push([cell.amt, 'right', false, '', 1, 1]);
+          else cells.push(['', 'right', false, '', 1, 1]);
+        } else {
+          if (cell.label !== '') cells.push([cell.label, 'center', false, '', 1, 1]);
+          else cells.push(['', 'center', false, '', 1, 1]);
+        }
+      }
+      trows.push(cells);
+    }
+    const sub: PrintCell[] = [['小计', 'center', true, '', 1, 1]];
+    multi.value.subtotals.forEach((s, i) => {
+      if (i > 0) sub.push(['', 'center', true, '', 1, 1]);
+      sub.push([s, 'right', true, '', 1, 1]);
+    });
+    trows.push(sub);
+    const last: PrintCell[] = [['总计', 'center', true, '', 1, 1]];
+    for (let i = 0; i < multi.value.cols * 2 - 2; i++) last.push(['', '', false, '', 1, 1]);
+    last.push([multi.value.grand, 'right', true, '', 1, 1]);
+    trows.push(last);
+  } else {
+    trows.push([['日期', 'center', true, 'grey', 1, 1], ['营业额', 'center', true, 'grey', 1, 1]]);
+    for (const d of dailyRows.value) {
+      trows.push([[d.label, 'center', false, '', 1, 1], [String(d.amt), 'right', false, '', 1, 1]]);
+    }
+    trows.push([['合计', 'center', true, '', 1, 1], [String(saleTotal.value), 'right', true, '', 1, 1]]);
+  }
+  // 打印页 HTML 直接由 trows 生成（与服务端渲染同构；无独立 h2——表格首行即模板标题，用户"双标题"→去除）
   const rows: string[] = [];
-  rows.push(`<h2 style="text-align:center">${esc(clientName.value)} 对账单</h2>`);
   rows.push('<table>');
-  // 打印页单元格：attr 支持 class="b"/class="b g"/style/colspan 等（class 与基础 c 合并）
-  const td = (text: unknown, attr = '') => {
-    const cls = (attr.match(/class="([^"]*)"/) || [, ''])[1] as string;
-    const rest = attr.replace(/class="[^"]*"/, '').trim();
-    return `<td class="c${cls ? ' ' + cls : ''}"${rest ? ' ' + rest : ''}>${esc(text)}</td>`;
-  };
-  rows.push(`<tr>${td('店铺', ' class="b"')}${td(clientName.value, ' colspan="3"')}</tr>`);
-  rows.push(`<tr>${td('周期', ' class="b"')}${td(`${from.value} 至 ${to.value}`, ' colspan="3"')}</tr>`);
-  rows.push(`<tr>${td('出货明细', ' class="b g" colspan="4"')}</tr>`);
-  rows.push(`<tr>${td('日期', ' class="b"')}${td('商品/店铺', ' class="b" colspan="2"')}${td('金额', ' class="b" style="text-align:right"')}</tr>`);
-  for (const s of sales.value) {
-    const name = s.item_name ? `${s.item_name}${s.quantity ?? ''}${s.unit ?? ''} ${s.client_name || ''}` : (s.client_name || '出货');
-    rows.push(`<tr>${td('')}${td(name, ' colspan="2"')}${td(fmtAmount(Number((s.amount ?? s.total) || 0)), ' style="text-align:right"')}</tr>`);
+  for (const row of trows) {
+    const cells: string[] = [];
+    row.forEach((cell, c) => {
+      if (cell[5] > 1) {
+        // colspan>1 标题行
+        const ta = cell[1] === 'center' ? ' style="text-align:center"' : (cell[1] === 'right' ? ' style="text-align:right"' : '');
+        cells.push(`<td${ta} colspan="${cell[5]}">${esc(cell[0])}</td>`);
+        return;
+      }
+      const cls = [cell[2] ? 'b' : '', cell[3] === 'grey' ? 'g' : ''].filter(Boolean).join(' ');
+      const ta = cell[1] === 'center' ? ' style="text-align:center"' : (cell[1] === 'right' ? ' style="text-align:right"' : '');
+      cells.push(`<td${ta}${cls ? ` class="${cls}"` : ''}>${esc(cell[0])}</td>`);
+    });
+    rows.push(`<tr>${cells.join('')}</tr>`);
   }
-  rows.push(`<tr>${td('收款明细', ' class="b g" colspan="4"')}</tr>`);
-  rows.push(`<tr>${td('日期', ' class="b"')}${td('店铺/方式', ' class="b" colspan="2"')}${td('金额', ' class="b" style="text-align:right"')}</tr>`);
-  for (const p of payments.value) {
-    rows.push(`<tr>${td('')}${td(`${p.client_name || ''}${p.method ? ' ' + p.method : ''}`, ' colspan="2"')}${td(fmtAmount(Number(p.amount || 0)), ' style="text-align:right"')}</tr>`);
-  }
-  rows.push(`<tr>${td('出货合计', ' class="b"')}${td(`${fmtAmount(saleTotal.value)}（${sales.value.length} 笔）`, ' colspan="3"')}</tr>`);
-  rows.push(`<tr>${td('收款合计', ' class="b"')}${td(`${fmtAmount(payTotal.value)}（${payments.value.length} 笔）`, ' colspan="3"')}</tr>`);
-  rows.push(`<tr>${td('期末欠款', ' class="b"')}${td(`${fmtAmount(debt.value)}`, ' colspan="3"')}</tr>`);
   rows.push('</table>');
   const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
-<title>${esc(clientName.value)} 对账单</title>
-<style>body{font-family:SimSun,serif;margin:24px;}h2{text-align:center;}table{border-collapse:collapse;width:100%;font-size:13px;}td{border:1px solid #666;padding:4px 8px;}td.b{font-weight:700;}td.g{background:#f2f2f2;}@media print{@page{margin:12mm;}}</style>
+<title>${esc(title)}</title>
+<style>body{font-family:SimSun,serif;margin:24px;}table{border-collapse:collapse;width:100%;font-size:13px;}td{border:1px solid #666;padding:4px 8px;}td.b{font-weight:700;}td.g{background:#f2f2f2;}@media print{@page{margin:12mm;}}</style>
 </head><body onload="window.print()">${rows.join('')}</body></html>`;
   const fileName = `${clientName.value.replace(/\s+/g, '')}-对账单.html`;
   // #ifdef MP-WEIXIN
@@ -613,16 +659,14 @@ async function printStmt() {
   }
   // #endif
   // H5/其他端：服务端渲染打印页 → 复制链接浏览器打开（对齐原逻辑）
-  const rowsData: unknown[] = [
-    [['对账单', 'center', true, '', 1, 4]],
-    [['店铺', 'left', true, '', 1, 1], [clientName.value, 'left', false, '', 1, 3]],
-    [['周期', 'left', true, '', 1, 1], [`${from.value} 至 ${to.value}`, 'left', false, '', 1, 3]],
-  ];
-  rowsData.push([['出货合计', 'left', true, '', 1, 1], [`¥${fmtAmount(saleTotal.value)}（${sales.value.length} 笔）`, 'left', false, '', 1, 3]]);
-  rowsData.push([['收款合计', 'left', true, '', 1, 1], [`¥${fmtAmount(payTotal.value)}（${payments.value.length} 笔）`, 'left', false, '', 1, 3]]);
-  rowsData.push([['期末欠款', 'left', true, '', 1, 1], [`¥${fmtAmount(debt.value)}`, 'left', false, '', 1, 3]]);
+  // 标题统一为模板标题（与 App 打印页首行一致："店铺 N月份账单"）：服务端 <h1> 显示该标题，
+  // 表格行已剔除首行（H5 分支不重复标题——用户"web打印依然是两个标题行"）
+  const rowsData: unknown[] = [];
+  for (let i = 1; i < trows.length; i++) {
+    rowsData.push(trows[i].map((cell) => [cell[0], cell[1], cell[2], cell[3], cell[4], cell[5]]));
+  }
   const b64 = utf8ToBase64(JSON.stringify(rowsData)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const url = `${getApiBase()}/api/v1/print/template?title=${encodeURIComponent(`${clientName.value} 对账单`)}&rows=${b64}&token=${getToken() || ''}${clientId ? `&client_id=${clientId}` : ''}`;
+  const url = `${getApiBase()}/api/v1/print/template?title=${encodeURIComponent(title)}&rows=${b64}&token=${getToken() || ''}${clientId ? `&client_id=${clientId}` : ''}`;
   uni.setClipboardData({
     data: url,
     success: () => uni.showModal({
