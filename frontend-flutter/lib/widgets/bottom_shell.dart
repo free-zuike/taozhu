@@ -7,6 +7,7 @@ import '../share_inbox.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../version.dart';
+import '../utils/github_release.dart';
 import 'center_sheet.dart';
 import 'force_update_dialog.dart';
 import '../pages/sale_page.dart';
@@ -103,16 +104,17 @@ class _BottomShellState extends State<BottomShell> with WidgetsBindingObserver {
     });
   }
 
-  /// 启动强制更新检查：仅当服务端声明了 min_supported 且当前版本低于它时弹窗
+  /// 启动强制更新检查：直连 GitHub 取最新版本（用户定案不走服务器代理），
+  /// 本地内置 MIN_SUPPORTED_VERSION 常量（与 src/version.ts 同步）——低于最低支持弹不可关闭更新窗
   Future<void> _checkForceUpdate() async {
     if (kIsWeb) return;
     await Future.delayed(const Duration(milliseconds: 1500));
     if (!mounted) return;
     try {
-      final d = await Api.instance.get('/auth/latest-version');
-      final min = '${d['min_supported'] ?? ''}';
+      final d = await fetchLatestRelease();
       final latest = '${d['latest'] ?? ''}';
-      if (min.isNotEmpty && versionBelow(APP_VERSION, min)) {
+      if (latest.isEmpty) return; // GitHub 不可达：静默（更新检查路径仍会再次触发）
+      if (versionBelow(APP_VERSION, MIN_SUPPORTED_VERSION)) {
         await showForceUpdateDialog(context, latest);
       }
     } catch (_) {

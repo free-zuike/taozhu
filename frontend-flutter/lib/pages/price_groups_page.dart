@@ -64,6 +64,24 @@ class _PriceGroupsPageState extends State<PriceGroupsPage> {
           ? rows
           : rows.where((r) => !hideIds.contains('${r['id']}')).toList();
       await LocalDb.upsertList('price_groups', visible);
+      // ③ 本地镜像对齐服务器列表：本地有而服务器已无的组（非本地待推送 upsert=离线新增未落地、
+      // 非待推送 delete=本地刚删）→ 服务器已删，本地残留行清除。否则"每次打开页面本地秒开
+      // 显示、刷新（upsertList 只合并不清理）后消失、再打开又回来"（用户"打开都在刷新不见"根因）
+      if (!kIsWeb) {
+        try {
+          final serverIds = rows.map((r) => '${r['id'] ?? ''}').toSet();
+          final pending = await LocalDb.getPendingChanges();
+          final keepIds = pending
+              .where((c) => '${c['entity_type'] ?? ''}' == 'price_group')
+              .map((c) => '${c['entity_sync_id'] ?? ''}')
+              .toSet();
+          for (final row in local) {
+            final gid = '${row['id'] ?? ''}';
+            if (gid.isEmpty || serverIds.contains(gid) || keepIds.contains(gid)) continue;
+            await LocalDb.deleteOne('price_groups', gid);
+          }
+        } catch (_) {}
+      }
       if (!mounted) return;
       setState(() {
         _groups = visible.where((x) => '${x['deleted_at'] ?? ''}'.isEmpty).toList()

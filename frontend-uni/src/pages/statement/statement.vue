@@ -560,13 +560,15 @@ async function delShare(s: ShareItem) {
 .t-title { font-size: 32rpx; font-weight: bold; text-align: center; padding: 24rpx 24rpx 4rpx; color: var(--text-main); }
 .t-sub { font-size: 24rpx; color: var(--text-sub); text-align: center; padding: 0 24rpx 16rpx; }
 .t-head, .t-row { display: flex; align-items: center; padding: 12rpx 24rpx; }
-.t-head { background: var(--input-bg); font-size: 24rpx; color: var(--text-sub); font-weight: 600; }
+/* 表头无底色（对齐 App：用户"日期营业额那行文字有底部颜色要去掉"） */
+.t-head { font-size: 24rpx; color: var(--text-sub); font-weight: 600; border-bottom: 1rpx solid var(--divider); }
 .t-row { border-bottom: 1rpx solid var(--divider); font-size: 26rpx; color: var(--text-main); }
 /* 模板切换（标准/多栏） */
 .tpl-seg { margin-bottom: 20rpx; }
 /* 多栏月账单（寻牛记式：每栏 日期+营业额 双列） */
 .m-row { display: flex; border-bottom: 1rpx solid var(--divider); }
-.m-head { background: var(--input-bg); font-weight: 600; color: var(--text-sub); font-size: 22rpx; }
+/* 多栏表头无底色（对齐 App 表头去底） */
+.m-head { font-weight: 600; color: var(--text-sub); font-size: 22rpx; }
 .m-col { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 10rpx 2rpx; border-left: 1rpx solid var(--divider); }
 .m-col:first-child { border-left: none; }
 .m-date { font-size: 20rpx; color: var(--text-sub); }

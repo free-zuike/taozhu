@@ -17,6 +17,8 @@
           <text class="meta">{{ c.contact || '' }} {{ c.phone || '' }}</text>
         </view>
         <view class="head-ops" @click.stop>
+          <!-- 编辑（对齐 App 行操作：编辑/导出/导入/删除 四个图标） -->
+          <text class="op-ic" @click="openEdit(c)"><text class="mi">&#xe3c9;</text></text>
           <text class="op-ic" @click="exportClientTrades(c)"><text class="mi">&#xe2c4;</text></text>
           <text class="op-ic" @click="importClientTrades(c)"><text class="mi">&#xe2c6;</text></text>
           <text class="op-ic del" @click="remove(c.id)"><text class="mi">&#xe872;</text></text>
@@ -48,6 +50,7 @@
       <view class="sheet" @click.stop>
         <view class="sheet-title">{{ form.editId ? '编辑饭店' : '新增饭店' }}</view>
         <input class="ipt" v-model="form.name" placeholder="饭店名（必填）" />
+        <input class="ipt" v-model="form.monthStartDay" type="number" placeholder="每月起始日（1-28，1=自然月）" />
         <picker class="field" mode="selector" :range="catNames" @change="onCatChange">
           <view class="field-inner">
             <text class="label">分类</text>
@@ -127,7 +130,7 @@ const filteredClients = computed(() => {
 });
 const showForm = ref(false);
 const saving = ref(false);
-const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' });
+const form = ref({ name: '', contact: '', phone: '', note: '', editId: '', monthStartDay: '1', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' });
 // 金额显示按「我的 → 金额舍入」设置的位数/进位口径（对齐 App fmtMoney）
 const fmt = (n: number) => fmtAmount(Number(n) || 0);
 
@@ -238,7 +241,7 @@ async function load() {
 }
 
 function openAdd() {
-  form.value = { name: '', contact: '', phone: '', note: '', editId: '', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' };
+  form.value = { name: '', contact: '', phone: '', note: '', editId: '', monthStartDay: '1', categoryId: '', categoryName: '', roundStage: 'none', roundUnit: 'yuan', roundCarry: '', priceGroupId: '', priceGroupName: '' };
   showForm.value = true;
 }
 
@@ -249,6 +252,7 @@ function openEdit(c: Client) {
     phone: c.phone || '',
     note: c.note || '',
     editId: c.id,
+    monthStartDay: String(Number(c.month_start_day) || 1),
     categoryId: c.category_id || '',
     categoryName: (c.category_id ? (c.category_name || '') : ''),
     roundStage: c.round_stage || 'none',
@@ -265,10 +269,16 @@ async function save() {
     uni.showToast({ title: '请填写饭店名', icon: 'none' });
     return;
   }
+  const msd = Number(form.value.monthStartDay);
+  if (!Number.isInteger(msd) || msd < 1 || msd > 28) {
+    uni.showToast({ title: '每月起始日须为 1-28 的整数', icon: 'none' });
+    return;
+  }
   saving.value = true;
   try {
     const body: Record<string, string | number | null> = {
       name: form.value.name.trim(),
+      month_start_day: msd,
       contact: form.value.contact.trim(),
       phone: form.value.phone.trim(),
       note: form.value.note.trim(),

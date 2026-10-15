@@ -13,6 +13,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../utils/update_sources.dart';
+import '../utils/github_release.dart';
 import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
@@ -544,7 +545,8 @@ class _MyPageState extends State<MyPage> {
     return false;
   }
 
-  /// 检查更新：走后端代理（Worker 代查 GitHub Release），避免 App/Web 直连 GitHub 被网络干扰
+  /// 检查更新：直连 GitHub Release API（用户定案：不走服务器代理——服务器代查多一跳，
+  /// 国内网络反而更不稳；APK 下载已有镜像加速，检查只需拿到版本号与更新日志）
   Future<void> _checkUpdate() async {
     // 更新下载进行中：不重复弹更新/重复下载
     if (_downloading) {
@@ -565,7 +567,7 @@ class _MyPageState extends State<MyPage> {
     // Web 端特殊处理：版本由部署方控制，刷新不升级（fork 实例需重新部署）。仅如实提示版本号
     if (kIsWeb) {
       try {
-        final d = await Api.instance.get('/auth/latest-version');
+        final d = await fetchLatestRelease();
         final ver = '${d['latest'] ?? ''}';
         toast(context, ver.isEmpty
             ? '当前部署版本 v$APP_VERSION'
@@ -582,7 +584,7 @@ class _MyPageState extends State<MyPage> {
     var d = <String, dynamic>{};
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
-        d = await Api.instance.get('/auth/latest-version');
+        d = await fetchLatestRelease();
         if ('${d['latest'] ?? ''}'.isNotEmpty) break;
       } catch (_) {}
       if (attempt < 2) await Future.delayed(const Duration(milliseconds: 600));
@@ -817,7 +819,7 @@ class _MyPageState extends State<MyPage> {
       await Future.delayed(const Duration(seconds: 30));
       if (!mounted) return;
       try {
-        final d = await Api.instance.get('/auth/latest-version');
+        final d = await fetchLatestRelease();
         if ('${d['latest'] ?? ''}' == ver && d['ready'] != false) {
           toast(context, 'v$ver 安装包已就绪，可以更新了');
           return;
