@@ -373,16 +373,25 @@ Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = '
   }
 }
 
-/// 语音记账：音频字节 → 语音转文字（智谱 audio 接口）→ 草稿明细
+/// 语音转文字端点：智谱 baseUrl 配自家协议 /audio/asr；其他 OpenAI 兼容服务商（硅基流动等）配 /audio/transcriptions
+String _speechSttUrl(String baseUrl) {
+  final b = baseUrl.replaceAll(RegExp(r'/+$'), '');
+  if (b.endsWith('/audio/asr') || b.endsWith('/audio/transcriptions')) return b;
+  return b.contains('open.bigmodel.cn') ? '$b/audio/asr' : '$b/audio/transcriptions';
+}
+
+/// 语音记账：音频字节 → 语音转文字 → 草稿明细
 Future<AiInvoice> aiParseVoice(Uint8List bytes, String mime, {String purpose = 'sale'}) async {
   try {
     final cfg = await aiLoadConfig();
     final p = _providerFor(cfg, 'speechProviderId');
     appLog('ai', '语音识别开始：${p.name}/${_modelFor(p, 'speech')}（${bytes.length} 字节 $mime）');
-    final url = '${p.baseUrl.replaceAll(RegExp(r'/+$'), '')}/audio/asr';
+    final url = _speechSttUrl(p.baseUrl);
     final req = http.MultipartRequest('POST', Uri.parse(url))
       ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
       ..headers['model'] = _modelFor(p, 'speech')
+      // OpenAI 兼容语音接口（硅基流动等）要求 model 在表单字段；智谱读 header——两端都放兼容两家
+      ..fields['model'] = _modelFor(p, 'speech')
       ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'voice.m4a', contentType: http.MediaType.parse(mime)));
     final resp = await req.send().timeout(const Duration(seconds: 60));
     final body = await resp.stream.bytesToString();
@@ -463,13 +472,15 @@ Future<String> aiTestCapability(String cap) async {
     return raw;
   }
   if (cap == 'speech') {
-    // 真实语音测试：生成 0.25s 静音 WAV 真发服务商 asr（Key 无效/通道错误如实报，不假通过）
+    // 真实语音测试：生成 0.25s 静音 WAV 真发服务商 stt（Key 无效/通道错误如实报，不假通过）
     final p = _providerFor(cfg, 'speechProviderId');
     if (p.apiKey.trim().isEmpty) throw Exception('「${p.name}」未配置 Key，无法测试语音');
-    final url = '${p.baseUrl.replaceAll(RegExp(r'/+$'), '')}/audio/asr';
+    final url = _speechSttUrl(p.baseUrl);
     final req = http.MultipartRequest('POST', Uri.parse(url))
       ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
       ..headers['model'] = _modelFor(p, 'speech')
+      // OpenAI 兼容语音接口（硅基流动等）要求 model 在表单字段；智谱读 header——两端都放兼容两家
+      ..fields['model'] = _modelFor(p, 'speech')
       ..files.add(http.MultipartFile.fromBytes('file', _silenceWav(), filename: 'test.wav',
           contentType: http.MediaType.parse('audio/wav')));
     final resp = await req.send().timeout(const Duration(seconds: 60));

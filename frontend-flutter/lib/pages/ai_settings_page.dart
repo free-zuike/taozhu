@@ -225,13 +225,12 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       final names = items.take(5).map((e) => '${(e as Map)['name'] ?? ''}').where((s) => s.isNotEmpty).join('、');
       return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
     }
-    if (capability == 'speech') {
-      return '语音转文字通道连通（本地直连；请到记单页录一句话实测）';
-    }
     final reply = await aiTestCapability(capability);
-    return capability == 'vision'
-        ? (reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply')
-        : '文字记账正常：$reply';
+    return capability == 'speech'
+        ? reply
+        : capability == 'vision'
+            ? (reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply')
+            : '文字记账正常：$reply';
   }
 
   /// 测试单个能力：圆点状态就地展示（绿=通过/红=失败/转圈=测试中）——成功只变绿不提示，失败才 toast 原因

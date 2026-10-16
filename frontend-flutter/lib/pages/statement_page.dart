@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:excel/excel.dart' hide Border, BorderStyle;
 // 前缀导入保留 excel 的 Border/BorderStyle（上方 hide 只挡无前缀名——用户"excel 打印无边框"→逐格加细边框）
 import 'package:excel/excel.dart' as exc;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
@@ -90,6 +92,8 @@ class _StatementPageState extends State<StatementPage> {
   /// 排版工具条（可视化，无需进设计器）：标题对齐 + 字号
   String _tplTitleAlign = 'center'; // 标题对齐：left | center | right
   double _tplFontSize = 12; // 正文字号（标题自动 +2）
+  /// 成品预览截图锚点（图片打印：所见即所得，截当前预览渲染）
+  final _previewKey = GlobalKey();
 
   static String _fmt(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -2023,7 +2027,13 @@ class _StatementPageState extends State<StatementPage> {
               clipBehavior: Clip.antiAlias,
               child: Padding(
                 padding: const EdgeInsets.all(10),
-                child: _renderTplSafe(fontSize: _tplFontSize),
+                child: RepaintBoundary(
+                  key: _previewKey,
+                  child: ColoredBox(
+                    color: Colors.white,
+                    child: _renderTplSafe(fontSize: _tplFontSize),
+                  ),
+                ),
               ),
             ),
             if (_pubTpls.any((t) => t.name != _selTplName && t.name == '模板设置'))
@@ -2086,7 +2096,7 @@ class _StatementPageState extends State<StatementPage> {
               ),
               onPressed: _printCurrent,
               icon: const Icon(Icons.print_outlined, size: 18),
-              label: const Text('打印（按当前模板）'),
+              label: const Text('图片打印（按当前模板）'),
             ),
           ],
         ],
@@ -2096,62 +2106,42 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
-  /// 按当前样式打印（对账单统一打印入口）：**本地生成打印页 HTML**（离线可用，不依赖服务端
-  /// 渲染——用户"打印需要网络？没有网络就打不开"）；保存后用浏览器打开即可打印
+  /// 按当前样式图片打印（对账单统一打印入口）：**截图成品预览生成 PNG 图片**——所见即所得，
+  /// 与页面预览完全一致（用户"打印生成的 HTML 不好用，改成生成图片"：隐藏 iframe 自动打印被
+  /// 浏览器拦截不可靠）；Web 新窗口打开图片（浏览器可直接打印/右键保存），原生端保存图片用看图软件打印。
   Future<void> _printCurrent() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
     try {
-      final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
-      final trows = renderTemplateRows(_curPubTpl, _td(clientName));
-      final html = _rowsToHtml(trows, clientName);
-      if (kIsWeb) {
-        // Web：不生成/不下载文件，data URL 直接打开隐藏 iframe 自动打印（用户"html 页面能不能不生成，直接打印"）
-        final dataUrl = 'data:text/html;charset=utf-8,${Uri.encodeComponent(html)}';
-        openPrintUrl(dataUrl);
+      await WidgetsBinding.instance.endOfFrame;
+      final boundary = _previewKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null || !boundary.hasSize) {
+        toast(context, '预览尚未就绪，请稍后重试');
         return;
       }
-      // 原生端：保存打印页 HTML → 用浏览器打开即可打印（离线可用；平台无直接打印 API）
-      final name = '对账单-${clientName.replaceAll(' ', '')}.html';
-      await saveBytes(utf8.encode(html), name, 'text/html', '对账单打印页');
-      toast(context, '打印页已生成保存，用浏览器打开即可打印（离线可用）');
-    } catch (e) {
-      toast(context, '打印页生成失败：${e.toString().replaceFirst('Exception: ', '')}');
-    }
-  }
-
-  /// 渲染行集合 → 自包含打印 HTML（表格；离线可用）
-  String _rowsToHtml(List<List<GridCell>> rows, String title) {
-    final buf = StringBuffer();
-    buf.writeln('<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">');
-    buf.writeln('<title>$title 对账单</title>');
-    buf.writeln(
-        '<style>body{font-family:SimSun,serif;margin:24px;}h2{text-align:center;}table{border-collapse:collapse;width:100%;font-size:13px;}td{border:1px solid #666;padding:4px 8px;}td.b{font-weight:700;}td.g{background:#f2f2f2;}@media print{@page{margin:12mm;}}</style>');
-    buf.writeln('</head><body onload="window.print()">');
-    // 不再输出独立 h2 标题（用户"转 PDF 双标题"：表格内模板首行已是居中加粗标题，h2 会重复）
-    buf.writeln('<table>');
-    for (final row in rows) {
-      buf.write('<tr>');
-      for (final c in row) {
-        final cls = [
-          if (c.bold) 'b',
-          if (c.bg == 'grey') 'g',
-        ].join(' ');
-        final align = c.align == 'right' ? ' style="text-align:right"' : (c.align == 'center' ? ' style="text-align:center"' : '');
-        // 合并单元格：colSpan/rowSpan >1 输出 colspan/rowspan（用户"打印时标题只占第一格、合并居中不生效"）
-        final cspan = c.colSpan > 1 ? ' colspan="${c.colSpan}"' : '';
-        final rspan = c.rowSpan > 1 ? ' rowspan="${c.rowSpan}"' : '';
-        buf.write('<td$align$cspan$rspan${cls.isNotEmpty ? ' class="$cls"' : ''}>${c.text.isEmpty ? '&nbsp;' : c.text}</td>');
+      final image = await boundary.toImage(pixelRatio: 3.5);
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) {
+        toast(context, '对账单图片生成失败');
+        return;
       }
-      buf.writeln('</tr>');
+      final bytes = data.buffer.asUint8List();
+      final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
+      final name = '对账单-${clientName.replaceAll(' ', '')}.png';
+      if (kIsWeb) {
+        // Web：新窗口打开 PNG（浏览器可打印/右键保存；比隐藏 iframe 自动打印稳定——用户反馈打印弹不出来）
+        openPrintImageBytes(bytes);
+        return;
+      }
+      // 原生端：保存图片（系统分享面板）→ 用看图软件打开即可打印（平台无直接打印 API）
+      await saveBytes(bytes, name, 'image/png', '对账单图片（用看图软件打开可打印）');
+      toast(context, '对账单图片已生成，用看图软件打开即可打印');
+    } catch (e) {
+      toast(context, '对账单图片生成失败：${e.toString().replaceFirst('Exception: ', '')}');
     }
-    buf.writeln('</table></body></html>');
-    return buf.toString();
   }
-
-  double _num(Object? v) => (v is num ? v.toDouble() : double.tryParse('$v') ?? 0);
 
   Widget _statCard(String label, String value, Color color) {
     return Card(

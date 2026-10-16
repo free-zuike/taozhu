@@ -134,6 +134,9 @@
         </scroll-view>
       </view>
     </view>
+
+    <!-- 图片打印用隐藏 canvas（2d；JS 里动态设尺寸，导出对账单图片） -->
+    <canvas id="stmt-canvas" type="2d" class="stmt-canvas-hidden" />
   </view>
 </template>
 
@@ -141,12 +144,12 @@
 import { onShow, onHide } from '@dcloudio/uni-app';
 import { onWs, offWs } from '../../ws';
 
-import { useThemeVars, utf8ToBase64 } from '../../theme';
+import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
-import { ref, computed } from 'vue';
+import { ref, computed, getCurrentInstance } from 'vue';
 ;
 ;
-import { request, getToken, getApiBase, appLog } from '../../api';
+import { request, getToken, appLog } from '../../api';
 import { roundAmount, fmtAmount, fmtByUnit, initRounding } from '../../utils/money';
 // @ts-ignore 定点样式版（xlsx-js-style：官方 xlsx 0.18.5 写入端不支持 cell.s 样式——合并居中/底色全部丢失，
 // 用户"小程序的 excel 全部都没有合并居中"根因；换 xlsx-js-style 后样式可写，与 App 导出一致）
@@ -588,19 +591,15 @@ async function exportXlsx() {
   }
 }
 
-// 打印对账单：生成与 App《_rowsToHtml》同构的自包含打印页 HTML（SimSun 表格、自动打印脚本）
-// → 微信端存 .html 文件分享到聊天（收到后用浏览器打开即自动打印/可另存 PDF）；H5 端打开服务端打印页。
-// 内容=当前模板成品（对齐 App 打印：标准=标题+日期/营业额逐日+合计；多栏=每栏「日期|营业额」+小计+总计）。
-// 无独立 h2 标题、无"出货合计/收款合计/期末欠款"统计行（用户"web打印依然是两个标题行/总计下边又多出几行"→
-// 表格首行即模板标题唯一标题，与 App 打印页完全一致）。
+/// 图片打印对账单（对齐 App 图片打印：所见即所得）：把模板行集合绘制成 PNG 图片——
+/// 微信端保存相册（可打印）+ 预览；H5 端新窗口打开图片（浏览器可打印/右键保存）。
+/// 不再生成 .html 文件分享（用户"打印生成的 html 不好用，改成生成图片"）。
 async function printStmt() {
   if (!loaded.value) {
     uni.showToast({ title: '请先生成对账单', icon: 'none' });
     return;
   }
-  const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  // 模板行集合 [文本, 对齐, 加粗, 底纹, rowspan, colspan]（与服务端 /print/template 同构，H5 直接复用）
-  type PrintCell = [string, string, boolean, string, number, number];
+  // 模板行集合 [文本, 对齐, 加粗, 底纹, rowspan, colspan]（与 App 模板渲染行集合同构；类型见 drawStmtImage 上方）
   const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
   const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
   const colN = tpl.value === 'multi' ? multi.value.cols * 2 : 2;
@@ -642,64 +641,109 @@ async function printStmt() {
     }
     trows.push([['合计', 'center', true, '', 1, 1], [String(saleTotal.value), 'right', true, '', 1, 1]]);
   }
-  // 打印页 HTML 直接由 trows 生成（与服务端渲染同构；无独立 h2——表格首行即模板标题，用户"双标题"→去除）
-  const rows: string[] = [];
-  rows.push('<table>');
-  for (const row of trows) {
-    const cells: string[] = [];
-    row.forEach((cell, c) => {
-      if (cell[5] > 1) {
-        // colspan>1 标题行
-        const ta = cell[1] === 'center' ? ' style="text-align:center"' : (cell[1] === 'right' ? ' style="text-align:right"' : '');
-        cells.push(`<td${ta} colspan="${cell[5]}">${esc(cell[0])}</td>`);
-        return;
-      }
-      const cls = [cell[2] ? 'b' : '', cell[3] === 'grey' ? 'g' : ''].filter(Boolean).join(' ');
-      const ta = cell[1] === 'center' ? ' style="text-align:center"' : (cell[1] === 'right' ? ' style="text-align:right"' : '');
-      cells.push(`<td${ta}${cls ? ` class="${cls}"` : ''}>${esc(cell[0])}</td>`);
-    });
-    rows.push(`<tr>${cells.join('')}</tr>`);
-  }
-  rows.push('</table>');
-  const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
-<title>${esc(title)}</title>
-<style>body{font-family:SimSun,serif;margin:24px;}table{border-collapse:collapse;width:100%;font-size:13px;}td{border:1px solid #666;padding:4px 8px;}td.b{font-weight:700;}td.g{background:#f2f2f2;}@media print{@page{margin:12mm;}}</style>
-</head><body onload="window.print()">${rows.join('')}</body></html>`;
-  const fileName = `${clientName.value.replace(/\s+/g, '')}-对账单.html`;
   // #ifdef MP-WEIXIN
   try {
-    const fs = uni.getFileSystemManager();
-    const filePath = `${((uni as any).env?.USER_DATA_PATH) || ''}/${fileName}`;
-    fs.writeFileSync(filePath, html, 'utf8');
-    (globalThis as any).wx?.shareFileMessage?.({
-      filePath,
-      fileName,
-      success: () => uni.showToast({ title: `已分享打印页「${fileName}」`, icon: 'success' }),
-      fail: () => uni.showToast({ title: '分享失败，请重试', icon: 'none' }),
+    const canvas = await drawStmtImage(trows, colN);
+    (uni.canvasToTempFilePath as any)({
+      canvas,
+      success: (r: { tempFilePath: string }) => {
+        const fp = r.tempFilePath;
+        uni.saveImageToPhotosAlbum({
+          filePath: fp,
+          success: () => {
+            uni.previewImage({ urls: [fp] });
+            uni.showToast({ title: '对账单图片已保存到相册（可打印）', icon: 'success' });
+          },
+          fail: () => {
+            uni.previewImage({ urls: [fp] });
+            uni.showToast({ title: '图片已生成，请长按保存到相册', icon: 'none' });
+          },
+        });
+      },
+      fail: () => uni.showToast({ title: '生成图片失败', icon: 'none' }),
     });
-    appLog('op', `打印对账单：${clientName.value} ${from.value} 至 ${to.value}`, 'info');
+    appLog('op', `图片打印对账单：${clientName.value} ${from.value} 至 ${to.value}`, 'info');
     return;
   } catch (e2) {
-    uni.showToast({ title: '生成打印页失败', icon: 'none' });
+    uni.showToast({ title: '生成图片失败', icon: 'none' });
     return;
   }
   // #endif
-  // H5/其他端：服务端渲染打印页 → 复制链接浏览器打开（对齐原逻辑）
-  // 标题统一为模板标题（与 App 打印页首行一致："店铺 N月份账单"）：服务端 <h1> 显示该标题，
-  // 表格行已剔除首行（H5 分支不重复标题——用户"web打印依然是两个标题行"）
-  const rowsData: unknown[] = [];
-  for (let i = 1; i < trows.length; i++) {
-    rowsData.push(trows[i].map((cell) => [cell[0], cell[1], cell[2], cell[3], cell[4], cell[5]]));
+  // H5/其他端：canvas 生成图片 → 新窗口打开（浏览器可直接打印/右键保存）
+  try {
+    const canvas = await drawStmtImage(trows, colN);
+    const dataUrl = (canvas as any).toDataURL('image/png');
+    window.open(dataUrl, '_blank');
+    appLog('op', `图片打印对账单：${clientName.value} ${from.value} 至 ${to.value}`, 'info');
+  } catch (e) {
+    uni.showToast({ title: '生成图片失败', icon: 'none' });
   }
-  const b64 = utf8ToBase64(JSON.stringify(rowsData)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const url = `${getApiBase()}/api/v1/print/template?title=${encodeURIComponent(title)}&rows=${b64}&token=${getToken() || ''}${clientId ? `&client_id=${clientId}` : ''}`;
-  uni.setClipboardData({
-    data: url,
-    success: () => uni.showModal({
-      title: '打印页链接已复制',
-      content: '请用浏览器打开该链接，页面会自动弹出打印（可另存为 PDF）。',
-      showCancel: false,
-    }),
+}
+
+/// 模板行集合 [文本, 对齐, 加粗, 底纹, rowspan, colspan]（与 App 模板渲染行集合同构）
+type PrintCell = [string, string, boolean, string, number, number];
+
+/// 把模板行集合绘制到隐藏 canvas（2d）并返回 canvas 节点：
+/// 列宽按内容自适应（measureText 实测每列最大宽），标题行加粗大字，全格细边框 + 浅灰底纹，
+/// 金额/日期居中、小计/合计加粗——与页面成品预览一致（所见即所得）。
+function drawStmtImage(trows: PrintCell[][], colN: number): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const inst = getCurrentInstance();
+    const query = inst ? uni.createSelectorQuery().in(inst.proxy) : uni.createSelectorQuery();
+    query.select('#stmt-canvas').fields({ node: true, size: true }, (res) => {
+      const canvas = (res as any[])?.[0]?.node;
+      if (!canvas) {
+        reject(new Error('canvas 初始化失败'));
+        return;
+      }
+      const ctx = canvas.getContext('2d');
+      const fs = 13, padX = 10, rowH = 34, headH = 46;
+      ctx.font = `${fs}px sans-serif`;
+      const widths: number[] = new Array(colN).fill(0);
+      trows.forEach((row) => {
+        let ci = 0;
+        row.forEach((cell: PrintCell) => {
+          const span = cell[5] || 1;
+          const per = (ctx.measureText(cell[0]).width + padX * 2) / span;
+          for (let k = 0; k < span; k++) widths[ci + k] = Math.max(widths[ci + k], per);
+          ci += span;
+        });
+      });
+      const W = Math.max(1, Math.round(widths.reduce((a, b) => a + b, 0)));
+      const H = headH + (trows.length - 1) * rowH;
+      canvas.width = W;
+      canvas.height = H;
+      ctx.font = `${fs}px sans-serif`;
+      ctx.textBaseline = 'middle';
+      let y = 0;
+      trows.forEach((row, ri) => {
+        const rh = ri === 0 ? headH : rowH;
+        let x = 0;
+        let ci = 0;
+        row.forEach((cell: PrintCell) => {
+          const span = cell[5] || 1;
+          const cw = widths.slice(ci, ci + span).reduce((a, b) => a + b, 0);
+          if (cell[3] === 'grey') {
+            ctx.fillStyle = '#f2f2f2';
+            ctx.fillRect(x, y, cw, rh);
+          }
+          ctx.strokeStyle = '#666';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x, y, cw, rh);
+          ctx.fillStyle = '#000';
+          ctx.font = `${cell[2] ? 'bold ' : ''}${ri === 0 ? fs + 3 : fs}px sans-serif`;
+          const tw = ctx.measureText(cell[0]).width;
+          let tx = x + padX;
+          if (cell[1] === 'center') tx = x + (cw - tw) / 2;
+          else if (cell[1] === 'right') tx = x + cw - padX - tw;
+          ctx.fillText(cell[0], tx, y + rh / 2);
+          x += cw;
+          ci += span;
+        });
+        y += rh;
+      });
+      resolve(canvas);
+    });
   });
 }
 
@@ -899,4 +943,6 @@ async function delShare(s: ShareItem) {
 .share-exp { font-size: 20rpx; color: var(--text-sub); }
 .share-op { font-size: 24rpx; color: var(--primary); padding: 8rpx 16rpx; flex-shrink: 0; }
 .share-op.del { color: #f56c6c; }
+/* 图片打印隐藏 canvas：移到屏幕外，尺寸由 JS 按内容动态设置 */
+.stmt-canvas-hidden { position: fixed; left: -9999rpx; top: 0; width: 300px; height: 300px; }
 </style>

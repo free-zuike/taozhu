@@ -401,7 +401,14 @@ export async function parseText(
   return normalizeInvoice(content);
 }
 
-/** 语音转文字（OpenAI 兼容 /audio/transcriptions；multipart file+model） */
+/** 语音转文字（智谱 baseUrl 走自家 /audio/asr；其他 OpenAI 兼容服务商走 /audio/transcriptions） */
+export function speechSttUrl(baseUrl: string): string {
+  const b = baseUrl.replace(/\/+$/, '');
+  if (b.endsWith('/audio/asr') || b.endsWith('/audio/transcriptions')) return b;
+  return b.includes('open.bigmodel.cn') ? `${b}/audio/asr` : `${b}/audio/transcriptions`;
+}
+
+/** 语音转文字（multipart file+model） */
 export async function speechToText(
   endpoint: CapabilityEndpoint,
   mime: string,
@@ -411,8 +418,7 @@ export async function speechToText(
   if (!endpoint.apiKey.trim()) {
     throw new Error('AI 语音记账未启用：请老板在「我的 → AI 识别设置」配置 API Key 并绑定语音记账能力');
   }
-  const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
-  const sttUrl = baseUrl.endsWith('/audio/transcriptions') ? baseUrl : `${baseUrl}/audio/transcriptions`;
+  const sttUrl = speechSttUrl(endpoint.baseUrl);
   const form = new FormData();
   form.append('file', new Blob([audioBytes], { type: mime || 'audio/webm' }), filename || 'audio.webm');
   form.append('model', endpoint.model || DEFAULT_AUDIO_MODEL);
