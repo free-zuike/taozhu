@@ -6,7 +6,6 @@ import 'package:excel/excel.dart' hide Border, BorderStyle;
 import 'package:excel/excel.dart' as exc;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
@@ -92,8 +91,6 @@ class _StatementPageState extends State<StatementPage> {
   /// 排版工具条（可视化，无需进设计器）：标题对齐 + 字号
   String _tplTitleAlign = 'center'; // 标题对齐：left | center | right
   double _tplFontSize = 12; // 正文字号（标题自动 +2）
-  /// 成品预览截图锚点（图片打印：所见即所得，截当前预览渲染）
-  final _previewKey = GlobalKey();
 
   static String _fmt(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -346,8 +343,8 @@ class _StatementPageState extends State<StatementPage> {
 
   /// 安全渲染成品（模板数据/渲染异常不整页灰屏）：渲染为空或异常 → 回退内置标准多栏账单，
 /// 保证预览区永远有可见内容（旧模板残留/空模板不再显示灰框）
-  Widget _renderTplSafe({double fontSize = 12}) {
-    // 数据快照（一次取，避免多次重复组装）
+  /// 当前模板成品行集合（预览/图片打印共用：公共模板渲染 renderTemplateRows 唯一数据源）
+  List<List<GridCell>> _currentRows() {
     final td = _td(clientNameForTpl);
     List<List<GridCell>> rows;
     try {
@@ -364,6 +361,11 @@ class _StatementPageState extends State<StatementPage> {
         rows = const [];
       }
     }
+    return rows;
+  }
+
+  Widget _renderTplSafe({double fontSize = 12}) {
+    final rows = _currentRows();
     if (rows.isEmpty || !rows.any((r) => r.any((c) => c.text.trim().isNotEmpty))) {
       return const Center(
         child: Padding(
@@ -373,6 +375,105 @@ class _StatementPageState extends State<StatementPage> {
       );
     }
     return _previewTplRows(rows, fontSize: fontSize);
+  }
+
+  /// 被上方 rowSpan>1 的合并起点覆盖的格（对齐预览 owner 展开逻辑）→ 跳过不画
+  bool _coveredByRowSpan(List<List<GridCell>> rows, int r, int c) {
+    for (var sr = 0; sr < r && sr < rows.length; sr++) {
+      final row = rows[sr];
+      var acc = 0;
+      for (final cell in row) {
+        final span = cell.colSpan < 1 ? 1 : cell.colSpan;
+        if (cell.rowSpan > 1 && c >= acc && c < acc + span && r < sr + cell.rowSpan) {
+          return true;
+        }
+        acc += span;
+      }
+    }
+    return false;
+  }
+
+  /// 图片打印：脱离 widget 树用 dart:ui Canvas 完整绘制对账单表格（PictureRecorder → toImage → PNG）。
+  /// 屏幕预览是虚拟化 TableView 只画视口格，截图必然残缺——用户"图片不完整，只有一部分"；
+  /// Canvas 绘制全量行（列宽 120 对齐预览、行高按文本换行自适应、合并/底纹/边框/对齐同预览），
+  /// 与小程序 canvas 图片打印同构（所见即所得 + 完整）。
+  Future<ui.Image> _renderStmtImage(List<List<GridCell>> rows) async {
+    const cw = 120.0, ch = 44.0, padX = 8.0, padY = 5.0;
+    const borderC = Color(0xFFD9D9D9);
+    int rowWidth(List<GridCell> row) => row.fold<int>(0, (m, c) => m + (c.colSpan < 1 ? 1 : c.colSpan));
+    final cols = rows.fold<int>(0, (m, r) => rowWidth(r) > m ? rowWidth(r) : m);
+    final rh = <double>[];
+    for (final row in rows) {
+      var maxH = ch;
+      for (final cell in row) {
+        final span = cell.colSpan < 1 ? 1 : cell.colSpan;
+        final tp = TextPainter(
+          text: TextSpan(
+            text: cell.text,
+            style: TextStyle(
+                fontSize: cell.bold ? 14 : 12,
+                fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: span * cw - padX * 2);
+        if (tp.height + padY * 2 > maxH) maxH = tp.height + padY * 2;
+      }
+      rh.add(maxH);
+    }
+    final W = cols * cw;
+    final H = rh.fold<double>(0, (a, b) => a + b);
+    const scale = 3.5;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder)..scale(scale);
+    canvas.drawRect(Rect.fromLTWH(0, 0, W, H), Paint()..color = const Color(0xFFFFFFFF));
+    var y = 0.0;
+    for (var r = 0; r < rows.length; r++) {
+      final row = rows[r];
+      var acc = 0;
+      var x = 0.0;
+      for (final cell in row) {
+        final span = cell.colSpan < 1 ? 1 : cell.colSpan;
+        if (r > 0 && _coveredByRowSpan(rows, r, acc)) {
+          acc += span;
+          x += span * cw;
+          continue;
+        }
+        final cellW = span * cw;
+        final cellH = rh[r];
+        if (cell.bg == 'grey') {
+          canvas.drawRect(
+              Rect.fromLTWH(x, y, cellW, cellH),
+              Paint()..color = _c.primary.withOpacity(0.12));
+        }
+        final border = Paint()
+          ..color = borderC
+          ..strokeWidth = 0.5
+          ..style = PaintingStyle.stroke;
+        canvas.drawRect(Rect.fromLTWH(x, y, cellW, cellH), border);
+        final tp = TextPainter(
+          text: TextSpan(
+            text: cell.text,
+            style: TextStyle(
+                fontSize: cell.bold ? 14 : 12,
+                fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal,
+                color: cell.bg == 'grey' ? _c.primary : null),
+          ),
+          textDirection: TextDirection.ltr,
+          textAlign: cell.align == 'center'
+              ? TextAlign.center
+              : (cell.align == 'right' ? TextAlign.right : TextAlign.left),
+        )..layout(maxWidth: cellW - padX * 2);
+        final dx = cell.align == 'center'
+            ? x + (cellW - tp.width) / 2
+            : (cell.align == 'right' ? x + cellW - padX - tp.width : x + padX);
+        tp.paint(canvas, Offset(dx, y + (cellH - tp.height) / 2));
+        acc += span;
+        x += cellW;
+      }
+      y += rh[r];
+    }
+    final picture = recorder.endRecording();
+    return picture.toImage((W * scale).round(), (H * scale).round());
   }
 
   /// 内置标准模板（{月账单} 展开=标题+多栏月账单；渲染兜底用，保证预览有内容）
@@ -2027,13 +2128,7 @@ class _StatementPageState extends State<StatementPage> {
               clipBehavior: Clip.antiAlias,
               child: Padding(
                 padding: const EdgeInsets.all(10),
-                child: RepaintBoundary(
-                  key: _previewKey,
-                  child: ColoredBox(
-                    color: Colors.white,
-                    child: _renderTplSafe(fontSize: _tplFontSize),
-                  ),
-                ),
+                child: _renderTplSafe(fontSize: _tplFontSize),
               ),
             ),
             if (_pubTpls.any((t) => t.name != _selTplName && t.name == '模板设置'))
@@ -2106,22 +2201,21 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
-  /// 按当前样式图片打印（对账单统一打印入口）：**截图成品预览生成 PNG 图片**——所见即所得，
-  /// 与页面预览完全一致（用户"打印生成的 HTML 不好用，改成生成图片"：隐藏 iframe 自动打印被
-  /// 浏览器拦截不可靠）；Web 新窗口打开图片（浏览器可直接打印/右键保存），原生端保存图片用看图软件打印。
+  /// 按当前样式图片打印（对账单统一打印入口）：**dart:ui Canvas 完整绘制对账单为 PNG 图片**——
+  /// 所见即所得且全量完整（预览是虚拟化表格只画视口，截屏残缺——用户"图片不完整，只有一部分"；
+  /// Canvas 绘制无此限制）；Web 新窗口打开图片（浏览器可直接打印/右键保存），原生端保存图片用看图软件打印。
   Future<void> _printCurrent() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
       return;
     }
     try {
-      await WidgetsBinding.instance.endOfFrame;
-      final boundary = _previewKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-      if (boundary == null || !boundary.hasSize) {
-        toast(context, '预览尚未就绪，请稍后重试');
+      final rows = _currentRows();
+      if (rows.isEmpty || !rows.any((r) => r.any((c) => c.text.trim().isNotEmpty))) {
+        toast(context, '暂无可用模板内容，请到「模板设置」选择或创建模板');
         return;
       }
-      final image = await boundary.toImage(pixelRatio: 3.5);
+      final image = await _renderStmtImage(rows);
       final data = await image.toByteData(format: ui.ImageByteFormat.png);
       if (data == null) {
         toast(context, '对账单图片生成失败');
