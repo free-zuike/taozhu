@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:excel/excel.dart' hide Border, BorderStyle;
+import 'package:excel/excel.dart' hide Border, BorderStyle, TextSpan;
 // 前缀导入保留 excel 的 Border/BorderStyle（上方 hide 只挡无前缀名——用户"excel 打印无边框"→逐格加细边框）
 import 'package:excel/excel.dart' as exc;
 import 'package:flutter/foundation.dart' show kIsWeb;
