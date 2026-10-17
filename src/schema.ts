@@ -156,6 +156,24 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_stocks_item_unit ON stocks (item_id, unit)`,
+  // v0.17.432：FIFO 批次库存账——进货每行一个批次（batch_id=进货行 id），出货按 happened_at/created_at
+  // 先进先出逐批扣减并算成本；报损/盘点后续可直接减批次 remaining 并记损耗流水
+  `CREATE TABLE IF NOT EXISTS stock_batches (
+    batch_id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    price REAL NOT NULL DEFAULT 0,
+    remaining REAL NOT NULL DEFAULT 0,
+    happened_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_batches_item ON stock_batches (item_id, unit)`,
+  `CREATE TABLE IF NOT EXISTS sale_batch_uses (
+    sale_item_id TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    qty REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (sale_item_id, batch_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS share_links (
     token TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -262,7 +280,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '9') {
+      if (meta?.value === '10') {
         schemaReady = true;
         return;
       }
@@ -298,6 +316,14 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!stockTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS stocks'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1])]);
+    }
+    // FIFO 批次账（v0.17.432）：stock_batches + sale_batch_uses；存量库补建（D1 无列级 IF NOT EXISTS，表级幂等）
+    const batchTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'stock_batches'",
+    ).first<{ name: string }>();
+    if (!batchTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS stock_batches'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1]), db.prepare(DDL[i + 2])]);
     }
     // 分享链接表（v0.16.17.0）：对账单分享页面用
     const shareTable = await db.prepare(
@@ -543,7 +569,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '9')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '10')",
     ).run();
     schemaReady = true;
     } catch (err) {

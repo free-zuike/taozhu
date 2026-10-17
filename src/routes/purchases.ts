@@ -89,11 +89,18 @@ purchasesRouter.post('/', async (c) => {
       : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
     // 行序：客户端显式传 sort（批量直编跨单全局录入序）优先，缺省回退数组索引（批内扫描顺序）
     const lineSort = Number.isFinite(Number(item.sort)) && Number(item.sort) >= 0 ? Number(item.sort) : i;
+    const piId = randomId();
     batch.push(
       c.env.DB.prepare(
         'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sync_key, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).bind(randomId(), purchaseId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount,
+      ).bind(piId, purchaseId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount,
         item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null, lineSort),
+    );
+    // FIFO 批次账：进货每行一个批次（batch_id=进货行 id），出货按先进先出逐批扣减并算成本
+    batch.push(
+      c.env.DB.prepare(
+        'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).bind(piId, price.item_id, price.unit, effective, qty, item.happened_at?.trim() || happenedAt),
     );
     // 进货增加库存（进销单位换算：折合过则按计数单位累计，否则按原单位）
     batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
@@ -244,12 +251,21 @@ purchasesRouter.patch('/items/:id', async (c) => {
 
   // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
   const amount = qty * purchasePrice;
+  // FIFO 批次联动：已消耗量保持（该批卖出的成本不变），只剩量按新数量/新进价调整
+  const curBatch = await c.env.DB.prepare(
+    'SELECT remaining FROM stock_batches WHERE batch_id = ?',
+  ).bind(id).first<{ remaining: number }>();
+  const usedQty = Math.max(0, row.quantity - (curBatch?.remaining ?? 0));
+  const newRemaining = Math.max(0, qty - usedQty);
   const batch: D1PreparedStatement[] = [
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1), // 回滚旧值
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, count_unit: row.count_unit }, 1),  // 按新值增加
     c.env.DB.prepare(
       'UPDATE purchase_items SET quantity = ?, unit = ?, count_qty = ?, purchase_price = ?, amount = ?, happened_at = ?, note = ? WHERE id = ?',
     ).bind(qty, unit, countQty > 0 ? countQty : null, purchasePrice, amount, happenedAt || null, note, id),
+    c.env.DB.prepare(
+      'UPDATE stock_batches SET price = ?, remaining = ?, unit = ?, happened_at = ? WHERE batch_id = ?',
+    ).bind(purchasePrice, newRemaining, unit, happenedAt || null, id),
   ];
   await c.env.DB.batch(batch);
   // 无头表：组装时 happened_at=明细行最大日期，无需再同步 head
@@ -314,6 +330,10 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
     const oldLineIds = (await c.env.DB.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
       .all<{ id: string }>()).results.map((r) => r.id);
     batch.push(c.env.DB.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
+    // FIFO 批次：旧行批次删除（已消耗部分不追溯——卖出的成本快照留在 sale_items）
+    for (const lid of oldLineIds) {
+      batch.push(c.env.DB.prepare('DELETE FROM stock_batches WHERE batch_id = ?').bind(lid));
+    }
     const newLineIds: string[] = [];
     for (const [i, item] of items.entries()) {
       const price = priceMap.get(item.price_id);
@@ -335,6 +355,12 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
           'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).bind(newId, id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount2,
           item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id, lineSort),
+      );
+      // FIFO 批次：新行建批
+      batch.push(
+        c.env.DB.prepare(
+          'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ).bind(newId, price.item_id, price.unit, effective, qty, item.happened_at?.trim() || body?.happened_at?.trim() || ''),
       );
       // 按新明细增加库存（进销单位换算：折合过则按计数单位累计）
       batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
@@ -370,6 +396,8 @@ purchasesRouter.delete('/items/:id', async (c) => {
   const batch: D1PreparedStatement[] = [
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1), // 进货增加恢复
     c.env.DB.prepare('DELETE FROM purchase_items WHERE id = ?').bind(id),
+    // FIFO 批次：删批次（该批剩余丢弃；已消耗的成本快照保留在 sale_items 不追溯）
+    c.env.DB.prepare('DELETE FROM stock_batches WHERE batch_id = ?').bind(id),
   ];
   await c.env.DB.batch(batch);
   // 该行若有凭证附件（行级 purchase_item 引用），级联删除引用+R2（best-effort 不阻塞删除）
@@ -494,6 +522,8 @@ purchasesRouter.delete('/:id', adminOnly(), async (c) => {
   const batch: D1PreparedStatement[] = oldItems.results
     .map((it) => stockDeltaFor(c.env.DB, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1)); // 进货加的减回
   batch.push(c.env.DB.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
+  // FIFO 批次：整单删除清批次（已消耗部分成本快照保留）
+  batch.push(c.env.DB.prepare('DELETE FROM stock_batches WHERE batch_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?)').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
   await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'purchase', entity_id: id, detail: `删除进货记录（${oldItems.results.length} 件商品）` });

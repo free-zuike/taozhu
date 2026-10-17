@@ -8,6 +8,7 @@ import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
 import { getRoundingConfig, roundMoney } from '../lib/money';
 import { chunkQuery } from '../lib/query';
+import { consumeFifoStatements, releaseSaleUsesStatements } from '../lib/fifo';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -17,16 +18,6 @@ export const salesRouter = new Hono<{ Bindings: Env; Variables: V }>();
 salesRouter.use('*', authMiddleware());
 
 const nowIso = () => new Date().toISOString();
-
-/** 该商品+单位最近一次进货价（成本随进货走：出货成本=最近一批进的货的进价；无记录返回 null 由调用方回退档案进价） */
-async function latestPurchasePrice(db: D1Database, itemId: string, unit: string): Promise<number | null> {
-  const row = await db.prepare(
-    `SELECT pi.purchase_price FROM purchase_items pi
-     WHERE pi.item_id = ? AND pi.unit = ?
-     ORDER BY pi.happened_at DESC, pi.created_at DESC LIMIT 1`,
-  ).bind(itemId, unit).first<{ purchase_price: number }>();
-  return row ? Number(row.purchase_price) : null;
-}
 
 interface SaleItemInput {
   id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
@@ -104,11 +95,15 @@ salesRouter.post('/', async (c) => {
     total += amount;
     const siId = randomId();
     saleItemIds.push(siId);
-    // 出货成本（进价快照）：老板显式传手动进价 >0 优先；否则跟随最近进货价，无进货记录回退档案进价
+    // FIFO 批次消耗：无论成本是否手动指定都消耗批次（保证批次总量与库存一致），批次不足部分按档案进价兜底
+    const { result: fifo, stmts: fifoStmts } = await consumeFifoStatements(
+        c.env.DB, price.item_id, price.unit, qty, siId);
+    // 出货成本（进价快照）：老板显式传手动进价 >0 优先；否则 = 各批次先进先出加权成本
     const manualCost = item.cost_price !== undefined && Number(item.cost_price) > 0 ? Number(item.cost_price) : null;
     const costPrice = user.role === 'admin' && manualCost !== null
       ? manualCost
-      : ((await latestPurchasePrice(c.env.DB, price.item_id, price.unit)) ?? price.purchase_price);
+      : (fifo.leftover > 0 ? (fifo.cost + fifo.leftover * price.purchase_price) / qty : fifo.cost / qty);
+    batch.push(...fifoStmts);
     // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity（按原单位）
     const countQty = Number(item.count_qty);
     const per = Number(price.per ?? 0);
@@ -356,7 +351,21 @@ salesRouter.patch('/items/:id', async (c) => {
 
   // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
   const amount = qty * salePrice;
+  // FIFO 批次：先释放旧占用（落库后 SELECT 才能看到恢复后的 remaining），再按新数量/单位重新消耗
+  const relStmts = await releaseSaleUsesStatements(c.env.DB, id);
+  await c.env.DB.batch(relStmts);
+  const archivePrice = (await c.env.DB.prepare(
+    'SELECT purchase_price FROM item_prices WHERE item_id = ? AND unit = ? AND active = 1 ORDER BY created_at DESC LIMIT 1',
+  ).bind(row.item_id, unit).first<{ purchase_price: number }>())?.purchase_price ?? 0;
+  const { result: fifo, stmts: fifoStmts } = await consumeFifoStatements(c.env.DB, row.item_id, unit, qty, id);
+  if (!costGiven) {
+    // 未显式改进价：按当前批次先进先出重算成本（改数量/单位后成本自动跟随批次）
+    costPrice = fifo.leftover > 0
+      ? (fifo.cost + fifo.leftover * archivePrice) / qty
+      : (fifo.cost > 0 ? fifo.cost / qty : row.cost_price);
+  }
   const batch: D1PreparedStatement[] = [
+    ...fifoStmts,
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, 1),  // 出货扣减恢复（旧值）
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, count_unit: row.count_unit }, -1), // 按新值扣减
     c.env.DB.prepare(
@@ -434,6 +443,12 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       total += qty * effectiveSale;
     }
     batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
+    // FIFO：先释放旧明细的批次占用（单独落库，重新消耗的 SELECT 才能看到恢复后的 remaining）
+    const relAll: D1PreparedStatement[] = [];
+    for (const lid of oldLineIds) {
+      relAll.push(...(await releaseSaleUsesStatements(c.env.DB, lid)));
+    }
+    await c.env.DB.batch(relAll);
     const happenedAt = body?.happened_at?.trim() || '';
     const newLineIds: string[] = [];
     for (const [i, item] of items.entries()) {
@@ -443,17 +458,21 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       const salePrice = Number(item.sale_price);
       const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
       const amount = qty * effectiveSale;
-      // 出货成本（进价快照）：老板显式传手动进价 >0 优先；否则跟随最近进货价，无进货记录回退档案进价
-      const manualCost = item.cost_price !== undefined && Number(item.cost_price) > 0 ? Number(item.cost_price) : null;
-      const costPrice = c.get('user').role === 'admin' && manualCost !== null
-        ? manualCost
-        : ((await latestPurchasePrice(c.env.DB, price.item_id, price.unit)) ?? price.purchase_price);
       // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity（按原单位）
       const countQty = Number(item.count_qty);
       const per = Number(price.per ?? 0);
       const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
       const newId = item.id ?? randomId();
       newLineIds.push(newId);
+      // FIFO 批次消耗（无论成本是否手动指定都消耗批次，保证批次与库存一致）；不足部分按档案进价兜底
+      const { result: fifo, stmts: fifoStmts } = await consumeFifoStatements(
+          c.env.DB, price.item_id, price.unit, qty, newId);
+      // 出货成本（进价快照）：老板显式传手动进价 >0 优先；否则 = 批次先进先出加权成本
+      const manualCost = item.cost_price !== undefined && Number(item.cost_price) > 0 ? Number(item.cost_price) : null;
+      const costPrice = c.get('user').role === 'admin' && manualCost !== null
+        ? manualCost
+        : (fifo.leftover > 0 ? (fifo.cost + fifo.leftover * price.purchase_price) / qty : fifo.cost / qty);
+      batch.push(...fifoStmts);
       // 行序：客户端显式传 sort（批量直编跨单全局录入序）优先，缺省回退数组索引（批内扫描顺序）
       const lineSort = Number.isFinite(Number(item.sort)) && Number(item.sort) >= 0 ? Number(item.sort) : i;
       batch.push(
@@ -494,6 +513,7 @@ salesRouter.delete('/items/:id', async (c) => {
   if (!row) return c.json({ error: '明细行不存在' }, 404);
   const saleId = row.sale_id;
   const batch: D1PreparedStatement[] = [
+    ...(await releaseSaleUsesStatements(c.env.DB, id)), // FIFO：释放该行批次占用（remaining 恢复）
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, 1), // 出货扣减恢复
     c.env.DB.prepare('DELETE FROM sale_items WHERE id = ?').bind(id),
   ];
@@ -617,15 +637,20 @@ salesRouter.delete('/:id', adminOnly(), async (c) => {
      FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`).bind(id)
     .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
   // 行级凭证附件：删行前拿行 id 清理（行级附件按 sale_item/{lineId}/ 存储）
-  try {
-    const lineRows = await c.env.DB.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
-      .all<{ id: string }>();
-    for (const lr of lineRows.results) {
+  const lineRows = await c.env.DB.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
+    .all<{ id: string }>();
+  for (const lr of lineRows.results) {
+    try {
       await deleteEntityAttachments(c.env, 'sale_item', lr.id);
-    }
-  } catch (_) {}
-  const batch: D1PreparedStatement[] = oldItems.results
-    .map((it) => stockDeltaFor(c.env.DB, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1)); // 出货扣的加回
+    } catch (_) {}
+  }
+  const batch: D1PreparedStatement[] = [];
+  // FIFO：释放全部行批次占用（remaining 恢复）
+  for (const lr of lineRows.results) {
+    batch.push(...(await releaseSaleUsesStatements(c.env.DB, lr.id)));
+  }
+  batch.push(...oldItems.results
+    .map((it) => stockDeltaFor(c.env.DB, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1))); // 出货扣的加回
   batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });

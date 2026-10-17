@@ -1336,6 +1336,7 @@ class _SalePageState extends State<SalePage> {
         'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
         'sale_price': r.salePrice,
         'cost_price': costPrice,
+        if (manualCost > 0) 'cost_manual': true, // 老板手动进价标记：服务端同步时用该值，不再按 FIFO 重算
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
         'note': r.note, // 保留行原备注（payload 缺 note 会被同步 upsert 写成空）

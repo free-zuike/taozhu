@@ -10,6 +10,7 @@ import { notifyClients } from '../services/sync-hub';
 import { createStorage } from '../services/storage';
 import { parseAttachmentKey, deleteEntityAttachments } from './image-key';
 import { getRoundingConfig, roundMoney } from './money';
+import { consumeFifoStatements, releaseSaleUsesStatements } from './fifo';
 import { recordAudit } from '../routes/audit';
 import type { Env } from '../types';
 
@@ -224,12 +225,19 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
     throw new Error('出货单明细缺失（items 为空），保留服务器原明细');
   }
   // 去单据化：无 sales 头表（已物理删除），行即主记录，头字段由行聚合派生
-  // 已有旧明细：回滚其库存（出货扣减恢复），再整体替换
+  // 已有旧明细：回滚其库存（出货扣减恢复）+ 释放批次占用，再整体替换
   const old = await db.prepare(
-    `SELECT si.item_id, si.unit, si.quantity, si.count_qty, i.count_unit
+    `SELECT si.id, si.item_id, si.unit, si.quantity, si.count_qty, i.count_unit
      FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`).bind(id)
-    .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
-  const batch: D1PreparedStatement[] = old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1));
+    .all<{ id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
+  const batch: D1PreparedStatement[] = [];
+  const relAll: D1PreparedStatement[] = [];
+  for (const o of old.results) {
+    relAll.push(...(await releaseSaleUsesStatements(db, o.id)));
+  }
+  // 释放批次先落库：下面 FIFO 消耗的 SELECT 才能看到恢复后的 remaining
+  if (relAll.length > 0) await db.batch(relAll);
+  batch.push(...old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1)));
   batch.push(db.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
   for (const it of ((p.items as Record<string, any>[]) ?? [])) {
     const qty = Number(it.quantity) || 0;
@@ -240,10 +248,22 @@ async function applySaleUpsert(db: D1Database, id: string, p: Record<string, any
     const clientId = String(it.client_id ?? p.client_id ?? '');
     const countQty = Number(it.count_qty);
     const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : qty;
+    const saleItemId = it.id ?? randomId();
+    // FIFO 批次消耗（无论成本如何都消耗，保证批次与库存一致）；不足部分按档案进价兜底
+    const { result: fifo, stmts: fifoStmts } = await consumeFifoStatements(db, itemId, it.unit ?? '', qty, saleItemId);
+    // 成本：客户端标了手动进价（老板显式填）→ 用它；否则按批次先进先出重算（对齐 Web 直连口径）
+    const manual = it.cost_manual === true && Number(it.cost_price) > 0;
+    const archivePrice = (await db.prepare(
+      'SELECT purchase_price FROM item_prices WHERE item_id = ? AND unit = ? AND active = 1 ORDER BY created_at DESC LIMIT 1',
+    ).bind(itemId, it.unit ?? '').first<{ purchase_price: number }>())?.purchase_price ?? 0;
+    const costPrice = manual
+      ? Number(it.cost_price)
+      : (fifo.leftover > 0 ? (fifo.cost + fifo.leftover * archivePrice) / qty : fifo.cost / qty);
+    batch.push(...fifoStmts);
     batch.push(db.prepare(
       'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(it.id ?? randomId(), id, clientId, itemId, it.unit ?? '', qty, effCount === qty ? null : effCount,
-      Number(it.sale_price) || 0, Number(it.cost_price) || 0, amount,
+    ).bind(saleItemId, id, clientId, itemId, it.unit ?? '', qty, effCount === qty ? null : effCount,
+      Number(it.sale_price) || 0, costPrice, amount,
       it.happened_at || p.happened_at || null, it.note ?? '', Number(it.sort) || 0));
     batch.push(stockDeltaFor(db, { item_id: itemId, unit: it.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: it.count_unit ?? null }, -1));
   }

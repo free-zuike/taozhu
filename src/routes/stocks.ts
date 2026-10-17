@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { stockUpsert, stockUpsertMin } from '../lib/stock';
 import { chunkQuery } from '../lib/query';
+import { consumeFifoStatements } from '../lib/fifo';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -156,10 +157,50 @@ stocksRouter.post('/rebuild', adminOnly(), async (c) => {
     const min = minMap.get(`${r.item_id}\u0000${r.unit}`) ?? 0;
     return stockUpsert(c.env.DB, r.item_id, r.unit, Math.round(Number(r.quantity) * 100) / 100, min);
   });
+  // FIFO 批次重建：清空批次账 → 按进货流水（时间序）建批 → 按出货流水（时间序）重放消耗并重写成本
+  batch.push(
+    c.env.DB.prepare('DELETE FROM stock_batches'),
+    c.env.DB.prepare('DELETE FROM sale_batch_uses'),
+  );
   await c.env.DB.batch(batch);
+  const purchaseRows = await c.env.DB.prepare(
+    `SELECT id, item_id, unit, purchase_price, quantity, happened_at, created_at
+     FROM purchase_items ORDER BY happened_at ASC, created_at ASC, id ASC`,
+  ).all<{ id: string; item_id: string; unit: string | null; purchase_price: number; quantity: number; happened_at: string | null; created_at: string }>();
+  const batchP: D1PreparedStatement[] = purchaseRows.results.map((r) => c.env.DB.prepare(
+    'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).bind(r.id, r.item_id, r.unit ?? '', Number(r.purchase_price) || 0, Number(r.quantity) || 0, r.happened_at ?? '', r.created_at ?? ''));
+  for (let i = 0; i < batchP.length; i += 200) {
+    await c.env.DB.batch(batchP.slice(i, i + 200));
+  }
+  const saleRows = await c.env.DB.prepare(
+    `SELECT id, item_id, unit, quantity FROM sale_items
+     ORDER BY happened_at ASC, created_at ASC, sort ASC, id ASC`,
+  ).all<{ id: string; item_id: string; unit: string | null; quantity: number }>();
+  const saleBatch: D1PreparedStatement[] = [];
+  for (const s of saleRows.results) {
+    const qty = Number(s.quantity) || 0;
+    if (qty <= 0) continue;
+    const { result: fifo, stmts } = await consumeFifoStatements(c.env.DB, s.item_id, s.unit ?? '', qty, s.id);
+    saleBatch.push(...stmts);
+    if (fifo.leftover > 0) {
+      // 批次不足：未消耗部分按商品当前档案进价兜底（无档案则 0）
+      const archive = (await c.env.DB.prepare(
+        'SELECT purchase_price FROM item_prices WHERE item_id = ? AND unit = ? AND active = 1 ORDER BY created_at DESC LIMIT 1',
+      ).bind(s.item_id, s.unit ?? '').first<{ purchase_price: number }>())?.purchase_price ?? 0;
+      saleBatch.push(c.env.DB.prepare('UPDATE sale_items SET cost_price = ? WHERE id = ?').bind((fifo.cost + fifo.leftover * archive) / qty, s.id));
+    } else if (fifo.cost > 0) {
+      saleBatch.push(c.env.DB.prepare('UPDATE sale_items SET cost_price = ? WHERE id = ?').bind(fifo.cost / qty, s.id));
+    }
+    if (saleBatch.length >= 200) {
+      await c.env.DB.batch(saleBatch);
+      saleBatch.length = 0;
+    }
+  }
+  if (saleBatch.length > 0) await c.env.DB.batch(saleBatch);
   await recordAudit(c.env.DB, {
     username: c.get('user').username, action: 'rebuild', entity_type: 'stocks',
-    detail: `全量重算库存：${batch.length} 个商品+单位`,
+    detail: `全量重算库存+批次成本：${batch.length} 个商品+单位、${purchaseRows.results.length} 个进货批次、${saleRows.results.length} 个出货行`,
   });
   return c.json({ ok: true, rebuilt: batch.length });
 });
