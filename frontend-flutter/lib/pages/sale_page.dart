@@ -75,6 +75,7 @@ class _Row {
   final qtyCtrl = TextEditingController();
   final saleCtrl = TextEditingController();
   final countCtrl = TextEditingController(); // 折合计数（可选）
+  final costCtrl = TextEditingController(); // 手动进价（留空=跟随最近进货价；填写覆盖）
 }
 
 class _SalePageState extends State<SalePage> {
@@ -95,6 +96,10 @@ class _SalePageState extends State<SalePage> {
   Map<String, String> _rowSaleId = {};
   /// Web 新建保存后服务端返回的真实单据 id（识别原图附件须挂它，否则 Web 端查不到）
   String _webSaleId = '';
+  /// 店员：不显示/不提交进价（后端强制跟随最近进货价）
+  bool _isStaff = false;
+  /// 本页已装载的本地进货行（原生跟随最近进货价用，避免每行重复全表读）
+  List<Map<String, dynamic>>? _buyRowsCache;
 
   /// 该日全部真实单据 id（dateRows 批量直编：识别记账/编辑页凭证挂单据级真实单 id，
   /// 查看器批量模式须一并查——此前只查 _saleId 临时单 id 导致"批量编辑暂无附件"）
@@ -137,6 +142,7 @@ class _SalePageState extends State<SalePage> {
       r.qtyCtrl.dispose();
       r.saleCtrl.dispose();
       r.countCtrl.dispose();
+      r.costCtrl.dispose();
     }
     // 未提交退出（取消）：清理识别即挂载的原图（引用+上传队列+本地副本，不留垃圾）
     if (!_submitted && _pendingGroups.isNotEmpty) {
@@ -174,6 +180,9 @@ class _SalePageState extends State<SalePage> {
     super.initState();
     _load();
     _maybeShare();
+    Api.instance.getRole().then((r) {
+      if (mounted) setState(() => _isStaff = r == 'staff');
+    });
   }
 
   /// 微信/系统分享图片进入：等商品/店铺目录就绪后自动识别填行（草稿，用户可修改后保存）
@@ -429,6 +438,7 @@ class _SalePageState extends State<SalePage> {
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..saleCtrl.text = sp.toString()
+          ..costCtrl.text = ((it['cost_price'] as num?)?.toDouble() ?? 0) > 0 ? '${(it['cost_price'] as num?)?.toDouble()}' : ''
           ..countQty = (double.tryParse('${it['count_qty'] ?? ''}') ?? 0) > 0 ? double.tryParse('${it['count_qty'] ?? ''}') : null);
         if ((it['count_qty'] as num?)?.toDouble() != null && ((it['count_qty'] as num?)?.toDouble() ?? 0) > 0) {
           _rows.last.countCtrl.text = '${it['count_qty']}';
@@ -512,6 +522,7 @@ class _SalePageState extends State<SalePage> {
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..saleCtrl.text = sp.toString()
+          ..costCtrl.text = ((it['cost_price'] as num?)?.toDouble() ?? 0) > 0 ? '${(it['cost_price'] as num?)?.toDouble()}' : ''
           ..countQty = (double.tryParse('${it['count_qty'] ?? ''}') ?? 0) > 0 ? double.tryParse('${it['count_qty'] ?? ''}') : null);
         if ((it['count_qty'] as num?)?.toDouble() != null && ((it['count_qty'] as num?)?.toDouble() ?? 0) > 0) {
           _rows.last.countCtrl.text = '${it['count_qty']}';
@@ -1158,6 +1169,19 @@ class _SalePageState extends State<SalePage> {
     } catch (_) {}
   }
 
+  /// 原生离线"跟随最近进货价"：本地最近一笔同商品同单位进货价；无则回退商品档案进价
+  double _followLocalCost(List<Map<String, dynamic>>? buyRows, _Row r, Map<String, dynamic>? price) {
+    if (buyRows != null) {
+      for (final p in buyRows) {
+        if ('${p['item_id']}' == r.itemId && '${p['unit']}' == r.unitCtrl.text.trim()) {
+          final pp = (p['purchase_price'] as num?)?.toDouble() ?? 0;
+          if (pp > 0) return pp;
+        }
+      }
+    }
+    return (price?['purchase_price'] as num?)?.toDouble() ?? 0;
+  }
+
   Future<void> _submit() async {
     if (_clientId == null) {
       toast(context, '请选择店铺');
@@ -1286,12 +1310,19 @@ class _SalePageState extends State<SalePage> {
         .reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
     final itemsPayload = <Map<String, dynamic>>[];
     var totalCalc = 0.0;
+    // 出货成本（进价快照）：手动进价（>0）优先；留空=跟随最近进货价——
+    // 原生离线本地查最近进货（无则档案进价）；Web 留空不传，由服务端跟随取数
+    final buyRows = kIsWeb ? null : await LocalDb.getAll('purchase_items');
     for (final (i, r) in valid.indexed) {
       final opt = _items.where((x) => x.id == r.itemId).firstOrNull;
       final price = opt?.prices.where((p) => p['id'] == r.priceId).firstOrNull;
       // 存储浮点原值（对齐参考项目 REAL：本地镜像/提交不取整；舍入配置只在统计/欠款/展示层换算）
       final amount = r.quantity * r.salePrice;
       totalCalc += amount;
+      final manualCost = double.tryParse(r.costCtrl.text.trim()) ?? 0;
+      final costPrice = manualCost > 0
+          ? manualCost
+          : (kIsWeb ? (price?['purchase_price'] ?? 0) : _followLocalCost(buyRows, r, price));
       // 批量直编：行保留各自原单号（该日可能多单，统一挂新单会把原单行搬走→本地/服务器错乱）
       final rowSaleId = isDateRows ? (r.origSaleId.isNotEmpty ? r.origSaleId : saleId) : saleId;
       final rowPayload = {
@@ -1304,7 +1335,7 @@ class _SalePageState extends State<SalePage> {
         'quantity': r.quantity,
         'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
         'sale_price': r.salePrice,
-        'cost_price': price?['purchase_price'] ?? 0,
+        'cost_price': costPrice,
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
         'note': r.note, // 保留行原备注（payload 缺 note 会被同步 upsert 写成空）
@@ -1334,6 +1365,8 @@ class _SalePageState extends State<SalePage> {
             'quantity': r.quantity,
             'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
             'sale_price': r.salePrice,
+            // Web 留空=不传（服务端跟随最近进货价）；手动填 >0 才传（老板才生效）
+            if ((double.tryParse(r.costCtrl.text.trim()) ?? 0) > 0) 'cost_price': double.tryParse(r.costCtrl.text.trim()),
             'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
             'note': r.note,
             'sort': i, // 行序=展示顺序（服务端按 sort 存储，插入行不排末尾）
@@ -1363,6 +1396,7 @@ class _SalePageState extends State<SalePage> {
                     'price_id': r.priceId,
                     'quantity': r.quantity,
                     'sale_price': r.salePrice,
+                    if ((double.tryParse(r.costCtrl.text.trim()) ?? 0) > 0) 'cost_price': double.tryParse(r.costCtrl.text.trim()),
                     'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
                     'note': r.note,
                     'sort': globalSort[r.rowId] ?? i,
@@ -1574,7 +1608,8 @@ class _SalePageState extends State<SalePage> {
             ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
             ..unitCtrl.text = unit
             ..qtyCtrl.text = qty.toString()
-            ..saleCtrl.text = sp.toStringAsFixed(2);
+            ..saleCtrl.text = sp.toStringAsFixed(2)
+            ..costCtrl.text = ((it['cost_price'] as num?)?.toDouble() ?? 0) > 0 ? '${(it['cost_price'] as num?)?.toDouble()}' : '';
           _rows.add(row);
         }
         if (_rows.isEmpty) _rows.add(_newRow());
@@ -2000,6 +2035,15 @@ class _SalePageState extends State<SalePage> {
               ),
             ],
           ),
+          if (!_isStaff) ...[
+            const SizedBox(height: 6),
+            NumberPadField(
+              controller: row.costCtrl,
+              style: txtStyle,
+              decoration: _fieldDec(label: '进价（留空=最近进货价，填写按手动）'),
+              onChanged: (v) => setState(() {}),
+            ),
+          ],
           // 折合计数输入（进销单位换算通用字段）：商品配了计数单位（袋/个…）且与当前单位不同时显示。
           // 填"本单折合几个计数单位"（卖货按大单位称重、备货按小单位计数 → 填折合出的计数单位数），库存/备货按它累计——备货页显示"还剩几个"。
           if (item != null && item.countUnit.isNotEmpty && item.countUnit != row.unitCtrl.text.trim())

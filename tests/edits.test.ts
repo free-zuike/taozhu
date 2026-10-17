@@ -118,7 +118,7 @@ describe('出货单编辑 PATCH /sales/:id', () => {
     expect(detail.items).toHaveLength(1);
     expect(detail.items[0].quantity).toBe(10);
     expect(detail.items[0].sale_price).toBe(3);
-    expect(detail.items[0].cost_price).toBe(2); // 进价快照仍是当前进价 2
+    expect(detail.items[0].cost_price).toBe(1.9); // 出货成本跟随最近一次进货价（seed 进货单进价 1.9）
   });
 
   it('换店铺：欠款从 A 转到 B', async () => {

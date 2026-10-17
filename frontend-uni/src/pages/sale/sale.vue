@@ -76,6 +76,12 @@
             <input class="num" type="digit" v-model="row.salePrice" placeholder="0" />
           </view>
         </view>
+        <view v-if="!isStaff" class="num-row">
+          <view class="num-col">
+            <text class="num-label">进价（留空=最近进货价，填写按手动）</text>
+            <input class="num" type="digit" v-model="row.cost" placeholder="0" />
+          </view>
+        </view>
         <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折合 ${row.countUnit} 数`" />
         <view class="amt-line">金额 <text class="amt">¥{{ rowAmount(row) }}</text></view>
         <input class="row-note" v-model="row.note" placeholder="行备注（选填）" />
@@ -151,7 +157,7 @@ import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { computed, ref } from 'vue';
 import { onLoad, onShow, onHide, onBackPress } from '@dcloudio/uni-app';
-import { request, getToken, uploadAi, uploadAttachment, getAttachments, deleteAttachment, attachmentUrl } from '../../api';
+import { request, getToken, getRole, uploadAi, uploadAttachment, getAttachments, deleteAttachment, attachmentUrl } from '../../api';
 import { fmtAmount, initRounding } from '../../utils/money';
 import { onWs, offWs } from '../../ws';
 
@@ -166,6 +172,7 @@ interface Row {
   note: string; // 行级备注（缺省空；对齐 App 行备注）
   rowId: string; // 原明细行 id（dateRows 批量编辑保留，保存时不换 id=附件不孤儿）
   orderId: string; // 原出货单 id（dateRows 按原单分组 PATCH）
+  cost: string; // 手动进价（留空=跟随最近进货价，填写覆盖；店员不可见/不生效）
 }
 
 const clientId = ref('');
@@ -177,6 +184,7 @@ const itemNames = ref<string[]>([]);
 const date = ref('');
 const note = ref(''); // 整单备注（对齐 App：单据级备注，提交时挂各行）
 const rows = ref<Row[]>([]);
+const isStaff = getRole() === 'staff'; // 店员不显示进价框（提交手动价被后端忽略）
 const saving = ref(false);
 const loading = ref(false);
 const editId = ref(''); // 非空 = 编辑已有出货单（账本进入，提交走 PATCH）
@@ -279,7 +287,7 @@ async function loadEdit() {
       rows.value.push({
         itemId: item.id, itemName: item.name, prices: item.prices,
         priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`, unit: price.unit,
-        quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
+        quantity: String(it.quantity), salePrice: String(it.sale_price), cost: Number(it.cost_price) > 0 ? String(it.cost_price) : '', countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
         rowId: String(it.id || ''), orderId: editId.value || '',
@@ -325,7 +333,7 @@ async function copyLast() {
       rows.value.push({
         itemId: item.id, itemName: item.name, prices: item.prices,
         priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`, unit: price.unit,
-        quantity: String(it.quantity), salePrice: String(it.sale_price), countQty: it.count_qty ? String(it.count_qty) : '',
+        quantity: String(it.quantity), salePrice: String(it.sale_price), cost: Number(it.cost_price) > 0 ? String(it.cost_price) : '', countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
         rowId: genRowId(), orderId: '',
@@ -488,7 +496,7 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', draftDate
         ? rows.value[0]
         : null;
     if (!row) {
-      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '' });
+      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '', cost: '' });
       row = rows.value[rows.value.length - 1];
     }
     if (row.rowId) rowIds.push(row.rowId);
@@ -524,7 +532,7 @@ function onDate(e: { detail: { value: string } }) {
 }
 
 function addRow() {
-  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '' });
+  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '', cost: '' });
 }
 
 /// 行上移/下移（对齐 App：批次内商品顺序直接挪位置，保存按数组序重排 sort）
@@ -541,7 +549,7 @@ function insertRow(i: number) {
   uni.showActionSheet({
     itemList: ['补录（并入上方原单）', '新商品（独立新单）'],
     success: (res) => {
-      const row: Row = { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: `si${Date.now()}${Math.floor(Math.random() * 0x7fffffff)}`, orderId: '' };
+      const row: Row = { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', salePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: `si${Date.now()}${Math.floor(Math.random() * 0x7fffffff)}`, orderId: '', cost: '' };
       // 补录：归入上方行原单（插入位置=提交位置，整单凭证挂原单时插入行同单可见）
       if (res.tapIndex === 0 && i > 0 && rows.value[i - 1].orderId) row.orderId = rows.value[i - 1].orderId;
       rows.value.splice(i, 0, row);
@@ -717,6 +725,7 @@ async function loadDateRows() {
         itemId: item.id, itemName: item.name, prices: item.prices,
         priceId: price.id, priceLabel: `${price.unit}（¥${price.sale_price}·库存${price.stock ?? 0}）`, unit: price.unit,
         quantity: String(l.quantity ?? ''), salePrice: String(l.sale_price ?? price.sale_price),
+        cost: Number(l.cost_price) > 0 ? String(l.cost_price) : '',
         countQty: l.count_qty ? String(l.count_qty) : '', countUnit: String(item.count_unit || ''),
         happenedAt: String(l.happened_at || '').slice(0, 10), note: String(l.note || ''),
         rowId, orderId,
@@ -924,6 +933,7 @@ async function submit() {
             quantity: Number(r.quantity),
             count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null,
             sale_price: Number(r.salePrice) || 0,
+            ...(Number(r.cost) > 0 ? { cost_price: Number(r.cost) } : {}),
             happened_at: r.happenedAt || date.value,
             note: r.note || '',
             sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0, // 全局录入序
@@ -938,7 +948,7 @@ async function submit() {
           client_id: clientId.value,
           happened_at: date.value,
           note: note.value.trim(),
-          items: newRows.map((r) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0 })),
+          items: newRows.map((r) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, ...(Number(r.cost) > 0 ? { cost_price: Number(r.cost) } : {}), happened_at: r.happenedAt || date.value, note: r.note || '', sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0 })),
         });
         newOrderId = d.id;
         for (const r of newRows) r.orderId = newOrderId; // 回填：行级凭证回退单据级查询命中
@@ -960,7 +970,7 @@ async function submit() {
       client_id: clientId.value,
       happened_at: date.value,
       note: note.value.trim(),
-      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || note.value.trim() })),
+      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, ...(Number(r.cost) > 0 ? { cost_price: Number(r.cost) } : {}), happened_at: r.happenedAt || date.value, note: r.note || note.value.trim() })),
     };
     let savedId = editId.value;
     if (editId.value) {

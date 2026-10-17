@@ -18,12 +18,23 @@ salesRouter.use('*', authMiddleware());
 
 const nowIso = () => new Date().toISOString();
 
+/** 该商品+单位最近一次进货价（成本随进货走：出货成本=最近一批进的货的进价；无记录返回 null 由调用方回退档案进价） */
+async function latestPurchasePrice(db: D1Database, itemId: string, unit: string): Promise<number | null> {
+  const row = await db.prepare(
+    `SELECT pi.purchase_price FROM purchase_items pi
+     WHERE pi.item_id = ? AND pi.unit = ?
+     ORDER BY pi.happened_at DESC, pi.created_at DESC LIMIT 1`,
+  ).bind(itemId, unit).first<{ purchase_price: number }>();
+  return row ? Number(row.purchase_price) : null;
+}
+
 interface SaleItemInput {
   id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
   price_id: string;          // item_prices.id
   quantity: number;
   count_qty?: number;        // 本单折合计数数量（卖货按大单位称重、备货按小单位计数→填折合出的计数单位数，库存按计数单位扣；缺省=quantity 按原单位）
   sale_price?: number;       // 可覆盖默认售价
+  cost_price?: number;       // 手动进价（老板显式传 >0 生效；缺省=跟随最近进货价）
   happened_at?: string;      // 行独立日期（缺省用单据日期）
   note?: string;             // 行级备注（缺省空）
   sort?: number;             // 行序（批量直编跨单全局录入序；缺省服务端按数组序）
@@ -93,6 +104,11 @@ salesRouter.post('/', async (c) => {
     total += amount;
     const siId = randomId();
     saleItemIds.push(siId);
+    // 出货成本（进价快照）：老板显式传手动进价 >0 优先；否则跟随最近进货价，无进货记录回退档案进价
+    const manualCost = item.cost_price !== undefined && Number(item.cost_price) > 0 ? Number(item.cost_price) : null;
+    const costPrice = user.role === 'admin' && manualCost !== null
+      ? manualCost
+      : ((await latestPurchasePrice(c.env.DB, price.item_id, price.unit)) ?? price.purchase_price);
     // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity（按原单位）
     const countQty = Number(item.count_qty);
     const per = Number(price.per ?? 0);
@@ -102,7 +118,7 @@ salesRouter.post('/', async (c) => {
     batch.push(
       c.env.DB.prepare(
         'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by, sync_key, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).bind(siId, saleId, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, price.purchase_price, amount,
+      ).bind(siId, saleId, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, costPrice, amount,
         item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null, lineSort),
     );
     // 出货扣减库存（进销单位换算：折合过则按计数单位扣减，否则按原单位）
@@ -427,6 +443,11 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       const salePrice = Number(item.sale_price);
       const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
       const amount = qty * effectiveSale;
+      // 出货成本（进价快照）：老板显式传手动进价 >0 优先；否则跟随最近进货价，无进货记录回退档案进价
+      const manualCost = item.cost_price !== undefined && Number(item.cost_price) > 0 ? Number(item.cost_price) : null;
+      const costPrice = c.get('user').role === 'admin' && manualCost !== null
+        ? manualCost
+        : ((await latestPurchasePrice(c.env.DB, price.item_id, price.unit)) ?? price.purchase_price);
       // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity（按原单位）
       const countQty = Number(item.count_qty);
       const per = Number(price.per ?? 0);
@@ -438,7 +459,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
       batch.push(
         c.env.DB.prepare(
           'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(newId, id, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, price.purchase_price, amount,
+        ).bind(newId, id, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, costPrice, amount,
           item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', c.get('user').id, lineSort),
       );
       // 按新明细扣减库存（进销单位换算：折合过则按计数单位扣减）
