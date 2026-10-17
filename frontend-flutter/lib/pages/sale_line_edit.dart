@@ -22,14 +22,19 @@ Future<Map<String, dynamic>?> editSaleLine(
   final itemId = '${line['item_id'] ?? ''}';
   if (itemId.isEmpty) return null; // 无明细（备注占位行）不在此编辑，调用方回退整单编辑
 
+  // 进价快照仅老板可改（店员无成本数据，后端打码 0；前端不显示输入框，后端 403 兜底）
+  final isAdmin = await Api.instance.getRole() == 'admin';
   final qtyCtrl = TextEditingController(text: '${line['quantity'] ?? ''}');
   final unitCtrl = TextEditingController(text: '${line['unit'] ?? ''}');
   final salePrice = (line['sale_price'] as num?)?.toDouble() ?? 0;
+  final origCost = (line['cost_price'] as num?)?.toDouble() ?? 0;
   final origCountQty = (line['count_qty'] as num?)?.toDouble();
   final countCtrl = TextEditingController(
       text: origCountQty != null && origCountQty > 0 ? origCountQty.toString() : '');
   final priceCtrl = TextEditingController(
       text: salePrice > 0 ? salePrice.toString() : '');
+  final costCtrl = TextEditingController(
+      text: origCost > 0 ? origCost.toString() : '');
   final happenedAt = '${line['happened_at'] ?? ''}';
   final dateCtrl = TextEditingController(
       text: happenedAt.length >= 10 ? happenedAt.substring(0, 10) : '');
@@ -63,6 +68,14 @@ Future<Map<String, dynamic>?> editSaleLine(
                 controller: priceCtrl,
                 label: '售价（元）',
               ),
+              if (isAdmin) ...[
+                const SizedBox(height: 8),
+                NumberPadField(
+                  controller: costCtrl,
+                  label: '进价（元）',
+                  helperText: '该记录当时的进货成本（历史记录补齐/更正；店员不可见）',
+                ),
+              ],
               const SizedBox(height: 8),
               // 日期：滚轮（与小程序 picker 一致）+ 隐藏后缀小图标（窄弹窗里 16px 图标像小点），只显示日期一行
               // filled:false 对齐弹窗内其他无填充输入框（否则日期字段一块浅灰底突出刺眼）
@@ -151,6 +164,9 @@ Future<Map<String, dynamic>?> editSaleLine(
   // 售价 ≤ 0 或留空视为不改价（与服务端行级编辑口径一致：sale_price > 0 才生效，否则沿用原价）
   final priceParsed = double.tryParse(priceCtrl.text.trim());
   final price = (priceParsed != null && priceParsed > 0) ? priceParsed : salePrice;
+  // 进价：留空=不改（保持原快照）；输入 0=清空进价；>0=更新（服务端仅老板放行）
+  final costParsed = double.tryParse(costCtrl.text.trim());
+  final cost = isAdmin && costParsed != null && costParsed >= 0 ? costParsed : null;
   var date = dateCtrl.text.trim();
   if (date.isEmpty) {
     date = happenedAt.length >= 10 ? happenedAt.substring(0, 10) : '';
@@ -165,7 +181,9 @@ Future<Map<String, dynamic>?> editSaleLine(
   final origNote = '${line['note'] ?? ''}';
   final note = noteCtrl.text.trim();
   final unchanged =
-      (origQty != null && qty == origQty) && unit == origUnit && price == salePrice && date == origDate && note == origNote &&
+      (origQty != null && qty == origQty) && unit == origUnit && price == salePrice &&
+      (cost == null ? origCost == 0 : cost == origCost) &&
+      date == origDate && note == origNote &&
       ((origCountQty == null || origCountQty <= 0) ? countQty == null : (countQty != null && countQty == origCountQty));
   if (unchanged) return null;
 
@@ -176,6 +194,7 @@ Future<Map<String, dynamic>?> editSaleLine(
         'unit': unit,
         'count_qty': countQty,
         'sale_price': price,
+        if (cost != null) 'cost_price': cost,
         'happened_at': date,
         'note': note,
       });
@@ -194,6 +213,7 @@ Future<Map<String, dynamic>?> editSaleLine(
         itMap['unit'] = unit;
         itMap['count_qty'] = countQty;
         itMap['sale_price'] = price;
+        if (cost != null) itMap['cost_price'] = cost; // 进价快照补齐/更正（同步整单快照含 cost_price 列）
         itMap['amount'] = qty * price;
         itMap['happened_at'] = date;
         itMap['note'] = note;

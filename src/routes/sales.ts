@@ -305,16 +305,16 @@ salesRouter.get('/:id', async (c) => {
   });
 });
 
-// PATCH /sales/items/:id — 编辑单条出货明细行（数量/单位/售价/日期/备注；回滚旧库存再按新值扣减，重算金额与单据日期）
+// PATCH /sales/items/:id — 编辑单条出货明细行（数量/单位/售价/进价/日期/备注；回滚旧库存再按新值扣减，重算金额与单据日期）
 salesRouter.patch('/items/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => null) as {
-    quantity?: number; unit?: string; sale_price?: number; happened_at?: string; note?: string; count_qty?: number;
+    quantity?: number; unit?: string; sale_price?: number; cost_price?: number; happened_at?: string; note?: string; count_qty?: number;
   } | null;
   const row = await c.env.DB.prepare(
-    `SELECT si.id, si.sale_id, si.item_id, si.unit, si.quantity, si.count_qty, si.sale_price, si.happened_at, si.note, i.count_unit
+    `SELECT si.id, si.sale_id, si.item_id, si.unit, si.quantity, si.count_qty, si.sale_price, si.cost_price, si.happened_at, si.note, i.count_unit
      FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.id = ?`,
-  ).bind(id).first<{ id: string; sale_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; sale_price: number; happened_at: string | null; note: string | null; count_unit?: string | null }>();
+  ).bind(id).first<{ id: string; sale_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; sale_price: number; cost_price: number; happened_at: string | null; note: string | null; count_unit?: string | null }>();
   if (!row) return c.json({ error: '明细行不存在' }, 404);
 
   const qty = body?.quantity !== undefined ? Number(body.quantity) : row.quantity;
@@ -323,6 +323,17 @@ salesRouter.patch('/items/:id', async (c) => {
   const countQty = body?.count_qty !== undefined ? Number(body.count_qty) : Number(row.count_qty ?? 0);
   const sp = body?.sale_price !== undefined ? Number(body.sale_price) : row.sale_price;
   const salePrice = Number.isFinite(sp) && sp > 0 ? sp : row.sale_price;
+  // 进价快照可改（历史记录补齐当时成本；用户"之前的记录进价更改不了"）：仅老板可改，
+  // 显式传值即生效（0=清空进价，留空=保持原值）；店员无成本数据且禁止改
+  const user = c.get('user');
+  const costGiven = body?.cost_price !== undefined && body?.cost_price !== null;
+  let costPrice = row.cost_price;
+  if (costGiven) {
+    if (user.role !== 'admin') return c.json({ error: '仅老板可修改进价' }, 403);
+    const cp = Number(body?.cost_price);
+    if (!Number.isFinite(cp) || cp < 0) return c.json({ error: '进价不合法' }, 400);
+    costPrice = cp;
+  }
   const happenedAt = body?.happened_at?.trim() || row.happened_at || '';
   if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
   const note = body?.note !== undefined ? (body.note ?? '').trim() : (row.note ?? '');
@@ -333,8 +344,8 @@ salesRouter.patch('/items/:id', async (c) => {
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, 1),  // 出货扣减恢复（旧值）
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, count_unit: row.count_unit }, -1), // 按新值扣减
     c.env.DB.prepare(
-      'UPDATE sale_items SET quantity = ?, unit = ?, count_qty = ?, sale_price = ?, amount = ?, happened_at = ?, note = ? WHERE id = ?',
-    ).bind(qty, unit, countQty > 0 ? countQty : null, salePrice, amount, happenedAt || null, note, id),
+      'UPDATE sale_items SET quantity = ?, unit = ?, count_qty = ?, sale_price = ?, cost_price = ?, amount = ?, happened_at = ?, note = ? WHERE id = ?',
+    ).bind(qty, unit, countQty > 0 ? countQty : null, salePrice, costPrice, amount, happenedAt || null, note, id),
   ];
   await c.env.DB.batch(batch);
   // 无头表：组装时 happened_at=明细行最大日期，无需再同步 head
@@ -342,9 +353,9 @@ salesRouter.patch('/items/:id', async (c) => {
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: c.get('user').username });
   await recordAudit(c.env.DB, {
     username: c.get('user').username, action: 'update', entity_type: 'sale_item', entity_id: id,
-    detail: `修改出货商品行：${happenedAt ? `日期 ${happenedAt}` : ''} 数量 ${qty}${unit}${countQty > 0 ? ` ${countQty}${row.count_unit ?? '计'}` : ''}${body?.sale_price !== undefined ? ` 售价 ${salePrice}` : ''}`,
+    detail: `修改出货商品行：${happenedAt ? `日期 ${happenedAt}` : ''} 数量 ${qty}${unit}${countQty > 0 ? ` ${countQty}${row.count_unit ?? '计'}` : ''}${body?.sale_price !== undefined ? ` 售价 ${salePrice}` : ''}${costGiven ? ` 进价 ${costPrice}` : ''}`,
   });
-  return c.json({ id, sale_id: saleId, item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, sale_price: salePrice, amount, happened_at: happenedAt || null });
+  return c.json({ id, sale_id: saleId, item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, sale_price: salePrice, cost_price: costPrice, amount, happened_at: happenedAt || null });
 });
 
 // PATCH /sales/:id — 编辑出货记录（改店铺/日期/备注；传 items 则整体替换明细，原子事务）
