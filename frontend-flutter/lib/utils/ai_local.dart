@@ -266,7 +266,8 @@ String _visionPromptFor(String purpose) {
       '{"name":"商品名称（逐行抄录单据上的商品名，含规格/牌号；模糊看不清也写最接近的名称，禁止省略或留空）",'
       '"unit":"单位（斤/公斤/件/包/箱/袋，若图上有单位就照抄）","quantity":数字,"price":数字（$priceLabel，元）}]}\n'
       '要求：1) 每项一行，商品名称必填不能省略，数量只填数字（不包含单位）；2) 看不清的字段填 0 或空字符串；'
-      '3) 若图片不是单据清单，输出 {"client":"","date":"","items":[]}。';
+      '3) 单据可能有很多行，请逐行完整抄录、不得遗漏任何一行——特别注意单据底部/纸边缘的最后一行，不要因模糊或裁切省略；'
+      '4) 若图片不是单据清单，输出 {"client":"","date":"","items":[]}。';
 }
 
 /// 文字记账：描述 → 草稿明细
@@ -304,7 +305,10 @@ String? _sniffImageMime(Uint8List bytes) {
 
 /// AI 拍照识别前处理：魔数嗅探真实格式 + 压缩重编码 JPEG。
 /// 智谱 glm-4v 对图片字节数有上限（实测 ~500KB 内安全，几 MB 直接 1210"图片输入格式/解析错误"），
-/// 真实单据照片 2-6MB 必超——统一压缩到长边 1536、质量 80（真实照片 ≈ 200-400KB，安全）。
+/// 真实单据照片 2-6MB 必超——统一重编码 JPEG 压到安全线内。
+/// 压缩放宽（识别少一行优化）：resize 阈值从 1536 提到 2048——竖长条小票（如 1080×4000）宽度
+/// 从 384px 提到 ~512px，底部行字不再过小导致模型漏读最后一行；小图（≤1MB 且边长 ≤2048）
+/// 只重编码不缩分辨率，保留细节。质量 82 起步，超智谱安全线逐档降质兜底（仍超 1MB 再降）。
 /// HEIC/无法解码抛中文提示。返回 {bytes, mime}：压缩后更小才用 JPEG；否则原字节 + 修正后的真实 mime。
 Future<({Uint8List bytes, String mime})> aiPreparePhoto(Uint8List bytes, String fallbackMime) async {
   final real = _sniffImageMime(bytes) ??
@@ -318,19 +322,22 @@ Future<({Uint8List bytes, String mime})> aiPreparePhoto(Uint8List bytes, String 
       throw Exception('图片无法解析，请换一张（iPhone 的 HEIC 请先转成 JPG）');
     }
     img.Image out = decoded;
-    if (decoded.width > 1536 || decoded.height > 1536 || bytes.length > 1024 * 1024) {
+    if (decoded.width > 2048 || decoded.height > 2048 || bytes.length > 1024 * 1024) {
       final scale = decoded.width >= decoded.height
-          ? 1536 / decoded.width
-          : 1536 / decoded.height;
+          ? 2048 / decoded.width
+          : 2048 / decoded.height;
       out = img.copyResize(
         decoded,
-        width: (decoded.width * scale).round().clamp(1, 1536),
-        height: (decoded.height * scale).round().clamp(1, 1536),
+        width: (decoded.width * scale).round().clamp(1, 2048),
+        height: (decoded.height * scale).round().clamp(1, 2048),
         interpolation: img.Interpolation.linear,
       );
     }
-    var jpg = img.encodeJpg(out, quality: 80);
-    // 极少数照片压缩后仍超 1MB（如高噪点截图）→ 再降一档质量兜底
+    var jpg = img.encodeJpg(out, quality: 82);
+    // 极少数照片重编码后仍超智谱安全线（约 512KB，如高噪点/深色截图）→ 逐档降质量兜底
+    if (jpg.length > 512 * 1024) {
+      jpg = img.encodeJpg(out, quality: 70);
+    }
     if (jpg.length > 1024 * 1024) {
       jpg = img.encodeJpg(out, quality: 55);
     }

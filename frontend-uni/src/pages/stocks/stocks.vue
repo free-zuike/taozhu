@@ -3,6 +3,7 @@
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="toolbar">
       <input class="search" v-model="q" placeholder="搜索商品" @input="onSearch" />
+      <view class="pill" @click="openLossList">损耗记录</view>
       <view :class="['pill', { active: belowOnly }]" @click="toggleBelow">只看预警</view>
     </view>
 
@@ -16,11 +17,44 @@
       <view class="sub">还剩 {{ fmtQty(s.quantity) }} {{ s.unit }} · 阈值 {{ fmtQty(s.min_stock) }} {{ s.unit }}{{ s.low ? ' · 库存不足' : '' }}</view>
       <view v-if="s._others && s._others.length" class="sub">另有 {{ othersText(s._others) }}</view>
       <view class="ops">
+        <text class="op" @click.stop="loss(s)">报损</text>
         <text class="op" @click.stop="edit(s)">调整</text>
         <text class="op" @click.stop="viewTrace(s)">来源</text>
       </view>
     </view>
     <view v-if="merged.length === 0" class="empty">暂无库存记录（进货后自动入库，可点「调整」初始化）</view>
+
+    <!-- 报损弹层 -->
+    <view v-if="showLoss" class="mask" @click="showLoss = false">
+      <view class="sheet" @click.stop>
+        <view class="sheet-title">报损：{{ cur.item_name }}</view>
+        <view class="form-item">当前库存 {{ fmtQty(curQuantity) }} {{ cur.unit }}（从最早进货批次扣减，损耗不计入毛利）</view>
+        <picker v-if="lossUnits.length > 1" :range="lossUnits" :value="lossUnitIndex" @change="onLossUnit">
+          <view class="ipt picker">单位：{{ lossUnits[lossUnitIndex] }}</view>
+        </picker>
+        <input class="ipt" v-model="lossQty" type="digit" placeholder="损耗数量" />
+        <input class="ipt" v-model="lossNote" placeholder="备注（可选，如：菜叶损坏）" />
+        <button class="btn-save" :disabled="saving" @click="submitLoss">{{ saving ? '提交中…' : '确认报损' }}</button>
+      </view>
+    </view>
+
+    <!-- 损耗记录弹层 -->
+    <view v-if="showLossList" class="mask" @click="showLossList = false">
+      <view class="sheet trace-sheet" @click.stop>
+        <view class="sheet-title">损耗记录（共 {{ lossRows.length }} 笔 · 合计 {{ fmtQty(lossTotalQty) }}）</view>
+        <view v-if="lossCostVisible" class="form-item">损耗金额合计 ¥{{ fmtAmount(lossTotalAmount) }}</view>
+        <scroll-view scroll-y class="trace-list">
+          <view v-if="lossRows.length === 0" class="empty">暂无损耗记录（库存页点「报损」登记）</view>
+          <view v-for="(r, i) in lossRows" :key="i" class="t-row">
+            <view class="t-body">
+              <text class="t-name">{{ r.item_name }}（{{ r.unit }}）</text>
+              <text class="t-date">{{ r.happened_at }}{{ r.note ? ' · ' + r.note : '' }}</text>
+            </view>
+            <text class="t-qty q-out">−{{ fmtQty(r.qty) }}{{ lossCostVisible ? ' · ¥' + fmtAmount(r.amount) : '' }}</text>
+          </view>
+        </scroll-view>
+      </view>
+    </view>
 
     <!-- 调整弹层 -->
     <view v-if="showForm" class="mask" @click="showForm = false">
@@ -83,6 +117,17 @@ const formQty = ref('');
 const formMin = ref('');
 const showTrace = ref(false);
 const traceRows = ref<Array<{ kind: string; happened_at: string; quantity: number; unit: string; eff_qty: number; count_qty: number | null; note: string | null }>>([]);
+const showLoss = ref(false);
+const lossQty = ref('');
+const lossNote = ref('');
+const lossUnits = ref<string[]>([]);
+const lossUnitIndex = ref(0);
+const curQuantity = ref(0);
+const showLossList = ref(false);
+const lossRows = ref<Array<{ item_name: string; unit: string; qty: number; amount: number; happened_at: string; note: string; cost_visible?: boolean }>>([]);
+const lossTotalQty = ref(0);
+const lossTotalAmount = ref(0);
+const lossCostVisible = ref(true);
 
 /** 数量显示：整数不显示小数（后端已舍入两位），小数最多两位去尾 0（防 1.7000000000000002 斤） */
 function fmtQty(v: number | string | null | undefined): string {
@@ -142,7 +187,7 @@ async function load() {
         for (const o of (s._others || [])) sum += (Number(o.quantity) || 0) * (Number((o as any).cost_price) || 0);
       }
       // 金额合计按「我的 → 金额舍入」设置的位数（对齐 App fmtMoney）
-      totalLabel.value = `库存金额合计（按当前进价）¥${fmtAmount(sum)}`;
+      totalLabel.value = `库存金额合计（按剩余批次成本）¥${fmtAmount(sum)}`;
     } else {
       totalLabel.value = '';
     }
@@ -192,6 +237,68 @@ function convertUnit(r: { unit: string }): string {
   return (cur.value.count_unit || '') ? cur.value.count_unit! : r.unit;
 }
 
+/** 报损弹层：单位取该商品全部单位（主 + _others），默认主单位（出货单位） */
+function loss(s: Stock) {
+  const units = new Set<string>([s.unit || '']);
+  for (const o of (s._others || [])) {
+    if (o.unit) units.add(o.unit);
+  }
+  const list = [...units].filter((u) => !!u);
+  if (!list.length) {
+    uni.showToast({ title: '缺少单位信息，无法报损', icon: 'none' });
+    return;
+  }
+  cur.value = { id: s.id, item_id: s.item_id, item_name: s.item_name, unit: s.unit, count_unit: s.count_unit };
+  curQuantity.value = Number(s.quantity) || 0;
+  lossUnits.value = list;
+  lossUnitIndex.value = Math.max(0, list.indexOf(s.unit));
+  lossQty.value = '';
+  lossNote.value = '';
+  showLoss.value = true;
+}
+
+function onLossUnit(e: any) {
+  lossUnitIndex.value = Number(e.detail.value) || 0;
+}
+
+async function submitLoss() {
+  const qty = Number(lossQty.value);
+  if (!(qty > 0)) {
+    uni.showToast({ title: '损耗数量须大于 0', icon: 'none' });
+    return;
+  }
+  saving.value = true;
+  try {
+    await request('/stocks/loss', 'POST', {
+      item_id: cur.value.item_id,
+      unit: lossUnits.value[lossUnitIndex.value],
+      qty,
+      note: lossNote.value.trim(),
+    });
+    uni.showToast({ title: `已报损 ${fmtQty(qty)}${lossUnits.value[lossUnitIndex.value]}`, icon: 'success' });
+    showLoss.value = false;
+    await load();
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '报损失败', icon: 'none' });
+  } finally {
+    saving.value = false;
+  }
+}
+
+/** 损耗记录：GET /stocks/loss 列表 + 汇总（金额/单价仅老板可见，店员打码） */
+async function openLossList() {
+  try {
+    const d = await request<{ rows: Array<{ item_name: string; unit: string; qty: number; amount: number; happened_at: string; note: string; cost_visible: boolean }>; total_qty: number; total_amount: number }>('/stocks/loss', 'GET');
+    lossRows.value = d?.rows || [];
+    lossTotalQty.value = Number(d?.total_qty) || 0;
+    lossTotalAmount.value = Number(d?.total_amount) || 0;
+    lossCostVisible.value = lossRows.value.length ? lossRows.value[0].cost_visible !== false : true;
+    showLossList.value = true;
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
+  }
+}
+
 async function viewTrace(s: Stock) {
   cur.value = { id: s.id, item_id: s.item_id, item_name: s.item_name, unit: s.unit, count_unit: s.count_unit };
   showTrace.value = true;
@@ -238,6 +345,7 @@ async function viewTrace(s: Stock) {
 .k-in { background: rgba(34,197,94,0.14); color: #16a34a; }
 .k-out { background: rgba(239,68,68,0.14); color: #dc2626; }
 .t-body { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.t-name { font-size: 26rpx; font-weight: bold; }
 .t-date { font-size: 24rpx; color: var(--text-sub); }
 .t-note { font-size: 22rpx; color: var(--text-sub); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .t-qty { font-size: 26rpx; font-weight: bold; flex-shrink: 0; }

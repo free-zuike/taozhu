@@ -174,6 +174,21 @@ const DDL: string[] = [
     qty REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (sale_item_id, batch_id)
   )`,
+  // v0.17.433：损耗/报损流水——菜品损坏/变质从 FIFO 批次扣减 remaining，金额=损量×批次进价（加权），单独统计不混进出货毛利
+  `CREATE TABLE IF NOT EXISTS loss_records (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    qty REAL NOT NULL DEFAULT 0,
+    price REAL NOT NULL DEFAULT 0,
+    amount REAL NOT NULL DEFAULT 0,
+    happened_at TEXT NOT NULL DEFAULT '',
+    note TEXT DEFAULT '',
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_loss_records_item ON loss_records (item_id, unit)`,
+  `CREATE INDEX IF NOT EXISTS idx_loss_records_date ON loss_records (happened_at)`,
   `CREATE TABLE IF NOT EXISTS share_links (
     token TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -280,7 +295,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '10') {
+      if (meta?.value === '11') {
         schemaReady = true;
         return;
       }
@@ -323,6 +338,14 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     ).first<{ name: string }>();
     if (!batchTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS stock_batches'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1]), db.prepare(DDL[i + 2])]);
+    }
+    // 损耗流水（v0.17.433）：报损从批次扣减并记损耗；存量库补建
+    const lossTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'loss_records'",
+    ).first<{ name: string }>();
+    if (!lossTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS loss_records'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1]), db.prepare(DDL[i + 2])]);
     }
     // 分享链接表（v0.16.17.0）：对账单分享页面用
@@ -569,7 +592,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '10')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '11')",
     ).run();
     schemaReady = true;
     } catch (err) {

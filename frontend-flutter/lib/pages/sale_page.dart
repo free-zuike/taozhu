@@ -219,16 +219,24 @@ class _SalePageState extends State<SalePage> {
     // （浏览器 CORS 限制无法直连服务商域名）
     if (kIsWeb) {
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=sale', pb, 'photo.$ext', pm);
-      final rowIds = _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
+      final items = (d['items'] as List?) ?? [];
+      final rowIds = _fillFromDrafts(items, '${d['client'] ?? ''}', '${d['date'] ?? ''}');
       setState(() => _pendingPhoto = pb); // Web 无本地库：保存成功后直传（多批组含 bytes）
       _pendingGroups.add({'file': '${md5.convert(pb).toString()}.jpg', 'rowIds': rowIds, 'bytes': pb});
-      toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
+      final tip = items.length == rowIds.length
+          ? '识别完成：${items.length} 项已填行（原图已作凭证）'
+          : '识别到 ${items.length} 项，实际填入 ${rowIds.length} 行（差 ${items.length - rowIds.length} 项——请核对原图或补填）';
+      toast(context, tip);
       return;
     }
     final inv = await aiParsePhoto(pb, pm, purpose: 'sale');
     final rowIds = _fillFromDrafts(_draftsToMaps(inv), inv.client, inv.date);
     await _attachRecognized(bytes); // App 本地：立即挂单据级，取消时 dispose 清理（凭证保留原图）
-    toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
+    // 识别行数 vs 实际填行数诊断（模型漏读/匹配失败一目了然——用户"扫描图片经常少一行"）
+    final tip = inv.items.length == rowIds.length
+        ? '识别完成：${inv.items.length} 项已填行（原图已作凭证）'
+        : '识别到 ${inv.items.length} 项，实际填入 ${rowIds.length} 行（差 ${inv.items.length - rowIds.length} 项——请核对原图或补填）';
+    toast(context, tip);
   }
 
   /// AI 草稿（本地直连 AiInvoice）→ 填行 Map 列表（对齐服务器返回形态）
@@ -1169,18 +1177,70 @@ class _SalePageState extends State<SalePage> {
     } catch (_) {}
   }
 
-  /// 原生离线"跟随最近进货价"：本地最近一笔同商品同单位进货价；无则回退商品档案进价
-  double _followLocalCost(List<Map<String, dynamic>>? buyRows, _Row r, Map<String, dynamic>? price) {
-    if (buyRows != null) {
-      for (final p in buyRows) {
-        if ('${p['item_id']}' == r.itemId && '${p['unit']}' == r.unitCtrl.text.trim()) {
-          final pp = (p['purchase_price'] as num?)?.toDouble() ?? 0;
-          if (pp > 0) return pp;
-        }
+  /// 原生离线 FIFO 成本：本地流水派生批次（进货建批 → 出货/报损按时间序消耗），逐行消耗返回
+/// 该行加权成本；批次不足回退商品档案进价。与服务器 FIFO 同口径（离线记账联网同步后成本一致）。
+double _fifoCost(
+    List<Map<String, dynamic>> buyRows,
+    List<Map<String, dynamic>> saleRows,
+    List<Map<String, dynamic>> lossRows,
+    Map<String, List<Map<String, dynamic>>> cache,
+    _Row r,
+    Set<String> selfRowIds,
+    Map<String, dynamic>? price) {
+  final key = '${r.itemId}\u0000${r.unitCtrl.text.trim()}';
+  var batches = cache[key];
+  if (batches == null) {
+    final unit = r.unitCtrl.text.trim();
+    final b = <Map<String, dynamic>>[];
+    for (final p in buyRows) {
+      if ('${p['item_id']}' != r.itemId || '${p['unit']}' != unit) continue;
+      b.add({
+        'price': (p['purchase_price'] as num?)?.toDouble() ?? 0,
+        'remaining': (p['quantity'] as num?)?.toDouble() ?? 0,
+        't': '${p['happened_at'] ?? ''}|${p['id'] ?? ''}',
+      });
+    }
+    b.sort((a, b2) => '${a['t']}'.compareTo('${b2['t']}'));
+    final events = <({double qty, String t})>[];
+    for (final s in saleRows) {
+      if ('${s['item_id']}' != r.itemId || '${s['unit']}' != unit) continue;
+      if (selfRowIds.contains('${s['id']}')) continue; // 本单行尚未写入本地，排除
+      events.add((qty: -((s['quantity'] as num?)?.toDouble() ?? 0), t: '${s['happened_at'] ?? ''}|${s['id'] ?? ''}'));
+    }
+    for (final l in lossRows) {
+      if ('${l['item_id']}' != r.itemId || '${l['unit']}' != unit) continue;
+      events.add((qty: -((l['qty'] as num?)?.toDouble() ?? 0), t: '${l['happened_at'] ?? ''}|${l['id'] ?? ''}'));
+    }
+    events.sort((a, b2) => a.t.compareTo(b2.t));
+    for (final e in events) {
+      var need = -e.qty;
+      for (final bb in b) {
+        if (need <= 0) break;
+        final rem = (bb['remaining'] as num).toDouble();
+        if (rem <= 0) continue;
+        final use = rem < need ? rem : need;
+        bb['remaining'] = rem - use;
+        need -= use;
       }
     }
-    return (price?['purchase_price'] as num?)?.toDouble() ?? 0;
+    batches = b;
+    cache[key] = b;
   }
+  // 消耗本行（先进先出，跨批次加权）
+  var need = r.quantity;
+  var cost = 0.0;
+  for (final bb in batches) {
+    if (need <= 0) break;
+    final rem = (bb['remaining'] as num).toDouble();
+    if (rem <= 0) continue;
+    final use = rem < need ? rem : need;
+    bb['remaining'] = rem - use;
+    cost += use * (bb['price'] as num);
+    need -= use;
+  }
+  if (need <= 0 && cost > 0) return cost / r.quantity;
+  return (price?['purchase_price'] as num?)?.toDouble() ?? 0;
+}
 
   Future<void> _submit() async {
     if (_clientId == null) {
@@ -1310,9 +1370,13 @@ class _SalePageState extends State<SalePage> {
         .reduce((a, b) => a.compareTo(b) >= 0 ? a : b);
     final itemsPayload = <Map<String, dynamic>>[];
     var totalCalc = 0.0;
-    // 出货成本（进价快照）：手动进价（>0）优先；留空=跟随最近进货价——
-    // 原生离线本地查最近进货（无则档案进价）；Web 留空不传，由服务端跟随取数
+    // 出货成本（进价快照）：手动进价（>0）优先；留空=FIFO 批次先进先出（与服务器同口径）——
+    // 原生离线用本地流水派生批次（进货建批→出货/报损消耗）；Web 留空不传由服务端算
     final buyRows = kIsWeb ? null : await LocalDb.getAll('purchase_items');
+    final saleRows = kIsWeb ? null : await LocalDb.getAll('sale_items');
+    final lossRows = kIsWeb ? null : await LocalDb.getAll('loss_records');
+    final selfRowIds = {for (final r in valid) r.rowId}; // 本单行排除（尚未写入本地，避免自耗）
+    final fifoCache = <String, List<Map<String, dynamic>>>{}; // itemId\u0000unit → 剩余批次（可变）
     for (final (i, r) in valid.indexed) {
       final opt = _items.where((x) => x.id == r.itemId).firstOrNull;
       final price = opt?.prices.where((p) => p['id'] == r.priceId).firstOrNull;
@@ -1322,7 +1386,9 @@ class _SalePageState extends State<SalePage> {
       final manualCost = double.tryParse(r.costCtrl.text.trim()) ?? 0;
       final costPrice = manualCost > 0
           ? manualCost
-          : (kIsWeb ? (price?['purchase_price'] ?? 0) : _followLocalCost(buyRows, r, price));
+          : (kIsWeb
+              ? (price?['purchase_price'] ?? 0)
+              : _fifoCost(buyRows!, saleRows!, lossRows!, fifoCache, r, selfRowIds, price));
       // 批量直编：行保留各自原单号（该日可能多单，统一挂新单会把原单行搬走→本地/服务器错乱）
       final rowSaleId = isDateRows ? (r.origSaleId.isNotEmpty ? r.origSaleId : saleId) : saleId;
       final rowPayload = {

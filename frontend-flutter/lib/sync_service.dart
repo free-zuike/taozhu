@@ -713,6 +713,7 @@ class SyncService {
       // 去单据化主结构：行级商品记录（每条商品=一条主记录）
       final saleItemRows = (d['sale_items'] as List?) ?? [];
       final purchaseItemRows = (d['purchase_items'] as List?) ?? [];
+      final lossRows = (d['loss_records'] as List?) ?? [];
       await LocalDb.putAll('clients', clients.cast<Map<String, dynamic>>());
       await LocalDb.putAll('items', items.cast<Map<String, dynamic>>());
       await LocalDb.putAll('categories', categories.cast<Map<String, dynamic>>());
@@ -725,6 +726,7 @@ class SyncService {
       await LocalDb.putAll('sale_items', saleItemRows.cast<Map<String, dynamic>>());
       await LocalDb.putAll('purchase_items', purchaseItemRows.cast<Map<String, dynamic>>());
       await LocalDb.putAll('stocks', stockRows.cast<Map<String, dynamic>>());
+      await LocalDb.putAll('loss_records', lossRows.cast<Map<String, dynamic>>());
       // 合并回写：本地未推送的 upsert（服务器没有/旧值）以本地版本覆盖，离线录入不丢
       for (final e in pendingLocal.entries) {
         if (e.value.isEmpty) continue;
@@ -740,7 +742,7 @@ class SyncService {
       // 此前漏 sale_items/purchase_items/stocks 导致"同步日志拉取 N 条"与面板数字对不上
       return clients.length + items.length + categories.length + accounts.length + priceGroups.length +
           sales.length + purchases.length + payments.length +
-          saleItemRows.length + purchaseItemRows.length + stockRows.length;
+          saleItemRows.length + purchaseItemRows.length + stockRows.length + lossRows.length;
     } catch (e) {
       _lastSyncFailed = true;
       appLog('sync', '全量同步失败：${_friendlyError(e)}', level: 'error');
@@ -1441,6 +1443,7 @@ class SyncService {
      // 行级商品记录（去单据化）：同 store，行自包含（client_id/happened_at/note/amount 都在行上）
       case 'sale_item': return 'sale_items';
       case 'purchase_item': return 'purchase_items';
+      case 'loss_record': return 'loss_records';
       default: return '';
     }
   }

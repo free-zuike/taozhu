@@ -4,13 +4,17 @@ import { Hono } from 'hono';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { stockUpsert, stockUpsertMin } from '../lib/stock';
 import { chunkQuery } from '../lib/query';
-import { consumeFifoStatements } from '../lib/fifo';
+import { consumeFifoStatements, consumeLossStatements } from '../lib/fifo';
+import { randomId } from '../lib/password';
+import { recordChange } from '../lib/sync';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
 export const stocksRouter = new Hono<{ Bindings: Env; Variables: V }>();
 stocksRouter.use('*', authMiddleware());
+
+const nowIso = () => new Date().toISOString();
 
 // GET /stocks?q=&below=1 — 库存列表（含商品名；below=1 仅低于阈值）
 // 库存 = 计算值：Σ进货(+)/出货(−) 流水按 商品+单位 累计（用户"库存应该是计算出来的不是写入数据库"）；
@@ -27,10 +31,12 @@ stocksRouter.get('/', async (c) => {
        SELECT item_id, unit, COALESCE(quantity, 0) AS qty FROM purchase_items
        UNION ALL
        SELECT item_id, unit, -COALESCE(quantity, 0) AS qty FROM sale_items
+       UNION ALL
+       SELECT item_id, unit, -COALESCE(qty, 0) AS qty FROM loss_records
      ) GROUP BY item_id, unit`,
   ).all<{ item_id: string; unit: string; quantity: number }>();
   const itemIds = [...new Set(agg.results.map((r) => r.item_id))];
-  const [itemRows, stockRows, priceRows] = await Promise.all([
+  const [itemRows, stockRows, batchCostRows, priceRows] = await Promise.all([
     itemIds.length
       ? chunkQuery(itemIds, (chunk) =>
           c.env.DB.prepare(
@@ -38,12 +44,17 @@ stocksRouter.get('/', async (c) => {
           ).bind(...chunk).all<{ id: string; name: string; count_unit: string | null }>().then((r) => r.results))
       : Promise.resolve([] as Array<{ id: string; name: string; count_unit: string | null }>),
     c.env.DB.prepare('SELECT item_id, unit, id, min_stock FROM stocks').all<{ item_id: string; unit: string; id: string; min_stock: number }>(),
+    // 库存成本 = 剩余批次加权单价（FIFO：剩多少批、每批什么价 → 平均成本）；无批次用档案进价兜底
+    c.env.DB.prepare(
+      'SELECT item_id, unit, SUM(price * remaining) AS amount, SUM(remaining) AS qty FROM stock_batches GROUP BY item_id, unit',
+    ).all<{ item_id: string; unit: string; amount: number; qty: number }>(),
     c.env.DB.prepare('SELECT item_id, unit, purchase_price FROM item_prices WHERE active = 1').all<{ item_id: string; unit: string; purchase_price: number }>(),
   ]);
   const itemName = new Map(itemRows.map((x) => [x.id, x.name]));
   const itemCountUnit = new Map(itemRows.map((x) => [x.id, x.count_unit ?? '']));
   const stockCfg = new Map(stockRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, x]));
-  const costMap = new Map(priceRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, Number(x.purchase_price) || 0]));
+  const batchCost = new Map(batchCostRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, Number(x.qty) > 0 ? Number(x.amount) / Number(x.qty) : 0]));
+  const archiveCost = new Map(priceRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, Number(x.purchase_price) || 0]));
   const merged = agg.results
     .map((r) => ({ ...r, item_name: itemName.get(r.item_id) ?? '', count_unit: itemCountUnit.get(r.item_id) ?? '' }))
     .filter((r) => r.item_name !== '') // 商品已删除（deleted_at）→ 不显示
@@ -84,7 +95,7 @@ stocksRouter.get('/', async (c) => {
       quantity: Math.round(Math.max(Number(r.quantity) || 0, 0) * 100) / 100,
       min_stock: Number(r.min_stock) || 0,
       suggest_min: suggest.get(`${r.item_id}\u0000${r.unit}`) ?? 0,
-      cost_price: canSeeCost ? (costMap.get(`${r.item_id}\u0000${r.unit}`) ?? 0) : 0,
+      cost_price: canSeeCost ? (batchCost.get(`${r.item_id}\u0000${r.unit}`) || archiveCost.get(`${r.item_id}\u0000${r.unit}`) || 0) : 0,
       low: (Number(r.quantity) || 0) <= (Number(r.min_stock) || 0),
     })),
     can_see_cost: canSeeCost,
@@ -151,6 +162,9 @@ stocksRouter.post('/rebuild', adminOnly(), async (c) => {
        UNION ALL
        SELECT i.id AS item_id, COALESCE(NULLIF(i.count_unit, ''), si.unit) AS unit, -COALESCE(si.count_qty, si.quantity) AS qty
          FROM sale_items si JOIN items i ON i.id = si.item_id
+       UNION ALL
+       SELECT i.id AS item_id, COALESCE(NULLIF(i.count_unit, ''), lr.unit) AS unit, -COALESCE(lr.qty, 0) AS qty
+         FROM loss_records lr JOIN items i ON i.id = lr.item_id
      ) GROUP BY item_id, unit`,
   ).all<{ item_id: string; unit: string; quantity: number }>();
   const batch = rows.results.map((r) => {
@@ -198,9 +212,26 @@ stocksRouter.post('/rebuild', adminOnly(), async (c) => {
     }
   }
   if (saleBatch.length > 0) await c.env.DB.batch(saleBatch);
+  // 损耗重放：按时间序报损从剩余批次扣减（不写 uses）
+  const lossRows = await c.env.DB.prepare(
+    `SELECT id, item_id, unit, qty FROM loss_records
+     ORDER BY happened_at ASC, created_at ASC, id ASC`,
+  ).all<{ id: string; item_id: string; unit: string | null; qty: number }>();
+  const lossBatch: D1PreparedStatement[] = [];
+  for (const l of lossRows.results) {
+    const qty = Number(l.qty) || 0;
+    if (qty <= 0) continue;
+    const { stmts } = await consumeLossStatements(c.env.DB, l.item_id, l.unit ?? '', qty);
+    lossBatch.push(...stmts);
+    if (lossBatch.length >= 200) {
+      await c.env.DB.batch(lossBatch);
+      lossBatch.length = 0;
+    }
+  }
+  if (lossBatch.length > 0) await c.env.DB.batch(lossBatch);
   await recordAudit(c.env.DB, {
     username: c.get('user').username, action: 'rebuild', entity_type: 'stocks',
-    detail: `全量重算库存+批次成本：${batch.length} 个商品+单位、${purchaseRows.results.length} 个进货批次、${saleRows.results.length} 个出货行`,
+    detail: `全量重算库存+批次成本：${batch.length} 个商品+单位、${purchaseRows.results.length} 个进货批次、${saleRows.results.length} 个出货行、${lossRows.results.length} 条损耗`,
   });
   return c.json({ ok: true, rebuilt: batch.length });
 });
@@ -217,4 +248,74 @@ stocksRouter.patch('/:id', adminOnly(), async (c) => {
   await c.env.DB.prepare('UPDATE stocks SET min_stock = ? WHERE id = ?')
     .bind(Math.round(minStock * 100) / 100, id).run();
   return c.json({ ok: true });
+});
+
+// POST /stocks/loss — 报损（损耗）：从 FIFO 批次最早批扣减 remaining，金额=损量×批次进价（加权），
+// 单独记 loss_records 流水（不计入出货毛利）；损耗超过当前库存（批次剩余不足）拒绝。
+stocksRouter.post('/loss', adminOnly(), async (c) => {
+  const body = await c.req.json().catch(() => null) as {
+    item_id?: string; unit?: string; qty?: number; happened_at?: string; note?: string;
+  } | null;
+  const itemId = body?.item_id?.trim() ?? '';
+  const unit = body?.unit?.trim() ?? '';
+  const qty = Number(body?.qty);
+  if (!itemId || !unit || !Number.isFinite(qty) || qty <= 0) {
+    return c.json({ error: '请填写商品/单位/损耗数量（>0）' }, 400);
+  }
+  const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
+  const { amount, leftover, stmts } = await consumeLossStatements(c.env.DB, itemId, unit, qty);
+  if (leftover > 0) {
+    return c.json({ error: `损耗数量超过当前库存（还差 ${Math.round(leftover * 100) / 100}${unit}）` }, 400);
+  }
+  const lossId = randomId();
+  const unitPrice = amount / qty;
+  const batch: D1PreparedStatement[] = [
+    ...stmts,
+    c.env.DB.prepare(
+      'INSERT INTO loss_records (id, item_id, unit, qty, price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(lossId, itemId, unit, qty, unitPrice, amount, happenedAt, body?.note?.trim() ?? '', c.get('user').id),
+  ];
+  await c.env.DB.batch(batch);
+  await recordChange(c.env.DB, { entity_type: 'loss_record', entity_sync_id: lossId, payload: {
+    id: lossId, item_id: itemId, unit, qty, price: unitPrice, amount, happened_at: happenedAt, note: body?.note?.trim() ?? '',
+  }, updated_by_username: c.get('user').username });
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'loss', entity_type: 'stocks',
+    detail: `报损：${itemId} ${unit} ${qty}，金额 ¥${Math.round(amount * 100) / 100}${body?.note?.trim() ? `（${body.note.trim()}）` : ''}`,
+  });
+  return c.json({ id: lossId, item_id: itemId, unit, qty, price: unitPrice, amount, happened_at: happenedAt }, 201);
+});
+
+// GET /stocks/loss?date_from=&date_to=&q= — 损耗流水列表（含商品名）+ 区间汇总金额
+stocksRouter.get('/loss', async (c) => {
+  const canSeeCost = c.get('user').role === 'admin';
+  const dateFrom = c.req.query('date_from')?.trim();
+  const dateTo = c.req.query('date_to')?.trim();
+  const q = c.req.query('q')?.trim() ?? '';
+  let where = ' WHERE 1=1';
+  const params: string[] = [];
+  if (dateFrom) { where += ' AND lr.happened_at >= ?'; params.push(dateFrom); }
+  if (dateTo) { where += ' AND lr.happened_at <= ?'; params.push(dateTo); }
+  if (q) { where += ' AND i.name LIKE ?'; params.push(`%${q}%`); }
+  const rows = await c.env.DB.prepare(
+    `SELECT lr.id, lr.item_id, lr.unit, lr.qty, lr.price, lr.amount, lr.happened_at, lr.note, lr.created_at, i.name AS item_name
+     FROM loss_records lr JOIN items i ON i.id = lr.item_id${where}
+     ORDER BY lr.happened_at DESC, lr.created_at DESC`,
+  ).bind(...params).all<{ id: string; item_id: string; unit: string; qty: number; price: number; amount: number; happened_at: string; note: string | null; created_at: string; item_name: string }>();
+  const sum = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(lr.amount), 0) AS amount, COALESCE(SUM(lr.qty), 0) AS qty FROM loss_records lr JOIN items i ON i.id = lr.item_id${where}`,
+  ).bind(...params).first<{ amount: number; qty: number }>();
+  return c.json({
+    rows: rows.results.map((r) => ({
+      id: r.id, item_id: r.item_id, item_name: r.item_name, unit: r.unit,
+      qty: Math.round(r.qty * 100) / 100,
+      amount: Math.round(r.amount * 100) / 100,
+      price: Math.round(r.price * 100) / 100,
+      happened_at: r.happened_at, note: r.note ?? '',
+      // 店员不可见成本：金额/单价打码（损耗金额是老板看的成本信息）
+      cost_visible: canSeeCost,
+    })),
+    total_amount: canSeeCost ? Math.round((sum?.amount ?? 0) * 100) / 100 : 0,
+    total_qty: Math.round((sum?.qty ?? 0) * 100) / 100,
+  });
 });

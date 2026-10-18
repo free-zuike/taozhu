@@ -205,6 +205,10 @@ export function maskPayload(entityType: string, payload: unknown): unknown {
     const p = payload as Record<string, unknown>;
     return { ...p, purchase_price: 0 };
   }
+  if (entityType === 'loss_record') {
+    const p = payload as Record<string, unknown>;
+    return { ...p, price: 0, amount: 0 };
+  }
   if (entityType === 'sale' || entityType === 'purchase') {
     const p = payload as { items?: Array<Record<string, unknown>> };
     if (!Array.isArray(p.items)) return payload;

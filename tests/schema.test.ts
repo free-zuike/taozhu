@@ -105,9 +105,10 @@ describe('schema.sql 完整建表与幂等', () => {
     // 标记表已补建且有行（0.17.323 店铺结账抹零 → clients.round_stage/round_unit 列 → 快检版本 '7'；
     // 0.17.326 行序 → sale_items/purchase_items.sort 列 → 快检版本 '8'；
     // 0.17.368 价格组 → price_groups/item_group_prices 表 + clients.price_group_id 列 → 快检版本 '9'；
-    // 0.17.432 FIFO 批次账 → stock_batches/sale_batch_uses 表 → 快检版本 '10'）
+    // 0.17.432 FIFO 批次账 → stock_batches/sale_batch_uses 表 → 快检版本 '10'；
+    // 0.17.433 报损 → loss_records 表 → 快检版本 '11'）
     const meta = await db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").first<{ value: string }>();
-    expect(meta?.value).toBe('10');
+    expect(meta?.value).toBe('11');
     // 二次调用（模拟后续请求）不抛
     resetSchemaState();
     await expect(ensureSchema(db as never)).resolves.toBeUndefined();

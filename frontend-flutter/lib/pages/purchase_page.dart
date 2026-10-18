@@ -194,16 +194,24 @@ class _PurchasePageState extends State<PurchasePage> {
     // App 本地直连 AI 服务商（用户要求：参考项目本地直连，不经服务器代理）；Web 保持服务器（CORS 限制）
     if (kIsWeb) {
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', pb, 'photo.$ext', pm);
-      final rowIds = _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+      final items = (d['items'] as List?) ?? [];
+      final rowIds = _fillFromDrafts(items, '${d['date'] ?? ''}');
       setState(() => _pendingPhoto = pb);
       _pendingGroups.add({'file': '${md5.convert(pb).toString()}.jpg', 'rowIds': rowIds, 'bytes': pb});
-      toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
+      final tip = items.length == rowIds.length
+          ? '识别完成：${items.length} 项已填行（原图已作凭证）'
+          : '识别到 ${items.length} 项，实际填入 ${rowIds.length} 行（差 ${items.length - rowIds.length} 项——请核对原图或补填）';
+      toast(context, tip);
       return;
     }
     final inv = await aiParsePhoto(pb, pm, purpose: 'purchase');
     final rowIds = _fillFromDrafts(_draftsToMaps(inv), inv.date);
     await _attachRecognized(bytes); // 凭证保留原图
-    toast(context, '识别完成（原图已作为本单凭证，提交后同步上传）');
+    // 识别行数 vs 实际填行数诊断（模型漏读/匹配失败一目了然——用户"扫描图片经常少一行"）
+    final tip = inv.items.length == rowIds.length
+        ? '识别完成：${inv.items.length} 项已填行（原图已作凭证）'
+        : '识别到 ${inv.items.length} 项，实际填入 ${rowIds.length} 行（差 ${inv.items.length - rowIds.length} 项——请核对原图或补填）';
+    toast(context, tip);
   }
 
   /// AI 草稿（本地直连 AiInvoice）→ 填行 Map 列表（对齐服务器返回形态）

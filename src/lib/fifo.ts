@@ -56,3 +56,25 @@ export async function releaseSaleUsesStatements(
     db.prepare('DELETE FROM sale_batch_uses WHERE sale_item_id = ?').bind(saleItemId),
   ];
 }
+
+/** 损耗（报损）扣减：按先进先出从最早批次扣 remaining，返回加权损耗金额与不足量（不写 uses——损耗不可回滚，只记流水） */
+export async function consumeLossStatements(
+  db: D1Database, itemId: string, unit: string, qty: number,
+): Promise<{ amount: number; leftover: number; stmts: D1PreparedStatement[] }> {
+  const batches = await db.prepare(
+    `SELECT batch_id, price, remaining FROM stock_batches
+     WHERE item_id = ? AND unit = ? AND remaining > 0
+     ORDER BY happened_at ASC, created_at ASC`,
+  ).bind(itemId, unit).all<{ batch_id: string; price: number; remaining: number }>();
+  let need = qty;
+  let amount = 0;
+  const stmts: D1PreparedStatement[] = [];
+  for (const b of batches.results) {
+    if (need <= 0) break;
+    const used = Math.min(need, b.remaining);
+    stmts.push(db.prepare('UPDATE stock_batches SET remaining = remaining - ? WHERE batch_id = ?').bind(used, b.batch_id));
+    amount += used * b.price;
+    need -= used;
+  }
+  return { amount, leftover: need, stmts };
+}

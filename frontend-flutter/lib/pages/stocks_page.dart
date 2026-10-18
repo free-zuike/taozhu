@@ -229,6 +229,170 @@ class _StocksPageState extends State<StocksPage> {
     }
   }
 
+  /// 报损（损耗）：老板操作、需在线——从 FIFO 最早进货批次扣减，单独记损耗流水（不计入出货毛利）。
+  /// 单位下拉取该商品全部单位（主卡 + 折叠行），默认主单位（出货单位）。
+  Future<void> _reportLoss(Map<String, dynamic> s) async {
+    final units = <String>{'${s['unit'] ?? ''}'};
+    for (final o in ((s['_others'] as List?) ?? const []).cast<Map<String, dynamic>>()) {
+      final u = '${o['unit'] ?? ''}';
+      if (u.isNotEmpty) units.add(u);
+    }
+    final unitList = units.where((u) => u.isNotEmpty).toList();
+    if (unitList.isEmpty) {
+      toast(context, '缺少单位信息，无法报损');
+      return;
+    }
+    if (!kIsWeb && Api.instance.isOffline) {
+      toast(context, '报损需联网（当前离线，联网后再报损）');
+      return;
+    }
+    final qtyCtrl = TextEditingController();
+    final noteCtrl = TextEditingController();
+    var selUnit = unitList.first;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: Text('报损：${s['item_name']}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text('当前库存：${fmtQty(s['quantity'] as num?)} ${s['unit']}'
+                    '（从最早进货批次扣减，损耗不计入毛利）',
+                    style: const TextStyle(fontSize: 13)),
+              ),
+              if (unitList.length > 1) ...[
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  value: selUnit,
+                  decoration: const InputDecoration(labelText: '单位', isDense: true),
+                  items: [for (final u in unitList) DropdownMenuItem(value: u, child: Text(u))],
+                  onChanged: (v) => setDlg(() => selUnit = v ?? selUnit),
+                ),
+              ],
+              const SizedBox(height: 10),
+              NumberPadField(controller: qtyCtrl, label: '损耗数量'),
+              const SizedBox(height: 10),
+              TextField(
+                controller: noteCtrl,
+                decoration: const InputDecoration(labelText: '备注（可选，如：菜叶损坏）', isDense: true),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('确认报损')),
+          ],
+        ),
+      ),
+    );
+    final qty = double.tryParse(qtyCtrl.text.trim()) ?? 0;
+    final note = noteCtrl.text.trim();
+    qtyCtrl.dispose();
+    noteCtrl.dispose();
+    if (ok != true || !mounted) return;
+    if (qty <= 0) {
+      toast(context, '损耗数量须大于 0');
+      return;
+    }
+    try {
+      await Api.instance.post('/stocks/loss', {
+        'item_id': s['item_id'],
+        'unit': selUnit,
+        'qty': qty,
+        'note': note,
+      });
+      toast(context, '已报损 ${fmtQty(qty)}$selUnit');
+      SyncService.notifyStockChanged(); // 我的页低库存红字实时刷新
+      _refresh();
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// 损耗记录：GET /stocks/loss 列表 + 区间汇总（金额/单价仅老板可见，店员打码对齐成本）
+  Future<void> _lossList() async {
+    try {
+      final d = await Api.instance.get('/stocks/loss');
+      final rows = ((d['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final costVisible = rows.isEmpty || rows.first['cost_visible'] != false;
+      final totalQty = (d['total_qty'] as num?)?.toDouble() ?? 0;
+      final totalAmount = (d['total_amount'] as num?)?.toDouble() ?? 0;
+      if (!mounted) return;
+      await showCenterSheet<void>(
+        context: context,
+        maxHeightFactor: 0.85,
+        builder: (ctx) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text('损耗记录', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                  ),
+                  Text('共 ${rows.length} 笔 · 合计 ${fmtQty(totalQty)}',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                ],
+              ),
+            ),
+            if (costVisible)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                child: Text('损耗金额合计 ¥${fmtMoney(totalAmount)}',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            if (rows.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: Text('暂无损耗记录（库存页行内可点「报损」）', style: TextStyle(fontSize: 13))),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: rows.length,
+                  itemBuilder: (_, i) {
+                    final r = rows[i];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${r['item_name']}（${r['unit']}）',
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                                Text('${r['happened_at'] ?? ''}${'${r['note'] ?? ''}'.isNotEmpty ? ' · ${r['note']}' : ''}',
+                                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            '−${fmtQty(r['qty'] as num?)}'
+                            '${costVisible ? ' · ¥${fmtMoney(r['amount'] as num?)}' : ''}',
+                            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFFDC2626)),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   /// 盘点弹层：列出所有商品价格单位，填写/修改库存与阈值，批量保存（可初始化期初库存）
   Future<void> _count() async {
     try {
@@ -520,6 +684,11 @@ class _StocksPageState extends State<StocksPage> {
         actions: [
           IconButton(tooltip: '盘点', icon: const Icon(Icons.edit_note_outlined), onPressed: _count),
           IconButton(
+            tooltip: '损耗记录',
+            icon: const Icon(Icons.receipt_long_outlined),
+            onPressed: _lossList,
+          ),
+          IconButton(
             tooltip: '只看预警',
             icon: Icon(Icons.notification_important_outlined,
                 color: _belowOnly ? _c.danger : null),
@@ -564,7 +733,7 @@ class _StocksPageState extends State<StocksPage> {
                             padding: const EdgeInsets.only(bottom: 8),
                             child: Row(
                               children: [
-                                Text('库存金额合计（按当前进价）',
+                                Text('库存金额合计（按剩余批次成本）',
                                     style: TextStyle(fontSize: 12, color: _c.textSub)),
                                 const Spacer(),
                                 Text(
@@ -626,13 +795,26 @@ class _StocksPageState extends State<StocksPage> {
         title: Text('${s['item_name']}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
         subtitle: Text('还剩 ${fmtQty(s['quantity'] as num?)} ${s['unit']} · 阈值 ${fmtQty(s['min_stock'] as num?)} ${s['unit']}$othersText',
             style: TextStyle(fontSize: 12, color: _c.textSub)),
-        trailing: Text(
-          '${fmtQty(s['quantity'] as num?)} ${s['unit']}',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: low ? _c.danger : _c.success,
-          ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${fmtQty(s['quantity'] as num?)} ${s['unit']}',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: low ? _c.danger : _c.success,
+              ),
+            ),
+            const SizedBox(width: 2),
+            IconButton(
+              tooltip: '报损',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.remove_circle_outline, size: 20),
+              color: _c.danger.withOpacity(0.8),
+              onPressed: () => _reportLoss(s),
+            ),
+          ],
         ),
         onTap: () => _viewTrace(s),
       ),

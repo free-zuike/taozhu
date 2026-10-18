@@ -302,10 +302,20 @@ syncRouter.get('/full', async (c) => {
     return isStaff ? { ...r, cost_price: 0 } : r;
   });
 
+  // 损耗流水（报损）：本地离线 FIFO 派生与库存显示需要（库存=进−出−损耗）
+  const lossRows = await db.prepare(
+    `SELECT lr.id, lr.item_id, lr.unit, lr.qty, lr.price, lr.amount, lr.happened_at, lr.note, lr.created_at, i.name AS item_name
+     FROM loss_records lr JOIN items i ON i.id = lr.item_id ORDER BY lr.happened_at, lr.created_at`,
+  ).all();
+  const losses = lossRows.results.map((x) => {
+    const r = x as Record<string, unknown>;
+    return isStaff ? { ...r, price: 0, amount: 0 } : r;
+  });
+
   return c.json({ clients, items, categories, payment_accounts, price_groups,
     // 去单据化主结构：行级商品记录数组（前端 fullSync 主读数），sales/purchases 整单仅作兼容
     sale_items: saleItems.results, purchase_items: purchaseItems.results,
-    sales, purchases, payments, stocks, server_cursor: await maxCursor(db) });
+    sales, purchases, payments, stocks, loss_records: losses, server_cursor: await maxCursor(db) });
 });
 
 // GET /sync/stats — 服务器端各实体计数 + 变更流游标（同步状态面板/差异诊断用）
