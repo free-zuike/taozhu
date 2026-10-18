@@ -401,13 +401,13 @@ Future<AiInvoice> aiParseVoice(Uint8List bytes, String mime, {String purpose = '
     final url = _speechSttUrl(p.baseUrl);
     final req = http.MultipartRequest('POST', Uri.parse(url))
       ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
-      // 只发必需参数（对齐 beecount：file+model 在表单字段，不加 header model——部分服务商对多余 header 敏感）
+      // 只发必需参数，file 不设 Content-Type（octet-stream）——逐字节对齐 beecount _speechToTextOpenAI
       ..fields['model'] = _modelFor(p, 'speech')
-      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'voice.m4a', contentType: http.MediaType.parse(mime)));
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'voice.m4a'));
     final resp = await req.send().timeout(const Duration(seconds: 60));
     final body = await resp.stream.bytesToString();
     if (resp.statusCode != 200) {
-      final err = 'AI 语音通道 ${resp.statusCode}（$url）: ${body.length > 120 ? body.substring(0, 120) : body}';
+      final err = 'AI 语音通道 ${resp.statusCode}（$url）: ${body.isEmpty ? '（空响应体）' : body}';
       appLog('ai', '语音转文字失败：$err', level: 'error');
       throw Exception(err);
     }
@@ -489,14 +489,13 @@ Future<String> aiTestCapability(String cap) async {
     final url = _speechSttUrl(p.baseUrl);
     final req = http.MultipartRequest('POST', Uri.parse(url))
       ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
-      // 只发必需参数（对齐 beecount：file+model 在表单字段，不加 header model）
+      // 只发必需参数，file 不设 Content-Type（octet-stream）——逐字节对齐 beecount _speechToTextOpenAI
       ..fields['model'] = _modelFor(p, 'speech')
-      ..files.add(http.MultipartFile.fromBytes('file', _silenceWav(), filename: 'test.wav',
-          contentType: http.MediaType.parse('audio/wav')));
+      ..files.add(http.MultipartFile.fromBytes('file', _silenceWav(), filename: 'test.wav'));
     final resp = await req.send().timeout(const Duration(seconds: 60));
     final body = await resp.stream.bytesToString();
     if (resp.statusCode != 200) {
-      throw Exception('AI 语音通道 ${resp.statusCode}（$url）: ${body.length > 120 ? body.substring(0, 120) : body}');
+      throw Exception('AI 语音通道 ${resp.statusCode}（$url）: ${body.isEmpty ? '（空响应体）' : body}');
     }
     return '语音转文字通道连通（已真实发送测试音频）';
   }
