@@ -236,12 +236,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       final names = items.take(5).map((e) => '${(e as Map)['name'] ?? ''}').where((s) => s.isNotEmpty).join('、');
       return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
     }
-    final reply = await aiTestCapability(capability);
-    if (capability == 'speech') {
-      // 语音测试改交互式录音（对齐语音记账：固定秒数用户来不及开口=录到静音，
-      // 部分 ASR 如 TeleAI/TeleSpeechASR 拒静音返回 500；弹窗手动结束保证真实人声）
-      return await aiTestSpeechRecord(context);
-    }
+    // 直接测试（对齐参考实现：静音素材直接发，不交互）——App 本地直连，Web 走服务器
+    return await aiTestCapability(capability);
     return capability == 'vision'
             ? (reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply')
             : '文字记账正常：$reply';

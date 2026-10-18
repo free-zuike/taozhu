@@ -5,7 +5,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:flutter/material.dart' show AlertDialog, BuildContext, FilledButton, Navigator, showDialog;
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart' show MediaType;
 import 'package:image/image.dart' as img;
@@ -454,41 +453,6 @@ Future<AiInvoice> aiParseVoice(Uint8List bytes, String mime, {String purpose = '
   }
 }
 
-/// 语音测试（录音式）：录一段真实人声发 STT（对齐语音记账交互——固定秒数录音用户来不及
-/// 开口会录到静音，部分 ASR 如 TeleAI/TeleSpeechASR 拒静音返回 500；弹窗手动点「结束」
-/// 保证录到真实人声，与语音记账同款交互同款通道）。
-Future<String> aiTestSpeechRecord(BuildContext context) async {
-  final perm = await Permission.microphone.request();
-  if (!perm.isGranted) throw Exception('需要麦克风权限才能语音测试');
-  final rec = AudioRecorder();
-  final dir = await getTemporaryDirectory();
-  final path = '${dir.path}/taozhu_voice_test_${DateTime.now().millisecondsSinceEpoch}.m4a';
-  await rec.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
-  var finished = false;
-  await showDialog<void>(
-    context: context,
-    barrierDismissible: false,
-    builder: (ctx) => AlertDialog(
-      title: const Text('语音测试'),
-      content: const Text('正在录音，请说一句话（如：白菜两斤），说完点「结束」'),
-      actions: [
-        FilledButton(
-          onPressed: () {
-            finished = true;
-            Navigator.pop(ctx);
-          },
-          child: const Text('结束'),
-        ),
-      ],
-    ),
-  );
-  await rec.stop();
-  if (!finished) throw Exception('录音未完成');
-  final bytes = await File(path).readAsBytes();
-  final text = await _speechToTextBytes(bytes, 'audio/mp4', 'voice.m4a');
-  return text.isEmpty ? '语音通道连通（未识别出文字）' : '语音识别正常：$text';
-}
-
 AiInvoice _normalizeInvoice(String raw) {
   final drafts = _normalizeDrafts(raw);
   var client = '';
@@ -545,15 +509,22 @@ Future<String> aiTestCapability(String cap) async {
     return raw;
   }
   if (cap == 'speech') {
-    // 真实语音测试：生成 0.25s 静音 WAV 真发服务商 stt（Key 无效/通道错误如实报，不假通过）
+    // 直接测试（对齐 beecount：1 秒静音 WAV 真发服务商 stt，静音返回空文本也算连通成功）——
+    // file 带 Content-Type（audio/x-wav，同 beecount Dio 推断/服务器 Blob type），
+    // 不设会发成 octet-stream，部分服务商对文件 MIME 敏感返回 500。
     final p = _providerFor(cfg, 'speechProviderId');
     if (p.apiKey.trim().isEmpty) throw Exception('「${p.name}」未配置 Key，无法测试语音');
     final url = _speechSttUrl(p.baseUrl);
     final req = http.MultipartRequest('POST', Uri.parse(url))
       ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
-      // 只发必需参数，file 不设 Content-Type（octet-stream）——逐字节对齐 beecount _speechToTextOpenAI
+      // 只发必需参数（file+model 表单字段，对齐 beecount _speechToTextOpenAI）
       ..fields['model'] = _modelFor(p, 'speech')
-      ..files.add(http.MultipartFile.fromBytes('file', _silenceWav(), filename: 'test.wav'));
+      ..files.add(http.MultipartFile.fromBytes(
+        'file',
+        _silenceWav(),
+        filename: 'test.wav',
+        contentType: MediaType('audio', 'x-wav'),
+      ));
     final resp = await req.send().timeout(const Duration(seconds: 60));
     final body = await resp.stream.bytesToString();
     if (resp.statusCode != 200) {
