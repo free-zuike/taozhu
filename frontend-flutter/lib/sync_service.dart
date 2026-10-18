@@ -1423,7 +1423,33 @@ class SyncService {
           });
       if (sameBinding && sameProviders) return; // 无变化：静默
       await aiSaveConfig(cfg);
-      appLog('ai', '同步 AI 配置：${cfg.providers.length} 个服务商（${cfg.providers.where((x) => x.apiKey.trim().isNotEmpty).length} 个 Key，他端变更）');
+      // 具体变更留痕（用户"日志应显示修改了什么"）：服务商增删 + 各字段 旧→新 + 绑定变化
+      final diffs = <String>[];
+      for (final p in cfg.providers) {
+        if (!local.providers.any((q) => q.id == p.id)) diffs.add('新增服务商「${p.name}」');
+      }
+      for (final x in local.providers) {
+        if (!cfg.providers.any((q) => q.id == x.id)) diffs.add('删除服务商「${x.name}」');
+      }
+      for (final p in cfg.providers) {
+        final x = local.providers.where((q) => q.id == p.id).firstOrNull;
+        if (x == null) continue;
+        if (x.apiKey != p.apiKey) diffs.add('「${p.name}」Key 变更');
+        if (x.baseUrl != p.baseUrl) diffs.add('「${p.name}」地址 ${x.baseUrl} → ${p.baseUrl}');
+        if (x.textModel != p.textModel) diffs.add('「${p.name}」文字模型 ${x.textModel} → ${p.textModel}');
+        if (x.visionModel != p.visionModel) diffs.add('「${p.name}」图片模型 ${x.visionModel} → ${p.visionModel}');
+        if (x.audioModel != p.audioModel) diffs.add('「${p.name}」语音模型 ${x.audioModel} → ${p.audioModel}');
+      }
+      if (local.binding['textProviderId'] != cfg.binding['textProviderId']) {
+        diffs.add('文字绑定 ${local.binding['textProviderId']} → ${cfg.binding['textProviderId']}');
+      }
+      if (local.binding['visionProviderId'] != cfg.binding['visionProviderId']) {
+        diffs.add('图片绑定 ${local.binding['visionProviderId']} → ${cfg.binding['visionProviderId']}');
+      }
+      if (local.binding['speechProviderId'] != cfg.binding['speechProviderId']) {
+        diffs.add('语音绑定 ${local.binding['speechProviderId']} → ${cfg.binding['speechProviderId']}');
+      }
+      appLog('ai', '同步 AI 配置（他端变更）：${diffs.isEmpty ? '服务商/绑定整体更新' : diffs.join('；')}');
     } catch (e) {
       appLog('ai', '同步 AI 配置失败：${e.toString().split('\n').first}', level: 'error');
     }

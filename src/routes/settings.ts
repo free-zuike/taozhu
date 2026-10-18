@@ -148,15 +148,17 @@ settingsRouter.put('/ai', async (c) => {
       const old = prevById.get(p.id);
       // api_key: undefined=保留旧值；''=清空；非空=覆盖（前端不持有明文，未编辑过的服务商不带该字段）
       const apiKey = p.api_key === undefined ? (old?.apiKey ?? '') : p.api_key.trim();
+      // 模型/地址同语义：undefined=保留旧值；''=显式清空（App 端删掉模型后不再被旧值兜底复活——
+      // 用户"App 去掉模型再次打开又显示"根因）；非空=覆盖
       return {
         id: p.id,
         name: (p.name ?? '').trim() || old?.name || p.id,
         isBuiltIn: Boolean(p.is_built_in ?? old?.isBuiltIn ?? false),
         apiKey,
-        baseUrl: p.base_url?.trim() || old?.baseUrl || ZHIPU_PROVIDER.baseUrl,
-        textModel: p.text_model?.trim() || old?.textModel || ZHIPU_PROVIDER.textModel,
-        visionModel: p.vision_model?.trim() || old?.visionModel || ZHIPU_PROVIDER.visionModel,
-        audioModel: p.audio_model?.trim() || old?.audioModel || ZHIPU_PROVIDER.audioModel,
+        baseUrl: p.base_url === undefined ? (old?.baseUrl ?? ZHIPU_PROVIDER.baseUrl) : p.base_url.trim(),
+        textModel: p.text_model === undefined ? (old?.textModel ?? ZHIPU_PROVIDER.textModel) : p.text_model.trim(),
+        visionModel: p.vision_model === undefined ? (old?.visionModel ?? ZHIPU_PROVIDER.visionModel) : p.vision_model.trim(),
+        audioModel: p.audio_model === undefined ? (old?.audioModel ?? ZHIPU_PROVIDER.audioModel) : p.audio_model.trim(),
       };
     });
     // 智谱内置不可删除（对齐参考项目）：始终保底在列表（置顶）
