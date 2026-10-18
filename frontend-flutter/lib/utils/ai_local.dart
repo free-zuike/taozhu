@@ -509,26 +509,44 @@ Future<String> aiTestCapability(String cap) async {
     return raw;
   }
   if (cap == 'speech') {
-    // 直接测试（对齐 beecount：1 秒静音 WAV 真发服务商 stt，静音返回空文本也算连通成功）——
-    // file 带 Content-Type（audio/x-wav，同 beecount Dio 推断/服务器 Blob type），
-    // 不设会发成 octet-stream，部分服务商对文件 MIME 敏感返回 500。
+    // 直接测试（对齐 beecount：1 秒静音 WAV 真发服务商 stt，静音返回空文本也算连通成功）。
+    // multipart 手写 body：file 在前、model 在后（http 包 MultipartRequest 固定先 fields 后 files
+    // = model 先于 file，与 beecount Dio 添加顺序相反——部分服务商对字段顺序敏感）；
+    // file 带 Content-Type audio/x-wav（同 Dio 推断，不设会发成 octet-stream 被部分服务商拒）。
     final p = _providerFor(cfg, 'speechProviderId');
     if (p.apiKey.trim().isEmpty) throw Exception('「${p.name}」未配置 Key，无法测试语音');
     final url = _speechSttUrl(p.baseUrl);
-    final req = http.MultipartRequest('POST', Uri.parse(url))
+    final model = _modelFor(p, 'speech');
+    final wav = _silenceWav();
+    final boundary = 'taozhu_b_${DateTime.now().millisecondsSinceEpoch}';
+    final body = BytesBuilder();
+    void part(String name, String value, {String? filename, String? contentType, List<int>? bytes}) {
+      body.add(utf8.encode('--$boundary\r\n'));
+      body.add(utf8.encode('Content-Disposition: form-data; name="$name"${filename != null ? '; filename="$filename"' : ''}\r\n'));
+      if (contentType != null) body.add(utf8.encode('Content-Type: $contentType\r\n'));
+      body.add(utf8.encode('\r\n'));
+      if (bytes != null) {
+        body.add(bytes);
+      } else {
+        body.add(utf8.encode(value));
+      }
+      body.add(utf8.encode('\r\n'));
+    }
+    // file 在前、model 在后（对齐 Dio fromMap 添加顺序）
+    part('file', '', filename: 'test.wav', contentType: 'audio/x-wav', bytes: wav);
+    part('model', model);
+    body.add(utf8.encode('--$boundary--\r\n'));
+    final req = http.Request('POST', Uri.parse(url))
       ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
-      // 只发必需参数（file+model 表单字段，对齐 beecount _speechToTextOpenAI）
-      ..fields['model'] = _modelFor(p, 'speech')
-      ..files.add(http.MultipartFile.fromBytes(
-        'file',
-        _silenceWav(),
-        filename: 'test.wav',
-        contentType: MediaType('audio', 'x-wav'),
-      ));
+      ..headers['Content-Type'] = 'multipart/form-data; boundary=$boundary'
+      ..bodyBytes = body.takeBytes();
+    appLog('ai', '语音测试请求：$url model=$model file=${wav.length}B audio/x-wav 字段顺序=file,model');
     final resp = await req.send().timeout(const Duration(seconds: 60));
-    final body = await resp.stream.bytesToString();
+    final bodyText = await resp.bodyBytes.isEmpty ? '' : utf8.decode(resp.bodyBytes, allowMalformed: true);
+    appLog('ai', '语音测试响应：status=${resp.statusCode} 头=${resp.headers.keys.toList()} 体=${bodyText.isEmpty ? '（空响应体）' : bodyText}',
+        level: resp.statusCode == 200 ? 'ai' : 'error');
     if (resp.statusCode != 200) {
-      throw Exception('AI 语音通道 ${resp.statusCode}（$url）: ${body.isEmpty ? '（空响应体）' : body}');
+      throw Exception('AI 语音通道 ${resp.statusCode}（$url）: ${bodyText.isEmpty ? '（空响应体）' : bodyText}');
     }
     return '语音转文字通道连通（已真实发送测试音频）';
   }
