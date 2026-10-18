@@ -383,19 +383,19 @@ class _StatementPageState extends State<StatementPage> {
   /// 固定全量尺寸包 RepaintBoundary 挂屏幕外渲染后截图（对齐参考实现生成图片报告的做法——
   /// 文字走 widget 正常渲染，中文不会丢失；预览是虚拟化 TableView 只画视口格，
   /// 直接截当前屏幕必然残缺"图片不完整"——Overlay 外给全量尺寸则视口覆盖全部行，完整）。
-  /// 图片按 A4 纵向比例排版（表格居中 + 白纸页边距）：打印默认纵向 A4，
-  /// 浏览器/看图软件打印对话框仍可调方向纸张；文字强制黑字（暗色主题默认浅色看不清）。
+  /// 图片 = 完整 A4 纵向整页（210×297mm）：表格按可用宽等比缩放放页面上部，下方自然留白——
+  /// 打印默认纵向 A4、内容按实际大小不铺满（用户"图片横着占满 A4/正常竖着只占上半部分"，需
+  /// 边距 + 整页 A4 比例，浏览器"适应页面"不再拉伸）；文字强制黑字（暗色主题默认浅色看不清）。
   /// 返回 PNG 字节。列宽 120 / 行高 44 / 合并单元格与预览一致（所见即所得）。
   Future<Uint8List> _renderStmtImageByWidget(List<List<GridCell>> rows) async {
     int rowWidth(List<GridCell> row) => row.fold<int>(0, (m, c) => m + (c.colSpan < 1 ? 1 : c.colSpan));
     final cols = rows.fold<int>(0, (m, r) => rowWidth(r) > m ? rowWidth(r) : m);
     final w = cols * 120.0;
     final h = rows.length * 44.0;
-    // A4 纵向页面：宽:高 ≈ 210:297；表格不足一页宽度时按比例补宽并居中（防"默认横版 A4"）
+    // A4 整页（96dpi）：宽 794 × 高 1123 逻辑像素；表格超宽自动等比缩放，不足则原大小放上部
+    const pageW = 794.0;
+    const pageH = 1123.0;
     const margin = 40.0;
-    const a4Ratio = 210 / 297;
-    final pageW = math.max(w + margin * 2, (h + margin * 2) * a4Ratio);
-    final pageH = h + margin * 2;
     final key = GlobalKey();
     final overlay = Overlay.of(context);
     late OverlayEntry entry;
@@ -407,16 +407,21 @@ class _StatementPageState extends State<StatementPage> {
           color: Colors.transparent,
           child: RepaintBoundary(
             key: key,
-            // 白纸 + A4 纵向比例 + 表格居中（用户"默认变横版A4"→按页面比例生成则默认纵向）
             child: SizedBox(
               width: pageW,
               height: pageH,
-              child: Center(
-                child: SizedBox(
-                  width: w,
-                  height: h,
-                  // 截图白底 + 强制黑字（不跟随主题文字色——暗色主题下默认为浅色，白底上看不清）
-                  child: tplPreviewTable(rows, fontSize: 12, primary: _c.primary, textColor: Colors.black),
+              child: Container(
+                color: Colors.white,
+                padding: const EdgeInsets.all(margin),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.topCenter,
+                  child: SizedBox(
+                    width: w,
+                    height: h,
+                    // 截图白底 + 强制黑字（不跟随主题文字色——暗色主题下默认为浅色，白底上看不清）
+                    child: tplPreviewTable(rows, fontSize: 12, primary: _c.primary, textColor: Colors.black),
+                  ),
                 ),
               ),
             ),
@@ -923,14 +928,23 @@ class _StatementPageState extends State<StatementPage> {
       }
       return w > m ? w : m;
     });
-    final compact = colCount >= 6; // 多栏 8 列
+    // 列宽按该列内容最长文本自适应（中文按 2 字符宽折算）——硬编码 8 会让日期
+    // "2026-07-01"（10 字符宽）显示不全（用户"excel 显示不全日期"）；下限 6 上限 14
+    // 防极宽/极窄，多栏（旬段 31 号 8 列）总宽仍在 A4 一页内，标准 2 列自然宽松
     for (var cc = 0; cc < colCount; cc++) {
-      if (compact) {
-        // 日期列 8 / 金额列 10（8 列总宽 = 4*8 + 4*10 = 72 字符，A4 纵向可放下）
-        sheet.setColumnWidth(cc, cc.isEven ? 8 : 10);
-      } else {
-        sheet.setColumnWidth(cc, cc.isEven ? 12 : 14);
+      var maxLen = 0;
+      for (final row in trows) {
+        var acc = 0;
+        for (final c in row) {
+          final span = c.colSpan < 1 ? 1 : c.colSpan;
+          if (cc >= acc && cc < acc + span) {
+            final len = c.text.runes.fold<int>(0, (s, r) => s + (r > 0xFF ? 2 : 1));
+            if (len > maxLen) maxLen = len;
+          }
+          acc += span;
+        }
       }
+      sheet.setColumnWidth(cc, (maxLen + 2).clamp(6, 14).toDouble());
     }
     return excel;
   }

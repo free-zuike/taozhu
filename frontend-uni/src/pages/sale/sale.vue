@@ -16,6 +16,7 @@
         </view>
       </picker>
       <view class="ic-btn" :class="{ disabled: loading }" @click="copyLast"><text class="mi">&#xe14d;</text></view>
+      <view class="ic-btn" :class="{ disabled: loading }" @click="showCostOrderDlg"><text class="ic-txt" style="font-size:22rpx">价序</text></view>
       <view class="ic-btn ai" :class="{ disabled: aiBusy }" @click="aiMenu"><text class="mi">&#xe1ec;</text></view>
     </view>
     <!-- 批量直编头：卡片式对齐 App _infoCard（店铺/日期/整单凭证各行分层 + AI 操作行；不挤一排） -->
@@ -124,6 +125,26 @@
         <view class="dlg-ops">
           <button class="btn-cancel" @click="newItemDlg = false; newItemResolve(false)">不加入</button>
           <button class="btn-ok" @click="doCreateNewItems()">加入商品库</button>
+        </view>
+      </view>
+    </view>
+
+    <!-- 进价自动带出顺序（对齐 App：进价留空按顺序取第一个有效值填入，可再手改） -->
+    <view v-if="costDlg" class="mask" @click="costDlg = false">
+      <view class="sheet" @click.stop>
+        <text class="s-title">进价自动带出顺序</text>
+        <text class="s-sub">进价留空时按此顺序取第一个有效值；可再手改/清空</text>
+        <view v-for="(s, i) in costOrderEdit" :key="s" class="cost-row">
+          <text class="cost-idx">{{ i + 1 }}.</text>
+          <text class="cost-name">{{ COST_LABEL[s] }}</text>
+          <view class="cost-ops">
+            <text class="cost-op" :class="{ off: i === 0 }" @click="moveCost(i, -1)">↑</text>
+            <text class="cost-op" :class="{ off: i === costOrderEdit.length - 1 }" @click="moveCost(i, 1)">↓</text>
+          </view>
+        </view>
+        <view class="dlg-ops">
+          <button class="btn-cancel" @click="costDlg = false">取消</button>
+          <button class="btn-ok" @click="saveCostOrder">保存</button>
         </view>
       </view>
     </view>
@@ -786,6 +807,7 @@ async function onItemInput(i: number) {
       }
     } catch (_) {}
   }
+  applyCostByOrder(row);
 }
 
 /// 单位输入失焦：匹配到该商品的价格组合 → 带出价格；自定义单位（商品无此单位）=价格手动填（对齐 App）
@@ -802,6 +824,64 @@ function onUnitBlur(i: number) {
   } else {
     row.priceId = ''; // 自定义单位：价格手动填
     row.priceLabel = `单位 ${row.unit}（自定义，价格请手动填写）`;
+  }
+  applyCostByOrder(row);
+}
+
+// ── 进价自动带出顺序（对齐 App：进价留空按配置顺序取第一个有效值；小程序无本地流水，
+//    recent 来源暂跳过，group/item 取商品价格行进价）────────────────────────────
+const COST_ORDER_KEY = 'costSourceOrder';
+const COST_LABEL: Record<string, string> = {
+  recent_txn: '最近本店交易成本',
+  recent_purchase: '最近一次进货价',
+  group: '价格组（同单位）进价',
+  item: '商品库默认进价',
+};
+const COST_IDS = ['recent_txn', 'recent_purchase', 'group', 'item'];
+const costDlg = ref(false);
+const costOrderEdit = ref<string[]>([]);
+
+function costOrder(): string[] {
+  const raw = uni.getStorageSync(COST_ORDER_KEY) as string[] | '';
+  if (Array.isArray(raw) && raw.length && raw.every((x) => COST_IDS.includes(x))) return raw;
+  return [...COST_IDS];
+}
+
+function showCostOrderDlg() {
+  costOrderEdit.value = [...costOrder()];
+  costDlg.value = true;
+}
+
+function moveCost(i: number, dir: number) {
+  const j = i + dir;
+  if (j < 0 || j >= costOrderEdit.value.length) return;
+  const t = costOrderEdit.value[i];
+  costOrderEdit.value[i] = costOrderEdit.value[j];
+  costOrderEdit.value[j] = t;
+}
+
+function saveCostOrder() {
+  uni.setStorageSync(COST_ORDER_KEY, costOrderEdit.value);
+  costDlg.value = false;
+  uni.showToast({ title: '进价带出顺序已保存', icon: 'none' });
+}
+
+function applyCostByOrder(row: Row) {
+  if (row.cost && Number(row.cost) > 0) return;
+  if (!row.itemId) return;
+  for (const src of costOrder()) {
+    let v = 0;
+    if (src === 'group') {
+      const p = (row.prices || []).find((p2: any) => p2.unit === (row.unit || '')) || (row.prices || [])[0];
+      v = Number((p as any)?.purchase_price) || 0;
+    } else if (src === 'item') {
+      const p = (row.prices || [])[0];
+      v = Number((p as any)?.purchase_price) || 0;
+    }
+    if (v > 0) {
+      row.cost = Number.isInteger(v) ? String(v) : String(v);
+      return;
+    }
   }
 }
 
@@ -1076,6 +1156,14 @@ async function submit() {
 .ins-bar { display: flex; align-items: center; gap: 16rpx; padding: 8rpx 16rpx; }
 .ins-line { flex: 1; height: 1rpx; background: var(--divider); }
 .ins-tx { font-size: 22rpx; color: var(--primary); }
+/* 进价带出顺序弹层（对齐 App：上移/下移调整来源顺序；存本机，两端各自存储） */
+.cost-row { display: flex; align-items: center; padding: 12rpx 0; }
+.cost-idx { width: 52rpx; color: var(--text-sub, #888); font-size: 26rpx; }
+.cost-name { flex: 1; font-size: 28rpx; color: var(--text, #222); }
+.cost-ops { display: flex; gap: 12rpx; }
+.cost-op { width: 52rpx; height: 52rpx; line-height: 50rpx; text-align: center; border: 1rpx solid var(--divider, #ddd); border-radius: 8rpx; font-size: 28rpx; color: var(--primary); }
+.cost-op.off { opacity: 0.3; }
+.ic-txt { color: var(--primary); line-height: 1; }
 .ipt-note { background: var(--input-bg); border-radius: 12rpx; padding: 18rpx 20rpx; margin-bottom: 16rpx; font-size: 26rpx; }
 .del { color: #f56c6c; font-size: 36rpx; padding: 8rpx; flex-shrink: 0; line-height: 1; }
 /* 全屏凭证查看器（对齐 App attachment_viewer） */

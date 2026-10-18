@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../local_freq.dart';
@@ -544,6 +545,156 @@ class _SalePageState extends State<SalePage> {
       row.salePrice = (price['sale_price'] as num?)?.toDouble() ?? 0;
       row.saleCtrl.text = row.salePrice > 0 ? row.salePrice.toStringAsFixed(2) : '';
     }
+    unawaited(_applyCostByOrder(row, item));
+  }
+
+  // ── 进价（成本）自动带出：来源顺序可配置（出货页 AppBar「进价顺序」入口调整）────
+  // 候选源：recent_txn=本店最近出货该商品成本快照 / recent_purchase=最近一次进货价 /
+  //         group=价格组（按行单位匹配价格行）进价 / item=商品库默认进价；
+  // 进价输入框留空时按配置顺序取第一个有效值填入（可视可改可清空，清空提交仍走 FIFO）。
+  static const _costOrderKey = 'costSourceOrder';
+  static const _costSources = [
+    ('recent_txn', '最近本店交易成本'),
+    ('recent_purchase', '最近一次进货价'),
+    ('group', '价格组（同单位）进价'),
+    ('item', '商品库默认进价'),
+  ];
+
+  Future<List<String>> _costOrder() async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getStringList(_costOrderKey);
+    if (raw != null && raw.isNotEmpty && raw.every((x) => _costSources.any((s) => s.$1 == x))) return raw;
+    return const ['recent_txn', 'recent_purchase', 'group', 'item'];
+  }
+
+  Future<void> _saveCostOrder(List<String> order) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList(_costOrderKey, order);
+  }
+
+  Future<double> _costFrom(_Row row, _ItemOption item, String src) async {
+    switch (src) {
+      case 'recent_txn':
+        final sales = await LocalDb.getAll('sales');
+        final clientOf = {for (final s in sales) '${s['id'] ?? ''}': '${s['client_id'] ?? ''}'};
+        final rows = await LocalDb.getAll('sale_items');
+        final mine = rows.where((r) {
+          final cid = '${r['client_id'] ?? ''}'.isNotEmpty
+              ? '${r['client_id']}'
+              : (clientOf['${r['sale_id'] ?? ''}'] ?? '');
+          return cid == _clientId && '${r['item_id'] ?? ''}' == item.id;
+        }).toList()
+          ..sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+        if (mine.isEmpty) return 0;
+        return (mine.first['cost_price'] as num?)?.toDouble() ?? 0;
+      case 'recent_purchase':
+        final rows = await LocalDb.getAll('purchase_items');
+        final mine = rows.where((r) => '${r['item_id'] ?? ''}' == item.id).toList()
+          ..sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+        if (mine.isEmpty) return 0;
+        return (mine.first['purchase_price'] as num?)?.toDouble() ?? 0;
+      case 'group':
+        final unit = row.unitCtrl.text.trim();
+        final p = item.prices.where((x) => '${x['unit']}' == unit).firstOrNull ?? item.prices.firstOrNull;
+        return (p?['purchase_price'] as num?)?.toDouble() ?? 0;
+      case 'item':
+        final p = item.prices.where((x) => (x['active'] as num?) != 0).firstOrNull ?? item.prices.firstOrNull;
+        return (p?['purchase_price'] as num?)?.toDouble() ?? 0;
+    }
+    return 0;
+  }
+
+  /// 进价框留空时按配置顺序带出（有值不覆盖；首个有效值填入，用户可再改/清空）
+  Future<void> _applyCostByOrder(_Row row, _ItemOption item) async {
+    try {
+      if (row.costCtrl.text.trim().isNotEmpty) return;
+      if (row.itemId == null) return;
+      for (final src in await _costOrder()) {
+        final v = await _costFrom(row, item, src);
+        if (v > 0) {
+          row.costCtrl.text = v.toStringAsFixed(2);
+          if (mounted) setState(() {});
+          return;
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// 「进价顺序」设置弹窗（记录出货时直接调整带出顺序，保存本地生效，两端各自存储）
+  Future<void> _showCostOrderDlg() async {
+    final order = [...await _costOrder()];
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('进价自动带出顺序（进价留空时按顺序取第一个有效值）',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _c.text)),
+                const SizedBox(height: 10),
+                for (var i = 0; i < order.length; i++) ...[
+                  Row(
+                    children: [
+                      Text('${i + 1}.',
+                          style: TextStyle(fontSize: 14, color: _c.textSub, fontWeight: FontWeight.w600)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(_costSources.firstWhere((s) => s.$1 == order[i]).$2,
+                            style: TextStyle(fontSize: 14, color: _c.text)),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.arrow_upward, size: 18),
+                        onPressed: i == 0
+                            ? null
+                            : () => setDlg(() {
+                                  final t = order[i - 1];
+                                  order[i - 1] = order[i];
+                                  order[i] = t;
+                                }),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.arrow_downward, size: 18),
+                        onPressed: i == order.length - 1
+                            ? null
+                            : () => setDlg(() {
+                                  final t = order[i + 1];
+                                  order[i + 1] = order[i];
+                                  order[i] = t;
+                                }),
+                      ),
+                    ],
+                  ),
+                  if (i < order.length - 1) const Divider(height: 1),
+                ],
+                const SizedBox(height: 10),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () async {
+                        await _saveCostOrder(order);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        toast(context, '进价带出顺序已保存');
+                      },
+                      child: const Text('保存'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// 选中商品带出「当前店铺最近一次」的单位/单价（不同店铺单价不同——用户需求）：
@@ -618,6 +769,7 @@ class _SalePageState extends State<SalePage> {
           row.unitCtrl.text = unit;
           row.salePrice = sp;
           row.saleCtrl.text = sp.toStringAsFixed(2);
+          unawaited(_applyCostByOrder(row, item));
           return;
         }
       }
@@ -671,6 +823,7 @@ class _SalePageState extends State<SalePage> {
         row.salePrice = (price['sale_price'] as num?)?.toDouble() ?? 0;
         row.saleCtrl.text = row.salePrice > 0 ? row.salePrice.toStringAsFixed(2) : '';
       }
+      unawaited(_applyCostByOrder(row, item));
     } else {
       row.priceId = null; // 自定义单位：价格手动填
     }
@@ -1696,6 +1849,11 @@ double _fifoCost(
             tooltip: '复制上一单',
             icon: const Icon(Icons.copy_all_outlined),
             onPressed: _busy ? null : _copyLast,
+          ),
+          IconButton(
+            tooltip: '进价顺序',
+            icon: const Icon(Icons.price_change_outlined),
+            onPressed: _busy ? null : _showCostOrderDlg,
           ),
           PopupMenuButton<String>(
             tooltip: 'AI 记账（拍照/文字/语音）',
