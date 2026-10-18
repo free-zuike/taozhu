@@ -242,7 +242,7 @@ class _StocksPageState extends State<StocksPage> {
       toast(context, '缺少单位信息，无法报损');
       return;
     }
-    if (!kIsWeb && Api.instance.isOffline) {
+    if (!kIsWeb && Api.isOffline) {
       toast(context, '报损需联网（当前离线，联网后再报损）');
       return;
     }
@@ -375,7 +375,7 @@ class _StocksPageState extends State<StocksPage> {
                           ),
                           Text(
                             '−${fmtQty(r['qty'] as num?)}'
-                            '${costVisible ? ' · ¥${fmtMoney(r['amount'] as num?)}' : ''}',
+                            '${costVisible ? ' · ¥${fmtMoney((r['amount'] as num?)?.toDouble() ?? 0)}' : ''}',
                             style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFFDC2626)),
                           ),
                         ],
