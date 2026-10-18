@@ -378,7 +378,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                 ),
                 TextField(
                   controller: audioModelCtrl,
-                  decoration: const InputDecoration(labelText: '语音记账模型', hintText: '如 glm-asr-2512（语音转文字）'),
+                  decoration: const InputDecoration(labelText: '语音记账模型', hintText: '如 whisper-1（语音转文字）'),
                 ),
               ],
             ),
@@ -424,7 +424,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     final keyCtrl = TextEditingController();
     final visionModelCtrl = TextEditingController(text: 'glm-4v-flash');
     final textModelCtrl = TextEditingController(text: 'glm-4-flash');
-    final audioModelCtrl = TextEditingController(text: 'glm-asr-2512');
+    final audioModelCtrl = TextEditingController(text: 'whisper-1');
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(

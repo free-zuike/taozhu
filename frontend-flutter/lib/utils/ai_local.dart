@@ -60,7 +60,7 @@ const _cfgKey = 'taozhu_ai_local_config';
 AiProvider _zhipu() => AiProvider(
       id: 'zhipu_glm', name: '智谱GLM', isBuiltIn: true,
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-      textModel: 'glm-4-flash', visionModel: 'glm-4v-flash', audioModel: 'glm-asr-2512',
+      textModel: 'glm-4-flash', visionModel: 'glm-4v-flash', audioModel: 'whisper-1',
     );
 
 Future<AiLocalConfig> aiLoadConfig() async {
@@ -103,10 +103,8 @@ AiProvider _providerFor(AiLocalConfig cfg, String cap) {
 String _modelFor(AiProvider p, String cap) {
   if (cap == 'text') return p.textModel.isNotEmpty ? p.textModel : 'glm-4-flash';
   if (cap == 'vision') return p.visionModel.isNotEmpty ? p.visionModel : 'glm-4v-flash';
-  // 语音：智谱 ASR 模型已换代 glm-asr-2512；存量配置里的 glm-4-voice 自动映射（否则接口 500）
-  var m = p.audioModel.isNotEmpty ? p.audioModel : 'glm-asr-2512';
-  if (m == 'glm-4-voice' && p.baseUrl.contains('open.bigmodel.cn')) m = 'glm-asr-2512';
-  return m;
+  // 语音：OpenAI 兼容 whisper 系（对齐 beecount 默认 whisper-1）；用户自定义服务商按自己填的模型名
+  return p.audioModel.isNotEmpty ? p.audioModel : 'whisper-1';
 }
 
 /// 直连服务商 chat/completions（OpenAI 兼容；智谱 GLM 同协议）。
@@ -384,10 +382,13 @@ Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = '
   }
 }
 
-/// 语音转文字端点：智谱官方 ASR 接口为 /audio/transcriptions（模型 glm-asr-2512；
-/// 旧路径 /audio/asr 已失效=语音测试 500 根因）；其他 OpenAI 兼容服务商配 /audio/transcriptions
+/// 语音转文字端点（对齐 beecount）：先剥 baseUrl 里的 /chat/completions 后缀（AI 设置里的
+/// baseUrl 通常是完整聊天地址，直接拼会变成 .../chat/completions/audio/transcriptions → 服务商 500），
+/// 再拼 /audio/transcriptions；OpenAI 兼容服务商（硅基流动/whisper 系）同此协议。
 String _speechSttUrl(String baseUrl) {
-  final b = baseUrl.replaceAll(RegExp(r'/+$'), '');
+  final b = baseUrl
+      .replaceAll(RegExp(r'/chat/completions$'), '')
+      .replaceAll(RegExp(r'/+$'), '');
   if (b.endsWith('/audio/asr') || b.endsWith('/audio/transcriptions')) return b;
   return '$b/audio/transcriptions';
 }
@@ -401,14 +402,13 @@ Future<AiInvoice> aiParseVoice(Uint8List bytes, String mime, {String purpose = '
     final url = _speechSttUrl(p.baseUrl);
     final req = http.MultipartRequest('POST', Uri.parse(url))
       ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
-      ..headers['model'] = _modelFor(p, 'speech')
-      // OpenAI 兼容语音接口（硅基流动等）要求 model 在表单字段；智谱读 header——两端都放兼容两家
+      // 只发必需参数（对齐 beecount：file+model 在表单字段，不加 header model——部分服务商对多余 header 敏感）
       ..fields['model'] = _modelFor(p, 'speech')
       ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'voice.m4a', contentType: http.MediaType.parse(mime)));
     final resp = await req.send().timeout(const Duration(seconds: 60));
     final body = await resp.stream.bytesToString();
     if (resp.statusCode != 200) {
-      final err = 'AI 语音通道 ${resp.statusCode}: ${body.length > 120 ? body.substring(0, 120) : body}';
+      final err = 'AI 语音通道 ${resp.statusCode}（$url）: ${body.length > 120 ? body.substring(0, 120) : body}';
       appLog('ai', '语音转文字失败：$err', level: 'error');
       throw Exception(err);
     }
@@ -490,15 +490,14 @@ Future<String> aiTestCapability(String cap) async {
     final url = _speechSttUrl(p.baseUrl);
     final req = http.MultipartRequest('POST', Uri.parse(url))
       ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
-      ..headers['model'] = _modelFor(p, 'speech')
-      // OpenAI 兼容语音接口（硅基流动等）要求 model 在表单字段；智谱读 header——两端都放兼容两家
+      // 只发必需参数（对齐 beecount：file+model 在表单字段，不加 header model）
       ..fields['model'] = _modelFor(p, 'speech')
       ..files.add(http.MultipartFile.fromBytes('file', _silenceWav(), filename: 'test.wav',
           contentType: http.MediaType.parse('audio/wav')));
     final resp = await req.send().timeout(const Duration(seconds: 60));
     final body = await resp.stream.bytesToString();
     if (resp.statusCode != 200) {
-      throw Exception('AI 语音通道 ${resp.statusCode}: ${body.length > 120 ? body.substring(0, 120) : body}');
+      throw Exception('AI 语音通道 ${resp.statusCode}（$url）: ${body.length > 120 ? body.substring(0, 120) : body}');
     }
     return '语音转文字通道连通（已真实发送测试音频）';
   }

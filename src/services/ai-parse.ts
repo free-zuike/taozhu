@@ -228,7 +228,7 @@ export const ZHIPU_PROVIDER: AiProviderConfig = {
   baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
   textModel: 'glm-4-flash',
   visionModel: 'glm-4v-flash',
-  audioModel: 'glm-asr-2512',
+  audioModel: 'whisper-1',
 };
 
 export const DEFAULT_BINDING: AiBinding = {
@@ -255,13 +255,9 @@ export function providerForCapability(cfg: AiConfig, cap: 'text' | 'vision' | 's
 /** 提取某能力的实际请求参数（无 Key 时 apiKey 为空串，调用方据此提示） */
 export function capabilityEndpoint(cfg: AiConfig, cap: 'text' | 'vision' | 'speech'): CapabilityEndpoint {
   const p = providerForCapability(cfg, cap);
-  let model = cap === 'text' ? p.textModel
+  const model = cap === 'text' ? p.textModel
     : cap === 'vision' ? p.visionModel
     : p.audioModel;
-  // 智谱 ASR 模型已换代 glm-asr-2512：存量配置（D1 settings）里的 glm-4-voice 自动映射，否则接口 500
-  if (cap === 'speech' && model === 'glm-4-voice' && p.baseUrl.includes('open.bigmodel.cn')) {
-    model = 'glm-asr-2512';
-  }
   return { apiKey: p.apiKey.trim(), baseUrl: p.baseUrl, model };
 }
 
@@ -270,7 +266,7 @@ export const DEFAULT_AI_CONFIG = {
   model: 'glm-4v-flash',
 };
 export const DEFAULT_TEXT_MODEL = 'glm-4-flash';
-export const DEFAULT_AUDIO_MODEL = 'glm-asr-2512';
+export const DEFAULT_AUDIO_MODEL = 'whisper-1';
 
 // ── 自适应参数剥离（对齐参考项目 _post_chat_adaptive + _rejected_param）──────────
 // 不同模型对 OpenAI-compatible 参数有不同约束（推理模型锁 temperature、部分模型
@@ -405,10 +401,11 @@ export async function parseText(
   return normalizeInvoice(content);
 }
 
-/** 语音转文字（智谱官方 ASR 接口为 /audio/transcriptions、模型 glm-asr-2512；
- *  旧路径 /audio/asr 已失效=语音测试 500 根因；其他 OpenAI 兼容服务商同样走 /audio/transcriptions） */
+/** 语音转文字（对齐 beecount）：先剥 baseUrl 里的 /chat/completions 后缀（AI 设置里的
+ *  baseUrl 通常是完整聊天地址，直接拼会变成 .../chat/completions/audio/transcriptions → 服务商 500），
+ *  再拼 /audio/transcriptions；OpenAI 兼容服务商（硅基流动/whisper 系）同此协议。 */
 export function speechSttUrl(baseUrl: string): string {
-  const b = baseUrl.replace(/\/+$/, '');
+  const b = baseUrl.replace(/\/chat\/completions$/, '').replace(/\/+$/, '');
   if (b.endsWith('/audio/asr') || b.endsWith('/audio/transcriptions')) return b;
   return `${b}/audio/transcriptions`;
 }
@@ -426,6 +423,7 @@ export async function speechToText(
   const sttUrl = speechSttUrl(endpoint.baseUrl);
   const form = new FormData();
   form.append('file', new Blob([audioBytes], { type: mime || 'audio/webm' }), filename || 'audio.webm');
+  // 只发必需参数（对齐 beecount：file+model 在表单字段，不加 header model——部分服务商对多余 header 敏感）
   form.append('model', endpoint.model || DEFAULT_AUDIO_MODEL);
   const resp = await fetch(sttUrl, {
     method: 'POST',
@@ -434,7 +432,7 @@ export async function speechToText(
   });
   if (!resp.ok) {
     const bodyText = await resp.text().catch(() => '');
-    throw new Error(`语音转文字接口错误 HTTP ${resp.status}: ${bodyText.slice(0, 200)}`);
+    throw new Error(`语音转文字接口错误 HTTP ${resp.status}（${sttUrl}）: ${bodyText.slice(0, 200)}`);
   }
   const data = (await resp.json()) as { text?: string };
   return (data.text ?? '').trim();
