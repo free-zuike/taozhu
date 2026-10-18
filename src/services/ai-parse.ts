@@ -228,7 +228,7 @@ export const ZHIPU_PROVIDER: AiProviderConfig = {
   baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
   textModel: 'glm-4-flash',
   visionModel: 'glm-4v-flash',
-  audioModel: 'glm-4-voice',
+  audioModel: 'glm-asr-2512',
 };
 
 export const DEFAULT_BINDING: AiBinding = {
@@ -255,9 +255,13 @@ export function providerForCapability(cfg: AiConfig, cap: 'text' | 'vision' | 's
 /** 提取某能力的实际请求参数（无 Key 时 apiKey 为空串，调用方据此提示） */
 export function capabilityEndpoint(cfg: AiConfig, cap: 'text' | 'vision' | 'speech'): CapabilityEndpoint {
   const p = providerForCapability(cfg, cap);
-  const model = cap === 'text' ? p.textModel
+  let model = cap === 'text' ? p.textModel
     : cap === 'vision' ? p.visionModel
     : p.audioModel;
+  // 智谱 ASR 模型已换代 glm-asr-2512：存量配置（D1 settings）里的 glm-4-voice 自动映射，否则接口 500
+  if (cap === 'speech' && model === 'glm-4-voice' && p.baseUrl.includes('open.bigmodel.cn')) {
+    model = 'glm-asr-2512';
+  }
   return { apiKey: p.apiKey.trim(), baseUrl: p.baseUrl, model };
 }
 
@@ -266,7 +270,7 @@ export const DEFAULT_AI_CONFIG = {
   model: 'glm-4v-flash',
 };
 export const DEFAULT_TEXT_MODEL = 'glm-4-flash';
-export const DEFAULT_AUDIO_MODEL = 'glm-4-voice';
+export const DEFAULT_AUDIO_MODEL = 'glm-asr-2512';
 
 // ── 自适应参数剥离（对齐参考项目 _post_chat_adaptive + _rejected_param）──────────
 // 不同模型对 OpenAI-compatible 参数有不同约束（推理模型锁 temperature、部分模型
@@ -401,11 +405,12 @@ export async function parseText(
   return normalizeInvoice(content);
 }
 
-/** 语音转文字（智谱 baseUrl 走自家 /audio/asr；其他 OpenAI 兼容服务商走 /audio/transcriptions） */
+/** 语音转文字（智谱官方 ASR 接口为 /audio/transcriptions、模型 glm-asr-2512；
+ *  旧路径 /audio/asr 已失效=语音测试 500 根因；其他 OpenAI 兼容服务商同样走 /audio/transcriptions） */
 export function speechSttUrl(baseUrl: string): string {
   const b = baseUrl.replace(/\/+$/, '');
   if (b.endsWith('/audio/asr') || b.endsWith('/audio/transcriptions')) return b;
-  return b.includes('open.bigmodel.cn') ? `${b}/audio/asr` : `${b}/audio/transcriptions`;
+  return `${b}/audio/transcriptions`;
 }
 
 /** 语音转文字（multipart file+model） */
@@ -472,10 +477,11 @@ export const TEST_IMAGE_JPEG_B64 =
   'DAMBAAIRAxEAPwDyyiiivzo/ssKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiig' +
   'AooooAKKKKACiiigAooooAKKKKACiiigAooooA//2Q==';
 
-/** 生成 1 秒 8kHz 16-bit 单声道静音 WAV（对齐参考项目测试素材：仅验证语音通道连通） */
+/** 生成 0.5s 8kHz 16-bit 单声道 440Hz 正弦音 WAV（对齐参考项目测试素材：仅验证语音通道连通；
+ *  不用纯静音——部分 ASR 对无内容音频会报错/返回空，有内容音调更接近真实请求） */
 export function minimalWavBytes(): Uint8Array {
   const sampleRate = 8000;
-  const numSamples = sampleRate; // 1 秒
+  const numSamples = sampleRate / 2; // 0.5 秒
   const dataSize = numSamples * 2;
   const fileSize = 36 + dataSize;
   const le = (value: number, bytes: number): number[] => {
@@ -491,7 +497,10 @@ export function minimalWavBytes(): Uint8Array {
   buf.push(...le(sampleRate, 4), ...le(sampleRate * 2, 4)); // sample rate + byte rate
   buf.push(...le(2, 2), ...le(16, 2)); // block align + bits per sample
   buf.push(...[0x64, 0x61, 0x74, 0x61], ...le(dataSize, 4)); // "data" + size
-  for (let i = 0; i < numSamples; i++) buf.push(0x00, 0x00); // 静音
+  for (let i = 0; i < numSamples; i++) {
+    const v = Math.round(32767 * 0.4 * Math.sin((i * 2 * Math.PI * 440) / sampleRate));
+    buf.push(...le(v & 0xffff, 2)); // 16-bit LE
+  }
   return Uint8Array.from(buf);
 }
 

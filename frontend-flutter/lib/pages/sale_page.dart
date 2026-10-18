@@ -65,6 +65,7 @@ class _Row {
   String origSaleId = '';
   /// 行原备注（直编/编辑保存时保留，避免 payload 缺 note 清空服务端行备注）
   String note = '';
+  final noteCtrl = TextEditingController(); // 行备注输入（对齐小程序 row-note）
   /// 本单折合计数数量（如卖货按大单位称重、备货按小单位计数→填折合出的计数单位数；空=不折按原单位。仅当商品配计数单位时生效）
   double? countQty;
   /// 保存时构建的商品行 payload（去单据化：逐行入队 sale_item 用）
@@ -143,6 +144,7 @@ class _SalePageState extends State<SalePage> {
       r.saleCtrl.dispose();
       r.countCtrl.dispose();
       r.costCtrl.dispose();
+      r.noteCtrl.dispose();
     }
     // 未提交退出（取消）：清理识别即挂载的原图（引用+上传队列+本地副本，不留垃圾）
     if (!_submitted && _pendingGroups.isNotEmpty) {
@@ -442,6 +444,7 @@ class _SalePageState extends State<SalePage> {
           ..rowId = '${it['id'] ?? ''}'
           ..origSaleId = _saleId
           ..note = '${it['note'] ?? ''}'
+          ..noteCtrl.text = '${it['note'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -526,6 +529,7 @@ class _SalePageState extends State<SalePage> {
           ..rowId = rowId
           ..origSaleId = origSaleId
           ..note = '${it['note'] ?? ''}'
+          ..noteCtrl.text = '${it['note'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? opt.name}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -1857,11 +1861,14 @@ double _fifoCost(
                   style: TextStyle(fontSize: 11, color: Theme.of(context).extension<TaozhuColors>()!.textSub, height: 1.4)),
             ),
           const SizedBox(height: 10),
-          TextField(
-            controller: _noteCtrl,
-            style: TextStyle(color: c.textMain),
-            decoration: _fieldDec(icon: Icons.notes_outlined, label: '备注（可留空）'),
-          ),
+          // 整单备注（批量直编不显示：该模式按原单分组保存，整单备注属于各自原单，改了存不上是假入口——
+          // 要改备注请用每行「行备注」框）
+          if (!isDateRows)
+            TextField(
+              controller: _noteCtrl,
+              style: TextStyle(color: c.textMain),
+              decoration: _fieldDec(icon: Icons.notes_outlined, label: '备注（可留空）'),
+            ),
           // 整单通用附件（当天单据共用的凭证：送货单/发货单等）；行级附件在各商品行单独加。
           // 识别/分享原图已"识别即挂载"为本单凭证（App 本地/Web 保存后直传），不再显示预览卡片
           const SizedBox(height: 4),
@@ -2127,6 +2134,14 @@ double _fifoCost(
                 },
               ),
             ),
+          // 行备注（对齐小程序 row-note）：批量直编/编辑/新建都可用，保存逐行带 note
+          const SizedBox(height: 6),
+          TextField(
+            controller: row.noteCtrl,
+            style: txtStyle,
+            decoration: _fieldDec(label: '行备注（选填，如：赊账/规格说明）'),
+            onChanged: (v) => setState(() => row.note = v),
+          ),
           // 行上移/下移（批次内商品顺序调整；放行底部不挤商品名，保存按数组序重排 sort）
           const SizedBox(height: 6),
           Row(

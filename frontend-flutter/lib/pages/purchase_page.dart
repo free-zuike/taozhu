@@ -50,6 +50,7 @@ class _PRow {
   String origPurchaseId = '';
   /// 行原备注（直编/编辑保存时保留，避免 payload 缺 note 清空服务端行备注）
   String note = '';
+  final noteCtrl = TextEditingController(); // 行备注输入（对齐小程序 row-note）
   /// 本单折合计数数量（如进 1 大单位折合 N 个计数单位→库存按计数单位累计；空=不折按原单位。仅当商品配计数单位时生效）
   double? countQty;
   /// 保存时构建的商品行 payload（去单据化：逐行入队 purchase_item 用）
@@ -120,6 +121,7 @@ class _PurchasePageState extends State<PurchasePage> {
       r.qtyCtrl.dispose();
       r.priceCtrl.dispose();
       r.countCtrl.dispose();
+      r.noteCtrl.dispose();
     }
     // 未提交退出（取消）：清理识别即挂载的原图（引用+本地副本，零网络）
     if (!_submitted && _pendingGroups.isNotEmpty) {
@@ -380,6 +382,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..rowId = '${it['id'] ?? ''}'
           ..origPurchaseId = _purchaseId
           ..note = '${it['note'] ?? ''}'
+          ..noteCtrl.text = '${it['note'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -466,6 +469,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..rowId = rowId
           ..origPurchaseId = origPurchaseId
           ..note = '${it['note'] ?? ''}'
+          ..noteCtrl.text = '${it['note'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -1448,9 +1452,12 @@ class _PurchasePageState extends State<PurchasePage> {
                   style: TextStyle(fontSize: 11, color: c.textSub, height: 1.4)),
             ),
           const SizedBox(height: 10),
-          TextField(
-            controller: _noteCtrl,
-            style: TextStyle(color: c.textMain),
+          // 整单备注（批量直编不显示：该模式按原单分组保存，整单备注属于各自原单，改了存不上是假入口——
+          // 要改备注请用每行「行备注」框）
+          if (!widget.dateRows!.isNotEmpty)
+            TextField(
+              controller: _noteCtrl,
+              style: TextStyle(color: c.textMain),
             decoration: _fieldDec(icon: Icons.notes_outlined, label: '备注（可留空）'),
           ),
           // 整单通用附件（当天单据共用的凭证：送货单/发货单等）；行级附件在各商品行单独加。
@@ -1689,6 +1696,14 @@ class _PurchasePageState extends State<PurchasePage> {
                 },
               ),
             ),
+          // 行备注（对齐小程序 row-note）：批量直编/编辑/新建都可用，保存逐行带 note
+          const SizedBox(height: 6),
+          TextField(
+            controller: row.noteCtrl,
+            style: txtStyle,
+            decoration: _fieldDec(label: '行备注（选填，如：供应商/规格说明）'),
+            onChanged: (v) => setState(() => row.note = v),
+          ),
           // 行上移/下移（批次内商品顺序调整；放行底部不挤商品名，保存按数组序重排 sort）
           const SizedBox(height: 6),
           Row(

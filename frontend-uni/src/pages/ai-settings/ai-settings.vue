@@ -62,7 +62,7 @@
         <input class="ipt" :value="editKey[editId] ?? ''" placeholder="API Key（留空=保留原值）" @input="onKey(editId, $event)" />
         <input class="ipt" :value="(editModel[editId]?.text ?? editProv?.textModel) || ''" placeholder="文字模型，如 glm-4-flash" @input="onModel(editId, 'text', $event)" />
         <input class="ipt" :value="(editModel[editId]?.vision ?? editProv?.visionModel) || ''" placeholder="图片模型，如 glm-4v-flash（视觉）" @input="onModel(editId, 'vision', $event)" />
-        <input class="ipt" :value="(editModel[editId]?.speech ?? editProv?.audioModel) || ''" placeholder="语音模型，如 glm-4-voice（语音转文字）" @input="onModel(editId, 'speech', $event)" />
+        <input class="ipt" :value="(editModel[editId]?.speech ?? editProv?.audioModel) || ''" placeholder="语音模型，如 glm-asr-2512（语音转文字）" @input="onModel(editId, 'speech', $event)" />
         <button class="btn-save" @click="showEdit = false">完成</button>
       </view>
     </view>

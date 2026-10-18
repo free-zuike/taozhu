@@ -59,7 +59,7 @@ const _cfgKey = 'taozhu_ai_local_config';
 AiProvider _zhipu() => AiProvider(
       id: 'zhipu_glm', name: '智谱GLM', isBuiltIn: true,
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-      textModel: 'glm-4-flash', visionModel: 'glm-4v-flash', audioModel: 'glm-4-voice',
+      textModel: 'glm-4-flash', visionModel: 'glm-4v-flash', audioModel: 'glm-asr-2512',
     );
 
 Future<AiLocalConfig> aiLoadConfig() async {
@@ -99,11 +99,14 @@ AiProvider _providerFor(AiLocalConfig cfg, String cap) {
   return cfg.providers.where((p) => p.id == id).firstOrNull ?? cfg.providers.first;
 }
 
-String _modelFor(AiProvider p, String cap) => cap == 'text'
-    ? (p.textModel.isNotEmpty ? p.textModel : 'glm-4-flash')
-    : cap == 'vision'
-        ? (p.visionModel.isNotEmpty ? p.visionModel : 'glm-4v-flash')
-        : (p.audioModel.isNotEmpty ? p.audioModel : 'glm-4-voice');
+String _modelFor(AiProvider p, String cap) {
+  if (cap == 'text') return p.textModel.isNotEmpty ? p.textModel : 'glm-4-flash';
+  if (cap == 'vision') return p.visionModel.isNotEmpty ? p.visionModel : 'glm-4v-flash';
+  // 语音：智谱 ASR 模型已换代 glm-asr-2512；存量配置里的 glm-4-voice 自动映射（否则接口 500）
+  var m = p.audioModel.isNotEmpty ? p.audioModel : 'glm-asr-2512';
+  if (m == 'glm-4-voice' && p.baseUrl.contains('open.bigmodel.cn')) m = 'glm-asr-2512';
+  return m;
+}
 
 /// 直连服务商 chat/completions（OpenAI 兼容；智谱 GLM 同协议）。
 /// 自适应参数剥离（对齐服务器 ai-parse 与参考项目）：不同模型对参数约束不同
@@ -380,11 +383,12 @@ Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = '
   }
 }
 
-/// 语音转文字端点：智谱 baseUrl 配自家协议 /audio/asr；其他 OpenAI 兼容服务商（硅基流动等）配 /audio/transcriptions
+/// 语音转文字端点：智谱官方 ASR 接口为 /audio/transcriptions（模型 glm-asr-2512；
+/// 旧路径 /audio/asr 已失效=语音测试 500 根因）；其他 OpenAI 兼容服务商配 /audio/transcriptions
 String _speechSttUrl(String baseUrl) {
   final b = baseUrl.replaceAll(RegExp(r'/+$'), '');
   if (b.endsWith('/audio/asr') || b.endsWith('/audio/transcriptions')) return b;
-  return b.contains('open.bigmodel.cn') ? '$b/audio/asr' : '$b/audio/transcriptions';
+  return '$b/audio/transcriptions';
 }
 
 /// 语音记账：音频字节 → 语音转文字 → 草稿明细
@@ -504,10 +508,11 @@ Future<String> aiTestCapability(String cap) async {
   ]);
 }
 
-/// 0.25s 8000Hz 16bit 单声道静音 WAV（语音测试素材，真实请求服务商）
+/// 0.5s 8000Hz 16bit 单声道 440Hz 正弦音 WAV（语音测试素材，真实请求服务商）。
+/// 不用纯静音：部分 ASR 对无内容音频会报错/返回空，有内容音调更接近真实请求、结果可预期。
 Uint8List _silenceWav() {
   const sr = 8000;
-  final n = (sr * 0.25).round();
+  final n = sr ~/ 2; // 0.5 秒
   final dataLen = n * 2;
   final b = Uint8List(44 + dataLen);
   final dv = ByteData.view(b.buffer);
@@ -524,5 +529,9 @@ Uint8List _silenceWav() {
   dv.setUint16(34, 16, Endian.little);
   dv.setUint32(36, 0x64617461, Endian.little); // data
   dv.setUint32(40, dataLen, Endian.little);
+  for (var i = 0; i < n; i++) {
+    final v = (32767 * 0.4 * (i * 2 * 3.141592653589793 * 440 / sr).sin()).round();
+    dv.setInt16(44 + i * 2, v, Endian.little);
+  }
   return b;
 }

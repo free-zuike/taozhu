@@ -73,7 +73,7 @@
         </view>
       </view>
     </view>
-    <input class="ipt-note" v-model="note" placeholder="整单备注（选填，如：供应商/送货单号…）" />
+    <input v-if="!isDateRows" class="ipt-note" v-model="note" placeholder="整单备注（选填，如：供应商/送货单号…）" />
 
     <!-- 底部固定悬浮栏（对齐 App：合计+添加+提交同一行固定底部） -->
     <view class="bottom-bar">
