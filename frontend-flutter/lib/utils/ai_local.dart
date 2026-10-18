@@ -162,7 +162,7 @@ Future<String> _chatCompletion(AiProvider p, String cap, List<Map<String, dynami
       final content = (d['choices'] as List?)?[0]?['message']?['content'];
       final txt = '${content ?? ''}'.trim();
       // 模型原始返回留痕（模型+API 地址+内容截断）——换模型识别不出商品时日志可见模型实际回了什么
-      appLog('ai', 'AI 响应 [${p.name}/${_modelFor(p, cap)}] ${p.baseUrl} → ${txt.length > 500 ? txt.substring(0, 500) + '…' : txt}');
+      appLog('ai', 'AI 响应 [${p.name}/${_modelFor(p, cap)}] ${p.baseUrl} → ${txt}');
       return txt;
     }
     final errBody = utf8.decode(resp.bodyBytes);
@@ -290,7 +290,7 @@ Future<AiInvoice> aiParseText(String text, {String purpose = 'sale'}) async {
       {'role': 'user', 'content': '${_promptFor(purpose)}\n\n描述：$text'},
     ]);
     final inv = _normalizeInvoice(raw);
-    appLog('ai', '文字记账识别完成：${inv.items.length} 项、店铺「${inv.client}」｜模型原始返回（前500字）：${raw.length > 500 ? raw.substring(0, 500) : raw}');
+    appLog('ai', '文字记账识别完成：${inv.items.length} 项、店铺「${inv.client}」｜模型原始返回：${raw}');
     return inv;
   } catch (e) {
     appLog('ai', '文字记账识别失败：${e.toString().split('\n').first}', level: 'error');
@@ -385,7 +385,7 @@ Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = '
       },
     ]);
     final inv = _normalizeInvoice(raw);
-    appLog('ai', '图片识别完成：${inv.items.length} 项、店铺「${inv.client}」｜模型原始返回（前500字）：${raw.length > 500 ? raw.substring(0, 500) : raw}');
+    appLog('ai', '图片识别完成：${inv.items.length} 项、店铺「${inv.client}」｜模型原始返回：${raw}');
     return inv;
   } catch (e) {
     appLog('ai', '图片识别失败：${e.toString().split('\n').first}', level: 'error');
@@ -439,7 +439,7 @@ Future<String> _speechToTextBytes(Uint8List bytes, String mime, String filename)
   }
   final d = jsonDecode(body) as Map<String, dynamic>;
   final text = '${d['text'] ?? ''}'.trim();
-  appLog('ai', '语音转文字结果（前200字）：${text.length > 200 ? text.substring(0, 200) : text}');
+  appLog('ai', '语音转文字结果：${text}');
   return text;
 }
 
