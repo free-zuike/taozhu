@@ -237,10 +237,13 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
     }
     // 直接测试（对齐参考实现：静音素材直接发，不交互）——App 本地直连，Web 走服务器
-    return await aiTestCapability(capability);
-    return capability == 'vision'
-            ? (reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply')
-            : '文字记账正常：$reply';
+    final reply = await aiTestCapability(capability);
+    if (capability == 'vision') {
+      return reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply';
+    }
+    return capability == 'speech'
+        ? '语音转文字通道连通（已真实发送测试音频）'
+        : '文字记账正常：$reply';
   }
 
   /// 测试单个能力：圆点状态就地展示（绿=通过/红=失败/转圈=测试中）——成功只变绿不提示，失败才 toast 原因
