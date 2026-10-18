@@ -147,8 +147,9 @@ Future<String> _chatCompletion(AiProvider p, String cap, List<Map<String, dynami
   final body = <String, dynamic>{
     'model': _modelFor(p, cap),
     'messages': messages,
-    // 视觉模型（glm-4v 系）参数面窄：temperature 若被拒由自适应剥离重试（对齐服务器/参考项目）
-    'temperature': 0.1,
+    // 视觉模型（glm-4v 系）参数面窄：temperature 若被拒由自适应剥离重试（对齐服务器/参考项目）；
+    // 置 0 减少同图多次识别结果漂移（用户"同一张图反复识别结果不同"→模型采样随机，低温更稳）
+    'temperature': 0,
   };
   for (var i = 0; i <= _maxParamStrips; i++) {
     final resp = await http.post(
@@ -323,10 +324,13 @@ Future<({Uint8List bytes, String mime})> aiPreparePhoto(Uint8List bytes, String 
     throw Exception('图片格式不支持：请用 JPG/PNG 图片（iPhone 的 HEIC 请先转成 JPG）');
   }
   try {
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) {
+    final decoded0 = img.decodeImage(bytes);
+    if (decoded0 == null) {
       throw Exception('图片无法解析，请换一张（iPhone 的 HEIC 请先转成 JPG）');
     }
+    // 按 EXIF 方向摆正：拍照/相册的横拍图（orientation 6/8）不转正就横向发给模型，
+    // 手写单据识别质量差（用户反馈"拍出横着的图片识别有很大问题"）；bakeOrientation 自动应用
+    final decoded = img.bakeOrientation(decoded0);
     img.Image out = decoded;
     if (decoded.width > 2048 || decoded.height > 2048 || bytes.length > 1024 * 1024) {
       final scale = decoded.width >= decoded.height

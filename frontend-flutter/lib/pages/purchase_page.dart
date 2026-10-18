@@ -197,8 +197,8 @@ class _PurchasePageState extends State<PurchasePage> {
       setState(() => _pendingPhoto = pb);
       _pendingGroups.add({'file': '${md5.convert(pb).toString()}.jpg', 'rowIds': rowIds, 'bytes': pb});
       final tip = items.length == rowIds.length
-          ? '识别完成：${items.length} 项已填行（原图已作凭证）'
-          : '识别到 ${items.length} 项，实际填入 ${rowIds.length} 行（差 ${items.length - rowIds.length} 项——请核对原图或补填）';
+          ? '识别完成：${items.length} 项已填行（AI 可能多识/漏识，请核对后提交）'
+          : '识别到 ${items.length} 项，实际填入 ${rowIds.length} 行（差 ${items.length - rowIds.length} 项——AI 可能多识/漏识，请对照原图增删）';
       toast(context, tip);
       return;
     }
@@ -207,8 +207,8 @@ class _PurchasePageState extends State<PurchasePage> {
     await _attachRecognized(bytes); // 凭证保留原图
     // 识别行数 vs 实际填行数诊断（模型漏读/匹配失败一目了然——用户"扫描图片经常少一行"）
     final tip = inv.items.length == rowIds.length
-        ? '识别完成：${inv.items.length} 项已填行（原图已作凭证）'
-        : '识别到 ${inv.items.length} 项，实际填入 ${rowIds.length} 行（差 ${inv.items.length - rowIds.length} 项——请核对原图或补填）';
+        ? '识别完成：${inv.items.length} 项已填行（AI 可能多识/漏识，请核对后提交）'
+        : '识别到 ${inv.items.length} 项，实际填入 ${rowIds.length} 行（差 ${inv.items.length - rowIds.length} 项——AI 可能多识/漏识，请对照原图增删）';
     toast(context, tip);
   }
 

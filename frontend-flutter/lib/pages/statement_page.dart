@@ -38,6 +38,7 @@ class _StatementPageState extends State<StatementPage> {
   List<Map<String, dynamic>> _clients = [];
   String? _clientId; // null = 全部店铺
   String _period = 'month'; // month | last | cycle | cycleLast | custom
+  String _printOri = 'portrait'; // 图片打印方向：portrait 竖版 | landscape 横版（前端可切换）
 
   /// 选中店铺的每月起始日（1=自然月）
   int get _msd {
@@ -102,8 +103,22 @@ class _StatementPageState extends State<StatementPage> {
     super.initState();
     _loadClients();
     _loadTemplates();
+    // 图片打印方向记忆（用户"直接在前端设置横向或竖向"）
+    SharedPreferences.getInstance().then((sp) {
+      final v = sp.getString('stmtPrintOrientation');
+      if (v == 'landscape' || v == 'portrait') {
+        setState(() => _printOri = v);
+      }
+    });
     // 合计口径移除（用户"去掉吧，全部按照上边设置的来"）：固定逐笔舍入（_roundTotals 恒 true）
     _initLoad(); // 先恢复记忆店铺，再生成对账单（避免首载默认全店数据串店）
+  }
+
+  /// 图片打印方向设置（本地记忆；横版适合宽表格/竖版默认）
+  Future<void> _setPrintOrientation(String v) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString('stmtPrintOrientation', v);
+    if (mounted) setState(() => _printOri = v);
   }
 
   /// 恢复全局记忆的当前店铺后生成对账单（本地 prefs 读取，秒回；无记忆则全部店铺）
@@ -383,18 +398,19 @@ class _StatementPageState extends State<StatementPage> {
   /// 固定全量尺寸包 RepaintBoundary 挂屏幕外渲染后截图（对齐参考实现生成图片报告的做法——
   /// 文字走 widget 正常渲染，中文不会丢失；预览是虚拟化 TableView 只画视口格，
   /// 直接截当前屏幕必然残缺"图片不完整"——Overlay 外给全量尺寸则视口覆盖全部行，完整）。
-  /// 图片 = 完整 A4 纵向整页（210×297mm）：表格按可用宽等比缩放放页面上部，下方自然留白——
-  /// 打印默认纵向 A4、内容按实际大小不铺满（用户"图片横着占满 A4/正常竖着只占上半部分"，需
-  /// 边距 + 整页 A4 比例，浏览器"适应页面"不再拉伸）；文字强制黑字（暗色主题默认浅色看不清）。
+  /// 图片 = 完整 A4 整页（竖版 794×1123 / 横版 1123×794，可前端切换）：表格按可用宽等比缩放
+  /// 放页面上部，下方自然留白——打印按实际大小不铺满（用户"图片横着占满 A4/正常竖着只占上半
+  /// 部分"）；文字强制黑字（暗色主题默认浅色看不清）。
   /// 返回 PNG 字节。列宽 120 / 行高 44 / 合并单元格与预览一致（所见即所得）。
-  Future<Uint8List> _renderStmtImageByWidget(List<List<GridCell>> rows) async {
+  Future<Uint8List> _renderStmtImageByWidget(List<List<GridCell>> rows, {String orientation = 'portrait'}) async {
     int rowWidth(List<GridCell> row) => row.fold<int>(0, (m, c) => m + (c.colSpan < 1 ? 1 : c.colSpan));
     final cols = rows.fold<int>(0, (m, r) => rowWidth(r) > m ? rowWidth(r) : m);
     final w = cols * 120.0;
     final h = rows.length * 44.0;
-    // A4 整页（96dpi）：宽 794 × 高 1123 逻辑像素；表格超宽自动等比缩放，不足则原大小放上部
-    const pageW = 794.0;
-    const pageH = 1123.0;
+    // A4 整页（96dpi）：竖版 794×1123，横版 1123×794；表格超宽自动等比缩放，不足则原大小放上部
+    final portrait = orientation != 'landscape';
+    final pageW = portrait ? 794.0 : 1123.0;
+    final pageH = portrait ? 1123.0 : 794.0;
     const margin = 40.0;
     final key = GlobalKey();
     final overlay = Overlay.of(context);
@@ -2159,6 +2175,23 @@ class _StatementPageState extends State<StatementPage> {
               label: const Text('模板设置'),
             ),
             const SizedBox(height: 8),
+            // 图片打印方向：竖版/横版 A4（前端直接切换，记忆本地）
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'portrait', label: Text('竖版 A4')),
+                  ButtonSegment(value: 'landscape', label: Text('横版 A4')),
+                ],
+                selected: {_printOri},
+                onSelectionChanged: (s) => _setPrintOrientation(s.first),
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
             // 打印（按当前模板：逐单明细/每日汇总/旬段汇总 → 服务端渲染）
             OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
@@ -2192,7 +2225,7 @@ class _StatementPageState extends State<StatementPage> {
         toast(context, '暂无可用模板内容，请到「模板设置」选择或创建模板');
         return;
       }
-      final bytes = await _renderStmtImageByWidget(rows);
+      final bytes = await _renderStmtImageByWidget(rows, orientation: _printOri);
       final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
       // 文件名带账期月份（用户"店铺几月份账单"——原只到店铺名）
       final from = _fromCtrl.text.trim();
