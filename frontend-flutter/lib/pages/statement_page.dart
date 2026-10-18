@@ -6,6 +6,7 @@ import 'package:excel/excel.dart' hide Border, BorderStyle, TextSpan;
 import 'package:excel/excel.dart' as exc;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
@@ -377,107 +378,48 @@ class _StatementPageState extends State<StatementPage> {
     return _previewTplRows(rows, fontSize: fontSize);
   }
 
-  /// 被上方 rowSpan>1 的合并起点覆盖的格（对齐预览 owner 展开逻辑）→ 跳过不画
-  bool _coveredByRowSpan(List<List<GridCell>> rows, int r, int c) {
-    for (var sr = 0; sr < r && sr < rows.length; sr++) {
-      final row = rows[sr];
-      var acc = 0;
-      for (final cell in row) {
-        final span = cell.colSpan < 1 ? 1 : cell.colSpan;
-        if (cell.rowSpan > 1 && c >= acc && c < acc + span && r < sr + cell.rowSpan) {
-          return true;
-        }
-        acc += span;
-      }
-    }
-    return false;
-  }
-
-  /// 图片打印：脱离 widget 树用 dart:ui Canvas 完整绘制对账单表格（PictureRecorder → toImage → PNG）。
-  /// 屏幕预览是虚拟化 TableView 只画视口格，截图必然残缺——用户"图片不完整，只有一部分"；
-  /// Canvas 绘制全量行（列宽 120 对齐预览、行高按文本换行自适应、合并/底纹/边框/对齐同预览），
-  /// 与小程序 canvas 图片打印同构（所见即所得 + 完整）。
-  Future<ui.Image> _renderStmtImage(List<List<GridCell>> rows) async {
-    const cw = 120.0, ch = 44.0, padX = 8.0, padY = 5.0;
-    const borderC = Color(0xFFD9D9D9);
+  /// 图片打印：把对账单表格渲染成完整 widget（复用预览表格组件 tplPreviewTable），
+  /// 固定全量尺寸包 RepaintBoundary 挂屏幕外渲染后截图（对齐参考实现生成图片报告的做法——
+  /// 文字走 widget 正常渲染，中文不会丢失；预览是虚拟化 TableView 只画视口格，
+  /// 直接截当前屏幕必然残缺"图片不完整"——Overlay 外给全量尺寸则视口覆盖全部行，完整）。
+  /// 返回 PNG 字节。列宽 120 / 行高 44 / 合并单元格与预览一致（所见即所得）。
+  Future<Uint8List> _renderStmtImageByWidget(List<List<GridCell>> rows) async {
     int rowWidth(List<GridCell> row) => row.fold<int>(0, (m, c) => m + (c.colSpan < 1 ? 1 : c.colSpan));
     final cols = rows.fold<int>(0, (m, r) => rowWidth(r) > m ? rowWidth(r) : m);
-    final rh = <double>[];
-    for (final row in rows) {
-      var maxH = ch;
-      for (final cell in row) {
-        final span = cell.colSpan < 1 ? 1 : cell.colSpan;
-        final tp = TextPainter(
-          text: TextSpan(
-            text: cell.text,
-            style: TextStyle(
-                // 显式中文字体：Canvas 脱离 widget 树绘制，默认字体无 CJK 回退=图片无文字
-                fontFamily: 'Noto Sans SC',
-                fontSize: cell.bold ? 14 : 12,
-                fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal),
+    final w = cols * 120.0;
+    final h = rows.length * 44.0;
+    final key = GlobalKey();
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) => Positioned(
+        left: -10000,
+        top: -10000,
+        child: Material(
+          color: Colors.transparent,
+          child: RepaintBoundary(
+            key: key,
+            child: SizedBox(
+              width: w,
+              height: h,
+              child: tplPreviewTable(rows, fontSize: 12, primary: _c.primary),
+            ),
           ),
-          textDirection: TextDirection.ltr,
-        )..layout(maxWidth: span * cw - padX * 2);
-        if (tp.height + padY * 2 > maxH) maxH = tp.height + padY * 2;
-      }
-      rh.add(maxH);
+        ),
+      ),
+    );
+    overlay.insert(entry);
+    try {
+      await Future.delayed(const Duration(milliseconds: 400)); // 等布局/文本渲染完成
+      final boundary = key.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) throw Exception('表格渲染未完成');
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) throw Exception('图片编码失败');
+      return data.buffer.asUint8List();
+    } finally {
+      entry.remove();
     }
-    final W = cols * cw;
-    final H = rh.fold<double>(0, (a, b) => a + b);
-    const scale = 3.5;
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder)..scale(scale);
-    canvas.drawRect(Rect.fromLTWH(0, 0, W, H), Paint()..color = const Color(0xFFFFFFFF));
-    var y = 0.0;
-    for (var r = 0; r < rows.length; r++) {
-      final row = rows[r];
-      var acc = 0;
-      var x = 0.0;
-      for (final cell in row) {
-        final span = cell.colSpan < 1 ? 1 : cell.colSpan;
-        if (r > 0 && _coveredByRowSpan(rows, r, acc)) {
-          acc += span;
-          x += span * cw;
-          continue;
-        }
-        final cellW = span * cw;
-        final cellH = rh[r];
-        if (cell.bg == 'grey') {
-          canvas.drawRect(
-              Rect.fromLTWH(x, y, cellW, cellH),
-              Paint()..color = _c.primary.withOpacity(0.12));
-        }
-        final border = Paint()
-          ..color = borderC
-          ..strokeWidth = 0.5
-          ..style = PaintingStyle.stroke;
-        canvas.drawRect(Rect.fromLTWH(x, y, cellW, cellH), border);
-        final tp = TextPainter(
-          text: TextSpan(
-            text: cell.text,
-            style: TextStyle(
-                // 显式中文字体：Canvas 脱离 widget 树绘制，默认字体无 CJK 回退=图片无文字
-                fontFamily: 'Noto Sans SC',
-                fontSize: cell.bold ? 14 : 12,
-                fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal,
-                color: cell.bg == 'grey' ? _c.primary : null),
-          ),
-          textDirection: TextDirection.ltr,
-          textAlign: cell.align == 'center'
-              ? TextAlign.center
-              : (cell.align == 'right' ? TextAlign.right : TextAlign.left),
-        )..layout(maxWidth: cellW - padX * 2);
-        final dx = cell.align == 'center'
-            ? x + (cellW - tp.width) / 2
-            : (cell.align == 'right' ? x + cellW - padX - tp.width : x + padX);
-        tp.paint(canvas, Offset(dx, y + (cellH - tp.height) / 2));
-        acc += span;
-        x += cellW;
-      }
-      y += rh[r];
-    }
-    final picture = recorder.endRecording();
-    return picture.toImage((W * scale).round(), (H * scale).round());
   }
 
   /// 内置标准模板（{月账单} 展开=标题+多栏月账单；渲染兜底用，保证预览有内容）
@@ -2205,9 +2147,10 @@ class _StatementPageState extends State<StatementPage> {
     );
   }
 
-  /// 按当前样式图片打印（对账单统一打印入口）：**dart:ui Canvas 完整绘制对账单为 PNG 图片**——
+  /// 按当前样式图片打印（对账单统一打印入口）：**widget 全量渲染对账单表格 → RepaintBoundary 截图 PNG**——
   /// 所见即所得且全量完整（预览是虚拟化表格只画视口，截屏残缺——用户"图片不完整，只有一部分"；
-  /// Canvas 绘制无此限制）；Web 新窗口打开图片（浏览器可直接打印/右键保存），原生端保存图片用看图软件打印。
+  /// 屏幕外全量尺寸渲染无此限制，文字走 widget 渲染中文正常）；Web 新窗口打开图片（浏览器可直接打印/右键保存），
+  /// 原生端保存图片用看图软件打印。
   Future<void> _printCurrent() async {
     if (!_loaded) {
       toast(context, '请先生成对账单');
@@ -2219,13 +2162,7 @@ class _StatementPageState extends State<StatementPage> {
         toast(context, '暂无可用模板内容，请到「模板设置」选择或创建模板');
         return;
       }
-      final image = await _renderStmtImage(rows);
-      final data = await image.toByteData(format: ui.ImageByteFormat.png);
-      if (data == null) {
-        toast(context, '对账单图片生成失败');
-        return;
-      }
-      final bytes = data.buffer.asUint8List();
+      final bytes = await _renderStmtImageByWidget(rows);
       final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
       final name = '对账单-${clientName.replaceAll(' ', '')}.png';
       if (kIsWeb) {
