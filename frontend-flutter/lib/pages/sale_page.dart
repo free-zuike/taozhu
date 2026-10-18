@@ -635,7 +635,7 @@ class _SalePageState extends State<SalePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('进价自动带出顺序（进价留空时按顺序取第一个有效值）',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.text)),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.textMain)),
                 const SizedBox(height: 10),
                 for (var i = 0; i < order.length; i++) ...[
                   Row(
@@ -645,7 +645,7 @@ class _SalePageState extends State<SalePage> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(_costSources.firstWhere((s) => s.$1 == order[i]).$2,
-                            style: TextStyle(fontSize: 14, color: c.text)),
+                            style: TextStyle(fontSize: 14, color: c.textMain)),
                       ),
                       IconButton(
                         visualDensity: VisualDensity.compact,
