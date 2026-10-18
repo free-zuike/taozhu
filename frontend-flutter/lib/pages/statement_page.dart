@@ -107,7 +107,7 @@ class _StatementPageState extends State<StatementPage> {
     SharedPreferences.getInstance().then((sp) {
       final v = sp.getString('stmtPrintOrientation');
       if (v == 'landscape' || v == 'portrait') {
-        setState(() => _printOri = v);
+        setState(() => _printOri = v!);
       }
     });
     // 合计口径移除（用户"去掉吧，全部按照上边设置的来"）：固定逐笔舍入（_roundTotals 恒 true）
