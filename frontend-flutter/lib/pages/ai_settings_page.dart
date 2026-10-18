@@ -238,9 +238,9 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
     final reply = await aiTestCapability(capability);
     if (capability == 'speech') {
-      // 语音测试改录音式：部分 ASR（TeleAI/TeleSpeechASR 等）拒绝静音素材，必须真实人声验证
-      toast(context, '开始录音 3 秒，请说一句话…');
-      return await aiTestSpeechRecord();
+      // 语音测试改交互式录音（对齐语音记账：固定秒数用户来不及开口=录到静音，
+      // 部分 ASR 如 TeleAI/TeleSpeechASR 拒静音返回 500；弹窗手动结束保证真实人声）
+      return await aiTestSpeechRecord(context);
     }
     return capability == 'vision'
             ? (reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply')

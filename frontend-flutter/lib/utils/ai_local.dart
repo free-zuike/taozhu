@@ -5,7 +5,9 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/material.dart' show AlertDialog, BuildContext, FilledButton, Navigator, showDialog;
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart' show MediaType;
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -396,9 +398,18 @@ String _speechSttUrl(String baseUrl) {
   return '$b/audio/transcriptions';
 }
 
+/// multipart file 的 Content-Type：对齐 beecount（Dio MultipartFile.fromFile 自动带文件类型，
+/// 不是 octet-stream）——部分服务商对 file 的 MIME 敏感；静音 PCM WAV 推断为 audio/x-wav 同 Dio。
+MediaType _mediaTypeFor(String mime) {
+  final sub = mime.toLowerCase();
+  if (sub.contains('mp4') || sub.contains('m4a') || sub.contains('aac')) return MediaType('audio', 'mp4');
+  if (sub.contains('webm')) return MediaType('audio', 'webm');
+  return MediaType('audio', 'x-wav');
+}
+
 /// 语音转文字（STT）：真实音频字节 → 文本。请求构造对齐 beecount _speechToTextOpenAI：
-/// multipart file+model 表单字段、file 不设 Content-Type；部分 ASR（TeleAI/TeleSpeechASR 等）
-/// 拒绝静音/音调等非真实语音内容（500 空体），必须真实人声。
+/// multipart file+model 表单字段（file 带 Content-Type，同 Dio 推断）；部分 ASR
+/// （TeleAI/TeleSpeechASR 等）拒绝无语音内容的音频（500 空体），必须真实人声。
 Future<String> _speechToTextBytes(Uint8List bytes, String mime, String filename) async {
   final cfg = await aiLoadConfig();
   final p = _providerFor(cfg, 'speechProviderId');
@@ -407,7 +418,12 @@ Future<String> _speechToTextBytes(Uint8List bytes, String mime, String filename)
   final req = http.MultipartRequest('POST', Uri.parse(url))
     ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
     ..fields['model'] = _modelFor(p, 'speech')
-    ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    ..files.add(http.MultipartFile.fromBytes(
+      'file',
+      bytes,
+      filename: filename,
+      contentType: _mediaTypeFor(mime),
+    ));
   final resp = await req.send().timeout(const Duration(seconds: 60));
   final body = await resp.stream.bytesToString();
   if (resp.statusCode != 200) {
@@ -438,17 +454,36 @@ Future<AiInvoice> aiParseVoice(Uint8List bytes, String mime, {String purpose = '
   }
 }
 
-/// 语音测试（录音式）：录制一段真实人声发 STT（对齐语音记账同路径——部分 ASR 如
-/// TeleAI/TeleSpeechASR 拒绝静音素材，静音测试必然 500，必须真实语音）。录音 3 秒自动结束。
-Future<String> aiTestSpeechRecord() async {
+/// 语音测试（录音式）：录一段真实人声发 STT（对齐语音记账交互——固定秒数录音用户来不及
+/// 开口会录到静音，部分 ASR 如 TeleAI/TeleSpeechASR 拒静音返回 500；弹窗手动点「结束」
+/// 保证录到真实人声，与语音记账同款交互同款通道）。
+Future<String> aiTestSpeechRecord(BuildContext context) async {
   final perm = await Permission.microphone.request();
   if (!perm.isGranted) throw Exception('需要麦克风权限才能语音测试');
   final rec = AudioRecorder();
   final dir = await getTemporaryDirectory();
   final path = '${dir.path}/taozhu_voice_test_${DateTime.now().millisecondsSinceEpoch}.m4a';
   await rec.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
-  await Future.delayed(const Duration(seconds: 3)); // 录 3 秒自动结束（提示用户开口说话）
+  var finished = false;
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      title: const Text('语音测试'),
+      content: const Text('正在录音，请说一句话（如：白菜两斤），说完点「结束」'),
+      actions: [
+        FilledButton(
+          onPressed: () {
+            finished = true;
+            Navigator.pop(ctx);
+          },
+          child: const Text('结束'),
+        ),
+      ],
+    ),
+  );
   await rec.stop();
+  if (!finished) throw Exception('录音未完成');
   final bytes = await File(path).readAsBytes();
   final text = await _speechToTextBytes(bytes, 'audio/mp4', 'voice.m4a');
   return text.isEmpty ? '语音通道连通（未识别出文字）' : '语音识别正常：$text';

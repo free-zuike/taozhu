@@ -399,10 +399,16 @@ class _StatementPageState extends State<StatementPage> {
           color: Colors.transparent,
           child: RepaintBoundary(
             key: key,
-            child: SizedBox(
-              width: w,
-              height: h,
-              child: tplPreviewTable(rows, fontSize: 12, primary: _c.primary),
+            // 四周留白=打印页边距（用户"图片把边界去掉了，像excel打印应有边界"）：
+            // 白底 + 24 逻辑像素边距，表格线完整落在白纸内
+            child: Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(24),
+              child: SizedBox(
+                width: w,
+                height: h,
+                child: tplPreviewTable(rows, fontSize: 12, primary: _c.primary),
+              ),
             ),
           ),
         ),
@@ -2164,7 +2170,11 @@ class _StatementPageState extends State<StatementPage> {
       }
       final bytes = await _renderStmtImageByWidget(rows);
       final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
-      final name = '对账单-${clientName.replaceAll(' ', '')}.png';
+      // 文件名带账期月份（用户"店铺几月份账单"——原只到店铺名）
+      final from = _fromCtrl.text.trim();
+      final ym = RegExp(r'^(\d{4})-(\d{2})').firstMatch(from);
+      final ymText = ym != null ? '${ym.group(1)}年${int.parse(ym.group(2)!)}月' : '';
+      final name = '${clientName.replaceAll(' ', '')}$ymText账单.png';
       if (kIsWeb) {
         // Web：新窗口打开 PNG（浏览器可打印/右键保存；比隐藏 iframe 自动打印稳定——用户反馈打印弹不出来）
         openPrintImageBytes(bytes);
