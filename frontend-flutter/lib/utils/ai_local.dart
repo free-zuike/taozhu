@@ -563,18 +563,20 @@ Future<String> aiTestCapability(String cap) async {
 }
 
 /// 1 秒 8kHz 16-bit 单声道静音 WAV（语音测试素材，对齐 beecount _createMinimalWav）。
-/// 必须用静音：实测部分 ASR（如 TeleAI/TeleSpeechASR）对非语音音调（正弦波）返回 500；
-/// 静音音频返回空文本也算连通成功（beecount 同语义，用户实测正常）。
+/// 静音音频返回空文本也算连通成功（beecount 同语义）。
+/// 注意：四字符魔数（RIFF/WAVE/fmt /data）必须按字符顺序逐字节写——
+/// setUint32+Endian.little 会把 "RIFF"(52 49 46 46) 倒序成 "FFIR"(46 46 49 52)，
+/// 生成无效 WAV → 服务商解码失败返回 500 空体（App 500 / Web 200 差异根因，Web 服务端是逐字节写的）。
 Uint8List _silenceWav() {
   const sr = 8000;
   final n = sr; // 1 秒
   final dataLen = n * 2;
   final b = Uint8List(44 + dataLen);
   final dv = ByteData.view(b.buffer);
-  dv.setUint32(0, 0x52494646, Endian.little); // RIFF
+  b.setRange(0, 4, [0x52, 0x49, 0x46, 0x46]); // "RIFF"
   dv.setUint32(4, 36 + dataLen, Endian.little);
-  dv.setUint32(8, 0x57415645, Endian.little); // WAVE
-  dv.setUint32(12, 0x666d7420, Endian.little); // fmt
+  b.setRange(8, 12, [0x57, 0x41, 0x56, 0x45]); // "WAVE"
+  b.setRange(12, 16, [0x66, 0x6d, 0x74, 0x20]); // "fmt "
   dv.setUint32(16, 16, Endian.little);
   dv.setUint16(20, 1, Endian.little); // PCM
   dv.setUint16(22, 1, Endian.little); // mono
@@ -582,7 +584,7 @@ Uint8List _silenceWav() {
   dv.setUint32(28, sr * 2, Endian.little);
   dv.setUint16(32, 2, Endian.little);
   dv.setUint16(34, 16, Endian.little);
-  dv.setUint32(36, 0x64617461, Endian.little); // data
+  b.setRange(36, 40, [0x64, 0x61, 0x74, 0x61]); // "data"
   dv.setUint32(40, dataLen, Endian.little);
   for (var i = 0; i < n; i++) {
     dv.setInt16(44 + i * 2, 0, Endian.little); // 静音
