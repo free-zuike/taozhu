@@ -622,6 +622,7 @@ class _SalePageState extends State<SalePage> {
 
   /// 「进价顺序」设置弹窗（记录出货时直接调整带出顺序，保存本地生效，两端各自存储）
   Future<void> _showCostOrderDlg() async {
+    final c = Theme.of(context).extension<TaozhuColors>()!;
     final order = [...await _costOrder()];
     await showModalBottomSheet<void>(
       context: context,
@@ -634,17 +635,17 @@ class _SalePageState extends State<SalePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('进价自动带出顺序（进价留空时按顺序取第一个有效值）',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _c.text)),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: c.text)),
                 const SizedBox(height: 10),
                 for (var i = 0; i < order.length; i++) ...[
                   Row(
                     children: [
                       Text('${i + 1}.',
-                          style: TextStyle(fontSize: 14, color: _c.textSub, fontWeight: FontWeight.w600)),
+                          style: TextStyle(fontSize: 14, color: c.textSub, fontWeight: FontWeight.w600)),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(_costSources.firstWhere((s) => s.$1 == order[i]).$2,
-                            style: TextStyle(fontSize: 14, color: _c.text)),
+                            style: TextStyle(fontSize: 14, color: c.text)),
                       ),
                       IconButton(
                         visualDensity: VisualDensity.compact,
@@ -823,7 +824,7 @@ class _SalePageState extends State<SalePage> {
         row.salePrice = (price['sale_price'] as num?)?.toDouble() ?? 0;
         row.saleCtrl.text = row.salePrice > 0 ? row.salePrice.toStringAsFixed(2) : '';
       }
-      unawaited(_applyCostByOrder(row, item));
+      unawaited(_applyCostByOrder(row, item!));
     } else {
       row.priceId = null; // 自定义单位：价格手动填
     }
