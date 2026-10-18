@@ -17,7 +17,10 @@ Border _cellBorder(GridCell cell, {Color borderC = const Color(0xFFD9D9D9), doub
 
 /// 渲染模板行集合为只读表格（默认列宽 120/行高 44，横向滚动查看）。
 /// [primary] 用于底纹（bg='grey' 的表头浅色底）。
-Widget tplPreviewTable(List<List<GridCell>> rows, {double fontSize = 12, Color? primary}) {
+/// [textColor] 非空时强制全部文字该色（图片打印用：截图白底上必须深色文字，
+/// 否则暗色主题下 Text 默认浅色文字画白底 → 字浅看不清；页面预览不传=跟随主题）。
+Widget tplPreviewTable(List<List<GridCell>> rows,
+    {double fontSize = 12, Color? primary, Color? textColor}) {
   const borderC = Color(0xFFD9D9D9);
   // 列数 = colSpan 展开宽度（合并起点占多列，物理格子数会漏列）
   int rowWidth(List<GridCell> row) {
@@ -114,7 +117,7 @@ Widget tplPreviewTable(List<List<GridCell>> rows, {double fontSize = 12, Color? 
               style: TextStyle(
                   fontSize: cell.bold ? fontSize + 2 : fontSize,
                   fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal,
-                  color: cell.bg == 'grey' ? primary : null)),
+                  color: textColor ?? (cell.bg == 'grey' ? primary : null))),
         ),
       );
     },

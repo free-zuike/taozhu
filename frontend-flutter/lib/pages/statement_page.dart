@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:excel/excel.dart' hide Border, BorderStyle, TextSpan;
@@ -382,12 +383,19 @@ class _StatementPageState extends State<StatementPage> {
   /// 固定全量尺寸包 RepaintBoundary 挂屏幕外渲染后截图（对齐参考实现生成图片报告的做法——
   /// 文字走 widget 正常渲染，中文不会丢失；预览是虚拟化 TableView 只画视口格，
   /// 直接截当前屏幕必然残缺"图片不完整"——Overlay 外给全量尺寸则视口覆盖全部行，完整）。
+  /// 图片按 A4 纵向比例排版（表格居中 + 白纸页边距）：打印默认纵向 A4，
+  /// 浏览器/看图软件打印对话框仍可调方向纸张；文字强制黑字（暗色主题默认浅色看不清）。
   /// 返回 PNG 字节。列宽 120 / 行高 44 / 合并单元格与预览一致（所见即所得）。
   Future<Uint8List> _renderStmtImageByWidget(List<List<GridCell>> rows) async {
     int rowWidth(List<GridCell> row) => row.fold<int>(0, (m, c) => m + (c.colSpan < 1 ? 1 : c.colSpan));
     final cols = rows.fold<int>(0, (m, r) => rowWidth(r) > m ? rowWidth(r) : m);
     final w = cols * 120.0;
     final h = rows.length * 44.0;
+    // A4 纵向页面：宽:高 ≈ 210:297；表格不足一页宽度时按比例补宽并居中（防"默认横版 A4"）
+    const margin = 40.0;
+    const a4Ratio = 210 / 297;
+    final pageW = math.max(w + margin * 2, (h + margin * 2) * a4Ratio);
+    final pageH = h + margin * 2;
     final key = GlobalKey();
     final overlay = Overlay.of(context);
     late OverlayEntry entry;
@@ -399,15 +407,17 @@ class _StatementPageState extends State<StatementPage> {
           color: Colors.transparent,
           child: RepaintBoundary(
             key: key,
-            // 四周留白=打印页边距（用户"图片把边界去掉了，像excel打印应有边界"）：
-            // 白底 + 24 逻辑像素边距，表格线完整落在白纸内
-            child: Container(
-              color: Colors.white,
-              padding: const EdgeInsets.all(24),
-              child: SizedBox(
-                width: w,
-                height: h,
-                child: tplPreviewTable(rows, fontSize: 12, primary: _c.primary),
+            // 白纸 + A4 纵向比例 + 表格居中（用户"默认变横版A4"→按页面比例生成则默认纵向）
+            child: SizedBox(
+              width: pageW,
+              height: pageH,
+              child: Center(
+                child: SizedBox(
+                  width: w,
+                  height: h,
+                  // 截图白底 + 强制黑字（不跟随主题文字色——暗色主题下默认为浅色，白底上看不清）
+                  child: tplPreviewTable(rows, fontSize: 12, primary: _c.primary, textColor: Colors.black),
+                ),
               ),
             ),
           ),
