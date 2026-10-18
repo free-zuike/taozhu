@@ -82,7 +82,6 @@
             <input class="num" type="digit" v-model="row.cost" placeholder="0" />
           </view>
         </view>
-        <input v-if="row.countUnit" class="num count" type="digit" v-model="row.countQty" :placeholder="`折合 ${row.countUnit} 数`" />
         <view class="amt-line">金额 <text class="amt">¥{{ rowAmount(row) }}</text></view>
         <input class="row-note" v-model="row.note" placeholder="行备注（选填）" />
         <!-- 行上移/下移（批次内商品顺序调整；放行底部不挤商品名，保存按数组序重排 sort） -->
@@ -161,7 +160,7 @@ import { request, getToken, getRole, uploadAi, uploadAttachment, getAttachments,
 import { fmtAmount, initRounding } from '../../utils/money';
 import { onWs, offWs } from '../../ws';
 
-interface Price { id: string; unit: string; sale_price: number; purchase_price: number; stock?: number }
+interface Price { id: string; unit: string; sale_price: number; purchase_price: number; per?: number; stock?: number }
 interface Item { id: string; name: string; prices: Price[]; count_unit?: string }
 interface Row {
   itemId: string; itemName: string; prices: Price[];
@@ -239,6 +238,15 @@ const total = computed(() =>
   rows.value.reduce((s, r) => s + (Number(r.quantity) || 0) * (Number(r.salePrice) || 0), 0),
 );
 const rowAmount = (r: Row) => fmtAmount((Number(r.quantity) || 0) * (Number(r.salePrice) || 0));
+
+/** 折合计数由商品管理 per 统一决定（不再交易页手填）：per>0 → 数量×per；否则不折合（对齐 App _autoCount） */
+function countQtyOf(r: Row): number | null {
+  const pr = r.prices.find((p) => p.id === r.priceId);
+  const per = Number((pr as any)?.per || 0);
+  const qty = Number(r.quantity) || 0;
+  const ac = per > 0 ? Math.round(qty * per * 100) / 100 : qty;
+  return ac !== qty ? ac : null;
+}
 
 onShow(async () => {
   if (!getToken()) {
@@ -931,7 +939,7 @@ async function submit() {
             id: r.rowId || undefined, // 保留原行 id（服务端重建不换 id，行级附件不孤儿化）
             price_id: r.priceId,
             quantity: Number(r.quantity),
-            count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null,
+            count_qty: countQtyOf(r),
             sale_price: Number(r.salePrice) || 0,
             ...(Number(r.cost) > 0 ? { cost_price: Number(r.cost) } : {}),
             happened_at: r.happenedAt || date.value,
@@ -948,7 +956,7 @@ async function submit() {
           client_id: clientId.value,
           happened_at: date.value,
           note: note.value.trim(),
-          items: newRows.map((r) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, ...(Number(r.cost) > 0 ? { cost_price: Number(r.cost) } : {}), happened_at: r.happenedAt || date.value, note: r.note || '', sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0 })),
+          items: newRows.map((r) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: countQtyOf(r), sale_price: Number(r.salePrice) || 0, ...(Number(r.cost) > 0 ? { cost_price: Number(r.cost) } : {}), happened_at: r.happenedAt || date.value, note: r.note || '', sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0 })),
         });
         newOrderId = d.id;
         for (const r of newRows) r.orderId = newOrderId; // 回填：行级凭证回退单据级查询命中
@@ -970,7 +978,7 @@ async function submit() {
       client_id: clientId.value,
       happened_at: date.value,
       note: note.value.trim(),
-      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: Number(r.countQty) > 0 ? Number(r.countQty) : null, sale_price: Number(r.salePrice) || 0, ...(Number(r.cost) > 0 ? { cost_price: Number(r.cost) } : {}), happened_at: r.happenedAt || date.value, note: r.note || note.value.trim() })),
+      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: countQtyOf(r), sale_price: Number(r.salePrice) || 0, ...(Number(r.cost) > 0 ? { cost_price: Number(r.cost) } : {}), happened_at: r.happenedAt || date.value, note: r.note || note.value.trim() })),
     };
     let savedId = editId.value;
     if (editId.value) {

@@ -66,8 +66,6 @@ class _Row {
   /// 行原备注（直编/编辑保存时保留，避免 payload 缺 note 清空服务端行备注）
   String note = '';
   final noteCtrl = TextEditingController(); // 行备注输入（对齐小程序 row-note）
-  /// 本单折合计数数量（如卖货按大单位称重、备货按小单位计数→填折合出的计数单位数；空=不折按原单位。仅当商品配计数单位时生效）
-  double? countQty;
   /// 保存时构建的商品行 payload（去单据化：逐行入队 sale_item 用）
   Map<String, dynamic>? itemsPayload;
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
@@ -75,7 +73,6 @@ class _Row {
   final unitCtrl = TextEditingController();
   final qtyCtrl = TextEditingController();
   final saleCtrl = TextEditingController();
-  final countCtrl = TextEditingController(); // 折合计数（可选）
   final costCtrl = TextEditingController(); // 手动进价（留空=跟随最近进货价；填写覆盖）
 }
 
@@ -142,7 +139,6 @@ class _SalePageState extends State<SalePage> {
       r.unitCtrl.dispose();
       r.qtyCtrl.dispose();
       r.saleCtrl.dispose();
-      r.countCtrl.dispose();
       r.costCtrl.dispose();
       r.noteCtrl.dispose();
     }
@@ -449,11 +445,7 @@ class _SalePageState extends State<SalePage> {
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..saleCtrl.text = sp.toString()
-          ..costCtrl.text = ((it['cost_price'] as num?)?.toDouble() ?? 0) > 0 ? '${(it['cost_price'] as num?)?.toDouble()}' : ''
-          ..countQty = (double.tryParse('${it['count_qty'] ?? ''}') ?? 0) > 0 ? double.tryParse('${it['count_qty'] ?? ''}') : null);
-        if ((it['count_qty'] as num?)?.toDouble() != null && ((it['count_qty'] as num?)?.toDouble() ?? 0) > 0) {
-          _rows.last.countCtrl.text = '${it['count_qty']}';
-        }
+          ..costCtrl.text = ((it['cost_price'] as num?)?.toDouble() ?? 0) > 0 ? '${(it['cost_price'] as num?)?.toDouble()}' : '');
         _rowSaleId['${it['id'] ?? ''}'] = _saleId;
       }
       if (_rows.isEmpty) _rows.add(_newRow());
@@ -534,11 +526,7 @@ class _SalePageState extends State<SalePage> {
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..saleCtrl.text = sp.toString()
-          ..costCtrl.text = ((it['cost_price'] as num?)?.toDouble() ?? 0) > 0 ? '${(it['cost_price'] as num?)?.toDouble()}' : ''
-          ..countQty = (double.tryParse('${it['count_qty'] ?? ''}') ?? 0) > 0 ? double.tryParse('${it['count_qty'] ?? ''}') : null);
-        if ((it['count_qty'] as num?)?.toDouble() != null && ((it['count_qty'] as num?)?.toDouble() ?? 0) > 0) {
-          _rows.last.countCtrl.text = '${it['count_qty']}';
-        }
+          ..costCtrl.text = ((it['cost_price'] as num?)?.toDouble() ?? 0) > 0 ? '${(it['cost_price'] as num?)?.toDouble()}' : '');
       }
       if (_rows.isEmpty) _rows.add(_newRow());
       if (skipped > 0) toast(context, '该日 $skipped 条商品已删除或价格停用，保存后将移除');
@@ -1393,6 +1381,8 @@ double _fifoCost(
           : (kIsWeb
               ? (price?['purchase_price'] ?? 0)
               : _fifoCost(buyRows!, saleRows!, lossRows!, fifoCache, r, selfRowIds, price));
+      // 折合计数由商品管理 per 统一决定（不再交易页手填）：per>0 → 数量×per；否则不折合
+      final autoCount = _autoCount(r);
       // 批量直编：行保留各自原单号（该日可能多单，统一挂新单会把原单行搬走→本地/服务器错乱）
       final rowSaleId = isDateRows ? (r.origSaleId.isNotEmpty ? r.origSaleId : saleId) : saleId;
       final rowPayload = {
@@ -1403,7 +1393,7 @@ double _fifoCost(
         'item_name': opt?.name ?? r.nameCtrl.text.trim(),
         'unit': r.unitCtrl.text.trim(),
         'quantity': r.quantity,
-        'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
+        'count_qty': autoCount != r.quantity ? autoCount : null,
         'sale_price': r.salePrice,
         'cost_price': costPrice,
         if (manualCost > 0) 'cost_manual': true, // 老板手动进价标记：服务端同步时用该值，不再按 FIFO 重算
@@ -1434,7 +1424,7 @@ double _fifoCost(
             'id': r.rowId, // 保留原行 id（服务端重建明细时不换新 id，行级附件不孤儿化）
             'price_id': r.priceId,
             'quantity': r.quantity,
-            'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
+            'count_qty': _autoCount(r) != r.quantity ? _autoCount(r) : null,
             'sale_price': r.salePrice,
             // Web 留空=不传（服务端跟随最近进货价）；手动填 >0 才传（老板才生效）
             if ((double.tryParse(r.costCtrl.text.trim()) ?? 0) > 0) 'cost_price': double.tryParse(r.costCtrl.text.trim()),
@@ -2118,22 +2108,6 @@ double _fifoCost(
               onChanged: (v) => setState(() {}),
             ),
           ],
-          // 折合计数输入（进销单位换算通用字段）：商品配了计数单位（袋/个…）且与当前单位不同时显示。
-          // 填"本单折合几个计数单位"（卖货按大单位称重、备货按小单位计数 → 填折合出的计数单位数），库存/备货按它累计——备货页显示"还剩几个"。
-          if (item != null && item.countUnit.isNotEmpty && item.countUnit != row.unitCtrl.text.trim())
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: NumberPadField(
-                controller: row.countCtrl,
-                style: txtStyle,
-                decoration: _fieldDec(
-                    label: '折合 ${item.countUnit} 数（本单相当于 ${row.countCtrl.text.trim().isEmpty ? _autoCount(row) : row.countCtrl.text.trim()} ${item.countUnit}；可改）'),
-                onChanged: (v) {
-                  row.countQty = double.tryParse(v);
-                  setState(() {});
-                },
-              ),
-            ),
           // 行备注（对齐小程序 row-note）：批量直编/编辑/新建都可用，保存逐行带 note
           const SizedBox(height: 6),
           TextField(

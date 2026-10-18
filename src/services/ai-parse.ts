@@ -475,11 +475,11 @@ export const TEST_IMAGE_JPEG_B64 =
   'DAMBAAIRAxEAPwDyyiiivzo/ssKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiig' +
   'AooooAKKKKACiiigAooooAKKKKACiiigAooooA//2Q==';
 
-/** 生成 0.5s 8kHz 16-bit 单声道 440Hz 正弦音 WAV（对齐参考项目测试素材：仅验证语音通道连通；
- *  不用纯静音——部分 ASR 对无内容音频会报错/返回空，有内容音调更接近真实请求） */
+/** 生成 1 秒 8kHz 16-bit 单声道静音 WAV（对齐参考项目 beecount 测试素材：仅验证语音通道连通；
+ *  必须用静音——实测部分 ASR（如 TeleAI/TeleSpeechASR）对非语音音调返回 500，静音返回空也算成功） */
 export function minimalWavBytes(): Uint8Array {
   const sampleRate = 8000;
-  const numSamples = sampleRate / 2; // 0.5 秒
+  const numSamples = sampleRate; // 1 秒
   const dataSize = numSamples * 2;
   const fileSize = 36 + dataSize;
   const le = (value: number, bytes: number): number[] => {
@@ -495,10 +495,7 @@ export function minimalWavBytes(): Uint8Array {
   buf.push(...le(sampleRate, 4), ...le(sampleRate * 2, 4)); // sample rate + byte rate
   buf.push(...le(2, 2), ...le(16, 2)); // block align + bits per sample
   buf.push(...[0x64, 0x61, 0x74, 0x61], ...le(dataSize, 4)); // "data" + size
-  for (let i = 0; i < numSamples; i++) {
-    const v = Math.round(32767 * 0.4 * Math.sin((i * 2 * Math.PI * 440) / sampleRate));
-    buf.push(...le(v & 0xffff, 2)); // 16-bit LE
-  }
+  for (let i = 0; i < numSamples; i++) buf.push(0x00, 0x00); // 静音
   return Uint8Array.from(buf);
 }
 

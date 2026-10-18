@@ -3,7 +3,6 @@
 /// （OpenAI 兼容 chat/completions；智谱视觉/语音同协议），结果容错解析成商品草稿。
 /// 服务器 /ai/parse-* 仅 Web/小程序（平台域名限制）继续使用。
 import 'dart:convert';
-import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
@@ -508,11 +507,12 @@ Future<String> aiTestCapability(String cap) async {
   ]);
 }
 
-/// 0.5s 8000Hz 16bit 单声道 440Hz 正弦音 WAV（语音测试素材，真实请求服务商）。
-/// 不用纯静音：部分 ASR 对无内容音频会报错/返回空，有内容音调更接近真实请求、结果可预期。
+/// 1 秒 8kHz 16-bit 单声道静音 WAV（语音测试素材，对齐 beecount _createMinimalWav）。
+/// 必须用静音：实测部分 ASR（如 TeleAI/TeleSpeechASR）对非语音音调（正弦波）返回 500；
+/// 静音音频返回空文本也算连通成功（beecount 同语义，用户实测正常）。
 Uint8List _silenceWav() {
   const sr = 8000;
-  final n = sr ~/ 2; // 0.5 秒
+  final n = sr; // 1 秒
   final dataLen = n * 2;
   final b = Uint8List(44 + dataLen);
   final dv = ByteData.view(b.buffer);
@@ -530,8 +530,7 @@ Uint8List _silenceWav() {
   dv.setUint32(36, 0x64617461, Endian.little); // data
   dv.setUint32(40, dataLen, Endian.little);
   for (var i = 0; i < n; i++) {
-    final v = (32767 * 0.4 * math.sin(i * 2 * 3.141592653589793 * 440 / sr)).round();
-    dv.setInt16(44 + i * 2, v, Endian.little);
+    dv.setInt16(44 + i * 2, 0, Endian.little); // 静音
   }
   return b;
 }

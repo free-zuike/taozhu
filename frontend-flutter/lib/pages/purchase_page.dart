@@ -51,8 +51,6 @@ class _PRow {
   /// 行原备注（直编/编辑保存时保留，避免 payload 缺 note 清空服务端行备注）
   String note = '';
   final noteCtrl = TextEditingController(); // 行备注输入（对齐小程序 row-note）
-  /// 本单折合计数数量（如进 1 大单位折合 N 个计数单位→库存按计数单位累计；空=不折按原单位。仅当商品配计数单位时生效）
-  double? countQty;
   /// 保存时构建的商品行 payload（去单据化：逐行入队 purchase_item 用）
   Map<String, dynamic>? itemsPayload;
   // 输入框控制器：行重建时保留已输入内容（无 controller 时下拉切换/刷新会丢输入）
@@ -60,7 +58,6 @@ class _PRow {
   final unitCtrl = TextEditingController();
   final qtyCtrl = TextEditingController();
   final priceCtrl = TextEditingController();
-  final countCtrl = TextEditingController(); // 折合计数（可选）
 }
 
 class _PurchasePageState extends State<PurchasePage> {
@@ -120,7 +117,6 @@ class _PurchasePageState extends State<PurchasePage> {
       r.unitCtrl.dispose();
       r.qtyCtrl.dispose();
       r.priceCtrl.dispose();
-      r.countCtrl.dispose();
       r.noteCtrl.dispose();
     }
     // 未提交退出（取消）：清理识别即挂载的原图（引用+本地副本，零网络）
@@ -386,11 +382,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
-          ..priceCtrl.text = pp.toStringAsFixed(2)
-          ..countQty = (double.tryParse('${it['count_qty'] ?? ''}') ?? 0) > 0 ? double.tryParse('${it['count_qty'] ?? ''}') : null);
-        if ((it['count_qty'] as num?)?.toDouble() != null && ((it['count_qty'] as num?)?.toDouble() ?? 0) > 0) {
-          _rows.last.countCtrl.text = '${it['count_qty']}';
-        }
+          ..priceCtrl.text = pp.toStringAsFixed(2));
         _rowPurchaseId['${it['id'] ?? ''}'] = _purchaseId;
       }
       if (_rows.isEmpty) _rows.add(_newPRow());
@@ -473,11 +465,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
-          ..priceCtrl.text = pp.toStringAsFixed(2)
-          ..countQty = (double.tryParse('${it['count_qty'] ?? ''}') ?? 0) > 0 ? double.tryParse('${it['count_qty'] ?? ''}') : null);
-        if ((it['count_qty'] as num?)?.toDouble() != null && ((it['count_qty'] as num?)?.toDouble() ?? 0) > 0) {
-          _rows.last.countCtrl.text = '${it['count_qty']}';
-        }
+          ..priceCtrl.text = pp.toStringAsFixed(2));
       }
       if (_rows.isEmpty) _rows.add(_newPRow());
       if (skipped > 0) toast(context, '该日 $skipped 条商品已删除或价格停用，保存后将移除');
@@ -1039,6 +1027,8 @@ class _PurchasePageState extends State<PurchasePage> {
       // 存储浮点原值（对齐参考项目 REAL：本地镜像/提交不取整；舍入配置只在统计/欠款/展示层换算）
       final amount = r.quantity * r.purchasePrice;
       totalCalc += amount;
+      // 折合计数由商品管理 per 统一决定（不再交易页手填）：per>0 → 数量×per；否则不折合
+      final autoCount = _autoPCount(r);
       // 批量直编：行保留各自原单号（该日可能多单，统一挂新单会把原单行搬走→本地/服务器错乱）
       final rowPurchaseId = isDateRows ? (r.origPurchaseId.isNotEmpty ? r.origPurchaseId : purchaseId) : purchaseId;
       final rowPayload = {
@@ -1048,7 +1038,7 @@ class _PurchasePageState extends State<PurchasePage> {
         'item_name': opt?['name'] ?? r.nameCtrl.text.trim(),
         'unit': r.unitCtrl.text.trim(),
         'quantity': r.quantity,
-        'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
+        'count_qty': autoCount != r.quantity ? autoCount : null,
         'purchase_price': r.purchasePrice,
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
@@ -1074,7 +1064,7 @@ class _PurchasePageState extends State<PurchasePage> {
             'id': r.rowId, // 保留原行 id（服务端重建明细时不换新 id，行级附件不孤儿化）
             'price_id': r.priceId,
             'quantity': r.quantity,
-            'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
+            'count_qty': _autoPCount(r) != r.quantity ? _autoPCount(r) : null,
             'purchase_price': r.purchasePrice,
             'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
             'note': r.note,
@@ -1098,7 +1088,7 @@ class _PurchasePageState extends State<PurchasePage> {
                     'id': r.rowId,
                     'price_id': r.priceId,
                     'quantity': r.quantity,
-                    'count_qty': r.countQty != null && r.countQty! > 0 ? r.countQty : null,
+                    'count_qty': _autoPCount(r) != r.quantity ? _autoPCount(r) : null,
                     'purchase_price': r.purchasePrice,
                     'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
                     'note': r.note,
@@ -1682,20 +1672,6 @@ class _PurchasePageState extends State<PurchasePage> {
           ),
           // 折合计数输入（进销单位换算通用字段）：商品配了计数单位（袋/个…）且与当前单位不同时显示。
           // 填"本单折合几个计数单位"（进 1 大单位 → 填折合出的计数单位数），库存/备货按它累计——备货页显示"还剩几个"。
-          if (item != null && '${item['count_unit'] ?? ''}'.isNotEmpty && '${item['count_unit'] ?? ''}' != row.unitCtrl.text.trim())
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: NumberPadField(
-                controller: row.countCtrl,
-                style: txtStyle,
-                decoration: _fieldDec(
-                    label: '折合 ${item!['count_unit']} 数（本单相当于 ${row.countCtrl.text.trim().isEmpty ? _autoPCount(row) : row.countCtrl.text.trim()} ${item!['count_unit']}；可改）'),
-                onChanged: (v) {
-                  row.countQty = double.tryParse(v);
-                  setState(() {});
-                },
-              ),
-            ),
           // 行备注（对齐小程序 row-note）：批量直编/编辑/新建都可用，保存逐行带 note
           const SizedBox(height: 6),
           TextField(

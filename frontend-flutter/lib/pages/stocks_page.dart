@@ -110,35 +110,47 @@ class _StocksPageState extends State<StocksPage> {
     }
   }
 
-  /// 库存本地计算（用户"库存应该是计算出来的不是写入数据库"）：Σ进货 − Σ出货（按商品×单位），
-  /// 不依赖服务端 stocks 表数量；min_stock 阈值配置保留（stocks 表里用户设的）
+  /// 库存本地计算（用户"库存应该是计算出来的不是写入数据库"）：Σ进货 − Σ出货 − Σ损耗（按商品×单位），
+  /// 不依赖服务端 stocks 表数量；min_stock 阈值配置保留（stocks 表里用户设的）。
+  /// 聚合口径对齐服务端 /stocks：单位用商品计数单位 count_unit（若有，否则原单位），
+  /// 数量用折合 count_qty（>0 时，否则原数量）——交易页折合由商品管理 per 统一后两端一致。
   Future<List<Map<String, dynamic>>> _computedStocks() async {
     final buys = await LocalDb.getAll('purchase_items');
     final sells = await LocalDb.getAll('sale_items');
+    final losses = await LocalDb.getAll('loss_records');
     final cfg = <String, Map<String, dynamic>>{};
     try {
       for (final s in await LocalDb.getAll('stocks')) {
         cfg['${s['item_id']}|${s['unit']}'] = s;
       }
     } catch (_) {}
+    final items = await LocalDb.getAllByName('items');
+    final cuOf = {for (final i in items) '${i['id']}': '${i['count_unit'] ?? ''}'};
     final agg = <String, double>{};
+    final rawUnitOf = <String, String>{}; // 聚合 key → 原单位（阈值配置按原单位行存，找不到计数单位行时回退）
     void add(List<Map<String, dynamic>> rows, double sign) {
       for (final r in rows) {
         final itemId = '${r['item_id'] ?? ''}';
-        final unit = '${r['unit'] ?? ''}';
-        if (itemId.isEmpty || unit.isEmpty) continue;
-        agg['$itemId|$unit'] =
-            (agg['$itemId|$unit'] ?? 0) + sign * ((r['quantity'] as num?)?.toDouble() ?? 0);
+        final rawUnit = '${r['unit'] ?? ''}';
+        if (itemId.isEmpty || rawUnit.isEmpty) continue;
+        final cu = cuOf[itemId] ?? '';
+        final unit = cu.isNotEmpty ? cu : rawUnit;
+        final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
+        final cq = (r['count_qty'] as num?)?.toDouble() ?? 0;
+        final eff = cq > 0 ? cq : qty;
+        final key = '$itemId|$unit';
+        agg[key] = (agg[key] ?? 0) + sign * eff;
+        rawUnitOf[key] = rawUnit;
       }
     }
     add(buys, 1);
     add(sells, -1);
-    final items = await LocalDb.getAllByName('items');
+    add(losses, -1);
     final nameOf = {for (final i in items) '${i['id']}': '${i['name'] ?? ''}'};
     final out = <Map<String, dynamic>>[];
     for (final e in agg.entries) {
       final itemId = e.key.split('|').first;
-      final c = cfg[e.key];
+      final c = cfg[e.key] ?? cfg['$itemId|${rawUnitOf[e.key] ?? ''}'];
       out.add({
         'item_id': itemId,
         'unit': e.key.split('|').last,
