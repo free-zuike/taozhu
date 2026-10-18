@@ -1591,19 +1591,26 @@ class SyncService {
       var removed = 0;
       final removedList = <String>[];
       // 扫描附件公共目录 attachments/{file}（file=md5 文件名，同图一份平铺存储）：
-      // basename 不在引用表 = 孤儿 → 删文件（对齐参考实现 cleaner 只删文件；宁留勿误删）
+      // basename 不在引用表 = 孤儿 → 删文件（对齐参考实现 cleaner 只删文件；宁留勿误删）。
+      // 近期新增（5 分钟内）宁留勿删：识别图"写文件 → 挂引用行"之间有毫秒窗口，
+      // 同步扫描恰在窗口内会把刚生成的识别图当孤儿删（用户"扫描图片时随机清理图片"）。
       await for (final f in base.list(followLinks: false)) {
         if (f is! File) continue;
         final fileName = f.uri.pathSegments.last;
         scanned++;
         if (!refNames.contains(fileName)) {
+          try {
+            final mod = f.statSync().modified;
+            if (DateTime.now().difference(mod) < const Duration(minutes: 5)) continue;
+          } catch (_) {}
           try { f.deleteSync(); removed++; removedList.add(fileName); } catch (_) {}
         }
       }
       // 仅实际删除时才记日志（无事发生静默——用户"孤儿清理日志动不动连续几条"根因：
-      // 每次同步都记一条删 0 个的日志，同步被 WS/回前台频繁触发=刷屏）
+      // 每次同步都记一条删 0 个的日志，同步被 WS/回前台频繁触发=刷屏）。
+      // 被删文件全量列出不截断（用户"日志应把扫描的全部都显示而不是有限制"）
       if (removed > 0) {
-        appLog('sync', '本地孤儿附件清理：引用表 ${refs.length} 条，扫描 $scanned 文件，删除 $removed 个${removedList.isEmpty ? '' : '（' + removedList.take(5).join(', ') + '…）'}', level: 'info');
+        appLog('sync', '本地孤儿附件清理：引用表 ${refs.length} 条，扫描 $scanned 文件，删除 $removed 个${removedList.isEmpty ? '' : '（' + removedList.join(', ') + '）'}', level: 'info');
       }
     } catch (_) {}
   }
