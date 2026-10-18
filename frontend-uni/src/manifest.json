@@ -1,8 +1,8 @@
 {
     "name" : "陶朱",
     "appid" : "",
-    "description" : "通用进销存记账（陶朱）",
-    "versionName" : "0.17.438",
+    "description" : "通用进销存记账（陶朱�?,
+    "versionName" : "0.17.439",
     "versionCode" : "1",
     "transformPx" : false,
     /* 5+App特有相关 */
@@ -46,9 +46,9 @@
             "sdkConfigs" : {}
         }
     },
-    /* 快应用特有相关 */
+    /* 快应用特有相�?*/
     "quickapp" : {},
-    /* 小程序特有相关 */
+    /* 小程序特有相�?*/
     "mp-weixin" : {
         "appid" : "wxf33cb857c5be257a",
         "darkmode" : true,
@@ -58,7 +58,7 @@
         "usingComponents" : true,
         "permission" : {
             "scope.record" : {
-                "desc" : "用于 AI 语音记账（录音描述出货/进货）"
+                "desc" : "用于 AI 语音记账（录音描述出�?进货�?
             }
         }
     },
