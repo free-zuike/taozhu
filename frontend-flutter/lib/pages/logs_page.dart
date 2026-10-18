@@ -82,8 +82,13 @@ class _LogsPageState extends State<LogsPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('日志详情'),
-        content: SingleChildScrollView(
-          child: SelectableText(text, style: const TextStyle(fontSize: 12.5, height: 1.5)),
+        // 固定高度内部滚动：内容多长对话框都不变（用户"日志框大小随文字多少随意更改"）
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 320,
+          child: SingleChildScrollView(
+            child: SelectableText(text, style: const TextStyle(fontSize: 12.5, height: 1.5)),
+          ),
         ),
         actions: [
           TextButton(
