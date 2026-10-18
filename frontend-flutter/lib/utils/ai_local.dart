@@ -160,7 +160,10 @@ Future<String> _chatCompletion(AiProvider p, String cap, List<Map<String, dynami
     if (resp.statusCode == 200) {
       final d = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
       final content = (d['choices'] as List?)?[0]?['message']?['content'];
-      return '${content ?? ''}'.trim();
+      final txt = '${content ?? ''}'.trim();
+      // 模型原始返回留痕（模型+API 地址+内容截断）——换模型识别不出商品时日志可见模型实际回了什么
+      appLog('ai', 'AI 响应 [${p.name}/${_modelFor(p, cap)}] ${p.baseUrl} → ${txt.length > 500 ? txt.substring(0, 500) + '…' : txt}');
+      return txt;
     }
     final errBody = utf8.decode(resp.bodyBytes);
     // 诊断：记录直连请求的关键信息（模型/地址/请求体规模/智谱完整响应）——Web 同代码走服务器正常、
@@ -282,12 +285,12 @@ Future<AiInvoice> aiParseText(String text, {String purpose = 'sale'}) async {
   try {
     final cfg = await aiLoadConfig();
     final p = _providerFor(cfg, 'textProviderId');
-    appLog('ai', '文字记账识别开始：${p.name}/${_modelFor(p, 'text')}（${text.length} 字）');
+    appLog('ai', '文字记账识别开始：${p.name}/${_modelFor(p, 'text')} ${p.baseUrl}（${text.length} 字）');
     final raw = await _chatCompletion(p, 'text', [
       {'role': 'user', 'content': '${_promptFor(purpose)}\n\n描述：$text'},
     ]);
     final inv = _normalizeInvoice(raw);
-    appLog('ai', '文字记账识别完成：${inv.items.length} 项、店铺「${inv.client}」');
+    appLog('ai', '文字记账识别完成：${inv.items.length} 项、店铺「${inv.client}」｜模型原始返回（前500字）：${raw.length > 500 ? raw.substring(0, 500) : raw}');
     return inv;
   } catch (e) {
     appLog('ai', '文字记账识别失败：${e.toString().split('\n').first}', level: 'error');
@@ -367,7 +370,7 @@ Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = '
   try {
     final cfg = await aiLoadConfig();
     final p = _providerFor(cfg, 'visionProviderId');
-    appLog('ai', '图片识别开始：${p.name}/${_modelFor(p, 'vision')}（${bytes.length} 字节 $mime）');
+    appLog('ai', '图片识别开始：${p.name}/${_modelFor(p, 'vision')} ${p.baseUrl}（${bytes.length} 字节 $mime）');
     final b64 = base64Encode(bytes);
     // 视觉请求格式对齐参考实现（system 指令 + user 内 text 在前、image_url 在后）：
     // 智谱 glm-4v 对 content 顺序敏感，image_url 在前=1210"图片输入格式/解析错误"（实测全图报错）
@@ -382,7 +385,7 @@ Future<AiInvoice> aiParsePhoto(Uint8List bytes, String mime, {String purpose = '
       },
     ]);
     final inv = _normalizeInvoice(raw);
-    appLog('ai', '图片识别完成：${inv.items.length} 项、店铺「${inv.client}」');
+    appLog('ai', '图片识别完成：${inv.items.length} 项、店铺「${inv.client}」｜模型原始返回（前500字）：${raw.length > 500 ? raw.substring(0, 500) : raw}');
     return inv;
   } catch (e) {
     appLog('ai', '图片识别失败：${e.toString().split('\n').first}', level: 'error');
@@ -416,7 +419,7 @@ MediaType _mediaTypeFor(String mime) {
 Future<String> _speechToTextBytes(Uint8List bytes, String mime, String filename) async {
   final cfg = await aiLoadConfig();
   final p = _providerFor(cfg, 'speechProviderId');
-  appLog('ai', '语音转文字：${p.name}/${_modelFor(p, 'speech')}（${bytes.length} 字节 $mime）');
+  appLog('ai', '语音转文字：${p.name}/${_modelFor(p, 'speech')} ${p.baseUrl}（${bytes.length} 字节 $mime）');
   final url = _speechSttUrl(p.baseUrl);
   final req = http.MultipartRequest('POST', Uri.parse(url))
     ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
@@ -435,7 +438,9 @@ Future<String> _speechToTextBytes(Uint8List bytes, String mime, String filename)
     throw Exception(err);
   }
   final d = jsonDecode(body) as Map<String, dynamic>;
-  return '${d['text'] ?? ''}'.trim();
+  final text = '${d['text'] ?? ''}'.trim();
+  appLog('ai', '语音转文字结果（前200字）：${text.length > 200 ? text.substring(0, 200) : text}');
+  return text;
 }
 
 /// 语音记账：音频字节 → 语音转文字 → 草稿明细
