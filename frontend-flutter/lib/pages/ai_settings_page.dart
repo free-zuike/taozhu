@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../log.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/ai_local.dart';
 import 'router.dart';
@@ -119,13 +122,21 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       }
       return;
     }
-    // App 原生：本地权威（配置由同步 _syncAiConfig 拉取/合并，页面只读本地不直连服务器）
+    // App 原生：本地权威（配置由同步 syncAiConfig 拉取/合并，页面只读本地不直连服务器）
     final cfg = await aiLoadConfig();
     if (!mounted) return;
     setState(() {
       _applyLocal(cfg);
       _loading = false;
     });
+    // 后台拉一次服务器 AI 配置合并：Web 端添加的服务商/Key 自动出现（本地已配 Key 的保留本地，
+    // 本地空的服务商拿服务器值）；AI 设置页打开即对齐，不等整机同步
+    unawaited(() async {
+      await SyncService.syncAiConfig();
+      if (!mounted) return;
+      final cfg2 = await aiLoadConfig();
+      setState(() => _applyLocal(cfg2));
+    }());
   }
 
   Future<void> _save({bool quiet = false}) async {
@@ -226,9 +237,12 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
     }
     final reply = await aiTestCapability(capability);
-    return capability == 'speech'
-        ? reply
-        : capability == 'vision'
+    if (capability == 'speech') {
+      // 语音测试改录音式：部分 ASR（TeleAI/TeleSpeechASR 等）拒绝静音素材，必须真实人声验证
+      toast(context, '开始录音 3 秒，请说一句话…');
+      return await aiTestSpeechRecord();
+    }
+    return capability == 'vision'
             ? (reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply')
             : '文字记账正常：$reply';
   }
@@ -412,8 +426,12 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         audioModel: audioModelCtrl.text.trim(),
       );
       _providers[idx] = updated;
-      // 保存时把新 Key 传给后端（undefined=保留 / 非空=覆盖）；勾选清空=传空串（后端清空）
-      _pendingKeys[updated.id] = clearKey ? '' : keyCtrl.text.trim();
+      // Key：勾选清空=传空串；新填非空=覆盖；**留空=不设置 pendingKeys（否则空串覆盖原 Key，Key 丢失）**
+      if (clearKey) {
+        _pendingKeys[updated.id] = '';
+      } else if (keyCtrl.text.trim().isNotEmpty) {
+        _pendingKeys[updated.id] = keyCtrl.text.trim();
+      }
     });
     await _save();
   }

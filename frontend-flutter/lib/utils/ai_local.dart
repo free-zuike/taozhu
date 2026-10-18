@@ -3,9 +3,13 @@
 /// （OpenAI 兼容 chat/completions；智谱视觉/语音同协议），结果容错解析成商品草稿。
 /// 服务器 /ai/parse-* 仅 Web/小程序（平台域名限制）继续使用。
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../log.dart';
 
@@ -392,28 +396,35 @@ String _speechSttUrl(String baseUrl) {
   return '$b/audio/transcriptions';
 }
 
+/// 语音转文字（STT）：真实音频字节 → 文本。请求构造对齐 beecount _speechToTextOpenAI：
+/// multipart file+model 表单字段、file 不设 Content-Type；部分 ASR（TeleAI/TeleSpeechASR 等）
+/// 拒绝静音/音调等非真实语音内容（500 空体），必须真实人声。
+Future<String> _speechToTextBytes(Uint8List bytes, String mime, String filename) async {
+  final cfg = await aiLoadConfig();
+  final p = _providerFor(cfg, 'speechProviderId');
+  appLog('ai', '语音转文字：${p.name}/${_modelFor(p, 'speech')}（${bytes.length} 字节 $mime）');
+  final url = _speechSttUrl(p.baseUrl);
+  final req = http.MultipartRequest('POST', Uri.parse(url))
+    ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
+    ..fields['model'] = _modelFor(p, 'speech')
+    ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+  final resp = await req.send().timeout(const Duration(seconds: 60));
+  final body = await resp.stream.bytesToString();
+  if (resp.statusCode != 200) {
+    final err = 'AI 语音通道 ${resp.statusCode}（$url）: ${body.isEmpty ? '（空响应体）' : body}';
+    appLog('ai', '语音转文字失败：$err', level: 'error');
+    throw Exception(err);
+  }
+  final d = jsonDecode(body) as Map<String, dynamic>;
+  return '${d['text'] ?? ''}'.trim();
+}
+
 /// 语音记账：音频字节 → 语音转文字 → 草稿明细
 Future<AiInvoice> aiParseVoice(Uint8List bytes, String mime, {String purpose = 'sale'}) async {
   try {
-    final cfg = await aiLoadConfig();
-    final p = _providerFor(cfg, 'speechProviderId');
-    appLog('ai', '语音识别开始：${p.name}/${_modelFor(p, 'speech')}（${bytes.length} 字节 $mime）');
-    final url = _speechSttUrl(p.baseUrl);
-    final req = http.MultipartRequest('POST', Uri.parse(url))
-      ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
-      // 只发必需参数，file 不设 Content-Type（octet-stream）——逐字节对齐 beecount _speechToTextOpenAI
-      ..fields['model'] = _modelFor(p, 'speech')
-      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'voice.m4a'));
-    final resp = await req.send().timeout(const Duration(seconds: 60));
-    final body = await resp.stream.bytesToString();
-    if (resp.statusCode != 200) {
-      final err = 'AI 语音通道 ${resp.statusCode}（$url）: ${body.isEmpty ? '（空响应体）' : body}';
-      appLog('ai', '语音转文字失败：$err', level: 'error');
-      throw Exception(err);
-    }
-    final d = jsonDecode(body) as Map<String, dynamic>;
-    final text = '${d['text'] ?? ''}'.trim();
+    final text = await _speechToTextBytes(bytes, mime, 'voice.m4a');
     if (text.isEmpty) throw Exception('语音未识别出文字');
+    final cfg = await aiLoadConfig();
     final tp = _providerFor(cfg, 'textProviderId');
     final raw = await _chatCompletion(tp, 'text', [
       {'role': 'user', 'content': '${_promptFor(purpose)}\n\n描述：$text'},
@@ -425,6 +436,22 @@ Future<AiInvoice> aiParseVoice(Uint8List bytes, String mime, {String purpose = '
     appLog('ai', '语音识别失败：${e.toString().split('\n').first}', level: 'error');
     rethrow;
   }
+}
+
+/// 语音测试（录音式）：录制一段真实人声发 STT（对齐语音记账同路径——部分 ASR 如
+/// TeleAI/TeleSpeechASR 拒绝静音素材，静音测试必然 500，必须真实语音）。录音 3 秒自动结束。
+Future<String> aiTestSpeechRecord() async {
+  final perm = await Permission.microphone.request();
+  if (!perm.isGranted) throw Exception('需要麦克风权限才能语音测试');
+  final rec = AudioRecorder();
+  final dir = await getTemporaryDirectory();
+  final path = '${dir.path}/taozhu_voice_test_${DateTime.now().millisecondsSinceEpoch}.m4a';
+  await rec.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
+  await Future.delayed(const Duration(seconds: 3)); // 录 3 秒自动结束（提示用户开口说话）
+  await rec.stop();
+  final bytes = await File(path).readAsBytes();
+  final text = await _speechToTextBytes(bytes, 'audio/mp4', 'voice.m4a');
+  return text.isEmpty ? '语音通道连通（未识别出文字）' : '语音识别正常：$text';
 }
 
 AiInvoice _normalizeInvoice(String raw) {

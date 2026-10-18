@@ -1322,7 +1322,7 @@ class SyncService {
       await _syncRounding();
       // ⑥c AI 配置随同步拉取（本地优先：本地已配 Key 的服务商保留本地=老板自己的配置；
       // 本地空的服务商自动拿服务器值=员工/新设备同步一次即用上老板的 Key；页面不直连服务器）
-      await _syncAiConfig();
+      await syncAiConfig();
       // ⑦ 僵尸附件引用清理：引用目标实体不存在（识别取消残留等）→ 删引用行+对应副本文件；
       // 在用副本不清（孤儿文件仍由存储清理页扫描）——0.17.330 曾只加逻辑未挂调用点=从未执行
       await cleanupOrphanLocalAttachments();
@@ -1378,7 +1378,7 @@ class SyncService {
   /// AI 配置随同步拉取（对齐附件/商品同步语义：页面不直连，同步获取；本地优先合并）。
   /// 老板本地配好 Key 的服务商保留本地值；本地空的服务商（员工/新设备）自动用服务器值。
   /// **只在配置有变化时（其他端改了 AI 配置→本端收到）写库并记日志；无变化静默**——不刷屏。
-  static Future<void> _syncAiConfig() async {
+  static Future<void> syncAiConfig() async {
     try {
       final d = await Api.instance.get('/settings/ai?include_key=1');
       final provs = (d['providers'] as List?) ?? [];
