@@ -40,3 +40,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # 中文字体内置（图片打印/Canvas 绘制脱离 widget 树时默认字体无 CJK 回退 → 图片无文字根因）
+  fonts:
+    - family: Noto Sans SC
+      fonts:
+        - asset: assets/fonts/NotoSansSC-Regular.otf

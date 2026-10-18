@@ -411,6 +411,8 @@ class _StatementPageState extends State<StatementPage> {
           text: TextSpan(
             text: cell.text,
             style: TextStyle(
+                // 显式中文字体：Canvas 脱离 widget 树绘制，默认字体无 CJK 回退=图片无文字
+                fontFamily: 'Noto Sans SC',
                 fontSize: cell.bold ? 14 : 12,
                 fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal),
           ),
@@ -454,6 +456,8 @@ class _StatementPageState extends State<StatementPage> {
           text: TextSpan(
             text: cell.text,
             style: TextStyle(
+                // 显式中文字体：Canvas 脱离 widget 树绘制，默认字体无 CJK 回退=图片无文字
+                fontFamily: 'Noto Sans SC',
                 fontSize: cell.bold ? 14 : 12,
                 fontWeight: cell.bold ? FontWeight.w700 : FontWeight.normal,
                 color: cell.bg == 'grey' ? _c.primary : null),
