@@ -540,7 +540,11 @@ Future<String> aiTestCapability(String cap) async {
       ..headers['Authorization'] = 'Bearer ${p.apiKey.trim()}'
       ..headers['Content-Type'] = 'multipart/form-data; boundary=$boundary'
       ..bodyBytes = body.takeBytes();
-    appLog('ai', '语音测试请求：$url model=$model file=${wav.length}B audio/x-wav 字段顺序=file,model');
+    // 请求内容完整留痕：首 32 字节 hex + 数据区是否全零——排查"同内容电脑 200、App 500"差异
+    final headHex = wav.take(32).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final dataAllZero = wav.length > 44 && wav.skip(44).every((b) => b == 0);
+    appLog('ai',
+        '语音测试请求：$url model=$model file=${wav.length}B audio/x-wav 字段顺序=file,model 首32字节=$headHex 数据区全零=$dataAllZero');
     final resp = await req.send().timeout(const Duration(seconds: 60));
     final respBody = await resp.stream.toBytes();
     final bodyText = utf8.decode(respBody, allowMalformed: true);

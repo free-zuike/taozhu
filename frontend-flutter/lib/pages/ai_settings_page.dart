@@ -222,11 +222,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
   }
 
-  /// 单项能力测试：App 本地直连；Web 走服务器（/ai/test）。
-  /// 语音测试 App 原生端也走服务器（与 Web 一致）：手机直连语音服务商经系统代理/
-  /// VPN 时 multipart 请求可能被代理层破坏，服务商返回 500 空体（已实测：同 Key/URL/模型
-  /// 电脑直连 200、手机 App 500）；服务器通路稳定（Web 实测正常 + 服务器配置直连实测 200）。
-  /// 文字/图片仍本地直连（Key 不出本机原则不变，仅语音测试走服务器验证连通性）。
+  /// 单项能力测试：App 本地直连（AI 识别本机直连是用户定则，不走服务器）；Web 走服务器（/ai/test）。
   Future<String> _testCapability(String capability) async {
     if (kIsWeb) {
       final d = await Api.instance.post('/ai/test?capability=$capability');
@@ -240,16 +236,14 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       final names = items.take(5).map((e) => '${(e as Map)['name'] ?? ''}').where((s) => s.isNotEmpty).join('、');
       return count > 0 ? '文字记账正常：识别出 $count 项（$names）' : '文字记账连通（未识别到商品）';
     }
-    if (capability == 'speech') {
-      final d = await Api.instance.post('/ai/test?capability=speech');
-      return '语音转文字通道连通（已真实发送测试音频）';
-    }
-    // 直接测试（对齐参考实现：静音素材直接发，不交互）——App 本地直连文字/图片
+    // 直接测试（对齐参考实现：静音素材直接发，不交互）——App 本地直连
     final reply = await aiTestCapability(capability);
     if (capability == 'vision') {
       return reply.isEmpty ? '图片识别通道连通（模型未返回描述）' : '图片识别正常：$reply';
     }
-    return '文字记账正常：$reply';
+    return capability == 'speech'
+        ? '语音转文字通道连通（已真实发送测试音频）'
+        : '文字记账正常：$reply';
   }
 
   /// 测试单个能力：圆点状态就地展示（绿=通过/红=失败/转圈=测试中）——成功只变绿不提示，失败才 toast 原因

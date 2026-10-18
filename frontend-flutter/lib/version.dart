@@ -1,5 +1,5 @@
 /// Flutter 应用版本号（三位：主版本.功能版本.修复版本；微信不支持四段）——发版时递增，与 src/version.ts 语义同步
-const APP_VERSION = '0.17.446';
+const APP_VERSION = '0.17.447';
 const APP_NAME = '陶朱';
 
 /// 最低支持版本（与 src/version.ts MIN_SUPPORTED_VERSION 同步）：App 启动时直连 GitHub
