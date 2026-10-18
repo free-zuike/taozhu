@@ -542,7 +542,8 @@ Future<String> aiTestCapability(String cap) async {
       ..bodyBytes = body.takeBytes();
     appLog('ai', '语音测试请求：$url model=$model file=${wav.length}B audio/x-wav 字段顺序=file,model');
     final resp = await req.send().timeout(const Duration(seconds: 60));
-    final bodyText = await resp.bodyBytes.isEmpty ? '' : utf8.decode(resp.bodyBytes, allowMalformed: true);
+    final respBody = await resp.stream.toBytes();
+    final bodyText = utf8.decode(respBody, allowMalformed: true);
     appLog('ai', '语音测试响应：status=${resp.statusCode} 头=${resp.headers.keys.toList()} 体=${bodyText.isEmpty ? '（空响应体）' : bodyText}',
         level: resp.statusCode == 200 ? 'ai' : 'error');
     if (resp.statusCode != 200) {
