@@ -57,6 +57,8 @@ class XlsCfg {
 
   String name = '标准';
   String title = '陶朱对账单';
+  /// 图片打印方向（模板级定义，默认竖版）：portrait 竖版 | landscape 横版
+  String orientation = 'portrait';
   /// 模板正文（支持变量占位：{店铺}{账期}{日期}{出货合计}{收款合计}{期末欠款}{出货笔数}{明细}{旬段表}{1日}…{31日}）
   String content = '';
   /// Excel 式网格模板（行×列单元格 + 对齐）
@@ -81,6 +83,7 @@ class XlsCfg {
   Map<String, dynamic> toJson() => {
         'name': name,
         'title': title,
+        'orientation': orientation,
         'content': content,
         'grid': [
           for (final row in grid) [for (final c in row) c.toJson()],
@@ -103,6 +106,7 @@ class XlsCfg {
   XlsCfg.fromJson(Map<String, dynamic> j) {
     name = '${j['name'] ?? '标准'}';
     title = '${j['title'] ?? '陶朱对账单'}';
+    orientation = j['orientation'] == 'landscape' ? 'landscape' : 'portrait';
     content = '${j['content'] ?? ''}';
     final rawGrid = j['grid'];
     if (rawGrid is List) {

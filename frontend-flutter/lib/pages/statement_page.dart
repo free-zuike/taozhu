@@ -38,7 +38,6 @@ class _StatementPageState extends State<StatementPage> {
   List<Map<String, dynamic>> _clients = [];
   String? _clientId; // null = 全部店铺
   String _period = 'month'; // month | last | cycle | cycleLast | custom
-  String _printOri = 'portrait'; // 图片打印方向：portrait 竖版 | landscape 横版（前端可切换）
 
   /// 选中店铺的每月起始日（1=自然月）
   int get _msd {
@@ -103,22 +102,8 @@ class _StatementPageState extends State<StatementPage> {
     super.initState();
     _loadClients();
     _loadTemplates();
-    // 图片打印方向记忆（用户"直接在前端设置横向或竖向"）
-    SharedPreferences.getInstance().then((sp) {
-      final v = sp.getString('stmtPrintOrientation');
-      if (v == 'landscape' || v == 'portrait') {
-        setState(() => _printOri = v!);
-      }
-    });
     // 合计口径移除（用户"去掉吧，全部按照上边设置的来"）：固定逐笔舍入（_roundTotals 恒 true）
     _initLoad(); // 先恢复记忆店铺，再生成对账单（避免首载默认全店数据串店）
-  }
-
-  /// 图片打印方向设置（本地记忆；横版适合宽表格/竖版默认）
-  Future<void> _setPrintOrientation(String v) async {
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString('stmtPrintOrientation', v);
-    if (mounted) setState(() => _printOri = v);
   }
 
   /// 恢复全局记忆的当前店铺后生成对账单（本地 prefs 读取，秒回；无记忆则全部店铺）
@@ -2175,23 +2160,6 @@ class _StatementPageState extends State<StatementPage> {
               label: const Text('模板设置'),
             ),
             const SizedBox(height: 8),
-            // 图片打印方向：竖版/横版 A4（前端直接切换，记忆本地）
-            Align(
-              alignment: Alignment.centerLeft,
-              child: SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'portrait', label: Text('竖版 A4')),
-                  ButtonSegment(value: 'landscape', label: Text('横版 A4')),
-                ],
-                selected: {_printOri},
-                onSelectionChanged: (s) => _setPrintOrientation(s.first),
-                style: const ButtonStyle(
-                  visualDensity: VisualDensity.compact,
-                  textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
             // 打印（按当前模板：逐单明细/每日汇总/旬段汇总 → 服务端渲染）
             OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
@@ -2225,7 +2193,7 @@ class _StatementPageState extends State<StatementPage> {
         toast(context, '暂无可用模板内容，请到「模板设置」选择或创建模板');
         return;
       }
-      final bytes = await _renderStmtImageByWidget(rows, orientation: _printOri);
+      final bytes = await _renderStmtImageByWidget(rows, orientation: _curPubTpl.orientation);
       final clientName = clientNameForTpl.isEmpty ? '全部店铺' : clientNameForTpl;
       // 文件名带账期月份（用户"店铺几月份账单"——原只到店铺名）
       final from = _fromCtrl.text.trim();

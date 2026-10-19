@@ -237,7 +237,19 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
                       icon: const Icon(Icons.restore, size: 16),
                       label: const Text('恢复默认'),
                       onPressed: _resetToDefault),
-                  Text('下方「编辑/预览」切换实时预览效果', style: TextStyle(fontSize: 11, color: c.textSub)),
+                  SegmentedButton<String>(
+                    style: ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      textStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12)),
+                    ),
+                    segments: const [
+                      ButtonSegment(value: 'portrait', label: Text('竖版')),
+                      ButtonSegment(value: 'landscape', label: Text('横版')),
+                    ],
+                    selected: {_cur.orientation},
+                    onSelectionChanged: (s) => setState(() => _cur.orientation = s.first),
+                  ),
+                  Text('打印方向（随模板保存）', style: TextStyle(fontSize: 11, color: c.textSub)),
                 ]),
               ),
               const Divider(height: 1),
