@@ -68,6 +68,9 @@ class SyncService {
   /// AI 配置变更通知器：服务器广播 ai_config（其他端改了服务商/能力绑定）→ AI 设置页监听后重新拉取
   static final ChangeNotifier aiConfigChanged = ChangeNotifier();
 
+  /// 对账单模板变更通知器：服务器广播 stmt_templates（其他端设计器保存/重置）→ 对账单/模板设置页监听后重拉
+  static final ChangeNotifier stmtTemplatesChanged = ChangeNotifier();
+
   static String? _deviceId;
   static bool _syncing = false;
   static Timer? _debounce;

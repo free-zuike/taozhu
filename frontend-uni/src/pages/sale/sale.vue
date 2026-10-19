@@ -58,9 +58,15 @@
       <view class="row-card">
         <view class="head-row">
           <text class="idx">{{ i + 1 }}</text>
-          <input class="goods-field" :class="{ ph: !row.itemName }" v-model="row.itemName" placeholder="选商品（可输入或选择）" @blur="onItemInput(i)" />
+          <input class="goods-field" :class="{ ph: !row.itemName }" v-model="row.itemName" placeholder="选商品（可输入或选择）" @blur="onItemInput(i)" @input="onItemTyping(i, $event)" />
           <text v-if="row.rowId" class="att-btn" @click.stop="showRowAttach(row)"><text class="mi">&#xe3f4;</text></text>
           <text class="del mi" @click="rows.splice(i, 1)">&#xe872;</text>
+        </view>
+        <view v-if="suggest && suggest.i === i && suggest.list.length" class="sug-list">
+          <view v-for="(s, si) in suggest.list" :key="s.id" class="sug-item" @touchstart="pickSuggest(i, s)">
+            <text class="sug-name">{{ s.name }}</text>
+            <text v-if="s.count_unit" class="sug-cat">{{ s.count_unit }}</text>
+          </view>
         </view>
         <input class="unit-field" :class="{ ph: !row.unit }" v-model="row.unit" placeholder="单位（可手动填写）" @blur="onUnitBlur(i)" />
         <view class="price-hint" :class="{ ph: !row.priceLabel }">{{ row.priceLabel || '输入商品名自动带出单位与价格' }}</view>
@@ -200,6 +206,7 @@ const clientName = ref('');
 const clientNames = ref<string[]>([]);
 const clients = ref<Array<{ id: string; name: string }>>([]);
 const items = ref<Item[]>([]);
+const suggest = ref<{ i: number; list: Item[] } | null>(null); // 商品输入联想：当前行 + 候选
 const itemNames = ref<string[]>([]);
 const date = ref('');
 const note = ref(''); // 整单备注（对齐 App：单据级备注，提交时挂各行）
@@ -518,7 +525,12 @@ function fillFromDrafts(list: Array<Record<string, any>>, client = '', draftDate
     const qty = Number(raw.quantity) || 0;
     const price = Number(raw.price) || 0;
     const unit = String(raw.unit ?? '').trim();
-    const match = items.value.find((it) => it.name === name || it.name.includes(name) || name.includes(it.name));
+    // 识别匹配商品：精确优先；无精确时仅当"识别名≥2字且包含候选恰好1个"才关联（防"肝"误联"牛肝菌"）
+    let match = items.value.find((it) => it.name === name);
+    if (!match && name.length >= 2) {
+      const contains = items.value.filter((it) => it.name.includes(name) || name.includes(it.name));
+      if (contains.length === 1) match = contains[0]; // 多候选=歧义，不猜
+    }
     // 对齐 App 追加语义：仅初始单行空行时复用首行；否则一律顺延追加到末尾——
     // 找"第一个空行"会填进中间遗留空行（用户插入的空行），新批次顺序打乱
     let row = (rows.value.length === 1 && !rows.value[0].itemId && !rows.value[0].itemName)
@@ -772,9 +784,38 @@ async function loadDateRows() {
 
 const skippedRef = ref(0); // dateRows 加载被跳过的商品行数（商品已删/停用）
 
+/// 商品名输入联想：输入关键字实时过滤商品（包含匹配，最多 6 条）；点击候选立即选中
+function onItemTyping(i: number, e: any) {
+  const kw = (e.detail?.value || '').trim();
+  if (!kw) {
+    suggest.value = null;
+    return;
+  }
+  suggest.value = { i, list: items.value.filter((x) => x.name.includes(kw)).slice(0, 6) };
+}
+
+/// 点击联想候选：关联商品并带出默认单位/价格（对齐 App 联想选择）
+function pickSuggest(i: number, item: Item) {
+  const row = rows.value[i];
+  if (!row) return;
+  row.itemId = item.id;
+  row.itemName = item.name;
+  row.prices = item.prices;
+  const pr = item.prices.find((p) => p.unit === (row.unit || '')) || item.prices[0];
+  if (pr) {
+    row.priceId = pr.id;
+    row.unit = pr.unit;
+    row.priceLabel = `${pr.unit}（¥${pr.sale_price}·库存${pr.stock ?? 0}）`;
+    if (!row.salePrice) row.salePrice = String(pr.sale_price);
+  }
+  suggest.value = null;
+  applyCostByOrder(row);
+}
+
 /// 商品名输入失焦：精确匹配到已有商品 → 关联并带出默认单位/价格（不覆盖已手填价格）；
 /// 未匹配=自定义新商品名（itemId 留空，提交时可入库，对齐 App 名称输入关联）
 async function onItemInput(i: number) {
+  suggest.value = null; // 失焦收起联想
   const row = rows.value[i];
   const name = (row.itemName || '').trim();
   const match = items.value.find((x) => x.name === name);
@@ -1130,6 +1171,11 @@ async function submit() {
 .head-row { display: flex; align-items: center; gap: 12rpx; }
 .idx { width: 44rpx; height: 44rpx; border-radius: 12rpx; background: var(--primary-soft); color: var(--primary); font-size: 24rpx; font-weight: bold; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .goods-field { flex: 1; min-width: 0; background: var(--input-bg); border-radius: 10rpx; padding: 16rpx 18rpx; font-size: 28rpx; }
+.sug-list { margin: 0 0 12rpx 8rpx; border: 2rpx solid var(--divider); border-radius: 12rpx; overflow: hidden; background: var(--card-bg); }
+.sug-item { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; padding: 18rpx 20rpx; border-bottom: 1rpx solid var(--divider); }
+.sug-item:last-child { border-bottom: none; }
+.sug-name { font-size: 26rpx; color: var(--text-main); }
+.sug-cat { font-size: 22rpx; color: var(--text-sub); }
 .goods-field.ph { color: var(--text-sub); }
 .att-btn { color: #409EFF; padding: 6rpx; font-size: 34rpx; }
 /* 行上移/下移（对齐 App IconButton：主色小图标；边界行置灰不可点） */

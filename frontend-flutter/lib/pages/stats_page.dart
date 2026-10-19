@@ -478,7 +478,7 @@ class _StatsPageState extends State<StatsPage> {
                         i + 1,
                         _c.warning,
                         '${it['name'] ?? ''}',
-                        '${(it['quantity'] as double).toStringAsFixed(2)}${it['unit'] ?? ''}',
+                        '${(it['quantity'] as double).toStringAsFixed(2)}${it['unit'] ?? ''}${_canSeeProfit ? ' · 毛利 ¥${fmtMoney(_num(it['gross']))}' : ''}',
                         '¥${fmtMoney(_num(it['amount']))}',
                       ),
                     if (_itemRank().isEmpty) _empty('该区间暂无商品出货数据', Icons.inventory_2_outlined),
@@ -492,7 +492,7 @@ class _StatsPageState extends State<StatsPage> {
                         i + 1,
                         _success,
                         '${c['name']}',
-                        '出货 ¥${fmtMoney(_num(c['sales_total']))} · 已收 ¥${fmtMoney(_num(c['paid_total']))}',
+                        '出货 ¥${fmtMoney(_num(c['sales_total']))} · 已收 ¥${fmtMoney(_num(c['paid_total']))}${_canSeeProfit ? ' · 毛利 ¥${fmtMoney(_num(c['gross_profit']))}' : ''}',
                         '欠 ¥${fmtByUnit(_num(c['sales_total']) - _num(c['paid_total']), '${c['round_unit'] ?? ''}')}',
                         amountColor: _num(c['sales_total']) > _num(c['paid_total'])
                             ? _danger
@@ -522,10 +522,12 @@ class _StatsPageState extends State<StatsPage> {
           'unit': d['unit'] ?? '',
           'quantity': _num(d['quantity']),
           'amount': _num(d['amount']),
+          'gross': (_num(d['sale_price']) - _num(d['cost_price'])) * _num(d['quantity']),
         };
       } else {
         prev['quantity'] = (prev['quantity'] as double) + _num(d['quantity']);
         prev['amount'] = (prev['amount'] as double) + _num(d['amount']);
+        prev['gross'] = (prev['gross'] as double) + (_num(d['sale_price']) - _num(d['cost_price'])) * _num(d['quantity']);
       }
     }
     final list = agg.values.toList()

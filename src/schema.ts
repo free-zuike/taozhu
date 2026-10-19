@@ -78,6 +78,7 @@ const DDL: string[] = [
     amount REAL NOT NULL DEFAULT 0,
     happened_at TEXT,
     note TEXT DEFAULT '',
+    expiry_date TEXT DEFAULT '',
     created_by TEXT,
     sync_key TEXT,
     sort INTEGER NOT NULL DEFAULT 0,
@@ -165,6 +166,7 @@ const DDL: string[] = [
     price REAL NOT NULL DEFAULT 0,
     remaining REAL NOT NULL DEFAULT 0,
     happened_at TEXT NOT NULL DEFAULT '',
+    expiry_date TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_stock_batches_item ON stock_batches (item_id, unit)`,
@@ -339,6 +341,15 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!batchTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS stock_batches'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1]), db.prepare(DDL[i + 2])]);
+    }
+    // v0.17.461：库存临期提醒——stock_batches/purchase_items 加到期日列（存量库补列；SQLite 无 ADD COLUMN IF NOT EXISTS，需查列）
+    const sbCols = await db.prepare('PRAGMA table_info(stock_batches)').all<{ name: string }>();
+    if (!sbCols.results.some((x) => x.name === 'expiry_date')) {
+      await db.prepare(`ALTER TABLE stock_batches ADD COLUMN expiry_date TEXT DEFAULT ''`).run();
+    }
+    const piCols = await db.prepare('PRAGMA table_info(purchase_items)').all<{ name: string }>();
+    if (!piCols.results.some((x) => x.name === 'expiry_date')) {
+      await db.prepare(`ALTER TABLE purchase_items ADD COLUMN expiry_date TEXT DEFAULT ''`).run();
     }
     // 损耗流水（v0.17.433）：报损从批次扣减并记损耗；存量库补建
     const lossTable = await db.prepare(

@@ -50,6 +50,8 @@ class _PRow {
   String origPurchaseId = '';
   /// 行原备注（直编/编辑保存时保留，避免 payload 缺 note 清空服务端行备注）
   String note = '';
+  /// 行级到期日（YYYY-MM-DD；空=不参与临期提醒；随进货写入批次，库存页临期提醒用）
+  String expiryDate = '';
   final noteCtrl = TextEditingController(); // 行备注输入（对齐小程序 row-note）
   /// 保存时构建的商品行 payload（去单据化：逐行入队 purchase_item 用）
   Map<String, dynamic>? itemsPayload;
@@ -62,6 +64,9 @@ class _PRow {
 
 class _PurchasePageState extends State<PurchasePage> {
   List<Map<String, dynamic>> _items = [];
+  /// 商品输入联想：当前联想行 + 候选（输入包含匹配，最多 6 条；点击选择后清空）
+  _PRow? _suggestFor;
+  List<Map<String, dynamic>> _suggests = [];
   bool _isStaff = false; // 店员不可见进价（进货价手填）
   /// 初始空行必须预生成 rowId（否则首行保存后无行 id，历史页长按删除会误判为整单）
   late final List<_PRow> _rows = [_newPRow()];
@@ -193,7 +198,7 @@ class _PurchasePageState extends State<PurchasePage> {
     if (kIsWeb) {
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', pb, 'photo.$ext', pm);
       final items = (d['items'] as List?) ?? [];
-      final rowIds = _fillFromDrafts(items, '${d['date'] ?? ''}');
+      final rowIds = await _fillFromDrafts(items, '${d['date'] ?? ''}');
       setState(() => _pendingPhoto = pb);
       _pendingGroups.add({'file': '${md5.convert(pb).toString()}.jpg', 'rowIds': rowIds, 'bytes': pb});
       final tip = items.length == rowIds.length
@@ -203,7 +208,7 @@ class _PurchasePageState extends State<PurchasePage> {
       return;
     }
     final inv = await aiParsePhoto(pb, pm, purpose: 'purchase');
-    final rowIds = _fillFromDrafts(_draftsToMaps(inv), inv.date);
+    final rowIds = await _fillFromDrafts(_draftsToMaps(inv), inv.date);
     await _attachRecognized(bytes); // 凭证保留原图
     // 识别行数 vs 实际填行数诊断（模型漏读/匹配失败一目了然——用户"扫描图片经常少一行"）
     final tip = inv.items.length == rowIds.length
@@ -379,6 +384,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..origPurchaseId = _purchaseId
           ..note = '${it['note'] ?? ''}'
           ..noteCtrl.text = '${it['note'] ?? ''}'
+          ..expiryDate = '${it['expiry_date'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -462,6 +468,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..origPurchaseId = origPurchaseId
           ..note = '${it['note'] ?? ''}'
           ..noteCtrl.text = '${it['note'] ?? ''}'
+          ..expiryDate = '${it['expiry_date'] ?? ''}'
           ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
@@ -488,8 +495,35 @@ class _PurchasePageState extends State<PurchasePage> {
 
   /// 名称输入变化：精确匹配到已有商品 → 关联（**不覆盖识别/手填的价格与单位**——
   /// AI 识别填行改错名时只关联商品，识别价保留）；否则视为新商品名（可点「新增」入库）
+  /// 行到期日选择（showDatePicker；清空=不参与临期提醒）
+  Future<void> _pickExpiry(_PRow row) async {
+    final now = DateTime.now();
+    final init = DateTime.tryParse(row.expiryDate.isNotEmpty ? row.expiryDate : '${now.year}-${now.month}-${now.day}');
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: init ?? now,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 3),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => row.expiryDate =
+        '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}');
+  }
+
   void _onNameChanged(_PRow row, String v) {
     final name = v.trim();
+    // 输入联想：包含匹配候选（最多 6 条）；空输入清空
+    if (name.isNotEmpty) {
+      setState(() {
+        _suggestFor = row;
+        _suggests = _items.where((x) => '${x['name'] ?? ''}'.contains(name)).take(6).toList();
+      });
+    } else {
+      setState(() {
+        _suggestFor = null;
+        _suggests = const [];
+      });
+    }
     final match = _items.where((x) => '${x['name']}' == name).firstOrNull;
     if (match != null) {
       if (row.itemId != '${match['id']}') {
@@ -780,10 +814,10 @@ class _PurchasePageState extends State<PurchasePage> {
       // App 本地直连（用户要求）；Web 保持服务器（CORS 限制）
       if (kIsWeb) {
         final d = await Api.instance.post('/ai/parse-text?purpose=purchase', {'text': text});
-        _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+        await _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
       } else {
         final inv = await aiParseText(text, purpose: 'purchase');
-        _fillFromDrafts(_draftsToMaps(inv), inv.date);
+        await _fillFromDrafts(_draftsToMaps(inv), inv.date);
       }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -804,10 +838,10 @@ class _PurchasePageState extends State<PurchasePage> {
         final d = await Api.instance.uploadAudio('/ai/parse-voice?purpose=purchase', audio.bytes, audio.name, audio.mime);
         final text = '${d['text'] ?? ''}';
         if (text.isNotEmpty) toast(context, '语音识别：$text');
-        _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
+        await _fillFromDrafts((d['items'] as List?) ?? [], '${d['date'] ?? ''}');
       } else {
         final inv = await aiParseVoice(audio.bytes, audio.mime, purpose: 'purchase');
-        _fillFromDrafts(_draftsToMaps(inv), inv.date);
+        await _fillFromDrafts(_draftsToMaps(inv), inv.date);
       }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -816,7 +850,16 @@ class _PurchasePageState extends State<PurchasePage> {
 
   /// 识别结果 → 填日期 + 匹配已有商品填行（拍照/文字/语音共用；进货无购货单位字段）。
   /// 返回本次实际填充的商品行 id 列表（识别图按批次挂行=行级附件"批对批"；文字/语音无图可忽略返回值）
-  List<String> _fillFromDrafts(List<dynamic> items, [String date = '']) {
+  Future<List<String>> _fillFromDrafts(List<dynamic> items, [String date = '']) async {
+    // 识别快于目录加载（本地镜像空）→ 先等 _items 就绪再匹配，
+    // 防"库里有商品却报新增"（用户"扫描后显示新增，删除重输就好了"根因）；纯本地等待，不涉及网络
+    if (_items.isEmpty) {
+      var waited = 0;
+      while (_items.isEmpty && waited < 2000) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        waited += 100;
+      }
+    }
     _recognitionFilling = true; // 填行期间 unitCtrl 赋值触发 onUnitChanged 时不覆盖识别进价
     final recentNeeded = <_PRow>[]; // 识别无价的行：循环后异步带出最近进价（try 外声明=finally 可见）
     try {
@@ -836,11 +879,18 @@ class _PurchasePageState extends State<PurchasePage> {
       final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
       final price = (raw['price'] as num?)?.toDouble() ?? 0;
       final unit = '${raw['unit'] ?? ''}'.trim();
-      final match = _items
-          .where((it) => '${it['name']}' == name ||
-              '${it['name']}'.contains(name) ||
-              name.contains('${it['name']}'))
-          .firstOrNull;
+      // 识别匹配商品：**精确优先**；无精确时仅当"识别名≥2字且包含候选恰好1个"才关联——
+      // 防"肝"误联"牛肝菌"（contains 双向匹配把短名强行联想成长名商品=伪胡编根源，用户抓证）
+      Map<String, dynamic>? match;
+      final exact = _items.where((it) => '${it['name']}' == name).toList();
+      if (exact.isNotEmpty) {
+        match = exact.first;
+      } else if (name.length >= 2) {
+        final contains = _items
+            .where((it) => '${it['name']}'.contains(name) || name.contains('${it['name']}'))
+            .toList();
+        if (contains.length == 1) match = contains.first; // 多候选=歧义，不猜
+      }
       final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
       Map<String, dynamic>? pr;
       if (match != null) {
@@ -1043,6 +1093,7 @@ class _PurchasePageState extends State<PurchasePage> {
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
         'note': r.note, // 保留行原备注（payload 缺 note 会被同步 upsert 写成空）
+        'expiry_date': r.expiryDate,
         'sort': i, // 行序=展示/插入顺序（服务端/账本按 sort 展开，插入行不再排末尾）
       };
       r.itemsPayload = rowPayload;
@@ -1581,6 +1632,14 @@ class _PurchasePageState extends State<PurchasePage> {
                   style: txtStyle,
                   decoration: _fieldDec(label: '商品名称（可输入或选择）'),
                   onChanged: (v) => _onNameChanged(row, v),
+                  onTapOutside: (_) {
+                    if (_suggestFor == row) {
+                      setState(() {
+                        _suggestFor = null;
+                        _suggests = const [];
+                      });
+                    }
+                  },
                 ),
               ),
               const SizedBox(width: 4),
@@ -1607,6 +1666,51 @@ class _PurchasePageState extends State<PurchasePage> {
               ),
             ],
           ),
+          if (_suggestFor == row && _suggests.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.only(left: 44),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: c.card,
+                  border: Border.all(color: c.primary.withOpacity(0.35)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var si = 0; si < _suggests.length; si++)
+                      InkWell(
+                        borderRadius: BorderRadius.circular(10),
+                        onTap: () {
+                          _selectItem(row, _suggests[si]);
+                          setState(() {
+                            _suggestFor = null;
+                            _suggests = const [];
+                          });
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                          child: Row(children: [
+                            Icon(Icons.inventory_2_outlined, size: 14, color: c.primary.withOpacity(0.8)),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text('${_suggests[si]['name'] ?? ''}',
+                                  style: TextStyle(fontSize: 13, color: c.textMain),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                            ),
+                            if ('${_suggests[si]['category'] ?? ''}'.isNotEmpty)
+                              Text('${_suggests[si]['category']}',
+                                  style: TextStyle(fontSize: 11, color: c.textSub)),
+                          ]),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
           if (item != null && '${item['category'] ?? ''}'.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(left: 44),
@@ -1679,6 +1783,30 @@ class _PurchasePageState extends State<PurchasePage> {
             style: txtStyle,
             decoration: _fieldDec(label: '行备注（选填，如：供应商/规格说明）'),
             onChanged: (v) => setState(() => row.note = v),
+          ),
+          // 行到期日（选填）：随进货写入批次，库存页临期提醒用
+          const SizedBox(height: 6),
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => _pickExpiry(row),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(children: [
+                Icon(Icons.event_outlined, size: 15, color: row.expiryDate.isNotEmpty ? c.warning : c.textSub),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    row.expiryDate.isNotEmpty ? '到期日：${row.expiryDate}' : '设置到期日（选填，临期提醒）',
+                    style: TextStyle(fontSize: 12, color: row.expiryDate.isNotEmpty ? c.warning : c.textSub),
+                  ),
+                ),
+                if (row.expiryDate.isNotEmpty)
+                  InkWell(
+                    onTap: () => setState(() => row.expiryDate = ''),
+                    child: Icon(Icons.close, size: 14, color: c.textSub),
+                  ),
+              ]),
+            ),
           ),
           // 行上移/下移（批次内商品顺序调整；放行底部不挤商品名，保存按数组序重排 sort）
           const SizedBox(height: 6),

@@ -94,6 +94,9 @@ class RealtimeSync {
       } else if (type == 'ai_config') {
         // AI 配置变更：通知 AI 设置页等监听方重新拉取（不触发业务数据同步）
         SyncService.aiConfigChanged.notifyListeners();
+      } else if (type == 'stmt_templates') {
+        // 对账单模板云端变更（其他端设计器保存/重置）：通知对账单/模板设置页重新拉取
+        SyncService.stmtTemplatesChanged.notifyListeners();
       } else if (type == 'theme_config') {
         // 主题配置变更（其他端改了预设/图案/背景/明暗）：应用 payload（ws 也是推送，不 GET 回读兜底）
         ThemeConfig.instance.applyPayload(d);

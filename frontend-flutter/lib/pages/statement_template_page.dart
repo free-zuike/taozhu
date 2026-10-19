@@ -10,6 +10,7 @@ import 'package:two_dimensional_scrollables/two_dimensional_scrollables.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../statement_tmpl.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import '../widgets/tpl_preview_table.dart';
 
@@ -42,7 +43,19 @@ class _StatementTemplatePageState extends State<StatementTemplatePage> {
   @override
   void initState() {
     super.initState();
+    SyncService.stmtTemplatesChanged.addListener(_onTplChanged);
     _init();
+  }
+
+  @override
+  void dispose() {
+    SyncService.stmtTemplatesChanged.removeListener(_onTplChanged);
+    super.dispose();
+  }
+
+  /// 其他端改了模板（ws 推送）→ 重新拉取（开着页面时即时生效）
+  void _onTplChanged() {
+    if (mounted) _init();
   }
 
   Future<void> _init() async {

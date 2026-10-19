@@ -23,6 +23,8 @@ class _StocksPageState extends State<StocksPage> {
   bool _canSeeCost = true; // 店员不可见成本核算（后端 cost_price 打码）
   bool _loading = true;
   bool _belowOnly = false; // 只看预警（低于阈值）
+  /// 临期映射（key: item_id\u0000unit → 最早到期日；来自 /stocks/alerts）
+  Map<String, String> _expiryMap = {};
   Timer? _searchTimer;
 
   @override
@@ -92,6 +94,15 @@ class _StocksPageState extends State<StocksPage> {
       final query = params.isEmpty ? '' : '?${params.join('&')}';
       final d = await Api.instance.get('/stocks$query');
       if (!below && q.isEmpty) await Api.instance.setCache('/stocks', d);
+      // 临期映射（批次到期 ≤7 天；同商品+单位取最早到期日）
+      try {
+        final a = await Api.instance.get('/stocks/alerts?days=7');
+        final expMap = <String, String>{};
+        for (final e in ((a['expiring'] as List?) ?? []).cast<Map<String, dynamic>>()) {
+          expMap['${e['item_id']}\u0000${e['unit']}'] = '${e['expiry_date'] ?? ''}';
+        }
+        _expiryMap = expMap;
+      } catch (_) {}
       // 网络结果同时回写本地镜像（下次离线秒开）
       if (!kIsWeb) {
         try {
@@ -786,6 +797,8 @@ class _StocksPageState extends State<StocksPage> {
         ? '\n另有 ${others.map((o) => '${fmtQty(o['quantity'] as num?)} ${o['unit']}').join('、')}'
         : '';
     final low = _isLow(s);
+    final exp = _expiryMap['${s['item_id']}\u0000${s['unit']}'];
+    final expText = (exp != null && exp.isNotEmpty) ? '\n⚠ $exp 到期（临期）' : '';
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 3),
       elevation: 0,
@@ -805,7 +818,7 @@ class _StocksPageState extends State<StocksPage> {
           ),
         ),
         title: Text('${s['item_name']}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-        subtitle: Text('还剩 ${fmtQty(s['quantity'] as num?)} ${s['unit']} · 阈值 ${fmtQty(s['min_stock'] as num?)} ${s['unit']}$othersText',
+        subtitle: Text('还剩 ${fmtQty(s['quantity'] as num?)} ${s['unit']} · 阈值 ${fmtQty(s['min_stock'] as num?)} ${s['unit']}$othersText$expText',
             style: TextStyle(fontSize: 12, color: _c.textSub)),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,

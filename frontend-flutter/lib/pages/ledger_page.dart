@@ -106,6 +106,7 @@ class _LedgerPageState extends State<LedgerPage> {
     _syncDebounce = Timer(const Duration(milliseconds: 500), () {
       if (!mounted) return;
       _load();
+      _loadMonthly(); // 同步完成刷新顶部统计卡（用户"扫描添加交易后统计栏没刷新"根因：此前只 _load 列表）
       // 同步完成后后台刷新一次云端附件数（其他设备/Web 上传的附件），
       // 不在页面加载时访问网络（本地优先：离线进交易页零网络请求）
       if (!kIsWeb) _loadAttachCounts(withCloud: true);

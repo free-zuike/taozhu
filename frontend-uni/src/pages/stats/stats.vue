@@ -109,7 +109,7 @@
         <text class="rank-no">{{ i + 1 }}</text>
         <view class="left">
           <text class="name">{{ it.name }}</text>
-          <text class="meta">{{ fmtQty(it.quantity) }}{{ it.unit }}</text>
+          <text class="meta">{{ fmtQty(it.quantity) }}{{ it.unit }}{{ canSeeProfit ? ' · 毛利 ¥' + fmt(it.gross) : '' }}</text>
         </view>
         <text class="pay" style="color:var(--primary)">¥{{ fmt(it.amount) }}</text>
       </view>
@@ -151,14 +151,15 @@ const monthly = ref<Monthly[]>([]);
 const days = ref<DayRow[]>([]);
 const catRank = ref<Array<{ category: string; quantity: number; amount: number }>>([]);
 // 商品出货排行数据源：行级出货明细（对齐 App _saleDetail / _itemRank：商品+单位聚合数量降序 top20）
-const saleDetail = ref<Array<{ name: string; unit: string; quantity: number; amount: number }>>([]);
+const saleDetail = ref<Array<{ name: string; unit: string; quantity: number; amount: number; sale_price?: number; cost_price?: number }>>([]);
 const itemRank = computed(() => {
-  const agg = new Map<string, { name: string; unit: string; quantity: number; amount: number }>();
+  const agg = new Map<string, { name: string; unit: string; quantity: number; amount: number; gross: number }>();
   for (const d of saleDetail.value) {
     const key = `${d.name}\u0000${d.unit}`;
     const prev = agg.get(key);
-    if (!prev) agg.set(key, { name: d.name, unit: d.unit, quantity: Number(d.quantity) || 0, amount: Number(d.amount) || 0 });
-    else { prev.quantity += Number(d.quantity) || 0; prev.amount += Number(d.amount) || 0; }
+    const g = ((Number(d.sale_price) || 0) - (Number(d.cost_price) || 0)) * (Number(d.quantity) || 0);
+    if (!prev) agg.set(key, { name: d.name, unit: d.unit, quantity: Number(d.quantity) || 0, amount: Number(d.amount) || 0, gross: g });
+    else { prev.quantity += Number(d.quantity) || 0; prev.amount += Number(d.amount) || 0; prev.gross += g; }
   }
   return [...agg.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 20);
 });

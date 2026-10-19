@@ -102,6 +102,61 @@ stocksRouter.get('/', async (c) => {
   });
 });
 
+// GET /stocks/alerts?days=7 — 库存预警聚合：低库存（库存≤阈值）+ 临期（批次到期 ≤ 今天+days 且剩余>0）。
+// 首页/「我的」提醒用；同商品+单位多批合并显示最早到期批，剩余量=各批合计。
+stocksRouter.get('/alerts', async (c) => {
+  const days = Math.min(Math.max(Number(c.req.query('days')) || 7, 1), 90);
+  const today = new Date().toISOString().slice(0, 10);
+  const limitDate = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+  const [agg, stockRows, itemRows, expRows] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT item_id, unit, SUM(qty) AS quantity FROM (
+         SELECT item_id, unit, COALESCE(quantity, 0) AS qty FROM purchase_items
+         UNION ALL
+         SELECT item_id, unit, -COALESCE(quantity, 0) AS qty FROM sale_items
+         UNION ALL
+         SELECT item_id, unit, -COALESCE(qty, 0) AS qty FROM loss_records
+       ) GROUP BY item_id, unit`,
+    ).all<{ item_id: string; unit: string; quantity: number }>(),
+    c.env.DB.prepare('SELECT item_id, unit, min_stock FROM stocks').all<{ item_id: string; unit: string; min_stock: number }>(),
+    c.env.DB.prepare('SELECT id, name FROM items WHERE deleted_at IS NULL').all<{ id: string; name: string }>(),
+    c.env.DB.prepare(
+      `SELECT sb.item_id, sb.unit, sb.batch_id, sb.remaining, sb.expiry_date, i.name AS item_name
+       FROM stock_batches sb JOIN items i ON i.id = sb.item_id
+       WHERE sb.expiry_date IS NOT NULL AND sb.expiry_date != '' AND sb.expiry_date <= ?
+         AND sb.remaining > 0
+       ORDER BY sb.expiry_date ASC, sb.happened_at ASC`,
+    ).bind(limitDate).all<{ item_id: string; unit: string; batch_id: string; remaining: number; expiry_date: string; item_name: string }>(),
+  ]);
+  const itemName = new Map(itemRows.results.map((x) => [x.id, x.name]));
+  const minMap = new Map(stockRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, x.min_stock]));
+  const low = agg.results
+    .map((r) => {
+      const min = minMap.get(`${r.item_id}\u0000${r.unit}`) ?? 0;
+      const qty = Math.max(Number(r.quantity) || 0, 0);
+      return {
+        item_id: r.item_id, item_name: itemName.get(r.item_id) ?? '', unit: r.unit,
+        quantity: Math.round(qty * 100) / 100, min_stock: Number(min) || 0, low: qty <= (Number(min) || 0),
+      };
+    })
+    .filter((r) => r.item_name !== '' && r.low);
+  const expMap = new Map<string, { item_id: string; unit: string; remaining: number; expiry_date: string }>();
+  for (const e of expRows.results) {
+    const key = `${e.item_id}\u0000${e.unit}`;
+    const cur = expMap.get(key);
+    if (!cur) {
+      expMap.set(key, { item_id: e.item_id, unit: e.unit, remaining: Number(e.remaining) || 0, expiry_date: e.expiry_date });
+    } else {
+      cur.remaining += Number(e.remaining) || 0;
+    }
+  }
+  const expiring = [...expMap.values()].map((e) => ({
+    item_id: e.item_id, item_name: itemName.get(e.item_id) ?? '', unit: e.unit,
+    remaining: Math.round(e.remaining * 100) / 100, expiry_date: e.expiry_date,
+  })).filter((e) => e.item_name !== '');
+  return c.json({ low, expiring, days, today, limit_date: limitDate });
+});
+
 // GET /stocks/trace?item_id=&limit= — 该商品的进货/出货流水分录（数量来源明细；行级主记录，无需 JOIN 单据头）
 stocksRouter.get('/trace', async (c) => {
   const itemId = c.req.query('item_id')?.trim() ?? '';

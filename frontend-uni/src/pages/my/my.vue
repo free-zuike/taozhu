@@ -61,6 +61,9 @@
       <view class="row" @click="go('/pages/stocks/stocks')">
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE1A1;</text></view><view class="r-body"><text class="r-tx">库存</text><text class="r-sub">进货/出货自动维护，盘点与预警</text></view><text class="r-arrow">›</text>
       </view>
+      <view class="row" @click="go('/pages/debts/debts')">
+        <view class="r-ic ic-red"><text class="mi ic-tx">&#xE8A1;</text></view><view class="r-body"><text class="r-tx">欠款看板</text><text class="r-sub">每店欠款与账期（超 30 天标红）</text></view><text class="r-arrow">›</text>
+      </view>
       <view class="row" @click="go('/pages/items/items')">
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xEB70;</text></view><view class="r-body"><text class="r-tx">商品管理</text><text class="r-sub">商品与多单位价格</text></view><text class="r-arrow">›</text>
       </view>

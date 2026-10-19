@@ -80,6 +80,9 @@ class _Row {
 class _SalePageState extends State<SalePage> {
   List<Map<String, dynamic>> _clients = [];
   List<_ItemOption> _items = [];
+  /// 商品输入联想：当前联想行 + 候选（输入包含匹配，最多 6 条；点击选择后清空）
+  _Row? _suggestFor;
+  List<_ItemOption> _suggests = [];
   // 商品下拉菜单项缓存：行组件不再每次 build 重建 items（目录大时明显降卡顿）
   List<DropdownMenuItem<String>> _itemMenus = [];
   String? _clientId;
@@ -219,7 +222,7 @@ class _SalePageState extends State<SalePage> {
     if (kIsWeb) {
       final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=sale', pb, 'photo.$ext', pm);
       final items = (d['items'] as List?) ?? [];
-      final rowIds = _fillFromDrafts(items, '${d['client'] ?? ''}', '${d['date'] ?? ''}');
+      final rowIds = await _fillFromDrafts(items, '${d['client'] ?? ''}', '${d['date'] ?? ''}');
       setState(() => _pendingPhoto = pb); // Web 无本地库：保存成功后直传（多批组含 bytes）
       _pendingGroups.add({'file': '${md5.convert(pb).toString()}.jpg', 'rowIds': rowIds, 'bytes': pb});
       final tip = items.length == rowIds.length
@@ -229,7 +232,7 @@ class _SalePageState extends State<SalePage> {
       return;
     }
     final inv = await aiParsePhoto(pb, pm, purpose: 'sale');
-    final rowIds = _fillFromDrafts(_draftsToMaps(inv), inv.client, inv.date);
+    final rowIds = await _fillFromDrafts(_draftsToMaps(inv), inv.client, inv.date);
     await _attachRecognized(bytes); // App 本地：立即挂单据级，取消时 dispose 清理（凭证保留原图）
     // 识别行数 vs 实际填行数诊断（模型漏读/匹配失败一目了然——用户"扫描图片经常少一行"）
     final tip = inv.items.length == rowIds.length
@@ -784,6 +787,18 @@ class _SalePageState extends State<SalePage> {
   /// AI 识别填行改错名时只关联商品，识别价保留）；否则视为新商品名（可点「新增」入库）
   void _onNameChanged(_Row row, String v) {
     final name = v.trim();
+    // 输入联想：包含匹配候选（最多 6 条）；空输入清空。精确匹配到商品时下方仍可点选（已关联则无碍）
+    if (name.isNotEmpty) {
+      setState(() {
+        _suggestFor = row;
+        _suggests = _items.where((x) => x.name.contains(name)).take(6).toList();
+      });
+    } else {
+      setState(() {
+        _suggestFor = null;
+        _suggests = const [];
+      });
+    }
     final match = _items.where((x) => x.name == name).firstOrNull;
     if (match != null) {
       if (row.itemId != match.id) {
@@ -1166,10 +1181,10 @@ class _SalePageState extends State<SalePage> {
       // App 本地直连（用户要求）；Web 保持服务器（CORS 限制）
       if (kIsWeb) {
         final d = await Api.instance.post('/ai/parse-text?purpose=sale', {'text': text});
-        _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
+        await _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
       } else {
         final inv = await aiParseText(text, purpose: 'sale');
-        _fillFromDrafts(_draftsToMaps(inv), inv.client, inv.date);
+        await _fillFromDrafts(_draftsToMaps(inv), inv.client, inv.date);
       }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -1190,10 +1205,10 @@ class _SalePageState extends State<SalePage> {
         final d = await Api.instance.uploadAudio('/ai/parse-voice?purpose=sale', audio.bytes, audio.name, audio.mime);
         final text = '${d['text'] ?? ''}';
         if (text.isNotEmpty) toast(context, '语音识别：$text');
-        _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
+        await _fillFromDrafts((d['items'] as List?) ?? [], '${d['client'] ?? ''}', '${d['date'] ?? ''}');
       } else {
         final inv = await aiParseVoice(audio.bytes, audio.mime, purpose: 'sale');
-        _fillFromDrafts(_draftsToMaps(inv), inv.client, inv.date);
+        await _fillFromDrafts(_draftsToMaps(inv), inv.client, inv.date);
       }
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -1202,7 +1217,16 @@ class _SalePageState extends State<SalePage> {
 
   /// 识别结果 → 填店铺/日期 + 匹配已有商品填行（拍照/文字/语音共用）。
   /// 返回本次实际填充的商品行 id 列表（识别图按批次挂行=行级附件"批对批"；文字/语音无图可忽略返回值）
-  List<String> _fillFromDrafts(List<dynamic> items, [String client = '', String date = '']) {
+  Future<List<String>> _fillFromDrafts(List<dynamic> items, [String client = '', String date = '']) async {
+    // 识别快于目录加载（本地镜像空/Web 网络慢）→ 先等 _items 就绪再匹配，
+    // 防"库里有商品却报新增"（用户"扫描后显示新增，删除重输就好了"根因）
+    if (_items.isEmpty) {
+      var waited = 0;
+      while (_items.isEmpty && waited < 2000) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        waited += 100;
+      }
+    }
     _recognitionFilling = true; // 填行期间 unitCtrl 赋值触发 onUnitChanged 时不覆盖识别单价
     final recentNeeded = <_Row>[]; // 识别无价的行：循环后异步带出店铺最近价（try 外声明=finally 可见）
     try {
@@ -1234,9 +1258,16 @@ class _SalePageState extends State<SalePage> {
       final qty = (raw['quantity'] as num?)?.toDouble() ?? 0;
       final price = (raw['price'] as num?)?.toDouble() ?? 0;
       final unit = '${raw['unit'] ?? ''}'.trim();
-      final match = _items
-          .where((it) => it.name == name || it.name.contains(name) || name.contains(it.name))
-          .firstOrNull;
+      // 识别匹配商品：**精确优先**；无精确时仅当"识别名≥2字且包含候选恰好1个"才关联——
+      // 防"肝"误联"牛肝菌"（contains 双向匹配把短名强行联想成长名商品=伪胡编根源，用户抓证）
+      _ItemOption? match;
+      final exact = _items.where((it) => it.name == name).toList();
+      if (exact.isNotEmpty) {
+        match = exact.first;
+      } else if (name.length >= 2) {
+        final contains = _items.where((it) => it.name.contains(name) || name.contains(it.name)).toList();
+        if (contains.length == 1) match = contains.first; // 多候选=歧义，不猜
+      }
       Map<String, dynamic>? pr;
       if (match != null) {
         if (unit.isNotEmpty) {
@@ -2148,6 +2179,14 @@ double _fifoCost(
                   style: txtStyle,
                   decoration: _fieldDec(label: '商品名称（可输入或选择）'),
                   onChanged: (v) => _onNameChanged(row, v),
+                  onTapOutside: (_) {
+                    if (_suggestFor == row) {
+                      setState(() {
+                        _suggestFor = null;
+                        _suggests = const [];
+                      });
+                    }
+                  },
                 ),
               ),
               const SizedBox(width: 4),
@@ -2174,6 +2213,51 @@ double _fifoCost(
               ),
             ],
           ),
+          if (_suggestFor == row && _suggests.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.only(left: 44),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: c.card,
+                  border: Border.all(color: c.primary.withOpacity(0.35)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var si = 0; si < _suggests.length; si++)
+                      InkWell(
+                        borderRadius: BorderRadius.circular(10),
+                        onTap: () {
+                          _selectItem(row, _suggests[si]);
+                          setState(() {
+                            _suggestFor = null;
+                            _suggests = const [];
+                          });
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                          child: Row(children: [
+                            Icon(Icons.inventory_2_outlined, size: 14, color: c.primary.withOpacity(0.8)),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(_suggests[si].name,
+                                  style: TextStyle(fontSize: 13, color: c.textMain),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                            ),
+                            if (_suggests[si].category.isNotEmpty)
+                              Text(_suggests[si].category,
+                                  style: TextStyle(fontSize: 11, color: c.textSub)),
+                          ]),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
           if (item != null)
             Padding(
               padding: const EdgeInsets.only(left: 44),

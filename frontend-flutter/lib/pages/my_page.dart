@@ -27,6 +27,7 @@ import 'payments_page.dart';
 import 'statement_page.dart';
 import 'sync_panel_page.dart';
 import 'stocks_page.dart';
+import 'debts_page.dart';
 import 'cleanup_page.dart';
 import 'login_page.dart';
 import 'members_page.dart';
@@ -61,6 +62,7 @@ class _MyPageState extends State<MyPage> {
   bool _syncError = false; // 最近一次同步失败（网络/服务器异常；不再静默谎报"已同步"）
   String _webSyncState = ''; // Web 端服务器连通检查：''=检查中 / ok / error
   int _lowStocks = -1; // 低库存数量（-1=未加载）
+  int _expiringStocks = -1; // 临期数量（批次到期 ≤7 天，-1=未加载）
   int _pending = 0; // 待同步单据数（合并旧 Api 队列 + 新 SyncService 队列）
   int _pullErrors = 0; // 同步应用失败条数（pull 单条 apply 失败，持久化）——不一致直接可见
   int _pendingUploads = 0; // 待上传附件数（入队未成功上传，队列保留重试）
@@ -242,10 +244,15 @@ class _MyPageState extends State<MyPage> {
   Future<void> _loadLowStocks() async {
     try {
       final d = await Api.instance.get('/stocks?below=1');
+      final a = await Api.instance.get('/stocks/alerts?days=7');
       if (!mounted) return;
-      setState(() => _lowStocks = ((d['stocks'] as List?) ?? []).length);
+      setState(() {
+        _lowStocks = ((d['stocks'] as List?) ?? []).length;
+        _expiringStocks = ((a['expiring'] as List?) ?? []).length;
+      });
     } catch (_) {
       _lowStocks = 0;
+      _expiringStocks = 0;
     }
   }
 
@@ -1198,10 +1205,14 @@ class _MyPageState extends State<MyPage> {
           _groupTitle('商品与库存'),
           _card([
             _item(Icons.inventory_2_outlined, c.primary, '库存',
-                _lowStocks > 0 ? '有 $_lowStocks 项库存不足，点击查看' : '进货/出货自动维护，盘点与预警',
+                _lowStocks > 0 || _expiringStocks > 0
+                    ? '有 $_lowStocks 项库存不足${_expiringStocks > 0 ? '、$_expiringStocks 项临期' : ''}，点击查看'
+                    : '进货/出货自动维护，盘点与预警',
                 () => goPage(context, const StocksPage()),
-                warn: _lowStocks > 0),
+                warn: _lowStocks > 0 || _expiringStocks > 0),
             _item(Icons.sell_outlined, c.primary, '商品管理', '商品与多单位价格', () => goPage(context, const ItemsPage())),
+            _item(Icons.account_balance_wallet_outlined, c.danger, '欠款看板', '每店欠款与账期（超 30 天标红）',
+                () => goPage(context, const DebtsPage())),
             _item(Icons.label_outline, c.primary, '分类管理', '商品分类 / 店铺分类（两级）',
                 () => goPage(context, const CategoriesPage())),
             _item(Icons.local_offer_outlined, c.primary, '价格组', '店铺分级定价：零售/批发/VIP…（记单按等级带价）',

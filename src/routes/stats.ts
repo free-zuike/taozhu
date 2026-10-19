@@ -390,6 +390,61 @@ statsRouter.get('/summary', async (c) => {
 });
 
 // GET /stats/daily?start=&end=&client_id=&kind=sale|purchase — 区间内按日：出货/毛利/收款/进货（只含有数据的日，前端补零）
+// GET /stats/debts — 欠款账期看板：每店截止今天的累计欠款（Σ出货−Σ收款，按店抹零配置）+ 最近出货日/金额 + 笔数。
+// 账期天数由客户端算（last_sale_date → 今天）；App 本地优先聚合，本接口供小程序/Web。
+statsRouter.get('/debts', async (c) => {
+  const db = c.env.DB;
+  const money = await getRoundingConfig(c.env.DB);
+  const today = new Date().toISOString().slice(0, 10);
+  const [saleRows, payRows, clientRows, roundRows] = await Promise.all([
+    db.prepare(
+      'SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= ?',
+    ).bind(today).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
+    db.prepare(
+      'SELECT client_id, amount, waived FROM payments WHERE happened_at <= ?',
+    ).bind(today).all<{ client_id: string; amount: number; waived: number }>(),
+    db.prepare('SELECT id, name FROM clients WHERE deleted_at IS NULL').all<{ id: string; name: string }>(),
+    db.prepare('SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL').all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
+  ]);
+  const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
+  // 按店出货金额（按各店抹零配置分组向下取整，口径与 /summary 欠款一致）+ 最近出货日/金额/笔数
+  const saleByClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
+  const lastDate = new Map<string, string>();
+  let lastAmt = new Map<string, number>();
+  for (const s of saleRows.results) {
+    const id = s.client_id;
+    if (!id) continue;
+    saleByClient.set(id, [...(saleByClient.get(id) ?? []), { sale_id: s.sale_id, happened_at: s.happened_at, amount: Number(s.amount) || 0 }]);
+    const d = (s.happened_at ?? '').slice(0, 10);
+    if (d && d > (lastDate.get(id) ?? '')) {
+      lastDate.set(id, d);
+      lastAmt = new Map(lastAmt).set(id, Number(s.amount) || 0);
+    }
+  }
+  const payByClient = new Map<string, number>();
+  for (const p of payRows.results) {
+    const id = p.client_id;
+    if (!id) continue;
+    payByClient.set(id, (payByClient.get(id) ?? 0) + roundMoney((Number(p.amount) || 0) + (Number(p.waived) || 0), money));
+  }
+  const debts = [...saleByClient.keys()]
+    .map((id) => {
+      const cfg = cfgMap.get(id) ?? normalizeRoundConfig(null, null, null);
+      const sales = salesSideRounded(saleByClient.get(id) ?? [], cfg.stage, cfg.unit, cfg.carry, money);
+      return {
+        client_id: id,
+        client_name: clientRows.results.find((x) => x.id === id)?.name ?? '',
+        debt: Math.round((sales - (payByClient.get(id) ?? 0)) * 100) / 100,
+        sale_count: (saleByClient.get(id) ?? []).length,
+        last_sale_date: lastDate.get(id) ?? '',
+        last_sale_amount: Math.round((lastAmt.get(id) ?? 0) * 100) / 100,
+      };
+    })
+    .filter((x) => x.client_name !== '')
+    .sort((a, b) => b.debt - a.debt);
+  return c.json({ debts, today });
+});
+
 statsRouter.get('/daily', async (c) => {
   const canSeeProfit = c.get('user').role === 'admin';
   const start = c.req.query('start')?.trim();
@@ -460,29 +515,36 @@ statsRouter.get('/items', async (c) => {
   if (clientId && kind === 'sale') params.push(clientId);
   const rows = await c.env.DB.prepare(
     kind === 'purchase'
-      ? `SELECT i.name, pi.unit, pi.quantity AS quantity, pi.amount AS amount
+      ? `SELECT i.name, pi.unit, pi.quantity AS quantity, pi.amount AS amount, 0 AS gross
          FROM purchase_items pi
          JOIN items i ON i.id = pi.item_id
          WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
-      : `SELECT i.name, si.unit, si.quantity AS quantity, si.amount AS amount
+      : `SELECT i.name, si.unit, si.quantity AS quantity, si.amount AS amount,
+         (si.sale_price - si.cost_price) * si.quantity AS gross
          FROM sale_items si
          JOIN items i ON i.id = si.item_id
          WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`,
-  ).bind(...params).all<{ name: string; unit: string; quantity: number; amount: number }>();
+  ).bind(...params).all<{ name: string; unit: string; quantity: number; amount: number; gross: number }>();
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const map = new Map<string, { name: string; unit: string; quantity: number; amount: number }>();
+  const map = new Map<string, { name: string; unit: string; quantity: number; amount: number; gross: number }>();
   for (const x of rows.results) {
     const key = `${x.name}|${x.unit}`;
-    const cur = map.get(key) ?? { name: x.name, unit: x.unit, quantity: 0, amount: 0 };
+    const cur = map.get(key) ?? { name: x.name, unit: x.unit, quantity: 0, amount: 0, gross: 0 };
     cur.quantity += Number(x.quantity) || 0;
     cur.amount += r(x.amount);
+    cur.gross += r(x.gross);
     map.set(key, cur);
   }
   const items = [...map.values()].sort((a, b) => b.amount - a.amount).slice(0, 15);
+  const canSeeProfit = c.get('user').role === 'admin';
   return c.json({
     kind,
-    items: items.map((x) => ({ name: x.name, unit: x.unit, quantity: r(x.quantity), amount: r(x.amount) })),
+    can_see_profit: canSeeProfit,
+    items: items.map((x) => ({
+      name: x.name, unit: x.unit, quantity: r(x.quantity), amount: r(x.amount),
+      gross_profit: kind === 'sale' && canSeeProfit ? r(x.gross) : 0,
+    })),
   });
 });
 

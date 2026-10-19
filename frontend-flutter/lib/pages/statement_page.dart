@@ -100,6 +100,7 @@ class _StatementPageState extends State<StatementPage> {
   @override
   void initState() {
     super.initState();
+    SyncService.stmtTemplatesChanged.addListener(_onStmtTplChanged);
     _loadClients();
     _loadTemplates();
     // 合计口径移除（用户"去掉吧，全部按照上边设置的来"）：固定逐笔舍入（_roundTotals 恒 true）
@@ -117,9 +118,20 @@ class _StatementPageState extends State<StatementPage> {
 
   @override
   void dispose() {
+    SyncService.stmtTemplatesChanged.removeListener(_onStmtTplChanged);
     _fromCtrl.dispose();
     _toCtrl.dispose();
     super.dispose();
+  }
+
+  /// 其他端改了模板（ws 推送）→ 重拉模板列表并刷新（开着页面时即时生效）
+  void _onStmtTplChanged() {
+    if (!mounted) return;
+    _loadTemplates().then((_) {
+      if (!mounted) return;
+      setState(() {});
+      _load();
+    });
   }
 
   Future<void> _loadClients() async {

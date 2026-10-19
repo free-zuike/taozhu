@@ -26,6 +26,7 @@ interface PurchaseItemInput {
   purchase_price?: number;   // 可覆盖默认进价
   happened_at?: string;      // 行独立日期（缺省用单据日期）
   note?: string;             // 行级备注（缺省空）
+  expiry_date?: string;      // 行级到期日（YYYY-MM-DD，缺省空=不参与临期提醒）
   sort?: number;             // 行序（批量直编跨单全局录入序；缺省服务端按数组序）
 }
 
@@ -92,15 +93,15 @@ purchasesRouter.post('/', async (c) => {
     const piId = randomId();
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sync_key, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, expiry_date, created_by, sync_key, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(piId, purchaseId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount,
-        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null, lineSort),
+        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', item.expiry_date?.trim() ?? '', user.id, syncKey || null, lineSort),
     );
     // FIFO 批次账：进货每行一个批次（batch_id=进货行 id），出货按先进先出逐批扣减并算成本
     batch.push(
       c.env.DB.prepare(
-        'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ).bind(piId, price.item_id, price.unit, effective, qty, item.happened_at?.trim() || happenedAt),
+        'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at, expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).bind(piId, price.item_id, price.unit, effective, qty, item.happened_at?.trim() || happenedAt, item.expiry_date?.trim() || ''),
     );
     // 进货增加库存（进销单位换算：折合过则按计数单位累计，否则按原单位）
     batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
@@ -231,12 +232,12 @@ purchasesRouter.post('/items/date', async (c) => {
 purchasesRouter.patch('/items/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => null) as {
-    quantity?: number; unit?: string; purchase_price?: number; happened_at?: string; note?: string; count_qty?: number;
+    quantity?: number; unit?: string; purchase_price?: number; happened_at?: string; note?: string; count_qty?: number; expiry_date?: string;
   } | null;
   const row = await c.env.DB.prepare(
-    `SELECT pi.id, pi.purchase_id, pi.item_id, pi.unit, pi.quantity, pi.count_qty, pi.purchase_price, pi.happened_at, pi.note, i.count_unit
+    `SELECT pi.id, pi.purchase_id, pi.item_id, pi.unit, pi.quantity, pi.count_qty, pi.purchase_price, pi.happened_at, pi.note, pi.expiry_date, i.count_unit
      FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.id = ?`,
-  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; purchase_price: number; happened_at: string | null; note: string | null; count_unit?: string | null }>();
+  ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; purchase_price: number; happened_at: string | null; note: string | null; expiry_date: string | null; count_unit?: string | null }>();
   if (!row) return c.json({ error: '明细行不存在' }, 404);
 
   const qty = body?.quantity !== undefined ? Number(body.quantity) : row.quantity;
@@ -248,6 +249,7 @@ purchasesRouter.patch('/items/:id', async (c) => {
   const happenedAt = body?.happened_at?.trim() || row.happened_at || '';
   if (happenedAt && !/^\d{4}-\d{2}-\d{2}$/.test(happenedAt)) return c.json({ error: '日期格式应为 YYYY-MM-DD' }, 400);
   const note = body?.note !== undefined ? (body.note ?? '').trim() : (row.note ?? '');
+  const expiryDate = body?.expiry_date !== undefined ? (body.expiry_date ?? '').trim() : (row.expiry_date ?? '');
 
   // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
   const amount = qty * purchasePrice;
@@ -261,11 +263,11 @@ purchasesRouter.patch('/items/:id', async (c) => {
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1), // 回滚旧值
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit, quantity: qty, count_qty: countQty > 0 ? countQty : null, count_unit: row.count_unit }, 1),  // 按新值增加
     c.env.DB.prepare(
-      'UPDATE purchase_items SET quantity = ?, unit = ?, count_qty = ?, purchase_price = ?, amount = ?, happened_at = ?, note = ? WHERE id = ?',
-    ).bind(qty, unit, countQty > 0 ? countQty : null, purchasePrice, amount, happenedAt || null, note, id),
+      'UPDATE purchase_items SET quantity = ?, unit = ?, count_qty = ?, purchase_price = ?, amount = ?, happened_at = ?, note = ?, expiry_date = ? WHERE id = ?',
+    ).bind(qty, unit, countQty > 0 ? countQty : null, purchasePrice, amount, happenedAt || null, note, expiryDate, id),
     c.env.DB.prepare(
-      'UPDATE stock_batches SET price = ?, remaining = ?, unit = ?, happened_at = ? WHERE batch_id = ?',
-    ).bind(purchasePrice, newRemaining, unit, happenedAt || null, id),
+      'UPDATE stock_batches SET price = ?, remaining = ?, unit = ?, happened_at = ?, expiry_date = ? WHERE batch_id = ?',
+    ).bind(purchasePrice, newRemaining, unit, happenedAt || null, expiryDate, id),
   ];
   await c.env.DB.batch(batch);
   // 无头表：组装时 happened_at=明细行最大日期，无需再同步 head
@@ -352,15 +354,15 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       const lineSort = Number.isFinite(Number(item.sort)) && Number(item.sort) >= 0 ? Number(item.sort) : i;
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, expiry_date, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).bind(newId, id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount2,
-          item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', c.get('user').id, lineSort),
+          item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', item.expiry_date?.trim() ?? '', c.get('user').id, lineSort),
       );
       // FIFO 批次：新行建批
       batch.push(
         c.env.DB.prepare(
-          'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at) VALUES (?, ?, ?, ?, ?, ?)',
-        ).bind(newId, price.item_id, price.unit, effective, qty, item.happened_at?.trim() || body?.happened_at?.trim() || ''),
+          'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at, expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        ).bind(newId, price.item_id, price.unit, effective, qty, item.happened_at?.trim() || body?.happened_at?.trim() || '', item.expiry_date?.trim() || ''),
       );
       // 按新明细增加库存（进销单位换算：折合过则按计数单位累计）
       batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));

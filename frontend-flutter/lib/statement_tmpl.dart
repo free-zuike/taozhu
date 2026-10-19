@@ -2,6 +2,7 @@
 /// 与具体页面解耦（不依赖 State），交易页/对账单页/独立模板设置页共用；渲染纯函数便于测试。
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'api.dart';
 
 /// 网格单元格：文本（可含 {变量} 占位）+ 对齐（left/center/right）+ 样式（bold 加粗 / bg 底纹色名）
 /// + 合并（rowSpan/colSpan：>1 表示该格为合并区起点，向右/向下覆盖；被覆盖的格子 text 置空）
@@ -759,11 +760,89 @@ List<List<GridCell>> _renderComps(XlsCfg cfg, TemplateData d) {
   return rows;
 }
 
-// ── 模板存储（SharedPreferences，跨页面共用）─────────────────────────
+// ── 模板存储（本地缓存 + 云端同步：云端优先，本地脏标记防丢）─────────────────
+
+const _tplCacheKey = 'taozhu_stmt_templates';
+const _tplNameKey = 'taozhu_stmt_xls_name';
+const _tplDirtyKey = 'taozhu_stmt_tpl_dirty';
+
+/// 云端拉取：GET /stmt-templates → 模板列表；失败返回 null（离线/未登录静默回退本地）
+Future<List<XlsCfg>?> _pullCloudTemplates() async {
+  try {
+    final d = await Api.instance.get('/stmt-templates').timeout(const Duration(seconds: 8));
+    final list = (d['templates'] as List? ?? [])
+        .whereType<Map>()
+        .map((e) => XlsCfg.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+    return list;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 云端推送：PUT /stmt-templates（templates + current）；成功 true / 失败 false（脏标记决定补推）
+Future<bool> _pushCloudTemplates(List<XlsCfg> templates, String currentName) async {
+  try {
+    await Api.instance
+        .put('/stmt-templates', {
+          'templates': [for (final t in templates) t.toJson()],
+          'current': currentName,
+        })
+        .timeout(const Duration(seconds: 8));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// 模板列表统一清洗：内置名强制出厂定义 + 补内置 + 滤空模板（云端/本地共用）
+List<XlsCfg> _cleanTemplates(List<XlsCfg> list) {
+  final kept = <XlsCfg>[];
+  for (final t in list) {
+    if (t.name == '按日汇总' && t.comps.isEmpty && t.content.trim().isEmpty) continue;
+    if (t.name == '标准') {
+      kept.add(_defaultTemplate());
+      continue;
+    }
+    if (t.name == '多栏') {
+      kept.add(_multiColTemplate());
+      continue;
+    }
+    kept.add(t);
+  }
+  final names = kept.map((t) => t.name).toSet();
+  if (!names.contains('标准')) kept.insert(0, _defaultTemplate());
+  if (!names.contains('多栏')) kept.add(_multiColTemplate());
+  return kept.where(_hasContent).toList();
+}
+────────
 
 Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
   final p = await SharedPreferences.getInstance();
-  final raw = p.getString('taozhu_stmt_templates');
+  // 云端优先：本地无未推送修改（脏标记）时以服务器为准——小程序/Web 端改的模板自动同步到 App；
+  // 拉取失败（离线）回退本地缓存；本地脏（离线保存未推成功）→ 本地权威并顺手补推云端。
+  final dirty = p.getBool(_tplDirtyKey) ?? false;
+  if (!dirty) {
+    final cloud = await _pullCloudTemplates();
+    if (cloud != null && cloud.isNotEmpty) {
+      final cleaned = _cleanTemplates(cloud);
+      if (cleaned.isNotEmpty) {
+        await p.setString(_tplCacheKey, jsonEncode([for (final t in cleaned) t.toJson()]));
+        return cleaned;
+      }
+    }
+  } else {
+    final rawLocal = p.getString(_tplCacheKey);
+    if (rawLocal != null && rawLocal.isNotEmpty) {
+      final cur = p.getString(_tplNameKey) ?? '';
+      final local = (jsonDecode(rawLocal) as List? ?? [])
+          .whereType<Map>()
+          .map((e) => XlsCfg.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      await _pushCloudTemplates(local, cur);
+    }
+  }
+  final raw = p.getString(_tplCacheKey);
   if (raw != null && raw.isNotEmpty) {
     final list = (jsonDecode(raw) as List? ?? [])
         .whereType<Map>()
@@ -775,42 +854,10 @@ Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
     // **内置名强制使用最新出厂定义**：用户本地存的旧「标准」/「多栏」（旧结构=40天/旧标题/旧布局）必须
     // 替换为最新展开网格——否则用户升级后看到的是旧模板（用户"32-40天还存在/标题重复"根因）。
     // 用户要自定义请另存新名；内置名 = 出厂定义，用户对内置名的修改不保留。
-    var migrated = false;
-    final kept = <XlsCfg>[];
-    for (final t in list) {
-      if (t.name == '按日汇总' && t.comps.isEmpty && t.content.trim().isEmpty) {
-        migrated = true; // 内置按日汇总已与标准合并，跳过（用户自定义过的按日汇总保留）
-        continue;
-      }
-      if (t.name == '标准') {
-        kept.add(_defaultTemplate());
-        migrated = true;
-        continue;
-      }
-      if (t.name == '多栏') {
-        kept.add(_multiColTemplate());
-        migrated = true;
-        continue;
-      }
-      kept.add(t);
-    }
-    // 内置模板始终合并进列表（用户旧缓存缺「标准」/「多栏」时补回——否则新模板不显示）
-    final names = kept.map((t) => t.name).toSet();
-    if (!names.contains('标准')) {
-      kept.insert(0, _defaultTemplate());
-      migrated = true;
-    }
-    if (!names.contains('多栏')) {
-      kept.add(_multiColTemplate());
-      migrated = true;
-    }
-    if (migrated) {
-      await p.setString('taozhu_stmt_templates', jsonEncode([for (final t in kept) t.toJson()]));
-    }
-    // 清洗空模板（旧版残留：grid/comps/content 全空 → 渲染出只有边框的空表格=预览灰色）。
-    // 保留有效模板；全空时返回内置默认（标题+多栏月账单），保证列表第一条必有内容。
-    final valid = kept.where(_hasContent).toList();
-    if (valid.isNotEmpty) return valid;
+    final cleaned = _cleanTemplates(list);
+    final encoded = jsonEncode([for (final t in cleaned) t.toJson()]);
+    if (raw != encoded) await p.setString(_tplCacheKey, encoded);
+    if (cleaned.isNotEmpty) return cleaned;
   }
   // 兼容旧单模板存储
   final old = p.getString('taozhu_stmt_xls_cfg');
@@ -906,18 +953,24 @@ XlsCfg _multiColTemplate() => XlsCfg()
 
 Future<void> saveTemplates(List<XlsCfg> templates, String currentName) async {
   final p = await SharedPreferences.getInstance();
-  await p.setString('taozhu_stmt_templates',
+  await p.setString(_tplCacheKey,
       jsonEncode([for (final t in templates) t.toJson()]));
-  await p.setString('taozhu_stmt_xls_name', currentName);
+  await p.setString(_tplNameKey, currentName);
+  // 云端推送：成功清脏；失败保留脏标记（本地权威，下次 load 补推，防离线保存被云端旧数据覆盖）
+  final ok = await _pushCloudTemplates(templates, currentName);
+  if (ok) await p.setBool(_tplDirtyKey, false);
 }
 
 /// 恢复出厂：清除全部用户模板缓存，回到内置「标准」「多栏」两个展开模板。
 /// 用户之前改过/新建的模板全部丢弃（页面已弹确认）。
 Future<List<XlsCfg>> resetTemplates() async {
   final p = await SharedPreferences.getInstance();
-  await p.remove('taozhu_stmt_templates');
+  await p.remove(_tplCacheKey);
   await p.remove('taozhu_stmt_xls_cfg');
-  await p.setString('taozhu_stmt_xls_name', '标准');
+  await p.setString(_tplNameKey, '标准');
+  // 云端重置：推空列表（其他端收到广播回退内置）+ 清脏
+  final ok = await _pushCloudTemplates([], '标准');
+  if (ok) await p.setBool(_tplDirtyKey, false);
   return [_defaultTemplate(), _multiColTemplate()];
 }
 

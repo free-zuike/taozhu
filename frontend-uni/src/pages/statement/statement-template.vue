@@ -1,68 +1,81 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <view class="sec-tip">选择对账单排版模板，返回对账单页立即生效（对齐 App「模板设置」入口）</view>
-    <view v-for="t in list" :key="t.id" :class="['card', { on: cur === t.id }]" @click="show = show === t.id ? '' : t.id">
+    <view class="sec-tip">选择对账单排版模板（云端同步：App 设计器保存的模板自动出现在这里）</view>
+    <view v-for="t in list" :key="t.name" :class="['card', { on: cur === t.name }]" @click="show = show === t.name ? '' : t.name">
       <view class="head">
         <view class="left">
           <view class="name-line">
             <text class="name">{{ t.name }}</text>
-            <text v-if="cur === t.id" class="badge">当前使用</text>
+            <text v-if="cur === t.name" class="badge">当前使用</text>
           </view>
-          <text class="desc">{{ t.desc }}</text>
+          <text class="desc">{{ t.orientation === 'landscape' ? '横版打印' : '竖版打印' }}{{ t.grid.length ? ` · ${t.grid.length} 行网格` : '' }}</text>
         </view>
         <text class="arrow">›</text>
       </view>
-      <view v-if="show === t.id" class="detail">
-        <text class="dt">{{ t.detail }}</text>
+      <view v-if="show === t.name" class="detail">
+        <text class="dt">网格模板（{{ t.grid.length }} 行 × {{ t.colAligns.length || '多' }} 列），标题「{{ t.title }}」；保存于云端，多端共用。</text>
         <view class="ops" @click.stop>
-          <view class="op" @click="pick(t.id)">使用此模板</view>
+          <view class="op" @click="pick(t.name)">使用此模板</view>
         </view>
       </view>
     </view>
+    <view v-if="list.length === 0" class="empty">暂无模板，请先在 App 端模板设计器创建，或恢复默认</view>
     <button class="btn" @click="reset">恢复默认布局</button>
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue';
+import { onLoad } from '@dcloudio/uni-app';
 import { useThemeVars } from '../../theme';
-import { appLog } from '../../api';
+import { request, appLog } from '../../api';
+import { xlsCfgFromJson, defaultStdTemplate, defaultMultiTemplate, type XlsCfg } from '../../utils/stmt-tmpl';
 
 const { tv, patternSrc } = useThemeVars();
 const TPL_KEY = 'taozhu_stmt_tpl';
-const cur = ref<string>((uni.getStorageSync(TPL_KEY) as string) || 'std');
+const cur = ref<string>('');
 const show = ref<string>('');
+const list = ref<XlsCfg[]>([]);
 
-// 内置两模板（对齐 App 内置「标准」「多栏」展开网格）：选择决定对账单页默认预览
-const list = [
-  {
-    id: 'std',
-    name: '标准',
-    desc: '单栏逐日金额表',
-    detail: '标题「店铺 x月份账单」→ 日期/营业额表头（无底色）→ 1..当月天数逐行（每天营业额，无数据日=0）→ 合计行。金额纯数字不带 ¥，与「总计 41349.81」示例口径一致。',
-  },
-  {
-    id: 'multi',
-    name: '多栏',
-    desc: '寻牛记式每栏 10 天，31 天→4 栏',
-    detail: '标题 → 每栏「日期|营业额」左右两列（31 天月共 8 列）→ 每栏栏底小计 → 底部总计。月末超出天数补空格保留表格线成矩形；金额纯数字不带 ¥。',
-  },
-];
+/// 旧值兼容：std→标准、multi→多栏（旧版本存 'std'/'multi'，新版本存模板名）
+function normalizeName(v: string): string {
+  if (v === 'std') return '标准';
+  if (v === 'multi') return '多栏';
+  return v;
+}
 
-function pick(id: string) {
-  uni.setStorageSync(TPL_KEY, id);
-  cur.value = id;
-  appLog('op', `对账单模板 切换：「${list.find((t) => t.id === id)?.name}」`, 'info');
-  uni.showToast({ title: `已切换到「${list.find((t) => t.id === id)?.name}」`, icon: 'success' });
+onLoad(() => {
+  cur.value = normalizeName(String(uni.getStorageSync(TPL_KEY) || '标准'));
+  loadTemplates();
+});
+
+async function loadTemplates() {
+  try {
+    const d = await request<{ templates?: Array<Record<string, any>> }>('/stmt-templates', 'GET');
+    const cloud = (d?.templates ?? []).map((j) => xlsCfgFromJson(j)).filter((t) => t.name);
+    list.value = cloud.length > 0 ? cloud : [defaultStdTemplate(), defaultMultiTemplate()];
+  } catch (_) {
+    list.value = [defaultStdTemplate(), defaultMultiTemplate()];
+  }
+  // 当前选中名不在列表（云端被删/重置）→ 回退第一条
+  if (!list.value.some((t) => t.name === cur.value)) cur.value = list.value[0]?.name ?? '标准';
+}
+
+function pick(name: string) {
+  uni.setStorageSync(TPL_KEY, name);
+  cur.value = name;
+  appLog('op', `对账单模板 切换：「${name}」`, 'info');
+  uni.showToast({ title: `已切换到「${name}」`, icon: 'success' });
   setTimeout(() => uni.navigateBack(), 500);
 }
 
 function reset() {
   uni.removeStorageSync(TPL_KEY);
-  cur.value = 'std';
+  cur.value = '标准';
   appLog('op', '对账单模板 恢复默认布局', 'info');
   uni.showToast({ title: '已恢复默认（标准）', icon: 'success' });
+  setTimeout(() => uni.navigateBack(), 500);
 }
 </script>
 
@@ -83,5 +96,6 @@ function reset() {
 .dt { font-size: 24rpx; color: var(--text-main); line-height: 1.6; }
 .ops { margin-top: 16rpx; }
 .op { background: var(--primary); color: #fff; text-align: center; padding: 16rpx 0; border-radius: 10rpx; font-size: 28rpx; }
+.empty { font-size: 24rpx; color: var(--text-sub); text-align: center; padding: 40rpx 0; }
 .btn { margin-top: 24rpx; background: var(--danger-bg); color: #f56c6c; font-weight: 700; border-radius: 44rpx; }
 </style>

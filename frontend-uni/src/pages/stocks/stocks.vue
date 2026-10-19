@@ -14,7 +14,7 @@
         <text class="name">{{ s.item_name }}</text>
         <text :class="['qty', { low: s.low }]">{{ fmtQty(s.quantity) }} {{ s.unit }}</text>
       </view>
-      <view class="sub">还剩 {{ fmtQty(s.quantity) }} {{ s.unit }} · 阈值 {{ fmtQty(s.min_stock) }} {{ s.unit }}{{ s.low ? ' · 库存不足' : '' }}</view>
+      <view class="sub">还剩 {{ fmtQty(s.quantity) }} {{ s.unit }} · 阈值 {{ fmtQty(s.min_stock) }} {{ s.unit }}{{ s.low ? ' · 库存不足' : '' }}{{ expiryOf(s) ? ' · ⚠' + expiryOf(s) + ' 到期（临期）' : '' }}</view>
       <view v-if="s._others && s._others.length" class="sub">另有 {{ othersText(s._others) }}</view>
       <view class="ops">
         <text class="op" @click.stop="loss(s)">报损</text>
@@ -107,6 +107,11 @@ import { fmtAmount } from '../../utils/money';
 interface Stock { id: string; item_id: string; item_name: string; unit: string; quantity: number; min_stock: number; low: boolean; count_unit?: string; _others?: Stock[] }
 
 const stocks = ref<Stock[]>([]);
+/// 临期映射（key: item_id\u0000unit → 最早到期日；来自 /stocks/alerts）
+const expiryMap = ref<Record<string, string>>({});
+function expiryOf(s: Stock): string {
+  return expiryMap.value[`${s.item_id}\u0000${s.unit}`] || '';
+}
 const q = ref('');
 const belowOnly = ref(false);
 const totalLabel = ref('');
@@ -180,6 +185,13 @@ async function load() {
     if (belowOnly.value) params.push('below=1');
     const d = await request<{ stocks: Stock[] }>(`/stocks${params.length ? '?' + params.join('&') : ''}`, 'GET');
     stocks.value = d.stocks;
+    // 临期映射（批次到期 ≤7 天；同商品+单位取最早到期日）
+    try {
+      const a = await request<{ expiring: Array<{ item_id: string; unit: string; expiry_date: string }> }>('/stocks/alerts?days=7', 'GET');
+      const m: Record<string, string> = {};
+      for (const e of (a?.expiring || [])) m[`${e.item_id}\u0000${e.unit}`] = e.expiry_date;
+      expiryMap.value = m;
+    } catch (_) {}
     if (!belowOnly.value && d.stocks.length) {
       let sum = 0;
       for (const s of merged.value) {

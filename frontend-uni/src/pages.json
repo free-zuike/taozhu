@@ -97,6 +97,12 @@
 			}
 		},
 		{
+			"path": "pages/debts/debts",
+			"style": {
+				"navigationBarTitleText": "欠款看板"
+			}
+		},
+		{
 			"path": "pages/theme-settings/theme-settings",
 			"style": {
 				"navigationBarTitleText": "主题设置"

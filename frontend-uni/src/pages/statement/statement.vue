@@ -34,8 +34,7 @@
         <!-- 对账单样式（对齐 App：样式 chips 切换 + 排版工具条 标题对齐/字号） -->
         <view class="tpl-title">对账单样式</view>
         <view class="tpl-chips">
-          <view :class="['chip', { active: tpl === 'std' }]" @click="setTpl('std')">标准</view>
-          <view :class="['chip', { active: tpl === 'multi' }]" @click="setTpl('multi')">多栏</view>
+          <view v-for="t in tplList" :key="t.name" :class="['chip', { active: tpl === t.name }]" @click="setTpl(t.name)">{{ t.name }}</view>
         </view>
         <view class="toolbar">
           <text class="tb-label">标题：</text>
@@ -51,53 +50,15 @@
             <view :class="['tb-item', { active: fontSize === 14 }]" @click="fontSize = 14">大</view>
           </view>
         </view>
-        <!-- 成品预览（对齐 App 标准模板：标题 + 日期/营业额表头 + 逐日行 + 合计；view+flex 模拟表格——
-        小程序 WXML 不支持 table 语义（会竖排），用行内 flex 单元格横排渲染，每格四边浅灰线同 App） -->
-        <view v-if="tpl === 'std'" class="card stmt-tbl">
-          <view class="t-title" :style="titleStyle">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
-          <view class="t-sub">{{ from }} 至 {{ to }}</view>
-          <view class="tbl">
-            <view class="tbl-row tbl-head">
-              <view class="tbl-cell">日期</view>
-              <view class="tbl-cell amt">营业额</view>
-            </view>
-            <view v-for="d in dailyRows" :key="d.day" class="tbl-row">
-              <view class="tbl-cell">{{ d.label }}</view>
-              <view class="tbl-cell amt">{{ stmtFmt(d.amt) }}</view>
-            </view>
-            <view class="tbl-row tbl-foot">
-              <view class="tbl-cell">合计</view>
-              <view class="tbl-cell amt">{{ stmtFmt(saleTotal) }}</view>
-            </view>
-          </view>
-        </view>
-        <!-- 多栏模板（对齐 App 展开网格：每栏「日期|营业额」左右两列，31 天→4 栏=8 列；月末补空格保矩形；栏底小计+底部总计）
-        多栏 8 列在小屏挤 → scroll-view 横向滚动（对齐 App SingleChildScrollView horizontal，可左右滑动看到全部列） -->
-        <view v-else class="card stmt-tbl">
-          <view class="t-title" :style="titleStyle">{{ clientName }} {{ from.slice(5, 7) }}月份账单</view>
-          <view class="t-sub">{{ from }} 至 {{ to }}</view>
+        <!-- 成品预览（按当前模板网格渲染：renderTemplateRows 行集合，view+flex 模拟表格——
+        单元格横向合并 cs 宽度、底纹/加粗/对齐随模板；多列横向滚动） -->
+        <view v-if="tplRows.length" class="card stmt-tbl">
           <scroll-view scroll-x class="tbl-scroll" enhanced :show-scrollbar="true">
-            <view class="tbl tbl-multi">
-              <view class="tbl-row tbl-head">
-                <template v-for="ci in multi.cols" :key="'h'+ci">
-                  <view class="tbl-cell">日期</view>
-                  <view class="tbl-cell amt">营业额</view>
-                </template>
-              </view>
-              <view v-for="(row, ri) in multi.rows" :key="'r'+ri" class="tbl-row">
-                <template v-for="(cell, ci) in row" :key="'c'+ci">
-                  <view :class="['tbl-cell', cell.isAmt ? 'amt' : '']">{{ cell.isAmt ? cell.amt : cell.label }}</view>
-                </template>
-              </view>
-              <view class="tbl-row tbl-foot">
-                <template v-for="ci in multi.cols" :key="'s'+ci">
-                  <view class="tbl-cell">小计</view>
-                  <view class="tbl-cell amt">{{ multi.subtotals[ci - 1] }}</view>
-                </template>
-              </view>
-              <view class="tbl-row tbl-foot">
-                <view class="tbl-cell">总计</view>
-                <view class="tbl-cell amt" :style="{ flex: multi.totalColspan + 1 }">{{ multi.grand }}</view>
+            <view class="tbl tbl-gen">
+              <view v-for="(row, ri) in tplRows" :key="'r'+ri" class="tbl-row">
+                <view v-for="(cell, ci) in row" :key="'c'+ci"
+                  :class="['tbl-cell', cell.g === 'grey' ? 'grey' : '', cell.b ? 'bold' : '']"
+                  :style="genCellStyle(cell)">{{ cell.t }}</view>
               </view>
             </view>
           </scroll-view>
@@ -150,6 +111,7 @@ import { ref, computed, getCurrentInstance } from 'vue';
 ;
 ;
 import { request, getToken, appLog } from '../../api';
+import { renderTemplateRows, xlsCfgFromJson, defaultStdTemplate, defaultMultiTemplate, type XlsCfg, type TemplateData, type GridCell } from '../../utils/stmt-tmpl';
 import { roundAmount, fmtAmount, fmtByUnit, initRounding } from '../../utils/money';
 // @ts-ignore 定点样式版（xlsx-js-style：官方 xlsx 0.18.5 写入端不支持 cell.s 样式——合并居中/底色全部丢失，
 // 用户"小程序的 excel 全部都没有合并居中"根因；换 xlsx-js-style 后样式可写，与 App 导出一致）
@@ -160,14 +122,55 @@ const clientNames = ref<string[]>(['全部店铺']);
 const clientName = ref('全部店铺');
 let clientId = '';
 
-// 对账单模板（对齐 App 内置模板切换：标准=单栏逐日金额表；多栏=每栏 10 天寻牛记式月账单；
-// 初始按模板设置页选择（storage），默认标准）
-const tpl = ref<'std' | 'multi'>((uni.getStorageSync('taozhu_stmt_tpl') as string) === 'multi' ? 'multi' : 'std');
+// 对账单模板（云端同步列表：App 设计器保存的模板自动出现；旧值 std/multi → 标准/多栏 兼容）
+function normalizeTplName(v: string): string {
+  if (v === 'std') return '标准';
+  if (v === 'multi') return '多栏';
+  return v;
+}
+const tpl = ref<string>(normalizeTplName(String(uni.getStorageSync('taozhu_stmt_tpl') || '标准')));
+const tplList = ref<XlsCfg[]>([]);
 
-function setTpl(t: 'std' | 'multi') {
-  tpl.value = t;
-  uni.setStorageSync('taozhu_stmt_tpl', t);
-  appLog('op', `对账单模板 切换：「${t === 'std' ? '标准' : '多栏'}」`, 'info');
+/// 拉云端模板列表（无云端/离线回退内置标准/多栏）；当前选中名不在列表回退第一条
+async function loadTplList() {
+  try {
+    const d = await request<{ templates?: Array<Record<string, any>> }>('/stmt-templates', 'GET');
+    const cloud = (d?.templates ?? []).map((j) => xlsCfgFromJson(j)).filter((t) => t.name);
+    tplList.value = cloud.length > 0 ? cloud : [defaultStdTemplate(), defaultMultiTemplate()];
+  } catch (_) {
+    tplList.value = [defaultStdTemplate(), defaultMultiTemplate()];
+  }
+  if (!tplList.value.some((t) => t.name === tpl.value)) tpl.value = tplList.value[0]?.name ?? '标准';
+}
+
+function setTpl(name: string) {
+  tpl.value = name;
+  uni.setStorageSync('taozhu_stmt_tpl', name);
+  appLog('op', `对账单模板 切换：「${name}」`, 'info');
+}
+
+/// 当前选中模板（缺省第一条/内置标准）
+const curTpl = computed<XlsCfg>(() => tplList.value.find((t) => t.name === tpl.value) || tplList.value[0] || defaultStdTemplate());
+
+/// 渲染输入（对齐 App TemplateData：roundMode 固定逐笔舍入；displayUnit 跟随店铺抹零精度）
+const tplData = computed<TemplateData>(() => ({
+  sales: sales.value,
+  payments: payments.value,
+  from: from.value,
+  to: to.value,
+  clientName: clientName.value,
+  debtEnd: debt.value,
+  debtUnit: roundUnit.value || '',
+  roundMode: true,
+  displayUnit: roundUnit.value || 'fen',
+}));
+
+/// 当前模板成品行集合（预览/图片打印用；导出用 evalSum=false 保公式）
+const tplRows = computed<GridCell[][]>(() => (curTpl.value ? renderTemplateRows(curTpl.value, tplData.value, true) : []));
+
+/// 预览单元格样式：横向合并宽度 + 对齐
+function genCellStyle(cell: GridCell) {
+  return { flex: cell.cs, textAlign: cell.a as 'left' | 'center' | 'right' };
 }
 
 /// 模板设置（对齐 App「模板设置」按钮 → 独立页：选择/查看/恢复默认）
@@ -185,56 +188,6 @@ const roundUnit = computed(() => {
 
 /// 对账单金额显示（对齐 App 按店铺抹零方式：不抹零=fmtAmount；抹零=fmtByUnit）
 const stmtFmt = (v: number) => (roundUnit.value ? fmtByUnit(v, roundUnit.value) : fmtAmount(v));
-
-/// 多栏月账单：每日营业额（出货，不含收款）→ 每栏 10 天平铺 + 栏底小计 + 总计
-const dailyAmt = computed(() => {
-  const days: number[] = [];
-  for (const s of sales.value) {
-    const d = String(s.happened_at || '').slice(0, 10);
-    if (d.length < 10) continue;
-    const day = Number(d.slice(8, 10));
-    days[day] = (days[day] || 0) + roundAmount(Number(s.amount ?? s.total) || 0);
-  }
-  return days; // 下标即日号 1..31
-});
-
-function monthDays(y: number, m: number): number {
-  return new Date(y, m, 0).getDate();
-}
-
-/// 多栏月账单（对齐 App：每栏「日期|营业额」左右两列，31 天→4 栏=8 列；月末补空格保矩形；日期「M月D日」）
-const multi = computed(() => {
-  const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
-  const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
-  const n = from.value ? monthDays(y, m) : 31;
-  const cols = Math.max(1, Math.ceil(n / 10));
-  const rows: Array<Array<{ isAmt: boolean; label: string; amt: string; day: number }>> = [];
-  for (let r = 0; r < 10; r++) {
-    const cells: Array<{ isAmt: boolean; label: string; amt: string; day: number }> = [];
-    for (let c = 0; c < cols; c++) {
-      const day = c * 10 + r + 1;
-      if (day <= n) {
-        // 日期点分带年（用户定稿 2026.10.16）
-        cells.push({ isAmt: false, label: `${y}.${m}.${day}`, amt: '', day });
-        cells.push({ isAmt: true, label: '', amt: stmtFmt(dailyAmt.value[day] || 0), day });
-      } else {
-        // 31 天月第 4 栏超出部分补空格格（对齐 App：保留表格线成矩形）
-        cells.push({ isAmt: false, label: '', amt: '', day: 0 });
-        cells.push({ isAmt: true, label: '', amt: '', day: 0 });
-      }
-    }
-    rows.push(cells);
-  }
-  const subtotals: string[] = [];
-  let grand = 0;
-  for (let c = 0; c < cols; c++) {
-    let s = 0;
-    for (let dd = c * 10; dd < (c + 1) * 10 && dd < n; dd++) s += dailyAmt.value[dd + 1] || 0;
-    grand += s;
-    subtotals.push(stmtFmt(s));
-  }
-  return { y, m, cols, rows, subtotals, grand: stmtFmt(grand), totalColspan: cols * 2 - 2 };
-});
 
 const period = ref<'month' | 'last' | 'cycle' | 'cycleLast' | 'custom'>('month');
 const from = ref('');
@@ -281,19 +234,6 @@ function cyclePeriod(startDay: number, anchor: Date): [string, string] {
 
 const saleTotal = ref(0);
 const payTotal = ref(0);
-
-/// 标准模板逐日金额表（对齐 App 标准模板：1..当月天数 逐行 日期+营业额，无数据日金额 0；
-/// 日期点分带年格式 2026.10.16——用户定稿"年月日改成 ."，模板内金额纯数字无 ¥）
-const dailyRows = computed(() => {
-  const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
-  const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
-  const n = from.value ? monthDays(y, m) : 31;
-  const rows: Array<{ day: number; label: string; amt: number }> = [];
-  for (let d = 1; d <= n; d++) {
-    rows.push({ day: d, label: `${y}.${m}.${d}`, amt: dailyAmt.value[d] || 0 });
-  }
-  return rows;
-});
 
 /// 减免合计（平账）：收款里 waive 部分（对齐 App _waivedTotal）
 const waivedTotal = computed(() =>
@@ -387,6 +327,7 @@ async function load() {
     uni.showToast({ title: '请选择起止日期', icon: 'none' });
     return;
   }
+  await loadTplList(); // 生成前刷新云端模板列表（App 设计器改的模板即时可用）
   loading.value = true;
   try {
     const cid = clientId ? `&client_id=${clientId}` : '';
@@ -475,40 +416,12 @@ async function exportXlsx() {
       const n = Number(String(v ?? '').replace(/[¥￥,，\s]/g, ''));
       return Number.isFinite(n) ? n : 0;
     };
-    // 内容结构：0=标题行（合并整行居中，用 !merges 跨列）→ 表头 → 逐日 → 小计/合计 → 总计。
-    // 不含"周期"行与"出货合计/收款合计/期末欠款"统计行（用户"多出一行周期/总计下边又多了几行"→去掉，
-    // 对齐 App 模板渲染结果）；日期点分带年（用户定稿 2026.10.16），金额纯数字。
-    const aoa: Array<Array<string | number>> = [
-      [`${clientName.value} ${from.value.slice(5, 7)}月份账单`],
-    ];
-    const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
-    if (tpl.value === 'multi') {
-      const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
-      const hdr: string[] = [];
-      for (let c = 0; c < multi.value.cols; c++) hdr.push('日期', '营业额');
-      aoa.push(hdr);
-      for (const row of multi.value.rows) {
-        // 日期点分年格式（用户定稿 2026.10.16）："10月16日" → "2026.10.16"
-        aoa.push(row.map((cell) => (cell.isAmt ? toNum(cell.amt) : (cell.day ? `${y}.${m}.${cell.day}` : ''))));
-      }
-      const sub: Array<string | number> = ['小计'];
-      multi.value.subtotals.forEach((s, i) => {
-        if (i > 0) sub.push('');
-        sub.push(toNum(s));
-      });
-      aoa.push(sub);
-      aoa.push(['总计', '', '', '', '', '', '', toNum(multi.value.grand)]);
-    } else {
-      const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
-      aoa.push(['日期', '营业额']);
-      for (const d of dailyRows.value) aoa.push([`${y}.${m}.${d.day}`, d.amt]);
-      aoa.push(['合计', saleTotal.value]);
-    }
+    // 内容=当前模板成品（对齐 App 导出：renderTemplateRows evalSum=false 保留 =sum 公式原文 →
+    // 公式格写 cell.f；预览/打印用 evalSum=true 显示求值结果）；日期点分带年、金额纯数字由模板渲染完成
+    const trows = renderTemplateRows(curTpl.value, tplData.value, false);
+    const aoa: Array<Array<string | number>> = trows.map((row) => row.map((c) => c.t));
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    // 标题行合并整行居中（用户"导出的 excel 标题要合并居中"）：1 行跨 colN 列
-    const colN = tpl.value === 'multi' ? multi.value.cols * 2 : 2;
-    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: colN - 1 } }];
     // 全表样式统一（用户"excel 和打印页不是一套/字体字号格式不一致/金额不居中/表头不居中"：对齐 App：
     // 宋体 + 细边框（打印页 td 1px #666）+ 标题合并居中加粗 + 表头加粗 + 金额/日期一律居中）
     const border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
@@ -531,28 +444,39 @@ async function exportXlsx() {
         }
       }
     }
-    // 合计/小计/总计用 Excel 公式（对齐 App 模板 =sum(...)：不是死数字，改动自动重算）
+    // 总列数（展开 colSpan；列宽压缩判断用）
+    const colN = trows.reduce((m, r) => {
+      let w = 0;
+      for (const c of r) w += c.cs < 1 ? 1 : c.cs;
+      return w > m ? w : m;
+    }, 0);
+    // 合并 colSpan/rowSpan 区（标题跨列居中——Excel 与打印/预览一致）
+    const merges: Array<{ s: { r: number; c: number }; e: { r: number; c: number } }> = [];
+    for (let ri = 0; ri < trows.length; ri++) {
+      let col = 0;
+      for (const c of trows[ri]) {
+        if (c.cs > 1 || c.rs > 1) {
+          merges.push({
+            s: { r: ri, c: col },
+            e: { r: ri + (c.rs > 1 ? c.rs - 1 : 0), c: col + (c.cs > 1 ? c.cs - 1 : 0) },
+          });
+        }
+        col += c.cs < 1 ? 1 : c.cs;
+      }
+    }
+    if (merges.length > 0) ws['!merges'] = merges;
+    // 合计/小计/总计公式格（对齐 App 模板 =sum(...)：不是死数字，改动自动重算）——
     // 公式文本不带 = 前缀（SheetJS 原样写入 <f>，带 = 会变成 ==SUM 非法公式——openpyxl 验证）
-    const fSum = (ref: string) => `SUM(${ref})`;
-    if (tpl.value === 'multi') {
-      const subIdx = 2 + multi.value.rows.length; // 小计行 aoa 索引（0标题 1表头 2.. 逐日）
-      const subExcelRow = subIdx + 1;
-      for (let c = 0; c < multi.value.cols; c++) {
-        const col = c * 2 + 1;
-        const cell = ws[XLSX.utils.encode_cell({ r: subIdx, c: col })];
-        if (cell) cell.f = fSum(`${XLSX.utils.encode_col(col)}3:${XLSX.utils.encode_col(col)}${subIdx}`);
+    for (let ri = 0; ri < trows.length; ri++) {
+      let col = 0;
+      for (const c of trows[ri]) {
+        const t = c.t.trim();
+        if (t.startsWith('=')) {
+          const cell = ws[XLSX.utils.encode_cell({ r: ri, c: col })];
+          if (cell) cell.f = t.slice(1);
+        }
+        col += c.cs < 1 ? 1 : c.cs;
       }
-      const gcell = ws[XLSX.utils.encode_cell({ r: subIdx + 1, c: multi.value.cols * 2 - 1 })];
-      if (gcell) {
-        const refs: string[] = [];
-        for (let c = 0; c < multi.value.cols; c++) refs.push(`${XLSX.utils.encode_col(c * 2 + 1)}${subExcelRow}`);
-        gcell.f = fSum(refs.join(','));
-      }
-    } else {
-      const n = dailyRows.value.length;
-      const sumIdx = 2 + n; // 合计行 aoa 索引
-      const cell = ws[XLSX.utils.encode_cell({ r: sumIdx, c: 1 })];
-      if (cell) cell.f = fSum(`B3:B${sumIdx}`);
     }
     XLSX.utils.book_append_sheet(wb, ws, '对账单');
     // 列宽：多栏（≥6 列）压缩到一页打印（用户"31号那2栏和之前的不在一页，要一页打印"）——
@@ -600,46 +524,13 @@ async function printStmt() {
     return;
   }
   // 模板行集合 [文本, 对齐, 加粗, 底纹, rowspan, colspan]（与 App 模板渲染行集合同构；类型见 drawStmtImage 上方）
-  const y = Number(from.value.slice(0, 4)) || new Date().getFullYear();
-  const m = Number(from.value.slice(5, 7)) || new Date().getMonth() + 1;
-  const colN = tpl.value === 'multi' ? multi.value.cols * 2 : 2;
-  const title = `${clientName.value} ${m}月份账单`;
-  const trows: PrintCell[][] = [
-    [[title, 'center', true, '', 1, colN]],
-  ];
-  if (tpl.value === 'multi') {
-    const hdr: PrintCell[] = [];
-    for (let c = 0; c < multi.value.cols; c++) hdr.push(['日期', 'center', true, '', 1, 1], ['营业额', 'center', true, '', 1, 1]);
-    trows.push(hdr);
-    for (const row of multi.value.rows) {
-      const cells: PrintCell[] = [];
-      for (const cell of row) {
-        if (cell.isAmt) {
-          if (cell.amt !== '' && cell.amt !== null && cell.amt !== undefined) cells.push([cell.amt, 'right', false, '', 1, 1]);
-          else cells.push(['', 'right', false, '', 1, 1]);
-        } else {
-          if (cell.label !== '') cells.push([cell.label, 'center', false, '', 1, 1]);
-          else cells.push(['', 'center', false, '', 1, 1]);
-        }
-      }
-      trows.push(cells);
-    }
-    const sub: PrintCell[] = [['小计', 'center', true, '', 1, 1]];
-    multi.value.subtotals.forEach((s, i) => {
-      if (i > 0) sub.push(['', 'center', true, '', 1, 1]);
-      sub.push([s, 'right', true, '', 1, 1]);
-    });
-    trows.push(sub);
-    const last: PrintCell[] = [['总计', 'center', true, '', 1, 1]];
-    for (let i = 0; i < multi.value.cols * 2 - 2; i++) last.push(['', '', false, '', 1, 1]);
-    last.push([multi.value.grand, 'right', true, '', 1, 1]);
-    trows.push(last);
-  } else {
-    trows.push([['日期', 'center', true, '', 1, 1], ['营业额', 'center', true, '', 1, 1]]);
-    for (const d of dailyRows.value) {
-      trows.push([[d.label, 'center', false, '', 1, 1], [String(d.amt), 'right', false, '', 1, 1]]);
-    }
-    trows.push([['合计', 'center', true, '', 1, 1], [String(saleTotal.value), 'right', true, '', 1, 1]]);
+  const trows: PrintCell[][] = renderTemplateRows(curTpl.value, tplData.value, true).map((row) =>
+      row.map((c) => [c.t, c.a, c.b, c.g, c.rs, c.cs] as PrintCell));
+  let colN = 0;
+  for (const r of trows) {
+    let w = 0;
+    for (const c of r) w += (c[5] || 1);
+    colN = w > colN ? w : colN;
   }
   // #ifdef MP-WEIXIN
   try {
@@ -901,6 +792,9 @@ async function delShare(s: ShareItem) {
 .tbl { margin-top: 8rpx; border-top: 1rpx solid #d9d9d9; border-left: 1rpx solid #d9d9d9; }
 .tbl-row { display: flex; }
 .tbl-cell { flex: 1; min-width: 0; border-right: 1rpx solid #d9d9d9; border-bottom: 1rpx solid #d9d9d9; padding: 8rpx 6rpx; text-align: center; font-size: 24rpx; color: var(--text-main); }
+.tbl-cell.grey { background: #f0f2f5; }
+.tbl-cell.bold { font-weight: 700; }
+.tbl-gen .tbl-cell { min-width: 150rpx; }
 .tbl-cell.amt { text-align: right; }
 .tbl-head .tbl-cell { font-weight: 600; color: var(--text-sub); }
 .tbl-foot .tbl-cell { font-weight: 700; color: var(--text-main); }

@@ -43,9 +43,15 @@
       <view class="row-card">
         <view class="head-row">
           <text class="idx">{{ i + 1 }}</text>
-          <input class="goods-field" :class="{ ph: !row.itemName }" v-model="row.itemName" placeholder="选商品（可输入或选择）" @blur="onItemInput(i)" />
+          <input class="goods-field" :class="{ ph: !row.itemName }" v-model="row.itemName" placeholder="选商品（可输入或选择）" @blur="onItemInput(i)" @input="onItemTyping(i, $event)" />
           <text v-if="row.rowId" class="att-btn" @click.stop="showRowAttach(row)"><text class="mi">&#xe3f4;</text></text>
           <text class="del mi" @click="rows.splice(i, 1)">&#xe872;</text>
+        </view>
+        <view v-if="suggest && suggest.i === i && suggest.list.length" class="sug-list">
+          <view v-for="(s, si) in suggest.list" :key="s.id" class="sug-item" @touchstart="pickSuggest(i, s)">
+            <text class="sug-name">{{ s.name }}</text>
+            <text v-if="s.count_unit" class="sug-cat">{{ s.count_unit }}</text>
+          </view>
         </view>
         <input class="unit-field" :class="{ ph: !row.unit }" v-model="row.unit" placeholder="单位（可手动填写）" @blur="onUnitBlur(i)" />
         <view class="price-hint" :class="{ ph: !row.priceLabel }">{{ row.priceLabel || '输入商品名自动带出单位与价格' }}</view>
@@ -63,6 +69,9 @@
           </view>
         </view>
         <view class="amt-line">金额 <text class="amt">¥{{ rowAmount(row) }}</text></view>
+        <picker class="date-pick" mode="date" :value="row.expiryDate || ''" @change="(e: any) => (row.expiryDate = e.detail.value)">
+          <view class="row-date" :class="{ ph: !row.expiryDate }">{{ row.expiryDate ? `到期：${row.expiryDate}` : '设置到期日（选填，临期提醒）' }}</view>
+        </picker>
         <input class="row-note" v-model="row.note" placeholder="行备注（选填）" />
         <!-- 行上移/下移（批次内商品顺序调整；放行底部不挤商品名，保存按数组序重排 sort） -->
         <view class="mv-row">
@@ -149,11 +158,13 @@ interface Row {
   countUnit: string; // 商品计数单位（袋/个…，有才显示折合计数输入框）
   happenedAt: string; // 行独立日期（缺省用单据日期；对齐 App 行级日期）
   note: string; // 行级备注（缺省空；对齐 App 行备注）
+  expiryDate: string; // 行级到期日（YYYY-MM-DD；空=不参与临期提醒，随进货写入批次）
   rowId: string; // 原明细行 id（dateRows 批量编辑保留，保存时不换 id=附件不孤儿）
   orderId: string; // 原进货单 id（dateRows 按原单分组 PATCH）
 }
 
 const items = ref<Item[]>([]);
+const suggest = ref<{ i: number; list: Item[] } | null>(null); // 商品输入联想：当前行 + 候选
 const itemNames = ref<string[]>([]);
 const date = ref('');
 const note = ref(''); // 整单备注（对齐 App：单据级备注，提交时挂各行）
@@ -258,6 +269,7 @@ async function loadEdit() {
         quantity: String(it.quantity), purchasePrice: String(it.purchase_price), countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
+        expiryDate: String(it.expiry_date || ''),
         rowId: String(it.id || ''), orderId: editId.value || '',
       });
     }
@@ -302,6 +314,7 @@ async function copyLast() {
         quantity: String(it.quantity), purchasePrice: String(it.purchase_price), countQty: it.count_qty ? String(it.count_qty) : '',
         countUnit: String(item.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
+        expiryDate: String(it.expiry_date || ''),
         rowId: genRowId(), orderId: '',
       });
     }
@@ -317,7 +330,7 @@ async function copyLast() {
 }
 
 function addRow() {
-  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '' });
+  rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', expiryDate: '', rowId: genRowId(), orderId: '' });
 }
 
 /// 行上移/下移（对齐 App：批次内商品顺序直接挪位置，保存按数组序重排 sort）
@@ -334,7 +347,7 @@ function insertRow(i: number) {
   uni.showActionSheet({
     itemList: ['补录（并入上方原单）', '新商品（独立新单）'],
     success: (res) => {
-      const row: Row = { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: `pi${Date.now()}${Math.floor(Math.random() * 0x7fffffff)}`, orderId: '' };
+      const row: Row = { itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', expiryDate: '', rowId: `pi${Date.now()}${Math.floor(Math.random() * 0x7fffffff)}`, orderId: '' };
       // 补录：归入上方行原单（插入位置=提交位置，整单凭证挂原单时插入行同单可见）
       if (res.tapIndex === 0 && i > 0 && rows.value[i - 1].orderId) row.orderId = rows.value[i - 1].orderId;
       rows.value.splice(i, 0, row);
@@ -511,6 +524,7 @@ async function loadDateRows() {
         quantity: String(l.quantity ?? ''), purchasePrice: String(l.purchase_price ?? price.purchase_price),
         countQty: l.count_qty ? String(l.count_qty) : '', countUnit: String(item.count_unit || ''),
         happenedAt: String(l.happened_at || '').slice(0, 10), note: String(l.note || ''),
+        expiryDate: String(l.expiry_date || ''),
         rowId, orderId,
       });
     }
@@ -651,14 +665,19 @@ function fillFromDrafts(list: Array<Record<string, any>>, draftDate = ''): strin
     const qty = Number(raw.quantity) || 0;
     const price = Number(raw.price) || 0;
     const unit = String(raw.unit ?? '').trim();
-    const match = items.value.find((it) => it.name === name || it.name.includes(name) || name.includes(it.name));
+    // 识别匹配商品：精确优先；无精确时仅当"识别名≥2字且包含候选恰好1个"才关联（防"肝"误联"牛肝菌"）
+    let match = items.value.find((it) => it.name === name);
+    if (!match && name.length >= 2) {
+      const contains = items.value.filter((it) => it.name.includes(name) || name.includes(it.name));
+      if (contains.length === 1) match = contains[0]; // 多候选=歧义，不猜
+    }
     // 对齐 App 追加语义：仅初始单行空行时复用首行；否则一律顺延追加到末尾——
     // 找"第一个空行"会填进中间遗留空行（用户插入的空行），新批次顺序打乱
     let row = (rows.value.length === 1 && !rows.value[0].itemId && !rows.value[0].itemName)
         ? rows.value[0]
         : null;
     if (!row) {
-      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', rowId: genRowId(), orderId: '' });
+      rows.value.push({ itemId: '', itemName: '', prices: [], priceId: '', priceLabel: '', unit: '', quantity: '', purchasePrice: '', countQty: '', countUnit: '', happenedAt: '', note: '', expiryDate: '', rowId: genRowId(), orderId: '' });
       row = rows.value[rows.value.length - 1];
     }
     if (row.rowId) rowIds.push(row.rowId);
@@ -694,9 +713,38 @@ function onDate(e: { detail: { value: string } }) {
   date.value = e.detail.value;
 }
 
+/// 商品名输入联想：输入关键字实时过滤商品（包含匹配，最多 6 条）；点击候选立即选中
+function onItemTyping(i: number, e: any) {
+  const kw = (e.detail?.value || '').trim();
+  if (!kw) {
+    suggest.value = null;
+    return;
+  }
+  suggest.value = { i, list: items.value.filter((x) => x.name.includes(kw)).slice(0, 6) };
+}
+
+/// 点击联想候选：关联商品并带出默认单位/进价（对齐 App 联想选择）
+function pickSuggest(i: number, item: Item) {
+  const row = rows.value[i];
+  if (!row) return;
+  row.itemId = item.id;
+  row.itemName = item.name;
+  row.prices = item.prices;
+  row.countUnit = String(item.count_unit || '');
+  const pr = item.prices.find((p) => p.unit === (row.unit || '')) || item.prices[0];
+  if (pr) {
+    row.priceId = pr.id;
+    row.unit = pr.unit;
+    row.priceLabel = `${pr.unit}（进 ¥${pr.purchase_price}·库存${pr.stock ?? 0}）`;
+    if (!row.purchasePrice) row.purchasePrice = String(pr.purchase_price);
+  }
+  suggest.value = null;
+}
+
 /// 商品名输入失焦：精确匹配到已有商品 → 关联并带出默认单位/进价（不覆盖已手填进价）；
 /// 未匹配=自定义新商品名（itemId 留空，提交时可入库，对齐 App 名称输入关联）
 function onItemInput(i: number) {
+  suggest.value = null; // 失焦收起联想
   const row = rows.value[i];
   const name = (row.itemName || '').trim();
   const match = items.value.find((x) => x.name === name);
@@ -859,6 +907,7 @@ async function submit() {
             purchase_price: Number(r.purchasePrice) || 0,
             happened_at: r.happenedAt || date.value,
             note: r.note || '',
+            expiry_date: r.expiryDate || '',
             sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0, // 全局录入序
           })),
         });
@@ -869,7 +918,7 @@ async function submit() {
         const d = await request<{ id: string }>('/purchases', 'POST', {
           happened_at: date.value,
           note: note.value.trim(),
-          items: newRows.map((r) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: countQtyOf(r), purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0 })),
+          items: newRows.map((r) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: countQtyOf(r), purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', expiry_date: r.expiryDate || '', sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0 })),
         });
         newOrderId = d.id;
         for (const r of newRows) r.orderId = newOrderId; // 回填：行级凭证回退单据级查询命中
@@ -889,7 +938,7 @@ async function submit() {
     const body = {
       happened_at: date.value,
       note: note.value.trim(),
-      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: countQtyOf(r), purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || note.value.trim() })),
+      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: countQtyOf(r), purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || note.value.trim(), expiry_date: r.expiryDate || '' })),
     };
     let savedId = editId.value;
     if (editId.value) {
@@ -958,6 +1007,11 @@ async function submit() {
 .head-row { display: flex; align-items: center; gap: 12rpx; }
 .idx { width: 44rpx; height: 44rpx; border-radius: 12rpx; background: var(--primary-soft); color: var(--primary); font-size: 24rpx; font-weight: bold; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .goods-field { flex: 1; min-width: 0; background: var(--input-bg); border-radius: 10rpx; padding: 16rpx 18rpx; font-size: 28rpx; }
+.sug-list { margin: 0 0 12rpx 8rpx; border: 2rpx solid var(--divider); border-radius: 12rpx; overflow: hidden; background: var(--card-bg); }
+.sug-item { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; padding: 18rpx 20rpx; border-bottom: 1rpx solid var(--divider); }
+.sug-item:last-child { border-bottom: none; }
+.sug-name { font-size: 26rpx; color: var(--text-main); }
+.sug-cat { font-size: 22rpx; color: var(--text-sub); }
 .goods-field.ph { color: var(--text-sub); }
 .att-btn { color: #409EFF; padding: 6rpx; font-size: 34rpx; }
 .unit-field { margin-top: 12rpx; width: 100%; box-sizing: border-box; background: var(--input-bg); border-radius: 10rpx; padding: 14rpx 18rpx; font-size: 26rpx; }
