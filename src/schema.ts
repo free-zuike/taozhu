@@ -297,7 +297,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '11') {
+      if (meta?.value === '12') {
         schemaReady = true;
         return;
       }
@@ -603,7 +603,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '11')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '12')",
     ).run();
     schemaReady = true;
     } catch (err) {
