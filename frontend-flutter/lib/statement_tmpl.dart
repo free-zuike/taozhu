@@ -815,7 +815,6 @@ List<XlsCfg> _cleanTemplates(List<XlsCfg> list) {
   if (!names.contains('多栏')) kept.add(_multiColTemplate());
   return kept.where(_hasContent).toList();
 }
-────────
 
 Future<List<XlsCfg>> loadTemplates({String? preferred}) async {
   final p = await SharedPreferences.getInstance();
