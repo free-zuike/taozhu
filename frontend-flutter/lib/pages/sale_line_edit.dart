@@ -270,7 +270,7 @@ Future<Map<String, dynamic>?> editSaleLine(
         for (final it in items0) {
           final itM = Map<String, dynamic>.from(it);
           if ('${it['id']}' == itemId && choseItem != null) {
-            final ci = choseItem; // 闭包捕获变量无 promotion，取局部快照
+            final ci = choseItem!; // 闭包捕获变量无 promotion，显式非空断言
             itM['item_id'] = ci['id'];
             itM['item_name'] = '${ci['name'] ?? ''}';
           }
@@ -319,7 +319,7 @@ Future<Map<String, dynamic>?> editSaleLine(
       final itMap = Map<String, dynamic>.from(it);
       if ('${it['id']}' == itemId) {
         if (choseItem != null) {
-          final ci = choseItem; // 闭包捕获变量无 promotion，取局部快照
+          final ci = choseItem!; // 闭包捕获变量无 promotion，显式非空断言
           itMap['item_id'] = ci['id'];
           itMap['item_name'] = '${ci['name'] ?? ''}';
         }
