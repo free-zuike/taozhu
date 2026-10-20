@@ -338,6 +338,14 @@ class _PurchasePageState extends State<PurchasePage> {
     }
     if (!mounted || d == null) return;
     final data = d;
+    // 已删商品行名称回退：本地镜像 id→item_name（服务端 JOIN 已删商品无名称，行快照在本地 payload 落库）
+    final localName = <String, String>{};
+    try {
+      for (final r in await LocalDb.getAll('purchase_items')) {
+        final rid = '${r['id'] ?? ''}';
+        if (rid.isNotEmpty && '${r['item_name'] ?? ''}'.isNotEmpty) localName[rid] = '${r['item_name']}';
+      }
+    } catch (_) {}
     setState(() {
       final hd = '${data['happened_at'] ?? ''}';
       _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
@@ -386,7 +394,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..note = '${it['note'] ?? ''}'
           ..noteCtrl.text = '${it['note'] ?? ''}'
           ..expiryDate = '${it['expiry_date'] ?? ''}'
-          ..nameCtrl.text = '${it['item_name'] ?? match?['name'] ?? ''}'
+          ..nameCtrl.text = '${it['item_name'] ?? localName['${it['id'] ?? ''}'] ?? match?['name'] ?? ''}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..priceCtrl.text = pp.toStringAsFixed(2));
@@ -420,6 +428,14 @@ class _PurchasePageState extends State<PurchasePage> {
             .compareTo(_rowIdNumeric('${b['row_id'] ?? b['id'] ?? ''}'));
       });
     if (lines.isEmpty) return;
+    // 已删商品行名称回退：本地镜像 id→item_name（服务端 JOIN 已删商品无名称，行快照在本地 payload 落库）
+    final localName = <String, String>{};
+    try {
+      for (final r in await LocalDb.getAll('purchase_items')) {
+        final rid = '${r['id'] ?? ''}';
+        if (rid.isNotEmpty && '${r['item_name'] ?? ''}'.isNotEmpty) localName[rid] = '${r['item_name']}';
+      }
+    } catch (_) {}
     setState(() {
       final hd = widget.initDate ?? _today();
       _dateCtrl.text = hd.length >= 10 ? hd.substring(0, 10) : _today();
@@ -469,7 +485,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..note = '${it['note'] ?? ''}'
           ..noteCtrl.text = '${it['note'] ?? ''}'
           ..expiryDate = '${it['expiry_date'] ?? ''}'
-          ..nameCtrl.text = '${it['item_name'] ?? match?['name'] ?? ''}'
+          ..nameCtrl.text = '${it['item_name'] ?? localName[rowId] ?? match?['name'] ?? ''}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..priceCtrl.text = pp.toStringAsFixed(2));
@@ -1672,12 +1688,15 @@ class _PurchasePageState extends State<PurchasePage> {
                   decoration: _fieldDec(label: '商品名称（可输入或选择）'),
                   onChanged: (v) => _onNameChanged(row, v),
                   onTapOutside: (_) {
-                    if (_suggestFor == row) {
-                      setState(() {
-                        _suggestFor = null;
-                        _suggests = const [];
-                      });
-                    }
+                    // 延迟清空：候选 onTap（抬起）在此回调之后触发，立即清空会让点击不填入
+                    Future.delayed(const Duration(milliseconds: 150), () {
+                      if (mounted && _suggestFor == row) {
+                        setState(() {
+                          _suggestFor = null;
+                          _suggests = const [];
+                        });
+                      }
+                    });
                   },
                 ),
               ),
@@ -1722,7 +1741,8 @@ class _PurchasePageState extends State<PurchasePage> {
                       InkWell(
                         borderRadius: BorderRadius.circular(10),
                         onTap: () {
-                          _selectItem(row, _suggests[si]);
+                          final opt = _suggests[si]; // 先取局部引用：onTapOutside 延迟清空前仍有效
+                          _selectItem(row, opt);
                           setState(() {
                             _suggestFor = null;
                             _suggests = const [];

@@ -32,6 +32,20 @@ Future<Map<String, dynamic>?> editPurchaseLine(
       text: happenedAt.length >= 10 ? happenedAt.substring(0, 10) : '');
   var category = '${line['category'] ?? ''}';
   final noteCtrl = TextEditingController(text: '${line['note'] ?? ''}');
+  // 「更换商品」支持：商品已删/停用时把该行重新关联到库中商品（保存时换行 item_id）
+  final goodsId = '${line['item_id'] ?? ''}';
+  final allItems = kIsWeb
+      ? await (() async {
+          try {
+            final d = await Api.instance.get('/items?limit=1000');
+            return ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+          } catch (_) {
+            return <Map<String, dynamic>>[];
+          }
+        })()
+      : await LocalDb.getAll('items');
+  final goodsDeleted = goodsId.isNotEmpty && !allItems.any((x) => '${x['id']}' == goodsId);
+  Map<String, dynamic>? choseItem;
 
   final ok = await showDialog<bool>(
     context: context,
@@ -69,28 +83,87 @@ Future<Map<String, dynamic>?> editPurchaseLine(
                 hint: 'YYYY-MM-DD',
               ),
               const SizedBox(height: 4),
-              // 商品分类（商品级，全局生效）：点击「修改分类」选择后即时保存
+              // 商品分类（商品级，全局生效）：点击「修改分类」选择后即时保存；
+              // 商品已删除时无法改分类 → 改为「更换商品」重新关联库中商品
               Row(
                 children: [
                   Icon(Icons.label_outline, size: 16, color: Theme.of(ctx).extension<TaozhuColors>()!.textSub),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      category.isEmpty ? '未分类' : category,
+                      choseItem != null
+                          ? '将更换为：${choseItem?['name'] ?? ''}'
+                          : (category.isEmpty ? '未分类' : category),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 13, color: Theme.of(ctx).extension<TaozhuColors>()!.textMain),
+                      style: TextStyle(fontSize: 13,
+                          color: choseItem != null ? Colors.orange : Theme.of(ctx).extension<TaozhuColors>()!.textMain),
                     ),
                   ),
                   TextButton(
-                    onPressed: () async {
-                      final goodsId = '${line['item_id'] ?? ''}';
-                      if (goodsId.isEmpty) return;
-                      final cat = await changeCategory(context, goodsId,
-                          itemName: '${line['item_name'] ?? ''}');
-                      if (cat != null && ctx.mounted) setDlg(() => category = cat);
-                    },
-                    child: const Text('修改分类'),
+                    onPressed: goodsDeleted
+                        ? () async {
+                            // 更换商品：弹目录搜索选择（该商品已删，重新关联库中商品）
+                            final kwCtrl = TextEditingController();
+                            var kw = '';
+                            final picked = await showDialog<Map<String, dynamic>>(
+                              context: context,
+                              builder: (dctx) => StatefulBuilder(
+                                builder: (dctx, dset) => AlertDialog(
+                                  title: const Text('更换商品（当前商品已从商品库删除）'),
+                                  content: SizedBox(
+                                    width: 340,
+                                    height: 360,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        TextField(
+                                          controller: kwCtrl,
+                                          decoration: const InputDecoration(labelText: '搜索商品名称', isDense: true),
+                                          onChanged: (v) => dset(() => kw = v),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Expanded(
+                                          child: ListView.builder(
+                                            itemCount: allItems.length,
+                                            itemBuilder: (_, idx) {
+                                              final it = allItems[idx];
+                                              if (kw.isNotEmpty && !'${it['name'] ?? ''}'.contains(kw)) {
+                                                return const SizedBox.shrink();
+                                              }
+                                              return ListTile(
+                                                dense: true,
+                                                title: Text('${it['name'] ?? ''}',
+                                                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                                                subtitle: '${it['category'] ?? ''}'.isNotEmpty
+                                                    ? Text('${it['category']}', maxLines: 1)
+                                                    : null,
+                                                onTap: () => Navigator.pop(dctx, it),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  actions: [
+                                    TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('取消')),
+                                  ],
+                                ),
+                              ),
+                            );
+                            if (picked != null && ctx.mounted) {
+                              setDlg(() => choseItem = picked);
+                            }
+                          }
+                        : () async {
+                            final goodsId = '${line['item_id'] ?? ''}';
+                            if (goodsId.isEmpty) return;
+                            final cat = await changeCategory(context, goodsId,
+                                itemName: '${line['item_name'] ?? ''}');
+                            if (cat != null && ctx.mounted) setDlg(() => category = cat);
+                          },
+                    child: Text(goodsDeleted ? '更换商品' : '修改分类'),
                   ),
                 ],
               ),
@@ -164,14 +237,48 @@ Future<Map<String, dynamic>?> editPurchaseLine(
 
   try {
     if (kIsWeb) {
-      await Api.instance.patch('/purchases/items/$itemId', {
-        'quantity': qty,
-        'unit': unit,
-        'count_qty': countQty,
-        'purchase_price': price,
-        'happened_at': date,
-        'note': note,
-      });
+      if (choseItem != null) {
+        // 更换商品：行级端点不支持换 item_id → 整单替换（items 带原行 id + 新 item_id）
+        final items0 = ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+        final updated = <Map<String, dynamic>>[];
+        for (final it in items0) {
+          final itM = Map<String, dynamic>.from(it);
+          if ('${it['id']}' == itemId) {
+            itM['item_id'] = choseItem['id'];
+            itM['item_name'] = '${choseItem['name'] ?? ''}';
+          }
+          final iid = '${itM['item_id'] ?? ''}';
+          final iunit = '${itM['unit'] ?? ''}';
+          final item = allItems.where((x) => '${x['id']}' == iid).firstOrNull;
+          final pr = item != null
+              ? ((item['prices'] as List?) ?? []).cast<Map<String, dynamic>>()
+                  .where((p) => '${p['unit']}' == iunit).firstOrNull
+              : null;
+          updated.add({
+            'id': itM['id'],
+            'price_id': pr?['id'] ?? '',
+            'item_id': iid,
+            'unit': iunit,
+            'quantity': itM['quantity'],
+            'count_qty': itM['count_qty'],
+            'purchase_price': itM['purchase_price'],
+            'happened_at': itM['happened_at'],
+            'note': itM['note'],
+            'expiry_date': itM['expiry_date'] ?? '',
+            'sort': (itM['sort'] as num?)?.toInt() ?? 0,
+          });
+        }
+        await Api.instance.patch('/purchases/${order['id']}', {'items': updated});
+      } else {
+        await Api.instance.patch('/purchases/items/$itemId', {
+          'quantity': qty,
+          'unit': unit,
+          'count_qty': countQty,
+          'purchase_price': price,
+          'happened_at': date,
+          'note': note,
+        });
+      }
       // 行级编辑后服务端已联动总额/单据日期：重新拉取该单最新快照
       final d = await Api.instance.get('/purchases/${order['id']}');
       toast(context, '已保存');
@@ -183,6 +290,10 @@ Future<Map<String, dynamic>?> editPurchaseLine(
     for (final it in items) {
       final itMap = Map<String, dynamic>.from(it);
       if ('${it['id']}' == itemId) {
+        if (choseItem != null) {
+          itMap['item_id'] = choseItem['id'];
+          itMap['item_name'] = '${choseItem['name'] ?? ''}';
+        }
         itMap['quantity'] = qty;
         itMap['unit'] = unit;
         itMap['count_qty'] = countQty;

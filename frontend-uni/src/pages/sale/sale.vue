@@ -63,7 +63,7 @@
           <text class="del mi" @click="rows.splice(i, 1)">&#xe872;</text>
         </view>
         <view v-if="suggest && suggest.i === i && suggest.list.length" class="sug-list">
-          <view v-for="(s, si) in suggest.list" :key="s.id" class="sug-item" @touchstart="pickSuggest(i, s)">
+          <view v-for="(s, si) in suggest.list" :key="s.id" class="sug-item" @touchstart.stop.prevent="pickSuggest(i, s)">
             <text class="sug-name">{{ s.name }}</text>
             <text v-if="s.count_unit" class="sug-cat">{{ s.count_unit }}</text>
           </view>
@@ -802,6 +802,7 @@ function onItemTyping(i: number, e: any) {
 function pickSuggest(i: number, item: Item) {
   const row = rows.value[i];
   if (!row) return;
+  lastPickAt = Date.now();
   row.itemId = item.id;
   row.itemName = item.name;
   row.prices = item.prices;
@@ -816,9 +817,12 @@ function pickSuggest(i: number, item: Item) {
   applyCostByOrder(row);
 }
 
+let lastPickAt = 0; // 联想候选选中时间戳：紧随其后的失焦不重匹配（微信键盘收起 blur 可能先于点击触发）
+
 /// 商品名输入失焦：精确匹配到已有商品 → 关联并带出默认单位/价格（不覆盖已手填价格）；
 /// 未匹配=自定义新商品名（itemId 留空，提交时可入库，对齐 App 名称输入关联）
 async function onItemInput(i: number) {
+  if (Date.now() - lastPickAt < 500) return; // 候选刚点选（touchstart 已填值），跳过失焦重匹配
   suggest.value = null; // 失焦收起联想
   const row = rows.value[i];
   const name = (row.itemName || '').trim();

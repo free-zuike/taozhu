@@ -399,6 +399,14 @@ class _SalePageState extends State<SalePage> {
     }
     if (!mounted || d == null) return;
     final data = d;
+    // 已删商品行名称回退：本地镜像 id→item_name（服务端 JOIN 已删商品无名称，行快照在本地 payload 落库）
+    final localName = <String, String>{};
+    try {
+      for (final r in await LocalDb.getAll('sale_items')) {
+        final rid = '${r['id'] ?? ''}';
+        if (rid.isNotEmpty && '${r['item_name'] ?? ''}'.isNotEmpty) localName[rid] = '${r['item_name']}';
+      }
+    } catch (_) {}
     setState(() {
       _clientId = data['client_id'] as String?;
       _noteCtrl.text = '${data['note'] ?? ''}';
@@ -446,7 +454,7 @@ class _SalePageState extends State<SalePage> {
           ..origSaleId = _saleId
           ..note = '${it['note'] ?? ''}'
           ..noteCtrl.text = '${it['note'] ?? ''}'
-          ..nameCtrl.text = '${it['item_name'] ?? opt?.name ?? ''}'
+          ..nameCtrl.text = '${it['item_name'] ?? localName['${it['id'] ?? ''}'] ?? opt?.name ?? ''}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..saleCtrl.text = sp.toString()
@@ -481,6 +489,14 @@ class _SalePageState extends State<SalePage> {
       });
     if (lines.isEmpty) return;
     final firstOrder = (lines.first['order'] as Map?) ?? const <String, dynamic>{};
+    // 已删商品行名称回退：本地镜像 id→item_name（服务端 JOIN 已删商品无名称，行快照在本地 payload 落库）
+    final localName = <String, String>{};
+    try {
+      for (final r in await LocalDb.getAll('sale_items')) {
+        final rid = '${r['id'] ?? ''}';
+        if (rid.isNotEmpty && '${r['item_name'] ?? ''}'.isNotEmpty) localName[rid] = '${r['item_name']}';
+      }
+    } catch (_) {}
     setState(() {
       _clientId = widget.clientId ?? '${firstOrder['client_id'] ?? _clientId}';
       _noteCtrl.text = '';
@@ -526,7 +542,7 @@ class _SalePageState extends State<SalePage> {
           ..origSaleId = origSaleId
           ..note = '${it['note'] ?? ''}'
           ..noteCtrl.text = '${it['note'] ?? ''}'
-          ..nameCtrl.text = '${it['item_name'] ?? opt?.name ?? ''}'
+          ..nameCtrl.text = '${it['item_name'] ?? localName[rowId] ?? opt?.name ?? ''}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..saleCtrl.text = sp.toString()
@@ -2217,12 +2233,15 @@ double _fifoCost(
                   decoration: _fieldDec(label: '商品名称（可输入或选择）'),
                   onChanged: (v) => _onNameChanged(row, v),
                   onTapOutside: (_) {
-                    if (_suggestFor == row) {
-                      setState(() {
-                        _suggestFor = null;
-                        _suggests = const [];
-                      });
-                    }
+                    // 延迟清空：候选 onTap（抬起）在此回调之后触发，立即清空会让点击不填入
+                    Future.delayed(const Duration(milliseconds: 150), () {
+                      if (mounted && _suggestFor == row) {
+                        setState(() {
+                          _suggestFor = null;
+                          _suggests = const [];
+                        });
+                      }
+                    });
                   },
                 ),
               ),
@@ -2267,7 +2286,8 @@ double _fifoCost(
                       InkWell(
                         borderRadius: BorderRadius.circular(10),
                         onTap: () {
-                          _selectItem(row, _suggests[si]);
+                          final opt = _suggests[si]; // 先取局部引用：onTapOutside 延迟清空前仍有效
+                          _selectItem(row, opt);
                           setState(() {
                             _suggestFor = null;
                             _suggests = const [];
