@@ -377,7 +377,7 @@ class _PurchasePageState extends State<PurchasePage> {
             lineDate.length >= 10 && lineDate.substring(0, 10) != hd.substring(0, 10);
         _rows.add(_PRow()
           ..itemId = itemId
-          ..priceId = price['id'] as String?
+          ..priceId = price?['id'] as String?
           ..quantity = qty
           ..purchasePrice = pp
           ..happenedAt = keepLineDate ? lineDate : ''
@@ -1336,7 +1336,7 @@ class _PurchasePageState extends State<PurchasePage> {
           final pp = (it['purchase_price'] as num?)?.toDouble() ?? 0;
           final row = _newPRow()
             ..itemId = itemId
-            ..priceId = price['id'] as String?
+            ..priceId = price?['id'] as String?
             ..quantity = qty
             ..purchasePrice = pp
             ..happenedAt = '${it['happened_at'] ?? ''}'

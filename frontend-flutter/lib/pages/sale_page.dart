@@ -438,7 +438,7 @@ class _SalePageState extends State<SalePage> {
             lineDate.length >= 10 && lineDate.substring(0, 10) != hd.substring(0, 10);
         _rows.add(_Row()
           ..itemId = itemId
-          ..priceId = price['id'] as String?
+          ..priceId = price?['id'] as String?
           ..quantity = qty
           ..salePrice = sp
           ..happenedAt = keepLineDate ? lineDate : ''
@@ -1884,7 +1884,7 @@ double _fifoCost(
           final sp = (it['sale_price'] as num?)?.toDouble() ?? 0;
           final row = _newRow()
             ..itemId = itemId
-            ..priceId = price['id'] as String?
+            ..priceId = price?['id'] as String?
             ..quantity = qty
             ..salePrice = sp
             ..happenedAt = '${it['happened_at'] ?? ''}'
