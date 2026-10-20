@@ -365,7 +365,8 @@ class _PurchasePageState extends State<PurchasePage> {
         final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
         final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
         final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
-        if (match == null || price == null) {
+        // 商品已删/价格停用不跳过：行照常加载（名称用快照、priceId 空），保存走服务端快照直写
+        if (itemId.isEmpty) {
           skipped++;
           continue;
         }
@@ -385,7 +386,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..note = '${it['note'] ?? ''}'
           ..noteCtrl.text = '${it['note'] ?? ''}'
           ..expiryDate = '${it['expiry_date'] ?? ''}'
-          ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
+          ..nameCtrl.text = '${it['item_name'] ?? match?['name'] ?? ''}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..priceCtrl.text = pp.toStringAsFixed(2));
@@ -450,9 +451,8 @@ class _PurchasePageState extends State<PurchasePage> {
         final match = _items.where((x) => '${x['id']}' == itemId).firstOrNull;
         final prices = ((match?['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
         final price = prices.where((p) => '${p['unit']}' == unit).firstOrNull;
-        // 仅商品已删/停用才跳过；单位与商品库价格组合不匹配（如识别单位差异）不跳过——
-        // 保留行（priceId 空、价格沿用原单识别值），老板保存时按实际单位校验
-        if (itemId.isEmpty || match == null) {
+        // 商品已删/价格停用不跳过：行照常加载（名称用快照、priceId 空），保存走服务端快照直写
+        if (itemId.isEmpty) {
           skipped++;
           continue;
         }
@@ -469,7 +469,7 @@ class _PurchasePageState extends State<PurchasePage> {
           ..note = '${it['note'] ?? ''}'
           ..noteCtrl.text = '${it['note'] ?? ''}'
           ..expiryDate = '${it['expiry_date'] ?? ''}'
-          ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
+          ..nameCtrl.text = '${it['item_name'] ?? match?['name'] ?? ''}'
           ..unitCtrl.text = unit
           ..qtyCtrl.text = qty.toString()
           ..priceCtrl.text = pp.toStringAsFixed(2));
@@ -963,6 +963,25 @@ class _PurchasePageState extends State<PurchasePage> {
   }
 
   Future<void> _submit() async {
+    // 提交前兜底匹配：行名与库中商品全等（trim）→ 自动关联（防"已存在商品显示新增"→重复入库）；
+    // 命中只关联不覆盖行内数量/价格；真不在库的才进下方新增弹窗
+    for (final r in _rows) {
+      if (r.itemId != null) continue;
+      final nm = r.nameCtrl.text.trim();
+      if (nm.isEmpty) continue;
+      final hit = _items.where((x) => '${x['name']}' == nm).firstOrNull;
+      if (hit == null) continue;
+      final pr = ((hit['prices'] as List?) ?? []).cast<Map<String, dynamic>>()
+          .where((p) => '${p['unit']}' == r.unitCtrl.text.trim())
+          .firstOrNull
+          ?? ((hit['prices'] as List?) ?? []).cast<Map<String, dynamic>>().firstOrNull;
+      setState(() {
+        r.itemId = '${hit['id']}';
+        r.priceId = pr?['id'] as String?;
+        r.nameCtrl.text = '${hit['name'] ?? ''}';
+        if (r.unitCtrl.text.trim().isEmpty && pr != null) r.unitCtrl.text = '${pr['unit'] ?? ''}';
+      });
+    }
     // 名称手动输入但未入库的新商品：弹窗让用户决定是否加入商品库（不再静默自动入库）
     final newNames = _rows
         .where((r) => r.nameCtrl.text.trim().isNotEmpty && r.itemId == null)
@@ -1032,15 +1051,31 @@ class _PurchasePageState extends State<PurchasePage> {
       final catName = category.isEmpty
           ? ''
           : '${cats.where((x) => '${x['id']}' == category).firstOrNull?['name'] ?? ''}';
+      final created = <String, String>{};
       for (final r in _rows) {
         final name = r.nameCtrl.text.trim();
         if (name.isEmpty || r.itemId != null) continue;
-        final id = await _createItem(name,
-            unit: r.unitCtrl.text.trim(), price: r.purchasePrice,
-            category: catName, categoryId: category);
-        if (id == null) return;
+        var id = created[name];
+        if (id == null) {
+          final nid = await _createItem(name,
+              unit: r.unitCtrl.text.trim(), price: r.purchasePrice,
+              category: catName, categoryId: category);
+          if (nid == null) return;
+          id = nid;
+          created[name] = nid;
+        }
         final opt = _items.where((x) => '${x['id']}' == id).firstOrNull;
-        if (opt != null) _selectItem(r, opt);
+        if (opt != null) {
+          setState(() {
+            r.itemId = opt['id'] as String?;
+            final pr = ((opt['prices'] as List?) ?? []).cast<Map<String, dynamic>>()
+                .where((x) => '${x['unit']}' == r.unitCtrl.text.trim())
+                .firstOrNull
+                ?? ((opt['prices'] as List?) ?? []).cast<Map<String, dynamic>>().firstOrNull;
+            r.priceId = pr?['id'] as String?;
+            r.nameCtrl.text = '${opt['name'] ?? ''}';
+          });
+        }
       }
     }
     // 校验：有名称、有数量、有单位（默认件）即可提交；进价可直接手填
@@ -1114,6 +1149,8 @@ class _PurchasePageState extends State<PurchasePage> {
           {
             'id': r.rowId, // 保留原行 id（服务端重建明细时不换新 id，行级附件不孤儿化）
             'price_id': r.priceId,
+            'item_id': r.itemId, // 快照行（商品已删/停用）price_id 空时服务端按行内值直写
+            'unit': r.unitCtrl.text.trim(),
             'quantity': r.quantity,
             'count_qty': _autoPCount(r) != r.quantity ? _autoPCount(r) : null,
             'purchase_price': r.purchasePrice,
@@ -1138,6 +1175,8 @@ class _PurchasePageState extends State<PurchasePage> {
                   {
                     'id': r.rowId,
                     'price_id': r.priceId,
+                    'item_id': r.itemId,
+                    'unit': r.unitCtrl.text.trim(),
                     'quantity': r.quantity,
                     'count_qty': _autoPCount(r) != r.quantity ? _autoPCount(r) : null,
                     'purchase_price': r.purchasePrice,
@@ -1301,7 +1340,7 @@ class _PurchasePageState extends State<PurchasePage> {
             ..quantity = qty
             ..purchasePrice = pp
             ..happenedAt = '${it['happened_at'] ?? ''}'
-            ..nameCtrl.text = '${it['item_name'] ?? match['name']}'
+            ..nameCtrl.text = '${it['item_name'] ?? match?['name'] ?? ''}'
             ..unitCtrl.text = unit
             ..qtyCtrl.text = qty.toString()
             ..priceCtrl.text = pp.toStringAsFixed(2);

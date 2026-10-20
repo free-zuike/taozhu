@@ -262,12 +262,15 @@ async function loadEdit() {
     for (const it of d.items) {
       const item = items.value.find((x) => x.id === it.item_id);
       const price = item?.prices.find((p) => p.unit === it.unit);
-      if (!item || !price) continue;
+      // 商品已删/价格停用不跳过：行照常加载（名称用快照、priceId 空），保存走服务端快照直写
       rows.value.push({
-        itemId: item.id, itemName: item.name, prices: item.prices,
-        priceId: price.id, priceLabel: `${price.unit}（进 ¥${price.purchase_price}·库存${price.stock ?? 0}）`, unit: price.unit,
+        itemId: item ? item.id : String(it.item_id || ''),
+        itemName: item ? item.name : String(it.item_name || ''),
+        prices: item?.prices || [],
+        priceId: price?.id ?? '', priceLabel: price ? `${price.unit}（进 ¥${price.purchase_price}·库存${price.stock ?? 0}）` : '',
+        unit: String(it.unit || ''),
         quantity: String(it.quantity), purchasePrice: String(it.purchase_price), countQty: it.count_qty ? String(it.count_qty) : '',
-        countUnit: String(item.count_unit || ''),
+        countUnit: String(item?.count_unit || ''),
         happenedAt: String(it.happened_at || '').slice(0, 10), note: String(it.note || ''),
         expiryDate: String(it.expiry_date || ''),
         rowId: String(it.id || ''), orderId: editId.value || '',
@@ -517,12 +520,14 @@ async function loadDateRows() {
       const item = items.value.find((x) => x.id === String(l.item_id || ''));
       const unit = String(l.unit || '');
       const price = item?.prices.find((p) => p.unit === unit) || item?.prices[0];
-      if (!item || !price) { skippedRef.value++; continue; }
+      // 商品已删/停用 → 不跳过：行照常加载（名称用快照、priceId 空），保存走服务端快照直写
       rows.value.push({
-        itemId: item.id, itemName: item.name, prices: item.prices,
-        priceId: price.id, priceLabel: `${price.unit}（进 ¥${price.purchase_price}·库存${price.stock ?? 0}）`, unit: price.unit,
-        quantity: String(l.quantity ?? ''), purchasePrice: String(l.purchase_price ?? price.purchase_price),
-        countQty: l.count_qty ? String(l.count_qty) : '', countUnit: String(item.count_unit || ''),
+        itemId: item ? item.id : String(l.item_id || ''),
+        itemName: item ? item.name : String(l.item_name || ''),
+        prices: item?.prices || [],
+        priceId: price?.id ?? '', priceLabel: price ? `${price.unit}（进 ¥${price.purchase_price}·库存${price.stock ?? 0}）` : '', unit,
+        quantity: String(l.quantity ?? ''), purchasePrice: String(l.purchase_price ?? price?.purchase_price ?? ''),
+        countQty: l.count_qty ? String(l.count_qty) : '', countUnit: String(item?.count_unit || ''),
         happenedAt: String(l.happened_at || '').slice(0, 10), note: String(l.note || ''),
         expiryDate: String(l.expiry_date || ''),
         rowId, orderId,
@@ -799,6 +804,19 @@ function pickVoucher() {
 /// 新商品入库：识别/手输未匹配名称提交时弹窗（不静默丢弃，对齐 App）。
 /// 弹窗带两级分类选择（对齐 App：一级分类 → 二级分类），不再硬编码无分类（修"items 页分类空白"）。
 async function ensureNewItems(): Promise<boolean> {
+  // 提交前兜底匹配：行名与库中商品全等（trim）→ 自动关联（防"已存在商品显示新增"→重复入库）；
+  // 命中只关联不覆盖行内数量/价格；真不在库的才进下方新增弹窗
+  for (const r of rows.value) {
+    if (r.itemId || !r.itemName?.trim()) continue;
+    const hit = items.value.find((x) => x.name === r.itemName.trim());
+    if (!hit) continue;
+    const pr = hit.prices.find((p) => p.unit === r.unit) || hit.prices[0];
+    r.itemId = hit.id;
+    r.priceId = pr?.id ?? '';
+    r.prices = hit.prices;
+    r.itemName = hit.name;
+    if (pr && !r.unit) r.unit = pr.unit;
+  }
   const newNames = [
     ...new Set(
       rows.value.filter((r) => r.itemName?.trim() && !r.itemId).map((r) => r.itemName.trim()),
@@ -831,20 +849,32 @@ async function doCreateNewItems() {
   const catId = sub?.id || top?.id || '';
   const catName = sub?.name || top?.name || '';
   try {
+    const created = new Map<string, string>();
     for (const r of rows.value) {
       const name = r.itemName?.trim();
       if (!name || r.itemId) continue;
-      const d = await request<{ id: string; prices?: unknown[] | string[] }>('/items', 'POST', {
-        name,
-        category: catName,
-        category_id: catId,
-        prices: [{ unit: r.unit || '件', purchase_price: Number(r.purchasePrice) || 0, sale_price: 0 }],
-      });
-      const pid = (d.prices as string[] | undefined)?.[0] || ((d.prices as unknown[] | undefined) as Array<{ id: string }> | undefined)?.[0]?.id || '';
-      r.itemId = d.id;
-      r.priceId = pid as string;
-      items.value.push({ id: d.id, name, prices: [{ id: pid as string, unit: r.unit || '件', purchase_price: Number(r.purchasePrice) || 0, sale_price: 0 }] });
-      itemNames.value.push(name);
+      let id = created.get(name);
+      if (!id) {
+        const d = await request<{ id: string; prices?: unknown[] | string[] }>('/items', 'POST', {
+          name,
+          category: catName,
+          category_id: catId,
+          prices: [{ unit: r.unit || '件', purchase_price: Number(r.purchasePrice) || 0, sale_price: 0 }],
+        });
+        id = d.id;
+        created.set(name, id);
+        const pid = (d.prices as string[] | undefined)?.[0] || ((d.prices as unknown[] | undefined) as Array<{ id: string }> | undefined)?.[0]?.id || '';
+        r.itemId = id;
+        r.priceId = pid as string;
+        items.value.push({ id, name, prices: [{ id: pid as string, unit: r.unit || '件', purchase_price: Number(r.purchasePrice) || 0, sale_price: 0 }] });
+        itemNames.value.push(name);
+      } else {
+        // 同名称多行：复用已建商品（防两个同名商品），保留行内数量/价格
+        const hit = items.value.find((x) => x.id === id);
+        r.itemId = id;
+        r.priceId = hit?.prices.find((p) => p.unit === r.unit)?.id ?? hit?.prices[0]?.id ?? '';
+        r.prices = hit?.prices || [];
+      }
     }
     newItemDlg.value = false;
     newItemResolve(true);
@@ -866,7 +896,7 @@ async function uploadPendingGroups(savedId: string) {
 
 async function submit() {
   if (!(await ensureNewItems())) return;
-  const valid = rows.value.filter((r) => r.itemId && r.priceId && Number(r.quantity) > 0);
+  const valid = rows.value.filter((r) => r.itemId && Number(r.quantity) > 0);
   if (valid.length === 0) return uni.showToast({ title: '请填写完整的商品明细', icon: 'none' });
   saving.value = true;
   try {
@@ -902,6 +932,8 @@ async function submit() {
           items: rowList.map((r) => ({
             id: r.rowId || undefined,
             price_id: r.priceId,
+            item_id: r.itemId, // 快照行（商品已删/停用）price_id 空时服务端按行内值直写
+            unit: r.unit,
             quantity: Number(r.quantity),
             count_qty: countQtyOf(r),
             purchase_price: Number(r.purchasePrice) || 0,
@@ -918,7 +950,7 @@ async function submit() {
         const d = await request<{ id: string }>('/purchases', 'POST', {
           happened_at: date.value,
           note: note.value.trim(),
-          items: newRows.map((r) => ({ id: r.rowId || undefined, price_id: r.priceId, quantity: Number(r.quantity), count_qty: countQtyOf(r), purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', expiry_date: r.expiryDate || '', sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0 })),
+          items: newRows.map((r) => ({ id: r.rowId || undefined, price_id: r.priceId, item_id: r.itemId, unit: r.unit, quantity: Number(r.quantity), count_qty: countQtyOf(r), purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || '', expiry_date: r.expiryDate || '', sort: r.rowId ? (globalSort.get(r.rowId) ?? 0) : 0 })),
         });
         newOrderId = d.id;
         for (const r of newRows) r.orderId = newOrderId; // 回填：行级凭证回退单据级查询命中
@@ -938,7 +970,7 @@ async function submit() {
     const body = {
       happened_at: date.value,
       note: note.value.trim(),
-      items: valid.map((r) => ({ price_id: r.priceId, quantity: Number(r.quantity), count_qty: countQtyOf(r), purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || note.value.trim(), expiry_date: r.expiryDate || '' })),
+      items: valid.map((r) => ({ price_id: r.priceId, item_id: r.itemId, unit: r.unit, quantity: Number(r.quantity), count_qty: countQtyOf(r), purchase_price: Number(r.purchasePrice) || 0, happened_at: r.happenedAt || date.value, note: r.note || note.value.trim(), expiry_date: r.expiryDate || '' })),
     };
     let savedId = editId.value;
     if (editId.value) {

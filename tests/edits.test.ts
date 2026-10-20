@@ -234,3 +234,54 @@ describe('收款编辑 PATCH /payments/:id', () => {
     expect(nf.status).toBe(404);
   });
 });
+
+describe('快照直写：商品已删/停用后批量直编保存（price_id 空 + item_id 按行内值写回）', () => {
+  let ctx: SetupCtx;
+  let itemId: string;
+  beforeEach(async () => {
+    ctx = await seed();
+    const items = (await (await call(ctx.env, 'GET', '/api/v1/items', ctx.token)).json()) as { items: Array<{ id: string }> };
+    itemId = items.items[0].id;
+    const del = await call(ctx.env, 'DELETE', `/api/v1/items/${itemId}`, ctx.token);
+    expect(del.status).toBeLessThan(300);
+  });
+
+  it('出货单：price_id 空 + item_id → 快照直写成功，金额=数量×售价', async () => {
+    const res = await call(ctx.env, 'PATCH', `/api/v1/sales/${ctx.saleId}`, ctx.token, {
+      happened_at: '2026-09-07',
+      items: [{ price_id: '', item_id: itemId, unit: '斤', quantity: 25, sale_price: 2.6 }],
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { total: number }).total).toBe(65); // 25 × 2.6
+    const got = (await (await call(ctx.env, 'GET', `/api/v1/sales/${ctx.saleId}`, ctx.token)).json()) as {
+      items: Array<{ item_id: string; unit: string; quantity: number; sale_price: number }>;
+    };
+    expect(got.items).toHaveLength(1);
+    expect(got.items[0].item_id).toBe(itemId);
+    expect(got.items[0].quantity).toBe(25);
+    expect(got.items[0].sale_price).toBe(2.6);
+  });
+
+  it('进货单：price_id 空 + item_id → 快照直写成功，金额=数量×进价', async () => {
+    const res = await call(ctx.env, 'PATCH', `/api/v1/purchases/${ctx.purchaseId}`, ctx.token, {
+      happened_at: '2026-09-07',
+      items: [{ price_id: '', item_id: itemId, unit: '斤', quantity: 30, purchase_price: 1.9 }],
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { total: number }).total).toBe(57); // 30 × 1.9
+    const got = (await (await call(ctx.env, 'GET', `/api/v1/purchases/${ctx.purchaseId}`, ctx.token)).json()) as {
+      items: Array<{ item_id: string; unit: string; quantity: number; purchase_price: number }>;
+    };
+    expect(got.items).toHaveLength(1);
+    expect(got.items[0].item_id).toBe(itemId);
+    expect(got.items[0].quantity).toBe(30);
+    expect(got.items[0].purchase_price).toBe(1.9);
+  });
+
+  it('item_id 也空 → 400 拒绝（防脏行）', async () => {
+    const res = await call(ctx.env, 'PATCH', `/api/v1/sales/${ctx.saleId}`, ctx.token, {
+      items: [{ price_id: '', quantity: 10, sale_price: 2.6 }],
+    });
+    expect(res.status).toBe(400);
+  });
+});

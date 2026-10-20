@@ -21,6 +21,8 @@ const nowIso = () => new Date().toISOString();
 interface PurchaseItemInput {
   id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
   price_id: string;
+  item_id?: string;          // 快照直写（商品已删/价格停用时按行内值写回，缺省用 price 的 item_id）
+  unit?: string;             // 快照直写单位（同上场景）
   quantity: number;
   count_qty?: number;        // 本单折合计数数量（进 1 大单位折合 N 个计数单位→填 N，库存按计数单位累计；缺省=quantity 按原单位）
   purchase_price?: number;   // 可覆盖默认进价
@@ -311,7 +313,7 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
       batch.push(stockDeltaFor(c.env.DB, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1));
     }
     const priceIds = items.map((i) => i.price_id);
-    if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
+    // 快照行（商品已删/价格停用）price_id 可为空——由循环内 item_id 校验兜底，勿整单 400
     const priceRows = await chunkQuery(priceIds, (chunk) =>
       c.env.DB.prepare(
         `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.per, i.count_unit
@@ -321,12 +323,17 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
     total = 0;
     for (const item of items) {
       const price = priceMap.get(item.price_id);
-      if (!price) return c.json({ error: `价格不存在: ${item.price_id}` }, 400);
       const qty = Number(item.quantity);
       if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
       const priceIn = Number(item.purchase_price);
-      const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
-      total += qty * effective;
+      if (price) {
+        const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
+        total += qty * effective;
+      } else {
+        // 商品已删/价格停用：快照直写（数量/价格按行内值，不建批不增库存）
+        if (!item.item_id) return c.json({ error: '商品已删除或价格停用，请先重新选择商品' }, 400);
+        total += qty * (Number.isFinite(priceIn) && priceIn > 0 ? priceIn : 0);
+      }
     }
     // 记录旧行 id：重建换 id 的行其 purchase_item 附件引用会残留（服务器多计），重建后清理
     const oldLineIds = (await c.env.DB.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
@@ -339,33 +346,46 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
     const newLineIds: string[] = [];
     for (const [i, item] of items.entries()) {
       const price = priceMap.get(item.price_id);
-      if (!price) continue;
       const qty = Number(item.quantity);
       const priceIn = Number(item.purchase_price);
-      const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
-      const amount2 = qty * effective;
-      // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity
-      const countQty = Number(item.count_qty);
-      const per = Number(price.per ?? 0);
-      const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
-      const newId = item.id ?? randomId();
-      newLineIds.push(newId);
       // 行序：客户端显式传 sort（批量直编跨单全局录入序）优先，缺省回退数组索引（批内扫描顺序）
       const lineSort = Number.isFinite(Number(item.sort)) && Number(item.sort) >= 0 ? Number(item.sort) : i;
-      batch.push(
-        c.env.DB.prepare(
-          'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, expiry_date, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(newId, id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount2,
-          item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', item.expiry_date?.trim() ?? '', c.get('user').id, lineSort),
-      );
-      // FIFO 批次：新行建批
-      batch.push(
-        c.env.DB.prepare(
-          'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at, expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ).bind(newId, price.item_id, price.unit, effective, qty, item.happened_at?.trim() || body?.happened_at?.trim() || '', item.expiry_date?.trim() || ''),
-      );
-      // 按新明细增加库存（进销单位换算：折合过则按计数单位累计）
-      batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
+      if (price) {
+        const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
+        const amount2 = qty * effective;
+        // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity
+        const countQty = Number(item.count_qty);
+        const per = Number(price.per ?? 0);
+        const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
+        const newId = item.id ?? randomId();
+        newLineIds.push(newId);
+        batch.push(
+          c.env.DB.prepare(
+            'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, expiry_date, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          ).bind(newId, id, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount2,
+            item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', item.expiry_date?.trim() ?? '', c.get('user').id, lineSort),
+        );
+        // FIFO 批次：新行建批
+        batch.push(
+          c.env.DB.prepare(
+            'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at, expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          ).bind(newId, price.item_id, price.unit, effective, qty, item.happened_at?.trim() || body?.happened_at?.trim() || '', item.expiry_date?.trim() || ''),
+        );
+        // 按新明细增加库存（进销单位换算：折合过则按计数单位累计）
+        batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
+      } else {
+        // 快照直写：商品已删/价格停用——保留行并允许改数量/价格（按行内值写回，不建批不增库存）
+        if (!item.item_id) continue;
+        const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : 0;
+        const newId = item.id ?? randomId();
+        newLineIds.push(newId);
+        batch.push(
+          c.env.DB.prepare(
+            'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, expiry_date, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          ).bind(newId, id, item.item_id, item.unit || '', qty, Number(item.count_qty) > 0 ? Number(item.count_qty) : null, effective, qty * effective,
+            item.happened_at?.trim() || body?.happened_at?.trim() || '', item.note?.trim() ?? '', item.expiry_date?.trim() ?? '', c.get('user').id, lineSort),
+        );
+      }
     }
     // 重建换 id 的行：旧行 purchase_item 附件引用残留（服务器多计）→ 级联清理
     const keep = new Set(newLineIds);

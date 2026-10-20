@@ -22,6 +22,8 @@ const nowIso = () => new Date().toISOString();
 interface SaleItemInput {
   id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
   price_id: string;          // item_prices.id
+  item_id?: string;          // 快照直写（商品已删/价格停用时按行内值写回，缺省用 price 的 item_id）
+  unit?: string;             // 快照直写单位（同上场景）
   quantity: number;
   count_qty?: number;        // 本单折合计数数量（卖货按大单位称重、备货按小单位计数→填折合出的计数单位数，库存按计数单位扣；缺省=quantity 按原单位）
   sale_price?: number;       // 可覆盖默认售价
@@ -424,7 +426,7 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
     const oldLineIds = (await c.env.DB.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
       .all<{ id: string }>()).results.map((r) => r.id);
     const priceIds = items.map((i) => i.price_id);
-    if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
+    // 快照行（商品已删/价格停用）price_id 可为空——由循环内 item_id 校验兜底，勿整单 400
     const priceRows = await chunkQuery(priceIds, (chunk) =>
       c.env.DB.prepare(
         `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.sale_price, p.active, p.per, i.count_unit
@@ -435,12 +437,17 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
     const money2 = await getRoundingConfig(c.env.DB);
     for (const item of items) {
       const price = priceMap.get(item.price_id);
-      if (!price || !price.active) return c.json({ error: `价格不存在或已停用: ${item.price_id}` }, 400);
       const qty = Number(item.quantity);
       if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
       const salePrice = Number(item.sale_price);
-      const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
-      total += qty * effectiveSale;
+      if (price && price.active) {
+        const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
+        total += qty * effectiveSale;
+      } else {
+        // 商品已删/价格停用：快照直写（数量/价格按行内值，不扣库存不走 FIFO）
+        if (!item.item_id) return c.json({ error: '商品已删除或价格停用，请先重新选择商品' }, 400);
+        total += qty * (Number.isFinite(salePrice) && salePrice > 0 ? salePrice : 0);
+      }
     }
     batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
     // FIFO：先释放旧明细的批次占用（单独落库，重新消耗的 SELECT 才能看到恢复后的 remaining）
@@ -453,36 +460,50 @@ salesRouter.patch('/:id', adminOnly(), async (c) => {
     const newLineIds: string[] = [];
     for (const [i, item] of items.entries()) {
       const price = priceMap.get(item.price_id);
-      if (!price || !price.active) continue;
       const qty = Number(item.quantity);
       const salePrice = Number(item.sale_price);
-      const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
-      const amount = qty * effectiveSale;
-      // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity（按原单位）
-      const countQty = Number(item.count_qty);
-      const per = Number(price.per ?? 0);
-      const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
-      const newId = item.id ?? randomId();
-      newLineIds.push(newId);
-      // FIFO 批次消耗（无论成本是否手动指定都消耗批次，保证批次与库存一致）；不足部分按档案进价兜底
-      const { result: fifo, stmts: fifoStmts } = await consumeFifoStatements(
-          c.env.DB, price.item_id, price.unit, qty, newId);
-      // 出货成本（进价快照）：老板显式传手动进价 >0 优先；否则 = 批次先进先出加权成本
-      const manualCost = item.cost_price !== undefined && Number(item.cost_price) > 0 ? Number(item.cost_price) : null;
-      const costPrice = c.get('user').role === 'admin' && manualCost !== null
-        ? manualCost
-        : (fifo.leftover > 0 ? (fifo.cost + fifo.leftover * price.purchase_price) / qty : fifo.cost / qty);
-      batch.push(...fifoStmts);
       // 行序：客户端显式传 sort（批量直编跨单全局录入序）优先，缺省回退数组索引（批内扫描顺序）
       const lineSort = Number.isFinite(Number(item.sort)) && Number(item.sort) >= 0 ? Number(item.sort) : i;
-      batch.push(
-        c.env.DB.prepare(
-          'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).bind(newId, id, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, costPrice, amount,
-          item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', c.get('user').id, lineSort),
-      );
-      // 按新明细扣减库存（进销单位换算：折合过则按计数单位扣减）
-      batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, -1));
+      if (price && price.active) {
+        const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
+        const amount = qty * effectiveSale;
+        // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity（按原单位）
+        const countQty = Number(item.count_qty);
+        const per = Number(price.per ?? 0);
+        const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
+        const newId = item.id ?? randomId();
+        newLineIds.push(newId);
+        // FIFO 批次消耗（无论成本是否手动指定都消耗批次，保证批次与库存一致）；不足部分按档案进价兜底
+        const { result: fifo, stmts: fifoStmts } = await consumeFifoStatements(
+            c.env.DB, price.item_id, price.unit, qty, newId);
+        // 出货成本（进价快照）：老板显式传手动进价 >0 优先；否则 = 批次先进先出加权成本
+        const manualCost = item.cost_price !== undefined && Number(item.cost_price) > 0 ? Number(item.cost_price) : null;
+        const costPrice = c.get('user').role === 'admin' && manualCost !== null
+          ? manualCost
+          : (fifo.leftover > 0 ? (fifo.cost + fifo.leftover * price.purchase_price) / qty : fifo.cost / qty);
+        batch.push(...fifoStmts);
+        batch.push(
+          c.env.DB.prepare(
+            'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          ).bind(newId, id, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, costPrice, amount,
+            item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', c.get('user').id, lineSort),
+        );
+        // 按新明细扣减库存（进销单位换算：折合过则按计数单位扣减）
+        batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, -1));
+      } else {
+        // 快照直写：商品已删/价格停用——保留行并允许改数量/价格（按行内值写回，不扣库存不走 FIFO）
+        if (!item.item_id) continue;
+        const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : 0;
+        const newId = item.id ?? randomId();
+        newLineIds.push(newId);
+        const costPrice = Number(item.cost_price) > 0 ? Number(item.cost_price) : 0;
+        batch.push(
+          c.env.DB.prepare(
+            'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          ).bind(newId, id, clientId, item.item_id, item.unit || '', qty, Number(item.count_qty) > 0 ? Number(item.count_qty) : null, effectiveSale, costPrice, qty * effectiveSale,
+            item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', c.get('user').id, lineSort),
+        );
+      }
     }
     // 重建换 id 的行：旧行 sale_item 附件引用残留（服务器多计）→ 级联清理（引用驱动：行没了引用即删）
     const keep = new Set(newLineIds);
