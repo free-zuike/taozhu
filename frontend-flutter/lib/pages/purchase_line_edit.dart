@@ -243,9 +243,10 @@ Future<Map<String, dynamic>?> editPurchaseLine(
         final updated = <Map<String, dynamic>>[];
         for (final it in items0) {
           final itM = Map<String, dynamic>.from(it);
-          if ('${it['id']}' == itemId) {
-            itM['item_id'] = choseItem['id'];
-            itM['item_name'] = '${choseItem['name'] ?? ''}';
+          if ('${it['id']}' == itemId && choseItem != null) {
+            final ci = choseItem; // 闭包捕获变量无 promotion，取局部快照
+            itM['item_id'] = ci['id'];
+            itM['item_name'] = '${ci['name'] ?? ''}';
           }
           final iid = '${itM['item_id'] ?? ''}';
           final iunit = '${itM['unit'] ?? ''}';
@@ -291,8 +292,9 @@ Future<Map<String, dynamic>?> editPurchaseLine(
       final itMap = Map<String, dynamic>.from(it);
       if ('${it['id']}' == itemId) {
         if (choseItem != null) {
-          itMap['item_id'] = choseItem['id'];
-          itMap['item_name'] = '${choseItem['name'] ?? ''}';
+          final ci = choseItem; // 闭包捕获变量无 promotion，取局部快照
+          itMap['item_id'] = ci['id'];
+          itMap['item_name'] = '${ci['name'] ?? ''}';
         }
         itMap['quantity'] = qty;
         itMap['unit'] = unit;
