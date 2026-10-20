@@ -837,6 +837,8 @@ class _MyPageState extends State<MyPage> {
 
   /// 查找本地已下载的该版本安装包（下载完未安装、再次点更新时不再重复下载）：
   /// Android 走系统 DownloadManager 记录 + 应用下载目录（与清理页同通道）；桌面扫下载/临时目录。
+  /// 只认「真实文件大小 ≥ 最小可信值且 zip 结构完整」的安装包——未下完/被拦截页污染的残留
+  /// 一律不提供"直接安装"（用户反馈：没下完退出 App，下次登录误显示已下载完成，装上却是坏包）
   Future<String?> _findLocalApk(String ver) async {
     try {
       if (kIsWeb) return null;
@@ -862,9 +864,49 @@ class _MyPageState extends State<MyPage> {
         await scan(await getDownloadsDirectory());
         await scan(await getTemporaryDirectory());
       }
-      return matches.isEmpty ? null : matches.first;
+      for (final p in matches) {
+        if (p.isEmpty) continue;
+        try {
+          final f = File(p);
+          if (!await f.exists()) continue;
+          // 真实落盘大小（DownloadManager 记录的总大小可能在未下完时就已写全，不能信记录）
+          if (await f.length() < minTrustedBytes) continue;
+          if (!await _apkLooksValid(f)) continue;
+          return p;
+        } catch (_) {}
+      }
+      return null;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// APK（zip）完整性快速校验：文件头 PK\x03\x04 + 文件尾 EOCD 标记（PK\x05\x06）。
+  /// 下载中断/镜像拦截页残留的坏文件必然缺尾，两个签名都过才算完整。
+  Future<bool> _apkLooksValid(File f) async {
+    try {
+      final raf = await f.open();
+      try {
+        final head = await raf.read(4);
+        if (head.length != 4 || head[0] != 0x50 || head[1] != 0x4B || head[2] != 0x03 || head[3] != 0x04) {
+          return false;
+        }
+        // EOCD 固定 22 字节 + 最多 64KB 注释；从文件尾向前扫签名，命中即完整 zip
+        final len = await raf.length();
+        final tailStart = len > 64 * 1024 + 22 ? len - 64 * 1024 - 22 : 0;
+        await raf.setPosition(tailStart);
+        final tail = await raf.read(len - tailStart);
+        for (var i = tail.length - 22; i >= 0; i--) {
+          if (tail[i] == 0x50 && tail[i + 1] == 0x4B && tail[i + 2] == 0x05 && tail[i + 3] == 0x06) {
+            return true;
+          }
+        }
+        return false;
+      } finally {
+        await raf.close();
+      }
+    } catch (_) {
+      return false;
     }
   }
 
@@ -878,6 +920,15 @@ class _MyPageState extends State<MyPage> {
   Future<void> _downloadAndInstall(String ver, {String? forcedPrefix}) async {
     _downloading = true;
     final fileName = 'taozhu-update-$ver.apk';
+    // 清理同名残留（上次中断/未下完的旧文件）：避免系统下载器续接/覆盖损坏包，也防残留再被误判可安装
+    try {
+      final dir = await getDownloadsDirectory();
+      final stale = File('${dir?.path}/$fileName');
+      if (await stale.exists()) await stale.delete();
+    } catch (_) {}
+    try {
+      await _dlChannel.invokeMethod('deleteFiles', {'names': [fileName]});
+    } catch (_) {}
     final custom = await loadUpdateSources();
     final specified = specifiedSource;
     final prefixes = forcedPrefix != null
@@ -932,14 +983,15 @@ class _MyPageState extends State<MyPage> {
           final status = (st['status'] as int?) ?? -1;
           if (status == 8) {
             // DownloadManager.STATUS_SUCCESSFUL —— 但代理/镜像可能把拦截页当 200 下完：
-            // 先校验文件大小，小于安装包最小可信值 = 下载到的是假文件 → 删除并换下一个源
+            // 先校验文件大小，小于安装包最小可信值 = 下载到的是假文件 → 删除并换下一个源；
+            // 大小过关再验 zip 结构（PK 头+EOCD 尾），结构损坏同样按假文件处理
             final dir = await getDownloadsDirectory();
             final file = File('${dir?.path}/$fileName');
             int size = 0;
             try {
               if (file.existsSync()) size = await file.length();
             } catch (_) {}
-            if (size < minTrustedBytes) {
+            if (size < minTrustedBytes || !await _apkLooksValid(file)) {
               try {
                 if (file.existsSync()) await file.delete();
               } catch (_) {}

@@ -45,17 +45,23 @@
       </view>
     </view>
 
-    <!-- 每日出货/进货趋势（对齐 App：区间内全部天数折线 + 每天日期标签） -->
+    <!-- 出货/进货趋势（对齐 App：今年/全部=按月折线；当月/自定义=按天折线+标签每5天抽稀；全部店铺出货=每店一条彩线） -->
     <view class="card">
       <view class="card-title">
-        <text>{{ kind === 'purchase' ? '每日进货趋势' : '每日出货趋势' }}</text>
+        <text>{{ trendTitle }}</text>
         <text class="range-txt">{{ rangeLabel }}</text>
       </view>
-      <view v-if="bars.length" class="chart">
+      <view v-if="buckets.list.length" class="chart">
         <!-- 折线图（对齐 App 折线趋势；SVG data URI 由 image 渲染，圆点为流水日金额） -->
         <image class="line-chart" :src="lineSvg" mode="widthFix" />
+        <view v-if="shopSeries.length" class="legend">
+          <view v-for="(s, i) in shopSeries" :key="i" class="lg-item">
+            <view class="lg-dot" :style="{ background: s.color }"></view>
+            <text class="lg-name">{{ s.name }} ¥{{ fmt(s.total) }}</text>
+          </view>
+        </view>
         <view class="x-labels">
-          <text class="bar-label" v-for="b in bars" :key="b.day">{{ b.label }}</text>
+          <text class="bar-label" v-for="(l, i) in xLabels" :key="i">{{ l }}</text>
         </view>
       </view>
       <view v-else class="empty">该区间暂无流水</view>
@@ -130,6 +136,7 @@ import { fmtAmount, fmtByUnit } from '../../utils/money';
 interface ByClient { id: string; name: string; sales_total: number; paid_total: number; debt: number; gross_profit: number; round_unit?: string }
 interface Monthly { month: string; sales_total: number; purchase_total: number; balance: number }
 interface DayRow { day: string; sales_total: number; paid_total: number; purchase_total: number; gross_profit: number }
+interface ShopDay { client_id: string; client_name: string; day: string; sales_total: number }
 
 const ranges = [
   { key: 'today', label: '今天' },
@@ -149,6 +156,8 @@ const kind = ref<'sale' | 'purchase'>('sale');
 const byClient = ref<ByClient[]>([]);
 const monthly = ref<Monthly[]>([]);
 const days = ref<DayRow[]>([]);
+// 全部店铺+出货：按店按日序列（/stats/daily shop_days，多色折线数据源）
+const shopDays = ref<ShopDay[]>([]);
 const catRank = ref<Array<{ category: string; quantity: number; amount: number }>>([]);
 // 商品出货排行数据源：行级出货明细（对齐 App _saleDetail / _itemRank：商品+单位聚合数量降序 top20）
 const saleDetail = ref<Array<{ name: string; unit: string; quantity: number; amount: number; sale_price?: number; cost_price?: number }>>([]);
@@ -198,17 +207,63 @@ const rangeLabel = computed(() => {
   return s.start === s.end ? (s.start || '') : `${s.start} ~ ${s.end}`;
 });
 
-// 日流水数据：区间内全部天数（无流水日金额 0，归一化供折线/标签；对齐 App 全量天数）
-const bars = computed(() => {
-  const list = days.value;
-  if (!list.length) return [];
-  const max = Math.max(...list.map((d) => Number(d.sales_total) || 0), 1);
-  return list.map((d) => ({
-    day: d.day,
-    label: d.day.length >= 10 ? `${Number(d.day.slice(5, 7))}/${Number(d.day.slice(8, 10))}` : d.day,
-    h: Math.max(2, Math.round((Number(d.sales_total) / max) * 100)),
-  }));
+// 折线桶：今年/全部=按天聚合为按月（点/标签按月，避免几百天挤爆）；其余=按天（点每天，标签每5天抽稀）
+const buckets = computed(() => {
+  const monthly = range.value === 'year' || range.value === 'all';
+  const agg = new Map<string, number>();
+  for (const d of days.value) {
+    const day = String(d.day || '');
+    const k = monthly ? (day.length >= 7 ? day.slice(0, 7) : '') : day;
+    if (!k) continue;
+    agg.set(k, (agg.get(k) || 0) + (Number(d.sales_total) || 0));
+  }
+  const keys = [...agg.keys()].sort();
+  return { monthly, list: keys.map((k) => ({ k, v: agg.get(k) || 0 })) };
 });
+
+// 全部店铺+出货：每店一条彩线（最多 6 家 + 其余合计灰线；对齐 App _shopSeries）
+const shopSeries = computed(() => {
+  const { monthly, list: bkt } = buckets.value;
+  if (!bkt.length) return [] as Array<{ name: string; color: string; total: number; vals: number[] }>;
+  const byShop = new Map<string, { name: string; m: Map<string, number> }>();
+  for (const s of shopDays.value) {
+    const cid = String(s.client_id || '');
+    if (!cid) continue;
+    const day = String(s.day || '');
+    const k = monthly ? (day.length >= 7 ? day.slice(0, 7) : '') : day;
+    if (!k) continue;
+    let e = byShop.get(cid);
+    if (!e) { e = { name: String(s.client_name || cid), m: new Map() }; byShop.set(cid, e); }
+    else if (!e.name) e.name = String(s.client_name || cid);
+    e.m.set(k, (e.m.get(k) || 0) + (Number(s.sales_total) || 0));
+  }
+  const palette = ['#409EFF', '#F59E0B', '#10B981', '#8B5CF6', '#EF4444', '#EC4899', '#64748B'];
+  const list = [...byShop.entries()].map(([cid, e]) => ({
+    name: e.name,
+    total: bkt.reduce((a, b) => a + (e.m.get(b.k) || 0), 0),
+    vals: bkt.map((b) => e.m.get(b.k) || 0),
+  })).sort((a, b) => b.total - a.total);
+  const shown = list.slice(0, 6).map((s, i) => ({ ...s, color: palette[i] }));
+  if (list.length > 6) {
+    const rest = bkt.map((_, i) => list.slice(6).reduce((a, s) => a + (s.vals[i] || 0), 0));
+    shown.push({ name: '其他', total: rest.reduce((a, b) => a + b, 0), vals: rest, color: palette[6] });
+  }
+  return shown;
+});
+
+// 底部标签：按月=每月都显示；按天=每 5 天显示（1/6/11/16/21/26/31…），其余空位占位保持点位对齐
+const xLabels = computed(() => {
+  const { monthly, list } = buckets.value;
+  return list.map((b) => {
+    const k = b.k;
+    if (monthly) return k.length >= 7 ? `${Number(k.slice(5, 7))}月` : k;
+    const d = k.length >= 10 ? Number(k.slice(8, 10)) : 0;
+    return d % 5 === 1 ? `${Number(k.slice(5, 7))}/${d}` : '';
+  });
+});
+
+const trendTitle = computed(() =>
+  `${kind.value === 'purchase' ? '进货' : '出货'}${range.value === 'year' || range.value === 'all' ? '月度' : '每日'}趋势`);
 
 // ASCII-only 简易 base64（小程序无 btoa；对齐 theme.ts 自实现，SVG 折线 data URI 用）
 function svgB64(svg: string): string {
@@ -226,22 +281,34 @@ function svgB64(svg: string): string {
   return out;
 }
 
-/// 日流水折线图（对齐 App：折线+数据圆点，随出货/进货切换颜色）
+/// 出货/进货趋势折线图（对齐 App：全部店铺出货=每店一条彩线；否则单线+数据圆点，随出货/进货切换颜色）
 const lineSvg = computed(() => {
-  if (!bars.value.length) return '';
+  const { monthly, list: bkt } = buckets.value;
+  if (!bkt.length) return '';
   const W = 360, H = 130;
-  const n = bars.value.length;
-  const stroke = kind.value === 'purchase' ? '#f59e0b' : '#409eff';
-  const pts = bars.value.map((b, i) => {
+  const n = bkt.length;
+  const multi = kind.value === 'sale' && !shopId.value && shopSeries.value.length > 0;
+  const allVals = multi ? shopSeries.value.flatMap((s) => s.vals) : bkt.map((b) => b.v);
+  const max = Math.max(...allVals, 1);
+  const xy = (v: number, i: number) => {
     const x = n === 1 ? W / 2 : (W * i) / (n - 1);
-    const y = H - 12 - (b.h / 100) * (H - 34);
+    const y = H - 12 - ((Number(v) || 0) / max) * (H - 34);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
+  };
+  const stroke = kind.value === 'purchase' ? '#f59e0b' : '#409eff';
+  let polylines = '';
+  let circles = '';
+  if (multi) {
+    polylines = shopSeries.value.map((s) =>
+      `<polyline fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${s.vals.map((v, i) => xy(v, i)).join(' ')}"/>`).join('');
+  } else {
+    const pts = bkt.map((b, i) => xy(b.v, i));
+    polylines = `<polyline fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${pts.join(' ')}"/>`;
+    circles = pts.map((p) => `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="3.5" fill="${stroke}"/>`).join('');
+  }
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
-    `<polyline fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${pts.join(' ')}"/>` +
-    pts.map((p) => `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="3.5" fill="${stroke}"/>`).join('') +
-    '</svg>';
+    polylines + circles + '</svg>';
   return 'data:image/svg+xml;base64,' + svgB64(svg);
 });
 
@@ -281,7 +348,7 @@ async function load() {
     }
     const results = await Promise.all([
       request<Record<string, any>>(`/stats/summary?start=${start}&end=${end}&kind=${kind.value}${cq}`, 'GET').catch(() => null),
-      request<{ days: DayRow[]; can_see_profit?: boolean }>(`/stats/daily?start=${start}&end=${end}&kind=${kind.value}${cq}`, 'GET').catch(() => null),
+      request<{ days: DayRow[]; shop_days?: ShopDay[]; can_see_profit?: boolean }>(`/stats/daily?start=${start}&end=${end}&kind=${kind.value}${cq}`, 'GET').catch(() => null),
       request<{ clients: ByClient[] }>(`/stats/clients?start=${start}&end=${end}`, 'GET').catch(() => null),
       request<{ months: Monthly[]; can_see_profit?: boolean }>(`/stats/monthly-flow?year=${year.value}`, 'GET').catch(() => null),
       request<{ categories?: Array<{ category: string; quantity: number; amount: number }> }>(`/stats/categories?start=${start}&end=${end}&kind=${kind.value}${cq}`, 'GET').catch(() => null),
@@ -301,6 +368,7 @@ async function load() {
     const d = results[1];
     if (d) {
       days.value = d.days || [];
+      shopDays.value = d.shop_days || [];
       canSeeProfit.value = d.can_see_profit !== false;
     }
     byClient.value = results[2]?.clients || [];
@@ -416,7 +484,12 @@ async function onYear(e: { detail: { value: number } }) {
 .chart { position: relative; padding-top: 10rpx; }
 .line-chart { width: 100%; height: 130rpx; }
 .x-labels { display: flex; flex-wrap: wrap; justify-content: space-between; margin-top: 10rpx; row-gap: 4rpx; }
-.bar-label { font-size: 18rpx; color: var(--text-sub); }
+.bar-label { font-size: 18rpx; color: var(--text-sub); min-width: 34rpx; text-align: center; }
+/* 多店折线图例（色点 + 店名 + 区间合计，与折线配色一一对应） */
+.legend { display: flex; flex-wrap: wrap; gap: 12rpx; margin-top: 8rpx; }
+.lg-item { display: flex; align-items: center; }
+.lg-dot { width: 14rpx; height: 14rpx; border-radius: 50%; margin-right: 6rpx; }
+.lg-name { font-size: 20rpx; color: var(--text-sub); }
 .rank-no { width: 40rpx; height: 40rpx; border-radius: 50%; background: var(--primary-soft); color: var(--primary); font-size: 24rpx; font-weight: 600; display: flex; align-items: center; justify-content: center; margin-right: 14rpx; flex-shrink: 0; }
 .year-btn { font-size: 26rpx; color: var(--primary); border: 1rpx solid var(--primary); border-radius: 8rpx; padding: 6rpx 16rpx; }
 .row { display: flex; align-items: center; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); }

@@ -1550,7 +1550,7 @@ class _PurchasePageState extends State<PurchasePage> {
           const SizedBox(height: 10),
           // 整单备注（批量直编不显示：该模式按原单分组保存，整单备注属于各自原单，改了存不上是假入口——
           // 要改备注请用每行「行备注」框）
-          if (!widget.dateRows!.isNotEmpty)
+          if (widget.dateRows == null || widget.dateRows!.isEmpty)
             TextField(
               controller: _noteCtrl,
               style: TextStyle(color: c.textMain),

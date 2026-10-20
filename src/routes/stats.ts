@@ -458,15 +458,15 @@ statsRouter.get('/daily', async (c) => {
 
   const sParams: unknown[] = [start, end];
   const sSql = kind === 'purchase'
-    ? `SELECT substr(pi.happened_at, 1, 10) AS day, pi.amount AS amount, 0 AS gross
+    ? `SELECT substr(pi.happened_at, 1, 10) AS day, pi.amount AS amount, 0 AS gross, '' AS cid
        FROM purchase_items pi
        WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
     : `SELECT substr(si.happened_at, 1, 10) AS day, si.amount AS amount,
-        (si.sale_price - si.cost_price) * si.quantity AS gross
+        (si.sale_price - si.cost_price) * si.quantity AS gross, si.client_id AS cid
        FROM sale_items si
        WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`;
   if (clientId && kind === 'sale') sParams.push(clientId);
-  const saleRows = await db.prepare(sSql).bind(...sParams).all<{ day: string; amount: number; gross: number }>();
+  const saleRows = await db.prepare(sSql).bind(...sParams).all<{ day: string; amount: number; gross: number; cid: string }>();
 
   const pParams: unknown[] = [start, end];
   const pSql = `SELECT substr(happened_at, 1, 10) AS day, amount, waived
@@ -501,7 +501,30 @@ statsRouter.get('/daily', async (c) => {
     paid_total: r(paidMap.get(day) ?? 0),
     purchase_total: r(buyMap.get(day) ?? 0),
   }));
-  return c.json({ start, end, can_see_profit: canSeeProfit, days });
+  // 全部店铺+出货：附按店按日序列（每店一条线，前端多色折线用）；单店/进货视图无店铺维度不发
+  let shopDays: Array<{ client_id: string; client_name: string; day: string; sales_total: number }> | undefined;
+  if (kind === 'sale' && !clientId) {
+    const cRows = await db.prepare('SELECT id, name FROM clients WHERE deleted_at IS NULL').all<{ id: string; name: string }>();
+    const nameMap = new Map(cRows.results.map((x) => [x.id, x.name]));
+    const shopMap = new Map<string, Map<string, number>>();
+    for (const x of saleRows.results) {
+      if (!x.cid || !x.day) continue;
+      const perDay = shopMap.get(x.cid) ?? new Map<string, number>();
+      perDay.set(x.day, (perDay.get(x.day) ?? 0) + r(x.amount));
+      shopMap.set(x.cid, perDay);
+    }
+    shopDays = [];
+    for (const [cid, perDay] of shopMap) {
+      for (const [day, total] of perDay) {
+        shopDays.push({ client_id: cid, client_name: nameMap.get(cid) ?? '', day, sales_total: total });
+      }
+    }
+    shopDays.sort((a, b) => a.day.localeCompare(b.day) || a.client_id.localeCompare(b.client_id));
+  }
+  return c.json({
+    start, end, can_see_profit: canSeeProfit, days,
+    ...(shopDays ? { shop_days: shopDays } : {}),
+  });
 });
 
 // GET /stats/items?start=&end=&client_id=&kind=sale|purchase — 区间内商品排行（出货额/进货额降序，Top 15）

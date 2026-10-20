@@ -123,6 +123,31 @@ describe('统计区间', () => {
     expect(d.days[0].sales_total).toBe(40);
   });
 
+  it('daily 全部店铺带 shop_days 按店序列（多色折线数据源）', async () => {
+    const res = await call(env, 'GET', '/api/v1/stats/daily?start=2026-09-01&end=2026-09-04', token);
+    const d = (await res.json()) as {
+      days: Array<Record<string, number | string>>;
+      shop_days: Array<{ client_id: string; client_name: string; day: string; sales_total: number }>;
+    };
+    expect(d.shop_days).toBeDefined();
+    expect(d.shop_days.length).toBe(2); // A店 9-01 + B店 9-02
+    const a = d.shop_days.find((x) => x.client_id === 'c-a')!;
+    expect(a.client_name).toBe('A店');
+    expect(a.day).toBe('2026-09-01');
+    expect(a.sales_total).toBe(50);
+    const b = d.shop_days.find((x) => x.client_id === 'c-b')!;
+    expect(b.client_name).toBe('B店');
+    expect(b.sales_total).toBe(40);
+    // 单店过滤不带 shop_days
+    const single = await call(env, 'GET', '/api/v1/stats/daily?start=2026-09-01&end=2026-09-04&client_id=c-a', token);
+    const sd = (await single.json()) as { shop_days?: unknown };
+    expect(sd.shop_days).toBeUndefined();
+    // 进货口径不带 shop_days
+    const buy = await call(env, 'GET', '/api/v1/stats/daily?start=2026-09-01&end=2026-09-04&kind=purchase', token);
+    const bd = (await buy.json()) as { shop_days?: unknown };
+    expect(bd.shop_days).toBeUndefined();
+  });
+
   it('clients 区间过滤（全部店铺）', async () => {
     const res = await call(env, 'GET', '/api/v1/stats/clients?start=2026-09-01&end=2026-09-30', token);
     const d = (await res.json()) as { clients: Array<{ name: string; sales_total: number; paid_total: number; gross_profit: number }> };

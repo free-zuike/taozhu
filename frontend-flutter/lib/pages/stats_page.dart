@@ -37,6 +37,8 @@ class _StatsPageState extends State<StatsPage> {
   Map<String, dynamic> _summary = {};
   List<dynamic> _days = [];
   List<dynamic> _months = [];
+  /// 全部店铺+出货：按店按日序列（/stats/daily shop_days，多色折线数据源；本地聚合同形）
+  List<dynamic> _shopDays = [];
   List<dynamic> _clientsStats = [];
   /// 出货明细（商品级，原生本地聚合；Web 由 /sales 直连）——统计页「出货明细」分区
   List<Map<String, dynamic>> _saleDetail = [];
@@ -318,6 +320,7 @@ class _StatsPageState extends State<StatsPage> {
     setState(() {
       _summary = results[0] ?? _summary;
       _days = ((results[1]?['days'] as List?) ?? []);
+      _shopDays = ((results[1]?['shop_days'] as List?) ?? []);
       _itemsStats = ((results[2]?['items'] as List?) ?? []).cast<Map<String, dynamic>>();
       _cats = ((results[3]?['categories'] as List?) ?? []).cast<Map<String, dynamic>>();
       _clientsStats = results.length > 4 ? ((results[4]?['clients'] as List?) ?? []) : [];
@@ -456,8 +459,8 @@ class _StatsPageState extends State<StatsPage> {
                   const SizedBox(height: 12),
                   const SizedBox(height: 20),
                   _sectionTitle(_isBuy
-                      ? (_mode == 'year' ? '月度进货趋势' : '每日进货趋势')
-                      : (_mode == 'year' ? '月度出货趋势' : '每日出货趋势')),
+                      ? (_quick == 'year' || _quick == 'all' ? '月度进货趋势' : '每日进货趋势')
+                      : (_quick == 'year' || _quick == 'all' ? '月度出货趋势' : '每日出货趋势')),
                   const SizedBox(height: 8),
                   _lineChart(),
                   const SizedBox(height: 20),
@@ -838,12 +841,28 @@ class _StatsPageState extends State<StatsPage> {
 
   // ── 折线图（自绘） ──
   Widget _lineChart() {
-    final items = _mode == 'year' ? _months : _days;
-    if (items.isEmpty) {
+    // 数据源：今年/全部=按天聚合为按月（折线点/标签按月，避免几百天挤爆——用户"日期越来越挤"）；
+    // 当月/自定义=按天（点位每天不变，底部标签每 5 天抽稀显示）
+    final monthlyView = _quick == 'year' || _quick == 'all';
+    final agg = <String, double>{};
+    for (final d in _days) {
+      final day = '${d['day'] ?? ''}';
+      final k = monthlyView ? (day.length >= 7 ? day.substring(0, 7) : '') : day;
+      if (k.isEmpty) continue;
+      agg[k] = (agg[k] ?? 0) + _num(d['sales_total']);
+    }
+    final keys = agg.keys.toList()..sort();
+    final buckets = <Map<String, dynamic>>[
+      for (final k in keys) <String, dynamic>{'k': k, 'sales_total': agg[k]},
+    ];
+    if (buckets.isEmpty) {
       return _empty('该区间暂无数据', Icons.show_chart);
     }
-    final values = items.map<double>((x) => _num(x['sales_total'])).toList();
-    final labels = items.map((x) => '${x[_mode == 'year' ? 'month' : 'day']}').toList();
+    final values = buckets.map<double>((x) => _num(x['sales_total'])).toList();
+    final labels = buckets.map((x) => '${x['k']}').toList();
+    // 全部店铺+出货：每店一条彩色折线（最多 6 家 + 其余合计灰线，避免店铺多时线条挤爆不可读）
+    final series = (_clientId == null && !_isBuy) ? _shopSeries(buckets, monthlyView) : const <({String name, Color color, double total, List<double> values})>[];
+    final useMulti = series.isNotEmpty;
     return Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
@@ -859,8 +878,18 @@ class _StatsPageState extends State<StatsPage> {
             SizedBox(
               height: 140,
               width: double.infinity,
-              child: CustomPaint(painter: _LineChartPainter(values, _primary)),
+              child: useMulti
+                  ? CustomPaint(
+                      painter: _MultiLinePainter(
+                        [for (final s in series) s.values],
+                        [for (final s in series) s.color],
+                      ))
+                  : CustomPaint(painter: _LineChartPainter(values, _primary)),
             ),
+            if (useMulti) ...[
+              const SizedBox(height: 8),
+              _chartLegend(series),
+            ],
             const SizedBox(height: 4),
             // 底部日期标签：每天一个且与折线点对齐（用户"日期和点对不上"反馈——Wrap 换行
             // 会错位；改为等距一行，每格 FittedBox 缩放保持点在正下方）
@@ -870,7 +899,12 @@ class _StatsPageState extends State<StatsPage> {
                   Expanded(
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
-                      child: Text(_shortLabel(l), style: TextStyle(fontSize: 9, color: _sub)),
+                      child: Text(
+                        // 按天视图抽稀：每 5 天显示日期（1/6/11/16/21/26/31…），其余格留空保持点位对齐；
+                        // 按月视图（今年/全部）每点都显示月份
+                        monthlyView || _labelVisible(l) ? _shortLabel(l) : '',
+                        style: TextStyle(fontSize: 9, color: _sub),
+                      ),
                     ),
                   ),
               ],
@@ -879,6 +913,83 @@ class _StatsPageState extends State<StatsPage> {
         ),
       ),
     );
+  }
+
+  /// 多店折线配色（深浅主题下均可辨识，固定色板与主题主色区分开）
+  static const List<Color> _seriesColors = [
+    Color(0xFF409EFF), Color(0xFFF59E0B), Color(0xFF10B981),
+    Color(0xFF8B5CF6), Color(0xFFEF4444), Color(0xFFEC4899), Color(0xFF64748B),
+  ];
+
+  /// 全部店铺+出货：把 shop_days 按店聚合到折线桶（按天/按月），区间总额降序，
+  /// 最多 6 家 + 其余合计为「其他」灰线（多店可读性优先）
+  List<({String name, Color color, double total, List<double> values})> _shopSeries(
+      List<Map<String, dynamic>> buckets, bool monthlyView) {
+    final byShop = <String, Map<String, double>>{};
+    final nameOf = <String, String>{};
+    for (final s in _shopDays) {
+      final cid = '${s['client_id'] ?? ''}';
+      if (cid.isEmpty) continue;
+      final day = '${s['day'] ?? ''}';
+      final k = monthlyView ? (day.length >= 7 ? day.substring(0, 7) : '') : day;
+      if (k.isEmpty) continue;
+      nameOf[cid] = '${s['client_name'] ?? ''}';
+      (byShop[cid] ??= {})[k] = ((byShop[cid]?[k]) ?? 0) + _num(s['sales_total']);
+    }
+    final list = <({String name, double total, List<double> values})>[];
+    for (final e in byShop.entries) {
+      final vs = [for (final b in buckets) e.value['${b['k']}'] ?? 0.0];
+      list.add((
+        name: nameOf[e.key] == '' ? e.key : nameOf[e.key]!,
+        total: vs.fold<double>(0, (a, b) => a + b),
+        values: vs,
+      ));
+    }
+    list.sort((a, b) => b.total.compareTo(a.total));
+    final shown = list.take(6).toList();
+    final out = <({String name, Color color, double total, List<double> values})>[
+      for (var i = 0; i < shown.length; i++)
+        (name: shown[i].name, color: _seriesColors[i], total: shown[i].total, values: shown[i].values),
+    ];
+    if (list.length > 6) {
+      final rest = <double>[];
+      for (var i = 0; i < buckets.length; i++) {
+        rest.add(list.skip(6).fold<double>(0, (a, s) => a + s.values[i]));
+      }
+      out.add((
+        name: '其他',
+        color: _seriesColors[6],
+        total: rest.fold<double>(0, (a, b) => a + b),
+        values: rest,
+      ));
+    }
+    return out;
+  }
+
+  /// 多店图例：色点 + 店名 + 区间合计（与折线配色一一对应）
+  Widget _chartLegend(List<({String name, Color color, double total, List<double> values})> series) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 4,
+      children: [
+        for (final s in series)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 8, height: 8, decoration: BoxDecoration(color: s.color, shape: BoxShape.circle)),
+              const SizedBox(width: 4),
+              Text('${s.name} ¥${fmtMoney(s.total)}', style: TextStyle(fontSize: 10, color: _sub)),
+            ],
+          ),
+      ],
+    );
+  }
+
+  /// 按天标签抽稀：日 %5==1（1/6/11/16/21/26/31）才显示，其余格留空保持折线点位对齐
+  bool _labelVisible(String s) {
+    if (s.length < 10) return true;
+    final d = int.tryParse(s.substring(8, 10)) ?? 0;
+    return d % 5 == 1;
   }
 
   String _shortLabel(String s) {
@@ -940,4 +1051,51 @@ class _LineChartPainter extends CustomPainter {
       oldDelegate.values.length != values.length ||
       (values.isNotEmpty && oldDelegate.values.first != values.first) ||
       (values.isNotEmpty && oldDelegate.values.last != values.last);
+}
+
+/// 多店折线：多条不同色线 + 数据点，统一按全局最大值缩放（店铺间可比）
+class _MultiLinePainter extends CustomPainter {
+  final List<List<double>> series;
+  final List<Color> colors;
+  _MultiLinePainter(this.series, this.colors);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (series.isEmpty || series.first.isEmpty) return;
+    var maxV = 0.0;
+    for (final s in series) {
+      for (final v in s) {
+        if (v > maxV) maxV = v;
+      }
+    }
+    final range = maxV <= 0 ? 1.0 : maxV;
+    final n = series.first.length;
+    final dx = n <= 1 ? size.width : size.width / (n - 1);
+    double yAt(double v) => size.height - 4 - (v / range) * (size.height - 10);
+    for (var si = 0; si < series.length; si++) {
+      final color = colors[si % colors.length];
+      final path = Path();
+      for (var i = 0; i < n; i++) {
+        final x = i * dx;
+        final y = yAt(series[si][i]);
+        if (i == 0) {
+          path.moveTo(x, y);
+        } else {
+          path.lineTo(x, y);
+        }
+      }
+      canvas.drawPath(path,
+          Paint()..color = color..strokeWidth = 2.2..style = PaintingStyle.stroke..strokeJoin = StrokeJoin.round);
+      for (var i = 0; i < n; i++) {
+        final c = Offset(i * dx, yAt(series[si][i]));
+        canvas.drawCircle(c, 2.6, Paint()..color = Colors.white);
+        canvas.drawCircle(c, 2.6, Paint()..color = color..style = PaintingStyle.stroke..strokeWidth = 1.4);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MultiLinePainter oldDelegate) =>
+      oldDelegate.series.length != series.length ||
+      (series.isNotEmpty && oldDelegate.series.first.length != series.first.length);
 }

@@ -67,7 +67,8 @@ Future<Map<String, dynamic>?> localSummary(String start, String end, String? cli
   };
 }
 
-/// 每日聚合（与 /stats/daily 同形）：days: [{day, sales_total, gross_profit, paid_total}]；kind=purchase 换进货口径
+/// 每日聚合（与 /stats/daily 同形）：days: [{day, sales_total, gross_profit, paid_total}]；kind=purchase 换进货口径。
+/// 全部店铺+出货：另附 shop_days 按店按日序列（[{client_id, client_name, day, sales_total}]，多色折线用）
 Future<Map<String, dynamic>> localDaily(String start, String end, String? clientId, {String kind = 'sale'}) async {
   final isBuy = kind == 'purchase';
   final rows = await LocalDb.getAll(isBuy ? 'purchase_items' : 'sale_items');
@@ -77,12 +78,22 @@ Future<Map<String, dynamic>> localDaily(String start, String end, String? client
     (byDay[day] ??= {'sales_total': 0, 'gross_profit': 0, 'paid_total': 0})[k] =
         (byDay[day]![k] ?? 0) + v;
   }
+  // 全部店铺+出货：按店按日累加（多色折线数据源；与服务端 /stats/daily shop_days 同形）
+  final allShops = !isBuy && clientId == null;
+  final shopDay = <String, Map<String, double>>{}; // cid → day → amount
   for (final r in rows) {
     if (!isBuy && clientId != null && '${r['client_id'] ?? ''}' != clientId) continue;
     final h = '${r['happened_at'] ?? ''}';
     if (h.isEmpty || h.compareTo(start) < 0 || h.compareTo(end) > 0) continue;
     final day = h.substring(0, 10);
-    acc(day, 'sales_total', (r['amount'] as num?)?.toDouble() ?? 0);
+    final amt = (r['amount'] as num?)?.toDouble() ?? 0;
+    acc(day, 'sales_total', amt);
+    if (allShops) {
+      final cid = '${r['client_id'] ?? ''}';
+      if (cid.isNotEmpty) {
+        (shopDay[cid] ??= {})[day] = ((shopDay[cid]?[day]) ?? 0) + amt;
+      }
+    }
     if (!isBuy) {
       acc(day, 'gross_profit', ((r['sale_price'] as num?)?.toDouble() ?? 0) - ((r['cost_price'] as num?)?.toDouble() ?? 0) * ((r['quantity'] as num?)?.toDouble() ?? 0));
     }
@@ -98,7 +109,23 @@ Future<Map<String, dynamic>> localDaily(String start, String end, String? client
     'day': e.key, 'sales_total': _r(e.value['sales_total'] ?? 0),
     'gross_profit': _r(e.value['gross_profit'] ?? 0), 'paid_total': _r(e.value['paid_total'] ?? 0),
   }).toList()..sort((a, b) => '${a['day']}'.compareTo('${b['day']}'));
-  return {'days': days};
+  var shopDays = <Map<String, dynamic>>[];
+  if (allShops && shopDay.isNotEmpty) {
+    final clients = await LocalDb.getAllByName('clients');
+    final nameOf = {for (final c in clients) '${c['id']}': '${c['name'] ?? ''}'};
+    for (final e in shopDay.entries) {
+      for (final de in e.value.entries) {
+        shopDays.add(<String, dynamic>{
+          'client_id': e.key, 'client_name': nameOf[e.key] ?? '',
+          'day': de.key, 'sales_total': _r(de.value),
+        });
+      }
+    }
+    shopDays.sort((a, b) => '${a['day']}'.compareTo('${b['day']}') == 0
+        ? '${a['client_id']}'.compareTo('${b['client_id']}')
+        : '${a['day']}'.compareTo('${b['day']}'));
+  }
+  return {'days': days, if (shopDays.isNotEmpty) 'shop_days': shopDays};
 }
 
 /// 商品排行（与 /stats/items 同形）：items: [{name, unit, quantity, amount}]（按 商品+单位 分组）；kind=purchase 换进货
