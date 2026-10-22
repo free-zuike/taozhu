@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import '../api.dart';
 import '../local_db.dart';
 import '../theme.dart';
@@ -107,7 +109,10 @@ class _BackupPageState extends State<BackupPage> {
   }
 
   /// 全库备份导出：**本地优先**——直接从本地库导出全量 JSON（本地库是数据主体，离线可用，
-  /// 不经服务器）；Web 直接下载文件，移动/桌面弹系统分享保存
+  /// 不经服务器）；Web 直接下载文件，移动/桌面弹系统分享保存。
+  /// 附件本体内嵌 base64（备份要带图：换设备/换环境恢复附件不丢）——本地公共副本
+  /// attachments/{file}（同图一份 md5 命名）按 attachment_refs 的 key 配对读取；
+  /// 附件总量超 25MB 保护（本地 JSON 过大保存/导入体验差），超限整体跳过附件并提示。
   Future<void> _exportBackup() async {
     try {
       final data = <String, List<dynamic>>{};
@@ -119,12 +124,53 @@ class _BackupPageState extends State<BackupPage> {
           data[store] = await LocalDb.getAll(store);
         } catch (_) {}
       }
+      const maxEmbedBytes = 25 * 1024 * 1024;
+      var skipped = 0;
+      var overflow = false;
+      final refs = await LocalDb.getAll('attachment_refs');
+      final atts = <Map<String, dynamic>>[];
+      final seen = <String>{};
+      if (refs.isNotEmpty) {
+        final root = await getApplicationDocumentsDirectory();
+        var total = 0;
+        for (final r in refs) {
+          final key = '${r['key'] ?? ''}';
+          final file = '${r['file'] ?? ''}';
+          if (key.isEmpty || file.isEmpty || !seen.add(key)) continue;
+          try {
+            final ff = File('${root.path}/attachments/$file');
+            if (!await ff.exists()) {
+              skipped++;
+              continue;
+            }
+            final bytes = await ff.readAsBytes();
+            total += bytes.length;
+            if (total > maxEmbedBytes) {
+              atts.clear();
+              overflow = true;
+              break;
+            }
+            atts.add(<String, dynamic>{
+              'key': key, 'data': base64Encode(bytes), 'size': bytes.length,
+            });
+          } catch (_) {
+            skipped++;
+          }
+        }
+      }
+      if (atts.isNotEmpty) data['__attachments'] = atts;
       final d = {'exported_at': DateTime.now().toIso8601String(), 'data': data};
       final bytes = Uint8List.fromList(
           utf8.encode(const JsonEncoder.withIndent('  ').convert(d)));
       final name = 'taozhu-backup-${DateTime.now().toIso8601String().split('T').first}.json';
       await saveBytes(bytes, name, 'application/json', '陶朱数据备份');
-      if (kIsWeb) toast(context, '备份已导出');
+      if (kIsWeb) {
+        toast(context, overflow
+            ? '已导出（附件共超过 25MB 未包含，建议用云端备份）'
+            : skipped > 0
+                ? '已导出（$skipped 个附件本地无副本未包含）'
+                : '备份已导出（含附件）');
+      }
     } catch (e) {
       toast(context, '备份导出失败：${e.toString().replaceFirst('Exception: ', '')}');
     }

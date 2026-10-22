@@ -148,11 +148,12 @@ function pickAutoKeep() {
   });
 }
 
-/// 导出备份：GET /backup 全库 JSON → 复制剪贴板（对齐小程序复制文本形态；超大提示走云端备份）
+/// 导出备份：GET /backup?attachments=none 全库表数据（轻量；剪贴板文本不带附件本体，
+/// 同环境导入附件引用即可正常读取；跨环境带图请用「立即备份到云端」或 App 本地导出）
 async function exportBackup() {
   uni.showLoading({ title: '导出中…' });
   try {
-    const d = await request<Record<string, unknown>>('/backup', 'GET');
+    const d = await request<Record<string, unknown>>('/backup?attachments=none', 'GET');
     uni.hideLoading();
     const json = JSON.stringify(d, null, 2);
     if (json.length > 900000) {
@@ -160,7 +161,7 @@ async function exportBackup() {
       return;
     }
     uni.setClipboardData({ data: json });
-    uni.showToast({ title: '备份 JSON 已复制，请粘贴到备忘录/电脑保存', icon: 'success' });
+    uni.showToast({ title: '备份 JSON 已复制（不含附件本体，附件请用云端备份）', icon: 'success' });
   } catch (e) {
     uni.hideLoading();
     uni.showToast({ title: '导出失败', icon: 'none' });

@@ -140,22 +140,89 @@ async function collectAttachmentRefs(env: Env): Promise<{ keys: string[]; total:
   return { keys, total: keys.length };
 }
 
+/// 附件内嵌上限：全量 base64 内嵌使备份 JSON 巨大 → Worker stringify 内存/CPU 超限 503
+/// （用户曾报"备份 503"根因）。附件总大小 ≤ 上限才内嵌本体；超出保持引用清单并在响应提示。
+const MAX_ATTACHMENT_EMBED_BYTES = 12 * 1024 * 1024;
+
+/** Uint8Array → base64（分段拼接，防 String.fromCharCode.apply 参数栈溢出） */
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+/// 导出附件：总大小 ≤ 上限 → 内嵌本体 [{key, data(base64), size}]（跨环境恢复附件不丢）；
+/// 超出 → 只列引用 [{key, size}]（同环境恢复仍完整），返回 omitted=true 供前端提示。
+async function exportAttachments(env: Env): Promise<{
+  files: Array<{ key: string; data?: string; size: number }>;
+  count: number;
+  bytes: number;
+  embedded: boolean;
+}> {
+  const refs = await env.DB.prepare('SELECT DISTINCT file_key AS key FROM attachment_refs').all<{ key: string }>();
+  const keys = refs.results.map((r) => r.key).filter((k): k is string => !!k);
+  if (keys.length === 0) return { files: [], count: 0, bytes: 0, embedded: false };
+  const store = createStorage(env);
+  // 先汇总物理大小：超上限直接引用清单（不读内容，省内存防 503）
+  const sizes = new Map<string, number>();
+  let total = 0;
+  for (let i = 0; i < keys.length; i += 100) {
+    const part = keys.slice(i, i + 100);
+    const groups = await Promise.all(part.map((k) => store.list(k)));
+    for (let j = 0; j < part.length; j++) {
+      const size = groups[j].objects[0]?.size ?? 0;
+      sizes.set(part[j], size);
+      total += size;
+    }
+  }
+  if (total > MAX_ATTACHMENT_EMBED_BYTES) {
+    return {
+      files: keys.map((k) => ({ key: k, size: sizes.get(k) ?? 0 })),
+      count: keys.length, bytes: total, embedded: false,
+    };
+  }
+  // 读本体内嵌（并发 6 防存储端限流；单个失败降级为引用，不中断整体导出）
+  const files: Array<{ key: string; data?: string; size: number }> = [];
+  const one = async (k: string) => {
+    try {
+      const obj = await store.get(k);
+      if (!obj) { files.push({ key: k, size: sizes.get(k) ?? 0 }); return; }
+      const buf = await new Response(obj.body).arrayBuffer();
+      files.push({ key: k, data: bytesToBase64(new Uint8Array(buf)), size: buf.byteLength });
+    } catch {
+      files.push({ key: k, size: sizes.get(k) ?? 0 });
+    }
+  };
+  for (let i = 0; i < keys.length; i += 6) {
+    await Promise.all(keys.slice(i, i + 6).map(one));
+  }
+  return { files, count: keys.length, bytes: total, embedded: true };
+}
+
 /// 导出全部业务表数据（手动导出与每日定时自动备份共用）
-/// 附件本体（R2/存储端文件）随备份内嵌（base64）：attachment_refs 只是引用元数据，
-/// 不含文件内容——旧版只导表导致恢复后附件丢失（用户"附件无法正常处理"）。
-export async function exportAllData(db: D1Database, env?: Env): Promise<Record<string, unknown[]>> {
+/// 附件：总大小 ≤ 上限时内嵌本体（{key, data}，跨环境恢复附件不丢）；超出保持引用清单（同环境恢复完整）。
+/// 返回 {data, attachments:{count,bytes,embedded}} 供响应提示（前端据此区分"已含附件/仅引用"）。
+export async function exportAllData(db: D1Database, env?: Env): Promise<{
+  data: Record<string, unknown[]>;
+  attachments: { count: number; bytes: number; embedded: boolean };
+}> {
   const data: Record<string, unknown[]> = {};
   const tables = await listBusinessTables(db);
   for (const t of tables) {
     data[t] = await exportTablePages(db, t);
   }
+  let attachments = { count: 0, bytes: 0, embedded: false };
   if (env) {
     try {
-      const att = await collectAttachmentRefs(env);
-      if (att.keys.length > 0) data['__attachments'] = att.keys.map((key) => ({ key }));
+      const att = await exportAttachments(env);
+      if (att.files.length > 0) data['__attachments'] = att.files;
+      attachments = { count: att.count, bytes: att.bytes, embedded: att.embedded };
     } catch (_) {}
   }
-  return data;
+  return { data, attachments };
 }
 
 /// 北京时间戳（YYYYMMDD-HHMMSSmmm），备份文件名唯一（定时/手动/同秒均不覆盖）
@@ -313,11 +380,21 @@ export async function performBackup(env: Env, username?: string): Promise<{
   };
 }
 
-// GET /backup — 全部数据 JSON（含附件本体 base64，随备份可完整恢复）
+// GET /backup — 全部数据 JSON。默认内嵌附件本体 base64（随备份可完整恢复，跨环境附件不丢；
+// 附件总量超上限仅引用清单并在 attachments.embedded=false 提示）；?attachments=none 只要表数据
+// （剪贴板/轻量导出：同环境导入附件本体已在存储端，attachment_refs 引用行恢复后即可正常读取）
 backupRouter.get('/', async (c) => {
-  const data = await exportAllData(c.env.DB, c.env);
-  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'export', entity_type: 'backup', detail: `导出全库备份（${Object.keys(data).length} 张表）` });
-  return c.json({ exported_at: new Date().toISOString(), data });
+  const wantEmbed = c.req.query('attachments') !== 'none';
+  const { data, attachments } = await exportAllData(c.env.DB, wantEmbed ? c.env : undefined);
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'export', entity_type: 'backup',
+    detail: `导出全库备份（${Object.keys(data).length} 张表${attachments.count > 0 ? ` · 附件 ${attachments.count} 个${attachments.embedded ? '（内嵌）' : '（仅引用）'}` : ''}）`,
+  });
+  return c.json({
+    exported_at: new Date().toISOString(),
+    data,
+    ...(attachments.count > 0 ? { attachments } : {}),
+  });
 });
 
 // POST /backup/import — 合并导入备份 JSON：

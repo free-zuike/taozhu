@@ -967,6 +967,126 @@ describe('全库备份导出 /backup', () => {
   });
 });
 
+describe('备份附件本体内嵌（导出带图，跨环境恢复附件不丢）', () => {
+  /** 内存 R2Bucket mock（对齐 attachments.test.ts） */
+  class FakeBucket {
+    private store = new Map<string, { bytes: Uint8Array }>();
+    async put(key: string, value: BodyInit) {
+      const bytes = new Uint8Array(await new Response(value).arrayBuffer());
+      this.store.set(key, { bytes });
+      return {} as R2Object;
+    }
+    async get(key: string) {
+      const o = this.store.get(key);
+      if (!o) return null;
+      return new R2TestObject(o.bytes) as unknown as R2ObjectBody;
+    }
+    async list(opts?: { prefix?: string }) {
+      const prefix = opts?.prefix ?? '';
+      return {
+        objects: [...this.store.keys()].filter((k) => k.startsWith(prefix)).map((k) => ({
+          key: k, size: this.store.get(k)!.bytes.byteLength, uploaded: new Date(),
+        })),
+        truncated: false,
+      } as R2Objects;
+    }
+    async delete(key: string) {
+      this.store.delete(key);
+    }
+  }
+  class R2TestObject {
+    constructor(private bytes: Uint8Array) {}
+    get size() { return this.bytes.byteLength; }
+    get uploaded() { return new Date(); }
+    get httpEtag() { return 'test-etag'; }
+    get body() {
+      const bytes = this.bytes;
+      return new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(bytes); controller.close(); },
+      });
+    }
+    writeHttpMetadata(headers: Headers) { headers.set('content-type', 'image/jpeg'); }
+  }
+  type BEnv = { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string; BUCKET: FakeBucket };
+  let env: BEnv;
+  let token: string;
+
+  beforeEach(async () => {
+    resetSchemaState();
+    const db = await createFakeD1();
+    await ensureSchema(db as never);
+    env = { DB: db, ASSETS: fakeAssets, JWT_SECRET, BUCKET: new FakeBucket() };
+    const res = await call(env, 'POST', '/api/v1/auth/bootstrap', undefined, { username: 'boss', password: 'admin1234' });
+    token = ((await res.json()) as { token: string }).token;
+  });
+
+  it('导出内嵌附件本体 base64，导入后写回存储端（跨环境附件不丢）', async () => {
+    const photo = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 5]);
+    const fd = new FormData();
+    fd.append('photo', new File([photo], 'a.jpg', { type: 'image/jpeg' }));
+    const up = await app.request(`${BASE}/api/v1/attachments?entity=sale&id=s-1`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    }, env as never);
+    expect(up.status).toBe(201);
+    const key = ((await up.json()) as { key: string }).key;
+
+    const res = await call(env, 'GET', '/api/v1/backup', token);
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as {
+      data: Record<string, unknown[]>;
+      attachments?: { count: number; bytes: number; embedded: boolean };
+    };
+    expect(d.attachments).toEqual({ count: 1, bytes: photo.byteLength, embedded: true });
+    const atts = d.data['__attachments'] as Array<{ key: string; data?: string; size: number }>;
+    expect(atts.length).toBe(1);
+    expect(atts[0].key).toBe(key);
+    expect(atts[0].data).toBe(Buffer.from(photo).toString('base64'));
+
+    // 清空存储端后从导出 JSON 导入：附件本体写回，内容一致
+    env.BUCKET.delete(key);
+    const imp = await call(env, 'POST', '/api/v1/backup/import', token, { data: d.data });
+    expect(imp.status).toBe(200);
+    const restored = await env.BUCKET.get(key);
+    expect(restored).not.toBeNull();
+    const bytes = new Uint8Array(await new Response((restored as unknown as R2TestObject).body).arrayBuffer());
+    expect(bytes).toEqual(photo);
+  });
+
+  it('附件总量超上限 → 仅引用清单（embedded=false，不内嵌防 503）', async () => {
+    const big = new Uint8Array(13 * 1024 * 1024); // 13MB > 12MB 内嵌上限
+    await env.BUCKET.put('taozhu/images/attachments/big.jpg', big);
+    await env.DB.prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES ('sale:s-1:taozhu/images/attachments/big.jpg', 'sale', 's-1', 'taozhu/images/attachments/big.jpg', 'big')",
+    ).run();
+    const res = await call(env, 'GET', '/api/v1/backup', token);
+    const d = (await res.json()) as {
+      data: Record<string, unknown[]>;
+      attachments: { count: number; bytes: number; embedded: boolean };
+    };
+    expect(d.attachments.embedded).toBe(false);
+    expect(d.attachments.count).toBe(1);
+    const atts = d.data['__attachments'] as Array<{ key: string; data?: string }>;
+    expect(atts[0].data).toBeUndefined();
+  });
+
+  it('attachments=none 只要表数据（轻量导出，不带附件）', async () => {
+    const photo = new Uint8Array([9, 8, 7]);
+    const fd = new FormData();
+    fd.append('photo', new File([photo], 'a.jpg', { type: 'image/jpeg' }));
+    await app.request(`${BASE}/api/v1/attachments?entity=sale&id=s-2`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    }, env as never);
+    const res = await call(env, 'GET', '/api/v1/backup?attachments=none', token);
+    const d = (await res.json()) as { data: Record<string, unknown[]>; attachments?: unknown };
+    expect(d.data['__attachments']).toBeUndefined();
+    expect(d.attachments).toBeUndefined();
+  });
+});
+
 describe('对账单分享（/api/v1/share + /share/:token）', () => {
   let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
   let token: string;
