@@ -9,10 +9,15 @@ import { createStorage } from './storage';
 import type { Env } from '../types';
 
 export class BackupPack {
-  private env!: Env;
+  private env: Env;
+
+  /** DO 的环境绑定经构造函数注入（this.env 不会自动赋值——缺失则 createStorage(undefined) 崩） */
+  constructor(_ctx: DurableObjectState, env: Env) {
+    this.env = env;
+  }
 
   async fetch(request: Request): Promise<Response> {
-    const env = this.env as Env;
+    const env = this.env;
     const url = new URL(request.url);
     const store = createStorage(env);
     try {
