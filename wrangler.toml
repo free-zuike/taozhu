@@ -37,6 +37,15 @@ class_name = "SyncHub"
 [triggers]
 crons = ["* * * * *"]
 
+# 备份打包 DO（云端备份/恢复的重活：zip 归档打包/解包，30s CPU 预算，绕开 Worker 10ms 限制）
+[[durable_objects.bindings]]
+name = "BACKUP_PACK"
+class_name = "BackupPack"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SyncHub"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["BackupPack"]

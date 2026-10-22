@@ -286,12 +286,14 @@ class _BackupPageState extends State<BackupPage> {
 
   /// 从云端历史备份恢复（服务端直接读取合并导入，不覆盖现有数据）
   Future<void> _restoreBackup(Map<String, dynamic> b) async {
-    final name = '${b['name_display'] ?? b['name'] ?? ''}';
+    // 存储 key 用文件名（name），显示名（name_display）是格式化时间，不能作恢复标识
+    final name = '${b['name'] ?? ''}';
+    final shown = '${b['name_display'] ?? name}';
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('恢复备份'),
-        content: Text('从云端历史备份「$name」恢复？\n\n将备份中的记录合并到当前数据：\n· 相同 ID 的记录跳过（不覆盖现有数据）\n· 只新增备份里有、当前没有的记录\n\n建议恢复前先「立即备份/导出」留底。'),
+        content: Text('从云端历史备份「$shown」恢复？\n\n将备份中的记录合并到当前数据：\n· 相同 ID 的记录跳过（不覆盖现有数据）\n· 只新增备份里有、当前没有的记录\n· 附件随归档包一并恢复\n\n建议恢复前先「立即备份/导出」留底。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('恢复')),

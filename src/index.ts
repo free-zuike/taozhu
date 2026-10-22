@@ -31,6 +31,7 @@ import { setHubEnv, SyncHub } from './services/sync-hub';
 
 // Durable Object 需从入口导出（wrangler 按 class_name 绑定）
 export { SyncHub };
+export { BackupPack } from './services/backup-pack';
 
 type AppEnv = { Bindings: Env; Variables: { user: import('./types').AuthUser } };
 

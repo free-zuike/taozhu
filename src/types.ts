@@ -9,6 +9,8 @@ export interface Env {
   STORAGE_DRIVER?: string;
   /** 实时同步广播（Durable Object）：数据变更后向在线客户端推送 sync 通知 */
   SYNC_HUB: DurableObjectNamespace;
+  /** 备份打包（Durable Object）：云端备份/恢复的重活（zip 归档打包/解包）在 30s CPU 预算内执行 */
+  BACKUP_PACK: DurableObjectNamespace;
 }
 
 /** JWT 载荷中的用户信息 */

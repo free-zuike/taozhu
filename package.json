@@ -12,6 +12,7 @@
     "audit:mp": "tsx scripts/audit-pages.ts && tsx scripts/audit-endpoints.ts && tsx scripts/audit-features.ts"
   },
   "dependencies": {
+    "@zip.js/zip.js": "^2.24.0",
     "hono": "^4.6.0"
   },
   "devDependencies": {
