@@ -63,6 +63,10 @@ class _MyPageState extends State<MyPage> {
   String _webSyncState = ''; // Web 端服务器连通检查：''=检查中 / ok / error
   int _lowStocks = -1; // 低库存数量（-1=未加载）
   int _expiringStocks = -1; // 临期数量（批次到期 ≤7 天，-1=未加载）
+  /// 备份状态副标题（我的页入口直接可见；空=未加载/店员，回落默认文案）
+  String _backupStatus = '';
+  /// 超 7 天未备份 → 红色警示
+  bool _backupWarn = false;
   int _pending = 0; // 待同步单据数（合并旧 Api 队列 + 新 SyncService 队列）
   int _pullErrors = 0; // 同步应用失败条数（pull 单条 apply 失败，持久化）——不一致直接可见
   int _pendingUploads = 0; // 待上传附件数（入队未成功上传，队列保留重试）
@@ -105,6 +109,7 @@ class _MyPageState extends State<MyPage> {
     _loadLowStocks();
     _loadPending();
     _loadStats();
+    _loadBackupStatus();
     if (kIsWeb) _checkWebSync();
   }
 
@@ -253,6 +258,50 @@ class _MyPageState extends State<MyPage> {
     } catch (_) {
       _lowStocks = 0;
       _expiringStocks = 0;
+    }
+  }
+
+  /// 备份状态（我的页入口直接可见）：取云端最新备份算距今天数，>7 天红色警示。
+  /// 店员（接口 403）/离线/未备份 → 回落默认文案，不阻塞页面。
+  Future<void> _loadBackupStatus() async {
+    try {
+      final d = await Api.instance.get('/backup/files');
+      final list = ((d['files'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (!mounted) return;
+      if (list.isEmpty) {
+        setState(() {
+          _backupStatus = '尚未备份，点此立即备份到云端';
+          _backupWarn = false;
+        });
+        return;
+      }
+      final created = DateTime.tryParse('${list.first['created_at'] ?? ''}');
+      if (created == null) return;
+      final local = created.toLocal();
+      final now = DateTime.now();
+      final days = DateTime(now.year, now.month, now.day)
+          .difference(DateTime(local.year, local.month, local.day))
+          .inDays;
+      final d2 = days < 0 ? 0 : days;
+      final hm = '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+      String status;
+      var warn = false;
+      if (d2 <= 0) {
+        status = '上次备份：今天 $hm';
+      } else if (d2 == 1) {
+        status = '上次备份：昨天 $hm';
+      } else if (d2 > 7) {
+        status = '已 $d2 天未备份，建议立即备份';
+        warn = true;
+      } else {
+        status = '上次备份：$d2 天前';
+      }
+      if (mounted) setState(() {
+        _backupStatus = status;
+        _backupWarn = warn;
+      });
+    } catch (_) {
+      // 店员 403 / 离线：保持默认文案
     }
   }
 
@@ -1274,8 +1323,10 @@ class _MyPageState extends State<MyPage> {
           _groupTitle('系统'),
           _card([
             if (_role != 'staff')
-              _item(Icons.backup_outlined, c.primary, '数据备份', '导出全库存档 / 从备份合并恢复',
-                  () => goPage(context, const BackupPage())),
+              _item(Icons.backup_outlined, c.primary, '数据备份',
+                  _backupStatus.isEmpty ? '导出全库存档 / 从备份合并恢复' : _backupStatus,
+                  () => goPage(context, const BackupPage()),
+                  warn: _backupWarn),
             if (_role != 'staff')
               _item(Icons.auto_awesome_outlined, c.primary, 'AI 识别设置', '配置 AI 记账 Key 与模型（拍照/文字/语音识别）',
                   () => goPage(context, const AiSettingsPage())),

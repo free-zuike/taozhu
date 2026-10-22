@@ -1,6 +1,15 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
+    <!-- 备份状态卡：上次备份时间一目了然；超 7 天未备份红色警示（对齐 App 备份页状态卡） -->
+    <view class="status-card" :class="statusCls">
+      <view class="st-ic"><text class="mi st-tx" :style="{ color: statusColor }">{{ statusIcon }}</text></view>
+      <view class="st-body">
+        <text class="st-title">{{ statusTitle }}</text>
+        <text class="st-sub" :style="{ color: statusColor }">{{ statusSub }}</text>
+      </view>
+    </view>
+
     <view class="group-title">备份</view>
     <view class="grp">
       <view class="tile" @click="backupNow">
@@ -53,13 +62,41 @@
 <script setup lang="ts">
 import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { request, getToken } from '../../api';
 
-type BackupItem = { name: string; name_display?: string; key: string; size?: number };
+type BackupItem = { name: string; name_display?: string; key: string; size?: number; created_at?: string };
 const backups = ref<BackupItem[]>([]);
 const busy = ref(false);
+// 最近一次备份距今天数（null=从未备份/读取失败）+ 显示文本（对齐 App 备份页状态卡）
+const lastBackupDays = ref<number | null>(null);
+const lastBackupLabel = ref('');
+const statusCls = computed(() => (lastBackupDays.value === null ? '' : lastBackupDays.value > 7 ? 'stale' : 'ok'));
+const statusColor = computed(() => {
+  const d = lastBackupDays.value;
+  if (d === null) return 'var(--text-sub)';
+  if (d > 7) return '#f56c6c';
+  return '#22c55e';
+});
+const statusIcon = computed(() => {
+  const d = lastBackupDays.value;
+  if (d === null) return '&#xE8B7;'; // 云朵×（未备份）
+  if (d > 7) return '&#xE8B2;'; // 警告
+  return '&#xE86C;'; // 云端完成
+});
+const statusTitle = computed(() => {
+  const d = lastBackupDays.value;
+  if (d === null) return '从未备份';
+  if (d > 7) return `已 ${d} 天未备份`;
+  return `上次备份：${lastBackupLabel.value}`;
+});
+const statusSub = computed(() => {
+  const d = lastBackupDays.value;
+  if (d === null) return '点「立即备份」把全库数据存到云端，历史可直接恢复';
+  if (d > 7) return '建议立即备份，或开启每日自动备份';
+  return d <= 1 ? '数据已云端留底' : `距今 ${d} 天 · 数据已云端留底`;
+});
 
 // 自动备份配置（存服务器 settings：backup_time/backup_keep，Cloudflare cron 每天到点执行）
 const autoTime = ref('02:00');
@@ -169,9 +206,36 @@ async function load() {
   try {
     const d = await request<{ files: BackupItem[] }>('/backup/files', 'GET');
     backups.value = d?.files || [];
+    applyLastBackup(backups.value);
   } catch (e) {
     uni.showToast({ title: '备份历史读取失败', icon: 'none' });
   }
+}
+
+/// 从历史最新一条算"距今天数 + 显示文本"（created_at 为 UTC ISO，转本地时区按自然日差；对齐 App _applyLastBackup）
+function applyLastBackup(list: BackupItem[]) {
+  if (!list.length) {
+    lastBackupDays.value = null;
+    lastBackupLabel.value = '';
+    return;
+  }
+  const t = new Date(list[0].created_at || '');
+  if (isNaN(t.getTime())) {
+    lastBackupDays.value = null;
+    lastBackupLabel.value = '';
+    return;
+  }
+  // UTC → 本地时刻（getTimezoneOffset 返回"本地-UTC"分钟差，东八区为 -480）
+  const loc = new Date(t.getTime() - t.getTimezoneOffset() * 60000);
+  const now = new Date();
+  const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const d1 = new Date(loc.getFullYear(), loc.getMonth(), loc.getDate());
+  const days = Math.max(0, Math.round((d0.getTime() - d1.getTime()) / 86400000));
+  lastBackupDays.value = days;
+  const hm = `${String(loc.getHours()).padStart(2, '0')}:${String(loc.getMinutes()).padStart(2, '0')}`;
+  if (days <= 0) lastBackupLabel.value = `今天 ${hm}`;
+  else if (days === 1) lastBackupLabel.value = `昨天 ${hm}`;
+  else lastBackupLabel.value = `${String(loc.getMonth() + 1).padStart(2, '0')}-${String(loc.getDate()).padStart(2, '0')} ${hm}`;
 }
 
 async function backupNow() {
@@ -218,6 +282,15 @@ function restore(b: BackupItem) {
 <style>
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); padding: 24rpx; box-sizing: border-box; }
+/* 备份状态卡（对齐 App 备份页状态卡：主色描边圆角，图标+标题+副文案） */
+.status-card { display: flex; align-items: center; gap: 18rpx; border-radius: 20rpx; padding: 24rpx; margin-bottom: 20rpx; background: var(--card-bg); border: 1rpx solid var(--divider); }
+.status-card.ok { border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.08); }
+.status-card.stale { border-color: rgba(245, 108, 108, 0.4); background: rgba(245, 108, 108, 0.08); }
+.st-ic { width: 60rpx; height: 60rpx; border-radius: 16rpx; background: var(--card-bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.st-tx { font-size: 36rpx; line-height: 1; }
+.st-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6rpx; }
+.st-title { font-size: 28rpx; font-weight: 600; color: var(--text-main); }
+.st-sub { font-size: 22rpx; line-height: 1.5; }
 .group-title { font-size: 25rpx; color: var(--text-sub); margin: 8rpx 8rpx 16rpx; display: flex; align-items: center; }
 .badge { display: inline-block; background: var(--primary-soft); color: var(--primary); border-radius: 999rpx; padding: 2rpx 14rpx; font-size: 20rpx; margin-left: 12rpx; }
 /* 分组卡片 + tile 行（对齐 App backup_page 卡片布局） */

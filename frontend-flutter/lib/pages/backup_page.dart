@@ -25,6 +25,10 @@ class _BackupPageState extends State<BackupPage> {
   int _autoKeep = 14;
   /// 云端备份历史（新→旧）：自动从存储端读取，可直接恢复，无需下载
   List<Map<String, dynamic>> _backups = [];
+  /// 最近一次备份距今天数（null=从未备份/读取失败）
+  int? _lastBackupDays;
+  /// 最近一次备份显示文本（今天/昨天 HH:MM / MM-DD HH:MM）
+  String _lastBackupLabel = '';
 
   @override
   void initState() {
@@ -192,13 +196,46 @@ class _BackupPageState extends State<BackupPage> {
     }
   }
 
-  /// 云端备份历史（新→旧）：自动读取存储端，无需下载文件
+  /// 云端备份历史（新→旧）：自动读取存储端，无需下载文件；同时算最近备份状态（状态卡/我的页入口用）
   Future<void> _loadBackups() async {
     try {
       final d = await Api.instance.get('/backup/files');
       final list = ((d['files'] as List?) ?? []).cast<Map<String, dynamic>>();
-      if (mounted) setState(() => _backups = list);
+      if (mounted) setState(() {
+        _backups = list;
+        _applyLastBackup(list);
+      });
     } catch (_) {}
+  }
+
+  /// 从历史最新一条算"距今天数 + 显示文本"（created_at 为 UTC ISO，转本地时区按自然日差）
+  void _applyLastBackup(List<Map<String, dynamic>> list) {
+    if (list.isEmpty) {
+      _lastBackupDays = null;
+      _lastBackupLabel = '';
+      return;
+    }
+    final created = DateTime.tryParse('${list.first['created_at'] ?? ''}');
+    if (created == null) {
+      _lastBackupDays = null;
+      _lastBackupLabel = '';
+      return;
+    }
+    final local = created.toLocal();
+    final now = DateTime.now();
+    final days = DateTime(now.year, now.month, now.day)
+        .difference(DateTime(local.year, local.month, local.day))
+        .inDays;
+    _lastBackupDays = days < 0 ? 0 : days;
+    final hm = '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    if (days <= 0) {
+      _lastBackupLabel = '今天 $hm';
+    } else if (days == 1) {
+      _lastBackupLabel = '昨天 $hm';
+    } else {
+      _lastBackupLabel =
+          '${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} $hm';
+    }
   }
 
   /// 从云端历史备份恢复（服务端直接读取合并导入，不覆盖现有数据）
@@ -238,6 +275,7 @@ class _BackupPageState extends State<BackupPage> {
           ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _backupStatusCard(c),
           _groupTitle(c, '备份'),
           _card(c, [
             _tile(c, Icons.cloud_upload_outlined, '立即备份', '手动备份全库到云端（历史可直接恢复），保留最近 $_autoKeep 份', _backupNow),
@@ -284,6 +322,57 @@ class _BackupPageState extends State<BackupPage> {
           const SizedBox(height: 24),
         ],
       ),
+        ],
+      ),
+    );
+  }
+
+  /// 备份状态卡：上次备份时间一目了然；从未备份=中性提示，超 7 天未备份=红色警示
+  Widget _backupStatusCard(TaozhuColors c) {
+    final days = _lastBackupDays;
+    IconData icon;
+    Color color;
+    String title;
+    String sub;
+    if (days == null) {
+      icon = Icons.cloud_off_outlined;
+      color = c.textSub;
+      title = '从未备份';
+      sub = '点「立即备份」把全库数据存到云端，历史可直接恢复';
+    } else if (days > 7) {
+      icon = Icons.warning_amber_outlined;
+      color = c.danger;
+      title = '已 $days 天未备份';
+      sub = '建议立即备份，或开启每日自动备份';
+    } else {
+      icon = Icons.cloud_done_outlined;
+      color = c.success;
+      title = '上次备份：$_lastBackupLabel';
+      sub = days <= 1 ? '数据已云端留底' : '距今 $days 天 · 数据已云端留底';
+    }
+    return Container(
+      margin: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 26, color: color),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: c.textMain)),
+                const SizedBox(height: 3),
+                Text(sub, style: TextStyle(fontSize: 12, color: color)),
+              ],
+            ),
+          ),
         ],
       ),
     );

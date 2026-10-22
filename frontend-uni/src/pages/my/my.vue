@@ -78,7 +78,7 @@
     <view class="group-title">系统</view>
     <view class="grp">
       <view v-if="isAdmin" class="row" @click="go('/pages/backup/backup')">
-        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE864;</text></view><view class="r-body"><text class="r-tx">数据备份</text><text class="r-sub">导出全库存档 / 从备份合并恢复</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE864;</text></view><view class="r-body"><text class="r-tx">数据备份</text><text class="r-sub" :style="backupWarn ? 'color:#f56c6c' : ''">{{ backupStatus || '导出全库存档 / 从备份合并恢复' }}</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="go('/pages/logs/logs')">
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE160;</text></view><view class="r-body"><text class="r-tx">日志</text><text class="r-sub">同步/操作/错误/网络记录，排障用</text></view><text class="r-arrow">›</text>
@@ -124,6 +124,9 @@ import { APP_VERSION } from '../../version';
 
 const user = ref({ name: '', role: '' });
 const isAdmin = ref(true);
+// 备份状态副标题（我的页入口直接可见；空=未加载，回落默认文案；超 7 天红色警示）
+const backupStatus = ref('');
+const backupWarn = ref(false);
 // 头像（/auth/avatar?token= 带鉴权，小程序 image 组件无法带 header）
 const avatarUrl = ref('');
 // 问候语（对齐 App：早上好/下午好/晚上好）+ 时段图标
@@ -200,7 +203,39 @@ onShow(async () => {
     // 用户信息拉取失败不阻塞页面
   }
   loadStats();
+  if (isAdmin.value) loadBackupStatus();
 });
+
+/// 备份状态（入口直接可见）：取云端最新备份算距今天数，>7 天红色警示（对齐 App 我的页）
+async function loadBackupStatus() {
+  try {
+    const d = await request<{ files?: Array<{ created_at?: string }> }>('/backup/files', 'GET').catch(() => null);
+    const list = d?.files || [];
+    if (!list.length) {
+      backupStatus.value = '尚未备份，点此立即备份到云端';
+      backupWarn.value = false;
+      return;
+    }
+    const t = new Date(list[0].created_at || '');
+    if (isNaN(t.getTime())) return;
+    const loc = new Date(t.getTime() - t.getTimezoneOffset() * 60000);
+    const now = new Date();
+    const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const d1 = new Date(loc.getFullYear(), loc.getMonth(), loc.getDate());
+    const days = Math.max(0, Math.round((d0.getTime() - d1.getTime()) / 86400000));
+    const hm = `${String(loc.getHours()).padStart(2, '0')}:${String(loc.getMinutes()).padStart(2, '0')}`;
+    let status: string;
+    let warn = false;
+    if (days <= 0) status = `上次备份：今天 ${hm}`;
+    else if (days === 1) status = `上次备份：昨天 ${hm}`;
+    else if (days > 7) { status = `已 ${days} 天未备份，建议立即备份`; warn = true; }
+    else status = `上次备份：${days} 天前`;
+    backupStatus.value = status;
+    backupWarn.value = warn;
+  } catch (e) {
+    // 店员 403 / 离线：保持默认文案
+  }
+}
 
 async function loadStats() {
   if (!isAdmin.value) return;
