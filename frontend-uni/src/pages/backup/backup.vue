@@ -1,13 +1,14 @@
 <template>
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
-    <!-- 备份状态卡：上次备份时间一目了然；超 7 天未备份红色警示（对齐 App 备份页状态卡） -->
-    <view class="status-card" :class="statusCls">
+    <!-- 备份状态卡：运行状态（进行中/成功/失败+日志）优先，点卡片查看日志（对齐 App 备份页） -->
+    <view class="status-card" :class="statusCls" @click="statusTap">
       <view class="st-ic"><text class="mi st-tx" :style="{ color: statusColor }">{{ statusIcon }}</text></view>
       <view class="st-body">
         <text class="st-title">{{ statusTitle }}</text>
         <text class="st-sub" :style="{ color: statusColor }">{{ statusSub }}</text>
       </view>
+      <text v-if="showRunArrow" class="st-arrow">›</text>
     </view>
 
     <view class="group-title">备份</view>
@@ -69,34 +70,65 @@ import { request, getToken } from '../../api';
 type BackupItem = { name: string; name_display?: string; key: string; size?: number; created_at?: string };
 const backups = ref<BackupItem[]>([]);
 const busy = ref(false);
+// 最近一次备份运行状态（/backup/runs/latest：running/succeeded/failed + 日志，对齐 App backup_page）
+const lastRun = ref<{ status: string; message?: string; log_text?: string; started_at?: string } | null>(null);
 // 最近一次备份距今天数（null=从未备份/读取失败）+ 显示文本（对齐 App 备份页状态卡）
 const lastBackupDays = ref<number | null>(null);
 const lastBackupLabel = ref('');
-const statusCls = computed(() => (lastBackupDays.value === null ? '' : lastBackupDays.value > 7 ? 'stale' : 'ok'));
+const statusCls = computed(() => {
+  const st = lastRun.value?.status;
+  if (st === 'failed') return 'stale';
+  if (st === 'running' || busy.value) return 'running';
+  return lastBackupDays.value === null ? '' : lastBackupDays.value > 7 ? 'stale' : 'ok';
+});
+/// 状态卡是否可点开查看日志（失败/进行中才有日志可看）
+const showRunArrow = computed(() => ['running', 'failed'].includes(lastRun.value?.status || '') || busy.value);
 const statusColor = computed(() => {
+  const st = lastRun.value?.status;
+  if (st === 'failed') return '#f56c6c';
+  if (st === 'running' || busy.value) return 'var(--primary)';
   const d = lastBackupDays.value;
   if (d === null) return 'var(--text-sub)';
   if (d > 7) return '#f56c6c';
   return '#22c55e';
 });
 const statusIcon = computed(() => {
+  const st = lastRun.value?.status;
+  if (st === 'failed') return '&#xE8B2;'; // 警告
+  if (st === 'running' || busy.value) return '&#xE868;'; // 上传
   const d = lastBackupDays.value;
   if (d === null) return '&#xE8B7;'; // 云朵×（未备份）
-  if (d > 7) return '&#xE8B2;'; // 警告
+  if (d > 7) return '&#xE8B2;';
   return '&#xE86C;'; // 云端完成
 });
 const statusTitle = computed(() => {
+  const st = lastRun.value?.status;
+  if (st === 'running' || busy.value) return '备份中…';
+  if (st === 'failed') return '上次备份失败';
   const d = lastBackupDays.value;
   if (d === null) return '从未备份';
   if (d > 7) return `已 ${d} 天未备份`;
   return `上次备份：${lastBackupLabel.value}`;
 });
 const statusSub = computed(() => {
+  const r = lastRun.value;
+  if (r?.status === 'failed') return `${r.message || '点击查看失败原因'}（点击查看详情）`;
+  if (r?.status === 'running' || busy.value) return r?.message || '正在打包数据与附件，请稍候';
   const d = lastBackupDays.value;
   if (d === null) return '点「立即备份」把全库数据存到云端，历史可直接恢复';
   if (d > 7) return '建议立即备份，或开启每日自动备份';
   return d <= 1 ? '数据已云端留底' : `距今 ${d} 天 · 数据已云端留底`;
 });
+/// 点状态卡：查看备份运行日志/失败详情
+function statusTap() {
+  const r = lastRun.value;
+  if (!r || !r.log_text || !r.message) return;
+  uni.showModal({
+    title: r.status === 'running' ? '备份进行中' : r.status === 'failed' ? '备份失败' : '最近备份',
+    content: String(r.log_text || r.message || ''),
+    showCancel: false,
+  });
+}
 
 // 自动备份配置（存服务器 settings：backup_time/backup_keep，Cloudflare cron 每天到点执行）
 const autoTime = ref('02:00');
@@ -106,6 +138,7 @@ onShow(async () => {
   if (!getToken()) return;
   load();
   loadAuto();
+  loadRun();
 });
 
 async function loadAuto() {
@@ -240,6 +273,10 @@ function applyLastBackup(list: BackupItem[]) {
 }
 
 async function backupNow() {
+  if (busy.value) {
+    uni.showToast({ title: '备份进行中，请稍候', icon: 'none' });
+    return;
+  }
   busy.value = true;
   try {
     const r = await request<{ key?: string; status?: string; message?: string }>('/backup/now', 'POST', {});
@@ -247,17 +284,25 @@ async function backupNow() {
     const msg = r?.message || '';
     if (status === 'failed') {
       uni.showToast({ title: `备份失败：${msg || '未知错误'}`, icon: 'none', duration: 3000 });
-    } else if (status === 'partial') {
-      uni.showModal({ title: '备份部分成功', content: msg || '部分数据未能完整备份', showCancel: false });
     } else {
       uni.showToast({ title: `备份成功：${msg || '已备份到云端'}`, icon: 'success' });
     }
     load();
+    loadRun();
   } catch (e) {
     uni.showToast({ title: '备份失败（503 超时等），请重试或检查云端存储', icon: 'none', duration: 3000 });
   } finally {
     busy.value = false;
+    loadRun();
   }
+}
+
+/// 最近一次备份运行状态（状态卡：进行中/成功/失败 + 日志）
+async function loadRun() {
+  try {
+    const d = await request<{ run: { status: string; message?: string; log_text?: string; started_at?: string } | null }>('/backup/runs/latest', 'GET');
+    lastRun.value = d?.run || null;
+  } catch (_) {}
 }
 
 function restore(b: BackupItem) {
@@ -287,6 +332,8 @@ function restore(b: BackupItem) {
 .status-card { display: flex; align-items: center; gap: 18rpx; border-radius: 20rpx; padding: 24rpx; margin-bottom: 20rpx; background: var(--card-bg); border: 1rpx solid var(--divider); }
 .status-card.ok { border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.08); }
 .status-card.stale { border-color: rgba(245, 108, 108, 0.4); background: rgba(245, 108, 108, 0.08); }
+.status-card.running { border-color: rgba(64, 158, 255, 0.45); background: rgba(64, 158, 255, 0.08); }
+.st-arrow { font-size: 34rpx; color: var(--text-sub); flex-shrink: 0; }
 .st-ic { width: 60rpx; height: 60rpx; border-radius: 16rpx; background: var(--card-bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .st-tx { font-size: 36rpx; line-height: 1; }
 .st-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6rpx; }

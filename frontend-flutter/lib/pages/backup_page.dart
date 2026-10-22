@@ -31,12 +31,17 @@ class _BackupPageState extends State<BackupPage> {
   int? _lastBackupDays;
   /// 最近一次备份显示文本（今天/昨天 HH:MM / MM-DD HH:MM）
   String _lastBackupLabel = '';
+  /// 立即备份进行中（防重入：进行中禁用重复点击，避免连点生成多份）
+  bool _backingUp = false;
+  /// 最近一次备份运行状态（/backup/runs/latest：running/succeeded/failed + 日志）
+  Map<String, dynamic>? _lastRun;
 
   @override
   void initState() {
     super.initState();
     _loadAutoTime();
     _loadBackups();
+    _loadLatestRun();
   }
 
   Future<void> _loadAutoTime() async {
@@ -223,23 +228,72 @@ class _BackupPageState extends State<BackupPage> {
     }
   }
 
-  /// 立即手动备份全库到云端（走存储工厂；历史可直接恢复）
+  /// 立即手动备份全库到云端（走 DO 打包 ZIP 归档包）；进行中防重入（连点不再生成多份）
   Future<void> _backupNow() async {
+    if (_backingUp) {
+      toast(context, '备份进行中，请稍候…');
+      return;
+    }
+    setState(() => _backingUp = true);
+    _loadLatestRun(); // 立即展示"备份中"状态
     try {
       final r = await Api.instance.post('/backup/now', {});
       final status = '${r['status'] ?? 'succeeded'}';
       final msg = '${r['message'] ?? ''}';
       if (status == 'failed') {
         toast(context, '备份失败：${msg.isEmpty ? '未知错误' : msg}');
-      } else if (status == 'partial') {
-        toast(context, '备份部分成功：$msg');
       } else {
         toast(context, '备份成功：${msg.isEmpty ? '已备份到云端' : msg}');
       }
       _loadBackups();
     } catch (e) {
       toast(context, '备份失败（可能超时），请重试或检查云端存储');
+    } finally {
+      if (mounted) {
+        setState(() => _backingUp = false);
+        _loadLatestRun();
+      }
     }
+  }
+
+  /// 最近一次备份运行状态（备份页状态卡：进行中/成功/失败 + 日志）
+  Future<void> _loadLatestRun() async {
+    try {
+      final d = await Api.instance.get('/backup/runs/latest');
+      final run = d['run'] as Map?;
+      if (mounted) {
+        setState(() => _lastRun = (run as Map<String, dynamic>?)?.cast<String, dynamic>());
+      }
+    } catch (_) {}
+  }
+
+  /// 备份运行日志弹窗（点状态卡查看：进行中/失败/成功明细）
+  void _showRunLog(String status, String message, String log) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(status == 'running'
+            ? '备份进行中'
+            : status == 'failed'
+                ? '备份失败'
+                : '最近备份'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (message.isNotEmpty)
+                Text(message, style: const TextStyle(fontSize: 13, height: 1.5)),
+              if (log.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(log, style: TextStyle(fontSize: 11, height: 1.5, color: _c.textSub)),
+              ],
+            ],
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭'))],
+      ),
+    );
   }
 
   /// 云端备份历史（新→旧）：自动读取存储端，无需下载文件；同时算最近备份状态（状态卡/我的页入口用）
@@ -326,7 +380,9 @@ class _BackupPageState extends State<BackupPage> {
           _backupStatusCard(c),
           _groupTitle(c, '备份'),
           _card(c, [
-            _tile(c, Icons.cloud_upload_outlined, '立即备份', '手动备份全库到云端（历史可直接恢复），保留最近 $_autoKeep 份', _backupNow),
+            _tile(c, Icons.cloud_upload_outlined, '立即备份',
+                _backingUp ? '备份进行中…请稍候（完成或失败会在状态卡提示）' : '手动备份全库到云端（历史可直接恢复），保留最近 $_autoKeep 份',
+                _backupNow),
             _tile(c, Icons.save_alt_outlined, '导出备份', '导出全库 JSON 存档（建议定期导出留底）', _exportBackup),
             _tile(c, Icons.restore_outlined, '导入备份', '从备份 JSON 合并恢复（不覆盖现有数据）', _importBackup),
           ]),
@@ -375,53 +431,88 @@ class _BackupPageState extends State<BackupPage> {
     );
   }
 
-  /// 备份状态卡：上次备份时间一目了然；从未备份=中性提示，超 7 天未备份=红色警示
+  /// 备份状态卡：运行状态（进行中/成功/失败+日志）优先；无运行记录时回退「上次备份时间」逻辑。
+  /// 点状态卡可查看备份日志/错误详情。
   Widget _backupStatusCard(TaozhuColors c) {
-    final days = _lastBackupDays;
+    final run = _lastRun;
+    final runStatus = '${run?['status'] ?? ''}';
+    final runMessage = '${run?['message'] ?? ''}';
+    final runLog = '${run?['log_text'] ?? ''}';
     IconData icon;
     Color color;
     String title;
     String sub;
-    if (days == null) {
-      icon = Icons.cloud_off_outlined;
-      color = c.textSub;
-      title = '从未备份';
-      sub = '点「立即备份」把全库数据存到云端，历史可直接恢复';
-    } else if (days > 7) {
-      icon = Icons.warning_amber_outlined;
+    if (_backingUp || runStatus == 'running') {
+      icon = Icons.cloud_upload_outlined;
+      color = c.primary;
+      title = '备份中…';
+      final st = DateTime.tryParse('${run?['started_at'] ?? ''}');
+      sub = st == null
+          ? (runMessage.isEmpty ? '正在打包数据与附件，请稍候' : runMessage)
+          : '${st.hour.toString().padLeft(2, '0')}:${st.minute.toString().padLeft(2, '0')} 开始 · '
+              '${runMessage.isEmpty ? '正在打包数据与附件' : runMessage}';
+    } else if (runStatus == 'failed') {
+      icon = Icons.error_outline;
       color = c.danger;
-      title = '已 $days 天未备份';
-      sub = '建议立即备份，或开启每日自动备份';
-    } else {
+      title = '上次备份失败';
+      sub = runMessage.isEmpty ? '点击查看失败原因' : '$runMessage（点击查看详情）';
+    } else if (runStatus == 'succeeded') {
+      final days = _lastBackupDays;
       icon = Icons.cloud_done_outlined;
       color = c.success;
-      title = '上次备份：$_lastBackupLabel';
-      sub = days <= 1 ? '数据已云端留底' : '距今 $days 天 · 数据已云端留底';
+      title = days == null ? '已备份到云端' : '上次备份：$_lastBackupLabel';
+      sub = days == null || days <= 1
+          ? (runMessage.isEmpty ? '数据已云端留底' : runMessage)
+          : '距今 $days 天 · ${runMessage.isEmpty ? '数据已云端留底' : runMessage}';
+    } else {
+      final days = _lastBackupDays;
+      if (days == null) {
+        icon = Icons.cloud_off_outlined;
+        color = c.textSub;
+        title = '从未备份';
+        sub = '点「立即备份」把全库数据存到云端，历史可直接恢复';
+      } else if (days > 7) {
+        icon = Icons.warning_amber_outlined;
+        color = c.danger;
+        title = '已 $days 天未备份';
+        sub = '建议立即备份，或开启每日自动备份';
+      } else {
+        icon = Icons.cloud_done_outlined;
+        color = c.success;
+        title = '上次备份：$_lastBackupLabel';
+        sub = days <= 1 ? '数据已云端留底' : '距今 $days 天 · 数据已云端留底';
+      }
     }
-    return Container(
-      margin: const EdgeInsets.only(bottom: 18),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withOpacity(0.35)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 26, color: color),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: c.textMain)),
-                const SizedBox(height: 3),
-                Text(sub, style: TextStyle(fontSize: 12, color: color)),
-              ],
+    final canView = run != null && (runStatus != 'succeeded' || runMessage.isNotEmpty || runLog.isNotEmpty);
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: canView ? () => _showRunLog(runStatus, runMessage, runLog) : null,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 18),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.withOpacity(0.35)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 26, color: color),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: c.textMain)),
+                  const SizedBox(height: 3),
+                  Text(sub, style: TextStyle(fontSize: 12, color: color)),
+                ],
+              ),
             ),
-          ),
-        ],
+            if (canView) Icon(Icons.chevron_right, size: 20, color: color),
+          ],
+        ),
       ),
     );
   }

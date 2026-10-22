@@ -10,9 +10,10 @@ import { createStorage, type AttachmentStorage } from './storage';
 import { APP_VERSION } from '../version';
 
 /** 备份排除表（内部/运行时，非业务数据）：login_attempts 限流/登录防爆破、schema_meta 建表标记、
- *  sync_changes 变更流(恢复后由 fullSync 重建，导入会导致客户端重放旧游标)、audit_logs 操作审计（量大且可再生成）
+ *  sync_changes 变更流(恢复后由 fullSync 重建，导入会导致客户端重放旧游标)、audit_logs 操作审计（量大且可再生成）、
+ *  backup_runs 备份运行状态（运行时数据，不随备份导出）
  */
-const EXCLUDED_TABLES = new Set(['login_attempts', 'schema_meta', 'sync_changes', 'audit_logs']);
+const EXCLUDED_TABLES = new Set(['login_attempts', 'schema_meta', 'sync_changes', 'audit_logs', 'backup_runs']);
 
 /// 动态枚举全部业务表（参考 sqlite_master 全量 - 内部表），不再硬编码——
 /// 新增表（价格组/分享/账号/设备…）自动纳入备份，杜绝"备份不全"
@@ -251,14 +252,34 @@ export interface BackupArchiveResult {
   attachments: { total: number; ok: number; failed: number };
 }
 
+/// buildBackupArchive 可选参数：runId=备份运行记录 id（提供则同时写 backup_runs 状态/日志，前端可查进行中/成功/失败）
+export interface BuildBackupOptions {
+  runId?: string;
+  onLog?: (line: string) => void;
+}
+
 /// 云备份：生成 ZIP 归档包（meta.json + db.json + attachments/ 附件原始文件，流式入包无大小上限）
 /// 并写入存储端，清理超保留份数。在 Durable Object（30s CPU 预算）内调用——附件多时 Worker
-/// 10ms CPU 限制会超（对齐 beecount：打包放 DO，绕开 Worker 限制）。
+/// 10ms CPU 限制会超（对齐参考项目：打包放 DO，绕开 Worker 限制）。
 export async function buildBackupArchive(
   db: D1Database,
   store: AttachmentStorage,
+  opts?: BuildBackupOptions,
 ): Promise<BackupArchiveResult> {
+  const log = opts?.onLog;
+  const runId = opts?.runId;
+  /// 运行状态写库（best-effort，不阻塞打包）
+  const touch = async (status: 'running' | 'succeeded' | 'failed', message: string, extra?: { file_name?: string; size?: number; finished?: boolean }) => {
+    if (!runId) return;
+    try {
+      await db.prepare(
+        `UPDATE backup_runs SET status = ?, message = ?, finished_at = COALESCE(finished_at, ?),
+           file_name = COALESCE(?, file_name), size = COALESCE(?, size) WHERE id = ?`,
+      ).bind(status, message, extra?.finished ? new Date().toISOString() : '', extra?.file_name ?? '', extra?.size ?? '', runId).run();
+    } catch (_) {}
+  };
   const keep = await getBackupKeep(db);
+  log?.('开始备份：读取数据…');
   // 1) 导出各表：单表失败不中断（收集 failed 表清单）
   const tables = await listBusinessTables(db);
   const data: Record<string, unknown[]> = {};
@@ -270,9 +291,11 @@ export async function buildBackupArchive(
       failedTables.push(t);
     }
   }
+  log?.(`数据导出完成：${tables.length} 张表${failedTables.length ? `（${failedTables.length} 张失败）` : ''}`);
   // 2) 附件清单（DISTINCT file_key；物理文件在存储端，恢复时按 key 写回）
   const refs = await db.prepare('SELECT DISTINCT file_key AS key FROM attachment_refs').all<{ key: string }>();
   const keys = refs.results.map((r) => r.key).filter((k): k is string => !!k);
+  log?.(`附件 ${keys.length} 个，开始打包…`);
   // 3) zip 打包：附件流式入包（zip.js useWebWorkers=false，Worker 环境不派生子 worker）
   const { ZipWriter, BlobWriter } = await import('@zip.js/zip.js');
   const zipWriter = new ZipWriter(new BlobWriter('application/zip'), { useWebWorkers: false });
@@ -297,17 +320,22 @@ export async function buildBackupArchive(
   }
   const blob = await zipWriter.close();
   const bytes = new Uint8Array(await blob.arrayBuffer());
+  log?.(`归档打包完成：${(bytes.length / 1048576).toFixed(2)} MB`);
   // 4) 写入存储端（失败=整体 failed）
   const key = `${BACKUP_PREFIX}${bjStamp(new Date())}.zip`;
   try {
     await store.put(key, bytes, 'application/zip');
   } catch (e) {
+    const message = `上传备份失败：${(e as Error).message}`;
+    log?.(message);
+    await touch('failed', message, { finished: true });
     return {
-      key, size: 0, status: 'failed', message: `上传备份失败：${(e as Error).message}`,
+      key, size: 0, status: 'failed', message,
       tables: { total: tables.length, ok: tables.length - failedTables.length, failed: failedTables },
       attachments: { total: keys.length, ok: attOk, failed: attFailed.length },
     };
   }
+  log?.(`已写入存储端：${key.slice(BACKUP_PREFIX.length)}`);
   // 5) 清理超保留份数（失败不改变备份结果，best-effort）
   try {
     const list = await store.list(BACKUP_PREFIX);
@@ -325,6 +353,12 @@ export async function buildBackupArchive(
   const message = tableOk && attOkAll
     ? `备份成功：${tables.length} 张表 · 附件 ${attOk} 个`
     : `备份不完整：${failedTables.length > 0 ? `表 <${failedTables.join(', ')}> ` : ''}${attFailed.length > 0 ? `附件 ${attFailed.length} 个读取失败` : ''}导出失败`;
+  log?.(message);
+  await touch(status, message, {
+    finished: true,
+    file_name: key.slice(BACKUP_PREFIX.length),
+    size: bytes.length,
+  });
   return {
     key, size: bytes.length, status, message,
     tables: { total: tables.length, ok: tables.length - failedTables.length, failed: failedTables },

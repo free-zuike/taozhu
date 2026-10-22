@@ -134,4 +134,34 @@ describe('云备份 ZIP 归档包（附件以原始文件入包）', () => {
     expect(formatBackupName('backup-2026-09-18')).toBe('2026-09-18');
     expect(formatBackupName('unknown-name')).toBe('unknown-name');
   });
+
+  it('buildBackupArchive 带 runId/onLog：backup_runs 从 running 收尾为 succeeded 且日志落库', async () => {
+    await db.prepare('INSERT INTO clients (id, name) VALUES (?, ?)').bind('c-1', 'A店').run();
+    const photo = new Uint8Array([1, 2, 3]);
+    await store.put('taozhu/images/attachments/md5run.jpg', photo);
+    await db.prepare(
+      "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES ('sale:s-1:taozhu/images/attachments/md5run.jpg', 'sale', 's-1', 'taozhu/images/attachments/md5run.jpg', 'md5run')",
+    ).run();
+    const logs: string[] = [];
+    // DO 流程=先建 running 记录再打包（单测模拟同序）
+    await db.prepare(
+      "INSERT INTO backup_runs (id, status, started_at, message, log_text) VALUES ('RUN1', 'running', '2026-10-22T00:00:00.000Z', '开始备份…', '')",
+    ).run();
+    const r = await buildBackupArchive(db, store, {
+      runId: 'RUN1',
+      onLog: (line) => logs.push(line),
+    });
+    expect(r.status).toBe('succeeded');
+    expect(logs.length).toBeGreaterThanOrEqual(3); // 数据导出/打包完成/已写入…
+    expect(logs.some((l) => l.includes('归档打包完成'))).toBe(true);
+    const row = await db.prepare("SELECT status, message, file_name, size FROM backup_runs WHERE id = 'RUN1'").first<{
+      status: string; message: string; file_name: string; size: number;
+    }>();
+    expect(row?.status).toBe('succeeded');
+    expect(row?.file_name).toMatch(/\.zip$/);
+    expect(row?.size).toBeGreaterThan(0);
+    // backup_runs 不计入业务表（不随备份导出）
+    const tables = await (await import('../src/services/backup-core')).listBusinessTables(db);
+    expect(tables).not.toContain('backup_runs');
+  });
 });

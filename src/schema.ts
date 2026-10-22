@@ -249,6 +249,18 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_devices_user ON devices (user_id)`,
+  // 云端备份运行状态（v0.17.471）：每次备份一条（running/succeeded/failed + 日志），
+  // 前端备份页展示"进行中/成功/失败"状态与日志；运行时数据不随备份导出
+  `CREATE TABLE IF NOT EXISTS backup_runs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'running',
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    message TEXT,
+    file_name TEXT,
+    size INTEGER,
+    log_text TEXT NOT NULL DEFAULT ''
+  )`,
   // 建表迁移标记：已初始化的库冷启动只查这一行即跳过下方 20+ 次 PRAGMA（首请求提速，避免 Web 首访超时）
   `CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
@@ -297,7 +309,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '12') {
+      if (meta?.value === '13') {
         schemaReady = true;
         return;
       }
@@ -603,7 +615,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '12')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '13')",
     ).run();
     schemaReady = true;
     } catch (err) {

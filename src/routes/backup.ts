@@ -151,6 +151,26 @@ backupRouter.get('/files', async (c) => {
   return c.json({ files });
 });
 
+// GET /backup/runs/latest — 最近一次备份运行状态（进行中/成功/失败 + 日志），备份页状态卡与日志展示用
+backupRouter.get('/runs/latest', async (c) => {
+  const row = await c.env.DB.prepare(
+    'SELECT id, status, started_at, finished_at, message, file_name, size, log_text FROM backup_runs ORDER BY started_at DESC LIMIT 1',
+  ).first<{ id: string; status: string; started_at: string; finished_at: string | null; message: string | null; file_name: string | null; size: number | null; log_text: string | null }>();
+  if (!row) return c.json({ run: null });
+  return c.json({
+    run: {
+      id: row.id,
+      status: row.status,
+      started_at: row.started_at,
+      finished_at: row.finished_at,
+      message: row.message,
+      file_name: row.file_name,
+      size: row.size,
+      log_text: (row.log_text ?? '').slice(0, 32768),
+    },
+  });
+});
+
 // POST /backup/files/:key/restore — 从存储端历史备份恢复（BackupPack DO 解包：db.json 合并导入 + 附件写回）。
 // 兼容 ZIP 归档包（新）与历史 JSON 备份（旧，附件引用同环境本体在存储端）。
 backupRouter.post('/files/:key/restore', async (c) => {

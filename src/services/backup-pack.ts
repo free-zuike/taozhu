@@ -4,7 +4,7 @@
  *   - POST /backup         生成 ZIP 归档包（meta.json + db.json + attachments/ 附件原始文件）写存储端
  *   - POST /restore?key=   从存储端读归档包 → db.json 合并导入 D1 + attachments/* 写回存储端
  *  Worker 路由（POST /backup/now、定时、恢复）只做鉴权与转发，不直接打包。 */
-import { BACKUP_PREFIX, buildBackupArchive, importBackupData, restoreBackupArchive } from './backup-core';
+import { BACKUP_PREFIX, bjStamp, buildBackupArchive, importBackupData, restoreBackupArchive } from './backup-core';
 import { createStorage } from './storage';
 import type { Env } from '../types';
 
@@ -22,8 +22,7 @@ export class BackupPack {
     const store = createStorage(env);
     try {
       if (url.pathname === '/backup') {
-        const r = await buildBackupArchive(env.DB, store);
-        return Response.json({ ok: true, ...r });
+        return await this.runBackup(env.DB, store);
       }
       if (url.pathname === '/restore') {
         const key = url.searchParams.get('key') ?? '';
@@ -54,6 +53,41 @@ export class BackupPack {
       return Response.json({ ok: false, error: '未知操作' }, { status: 404 });
     } catch (e) {
       return Response.json({ ok: false, error: `备份执行失败：${(e as Error).message}` }, { status: 500 });
+    }
+  }
+
+  /// 执行一次云备份：先建 backup_runs 记录（running），打包过程逐步写日志，完成/失败收尾。
+  /// 日志实时落库——App 备份页可查"进行中/成功/失败"状态与日志（对齐参考项目备份运行状态机制）。
+  private async runBackup(db: D1Database, store: ReturnType<typeof createStorage>): Promise<Response> {
+    const runId = bjStamp(new Date());
+    const started = new Date().toISOString();
+    try {
+      await db.prepare(
+        "INSERT INTO backup_runs (id, status, started_at, message, log_text) VALUES (?, 'running', ?, ?, '')",
+      ).bind(runId, started, '开始备份…').run();
+    } catch (e) {
+      return Response.json({ ok: false, status: 'failed', message: `备份状态记录失败：${(e as Error).message}` }, { status: 500 });
+    }
+    const logLines: string[] = [];
+    const onLog = (line: string) => {
+      logLines.push(`[${new Date().toISOString()}] ${line}`);
+      // 实时落库（best-effort；截断 64KB 防超大日志）
+      try {
+        db.prepare('UPDATE backup_runs SET log_text = ? WHERE id = ?')
+          .bind(logLines.join('\n').slice(0, 65536), runId).run();
+      } catch (_) {}
+    };
+    try {
+      const r = await buildBackupArchive(db, store, { runId, onLog });
+      return Response.json({ ok: true, runId, ...r });
+    } catch (e) {
+      const message = `备份执行异常：${(e as Error).message}`;
+      try {
+        await db.prepare(
+          "UPDATE backup_runs SET status = 'failed', message = ?, finished_at = ? WHERE id = ?",
+        ).bind(message, new Date().toISOString(), runId).run();
+      } catch (_) {}
+      return Response.json({ ok: false, status: 'failed', runId, message }, { status: 500 });
     }
   }
 }

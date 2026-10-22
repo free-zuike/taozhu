@@ -965,6 +965,32 @@ describe('全库备份导出 /backup', () => {
     const staffToken = ((await login.json()) as { token: string }).token;
     expect((await call(env, 'GET', '/api/v1/backup', staffToken)).status).toBe(403);
   });
+
+  it('/backup/runs/latest 返回最近一次备份运行状态（进行中/成功/失败+日志）', async () => {
+    // 无记录 → null
+    const empty = (await (await call(env, 'GET', '/api/v1/backup/runs/latest', token)).json()) as { run: unknown };
+    expect(empty.run).toBeNull();
+    // 插一条 running 记录
+    await env.DB.prepare(
+      "INSERT INTO backup_runs (id, status, started_at, message, log_text) VALUES ('R-1', 'running', '2026-10-22T00:00:00.000Z', '开始备份…', '[2026-10-22T00:00:00.000Z] 开始备份：读取数据…')",
+    ).run();
+    const d = (await (await call(env, 'GET', '/api/v1/backup/runs/latest', token)).json()) as {
+      run: { id: string; status: string; message: string; log_text: string };
+    };
+    expect(d.run.id).toBe('R-1');
+    expect(d.run.status).toBe('running');
+    expect(d.run.log_text).toContain('开始备份');
+    // 收尾 succeeded 后返回成功状态与归档文件名
+    await env.DB.prepare(
+      "UPDATE backup_runs SET status = 'succeeded', finished_at = '2026-10-22T00:00:05.000Z', message = '备份成功：20 张表', file_name = 'backup-20261022-000000000.zip', size = 12345 WHERE id = 'R-1'",
+    ).run();
+    const d2 = (await (await call(env, 'GET', '/api/v1/backup/runs/latest', token)).json()) as {
+      run: { status: string; file_name: string; size: number };
+    };
+    expect(d2.run.status).toBe('succeeded');
+    expect(d2.run.file_name).toMatch(/\.zip$/);
+    expect(d2.run.size).toBe(12345);
+  });
 });
 
 describe('备份附件本体内嵌（导出带图，跨环境恢复附件不丢）', () => {
