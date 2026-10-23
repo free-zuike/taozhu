@@ -303,13 +303,22 @@ export async function ensureSchema(db: D1Database): Promise<void> {
   if (schemaReady) return;
   return withSchemaLock(async () => {
     if (schemaReady) return;
+    // 新增表的前置幂等建表：必须放在版本快检之前——快检短路后（老库 schema_version 已最新）
+    // 短路之后的建表逻辑永远不跑。0.17.471 事故根因：backup_runs 建表写在短路后且版本号未 bump，
+    // 老库被短路卡死 → /backup/runs/latest 报 no such table:backup_runs → 备份页状态卡 500。
+    // 规则：以后新增表，除在 DDL 数组 + 下方增量迁移里加，还必须加入此清单（CREATE TABLE IF NOT EXISTS 幂等）。
+    for (const marker of ['CREATE TABLE IF NOT EXISTS backup_runs']) {
+      const i = DDL.findIndex((s) => s.includes(marker));
+      if (i >= 0) await db.prepare(DDL[i]).run();
+    }
     // 已初始化库：只查一次标记即返回（冷启动首请求不再跑下方 20+ 次 PRAGMA/ALTER 迁移链）
-    // 注意：短路值必须与末尾写入值一致，否则新增列的迁移永远不跑（生产曾缺 round_carry/price_group_id → 全接口 500）
+    // 注意：短路值必须与末尾写入值一致，否则新增列的迁移永远不跑（生产曾缺 round_carry/price_group_id → 全接口 500）；
+    // 每新增一次表/列迁移，版本号 +1（0.17.472：backup_runs 缺表事故后，前置建表兜底 + 快检版本升 '14' 让老库重走全量迁移）
     try {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '13') {
+      if (meta?.value === '14') {
         schemaReady = true;
         return;
       }
@@ -370,6 +379,14 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!lossTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS loss_records'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1]), db.prepare(DDL[i + 2])]);
+    }
+    // v0.17.471：云端备份运行状态 backup_runs（进行中/成功/失败+日志，前端备份页状态卡）；存量库补建
+    const brTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'backup_runs'",
+    ).first<{ name: string }>();
+    if (!brTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS backup_runs'));
+      await db.batch([db.prepare(DDL[i])]);
     }
     // 分享链接表（v0.16.17.0）：对账单分享页面用
     const shareTable = await db.prepare(
@@ -614,8 +631,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.175 进销单位换算新增三列（items.count_unit/item_prices.per/行 count_qty）→
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
+    // v0.17.472 backup_runs 缺表事故 → 前置建表兜底 + 快检版本 '14'：老库（标记 13）重走全量迁移
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '13')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '14')",
     ).run();
     schemaReady = true;
     } catch (err) {

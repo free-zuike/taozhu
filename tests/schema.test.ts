@@ -109,11 +109,34 @@ describe('schema.sql 完整建表与幂等', () => {
     // 0.17.433 报损 → loss_records 表 → 快检版本 '11'；
     // 0.17.463 临期提醒 → stock_batches/purchase_items 补 expiry_date 列 → 快检版本 '12'；
     // 0.17.471 备份运行状态 → backup_runs 表 → '13'
+    // 0.17.472 backup_runs 缺表事故 → 前置建表兜底 + 快检版本 '14'
     const meta = await db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").first<{ value: string }>();
-    expect(meta?.value).toBe('13');
+    expect(meta?.value).toBe('14');
     // 二次调用（模拟后续请求）不抛
     resetSchemaState();
     await expect(ensureSchema(db as never)).resolves.toBeUndefined();
+  });
+
+  it('0.17.472 回归：老生产库（schema_version=13、缺 backup_runs 表）跑 ensureSchema → 前置建表兜底补出表、可写读', async () => {
+    // 复现事故现场：库已初始化（标记 13、全量表已建），但缺 backup_runs——
+    // 0.17.471 把建表逻辑放在版本快检之后且未 bump 版本，老库被短路卡死，表永远建不出来
+    const db = await createFakeD1();
+    resetSchemaState();
+    await ensureSchema(db as never); // 全新库跑通（含 backup_runs）
+    await db.prepare('DROP TABLE backup_runs').run(); // 模拟老库缺表
+    await db.prepare("UPDATE schema_meta SET value = '13' WHERE key = 'schema_version'").run(); // 模拟老库标记 13
+    resetSchemaState();
+    // 部署 0.17.472 后再冷启动：前置幂等建表（快检之前）应补出 backup_runs
+    await expect(ensureSchema(db as never)).resolves.toBeUndefined();
+    const t = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'backup_runs'").first<{ name: string }>();
+    expect(t, 'backup_runs 表应被补建').toBeTruthy();
+    // 可写读（/backup/runs/latest 查询依赖）
+    await db.prepare("INSERT INTO backup_runs (id, status, started_at, message, log_text) VALUES ('R1', 'running', '2026-10-22T00:00:00.000Z', '开始备份…', '')").run();
+    const row = await db.prepare("SELECT status FROM backup_runs WHERE id = 'R1'").first<{ status: string }>();
+    expect(row?.status).toBe('running');
+    // 迁移标记已升级到 14（后续冷启动走快检）
+    const meta = await db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").first<{ value: string }>();
+    expect(meta?.value).toBe('14');
   });
 
   it('v0.17.114 彻底删表迁移：旧库（含头表+FK 与数据）跑 ensureSchema → 头表删除、行表无 FK、数据保留自包含', async () => {
