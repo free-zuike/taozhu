@@ -10,6 +10,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../widgets/number_pad_field.dart';
+import '../widgets/center_sheet.dart';
 import 'router.dart';
 
 class ItemsPage extends StatefulWidget {
