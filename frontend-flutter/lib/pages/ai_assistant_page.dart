@@ -45,6 +45,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
   }
 
   Future<void> _loadHistory() async {
+    // 本地缓存先渲染（秒开/离线）；在线时拉服务端历史覆盖（跨设备续聊，服务端为权威）
     try {
       final p = await SharedPreferences.getInstance();
       final raw = p.getString(_histKey);
@@ -56,14 +57,34 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
       }
     } catch (_) {}
     if (_messages.isEmpty) {
-      _messages.add({
-        'role': 'assistant',
-        'content': '你好，我是 AI 助手。可以问我经营数据，比如：今天卖了多少？哪个店欠款多？哪些货该补了？也可以问功能怎么用。',
-      });
+      _messages.add({'role': 'assistant', 'content': _welcome()});
     }
     _saveHistory();
     if (mounted) _scrollToBottom();
+    // 在线拉服务端历史（覆盖本地，跨设备续聊）
+    if (!kIsWeb && Api.isOffline) return;
+    try {
+      final d = await Api.instance.get('/ai/chat/history');
+      final msgs = ((d['messages'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (msgs.isNotEmpty && mounted) {
+        setState(() {
+          _messages
+            ..clear()
+            ..addAll(msgs
+                .map((m) => ({
+                      'role': '${m['role'] ?? ''}',
+                      'content': '${m['content'] ?? ''}',
+                    }))
+                .where((m) => m['role'] == 'user' || m['role'] == 'assistant'));
+        });
+        _saveHistory();
+        _scrollToBottom();
+      }
+    } catch (_) {}
   }
+
+  static String _welcome() =>
+      '你好，我是 AI 助手。可以问我经营数据，比如：今天卖了多少？哪个店欠款多？哪些货该补了？也可以说「记住：…」让我帮你记下重要事项，或问功能怎么用。';
 
   Future<void> _saveHistory() async {
     try {
@@ -124,6 +145,81 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
     }
   }
 
+  /// 记忆管理弹层（对齐参考 App「本地记忆」：查看/删除/清空）
+  Future<void> _manageMemories() async {
+    if (!kIsWeb && Api.isOffline) {
+      toast(context, '查看记忆需联网');
+      return;
+    }
+    try {
+      final d = await Api.instance.get('/ai/memories');
+      final memories = ((d['memories'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('我的记忆', style: TextStyle(fontSize: 16)),
+          content: SizedBox(
+            width: 420,
+            height: 360,
+            child: memories.isEmpty
+                ? const Center(child: Text('还没有记忆。跟助手说「记住：…」就能记下重要事项。', style: TextStyle(fontSize: 13)))
+                : ListView.separated(
+                    itemCount: memories.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final m = memories[i];
+                      return ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('${m['content'] ?? ''}',
+                            style: const TextStyle(fontSize: 13.5)),
+                        subtitle: Text('${m['created_at'] ?? ''}'.isEmpty
+                            ? ''
+                            : '${m['created_at']}'.substring(0, 10),
+                            style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                        trailing: IconButton(
+                          tooltip: '忘记',
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                          onPressed: () async {
+                            try {
+                              await Api.instance.delete('/ai/memories/${m['id']}');
+                              toast(context, '已忘记');
+                              if (ctx.mounted) Navigator.pop(ctx);
+                              _manageMemories();
+                            } catch (e) {
+                              toast(context, e.toString().replaceFirst('Exception: ', ''));
+                            }
+                          },
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            if (memories.isNotEmpty)
+              TextButton(
+                onPressed: () async {
+                  try {
+                    await Api.instance.delete('/ai/memories');
+                    toast(context, '已清空记忆');
+                    if (ctx.mounted) Navigator.pop(ctx);
+                  } catch (e) {
+                    toast(context, e.toString().replaceFirst('Exception: ', ''));
+                  }
+                },
+                child: const Text('清空记忆', style: TextStyle(fontSize: 13)),
+              ),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+          ],
+        ),
+      );
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -132,15 +228,25 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
         title: const Text('AI 助手', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         actions: [
           IconButton(
+            tooltip: '我的记忆',
+            icon: const Icon(Icons.bookmark_outline),
+            onPressed: _manageMemories,
+          ),
+          IconButton(
             tooltip: '清空对话',
             icon: const Icon(Icons.delete_outline),
-            onPressed: () {
+            onPressed: () async {
+              // 服务端历史同步清空（跨设备）；离线时仅本地
+              if (!kIsWeb && Api.isOffline) {
+                toast(context, '需联网清空服务端历史（本地已清）');
+              } else {
+                try {
+                  await Api.instance.delete('/ai/chat/history');
+                } catch (_) {}
+              }
               setState(() {
                 _messages.clear();
-                _messages.add({
-                  'role': 'assistant',
-                  'content': '你好，我是 AI 助手。可以问我经营数据，比如：今天卖了多少？哪个店欠款多？哪些货该补了？也可以问功能怎么用。',
-                });
+                _messages.add({'role': 'assistant', 'content': _welcome()});
               });
               _saveHistory();
             },

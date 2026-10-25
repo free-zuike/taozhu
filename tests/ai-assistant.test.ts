@@ -317,7 +317,7 @@ describe('动态查询与知识库（0.17.475）', () => {
         status: 200, headers: { 'Content-Type': 'application/json' },
       });
     }));
-    const r = await assistantAnswer(cfg, db as never, [{ role: 'user', content: '库存怎么盘点？' }], 'admin');
+    const r = await assistantAnswer(cfg, db as never, [{ role: 'user', content: '库存怎么盘点？' }], 'admin', 'user-1');
     expect(r.reply).toContain('盘点');
     expect(r.sources).toContain('库存与盘点');
     vi.unstubAllGlobals();

@@ -278,6 +278,36 @@ const DDL: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_stock_adjustments_item ON stock_adjustments (item_id, unit)`,
   `CREATE INDEX IF NOT EXISTS idx_stock_adjustments_date ON stock_adjustments (happened_at)`,
+  // AI 助手记忆（v0.17.476，对齐参考 App Agent 记忆）：用户显式让助手"记住"的事项，
+  // 按用户隔离、软删（status），每次对话注入相关记忆；助手页可管理（查看/删除/清空）
+  `CREATE TABLE IF NOT EXISTS ai_memories (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    keywords TEXT DEFAULT '',
+    source_message_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    expires_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_memories_user ON ai_memories (user_id, status)`,
+  // AI 助手会话（v0.17.476）：服务端持久化对话历史（跨设备续聊）；当前每用户单会话
+  `CREATE TABLE IF NOT EXISTS ai_conversations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_conversations_user ON ai_conversations (user_id)`,
+  `CREATE TABLE IF NOT EXISTS ai_messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, created_at)`,
   // 建表迁移标记：已初始化的库冷启动只查这一行即跳过下方 20+ 次 PRAGMA（首请求提速，避免 Web 首访超时）
   `CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
@@ -327,6 +357,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     for (const marker of [
       'CREATE TABLE IF NOT EXISTS backup_runs',
       'CREATE TABLE IF NOT EXISTS stock_adjustments',
+      'CREATE TABLE IF NOT EXISTS ai_memories',
+      'CREATE TABLE IF NOT EXISTS ai_conversations',
+      'CREATE TABLE IF NOT EXISTS ai_messages',
     ]) {
       const i = DDL.findIndex((s) => s.includes(marker));
       if (i >= 0) await db.prepare(DDL[i]).run();
@@ -334,12 +367,12 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // 已初始化库：只查一次标记即返回（冷启动首请求不再跑下方 20+ 次 PRAGMA/ALTER 迁移链）
     // 注意：短路值必须与末尾写入值一致，否则新增列的迁移永远不跑（生产曾缺 round_carry/price_group_id → 全接口 500）；
     // 每新增一次表/列迁移，版本号 +1（0.17.472：backup_runs 缺表事故后，前置建表兜底 + 快检版本升 '14' 让老库重走全量迁移；
-    // 0.17.473：库存盘点 stock_adjustments 表 → '15'）
+    // 0.17.473：库存盘点 stock_adjustments 表 → '15'；0.17.476：AI 记忆/对话历史 3 表 → '16'）
     try {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '15') {
+      if (meta?.value === '16') {
         schemaReady = true;
         return;
       }
@@ -416,6 +449,11 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!adjTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS stock_adjustments'));
       await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1]), db.prepare(DDL[i + 2])]);
+    }
+    // v0.17.476：AI 助手记忆/会话/消息 3 表（记住的事项 + 跨设备对话历史）；存量库补建
+    for (const marker of ['CREATE TABLE IF NOT EXISTS ai_memories', 'CREATE TABLE IF NOT EXISTS ai_conversations', 'CREATE TABLE IF NOT EXISTS ai_messages']) {
+      const i = DDL.findIndex((s) => s.includes(marker));
+      if (i >= 0) await db.prepare(DDL[i]).run();
     }
     // 分享链接表（v0.16.17.0）：对账单分享页面用
     const shareTable = await db.prepare(
@@ -662,8 +700,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     // v0.17.472 backup_runs 缺表事故 → 前置建表兜底 + 快检版本 '14'：老库（标记 13）重走全量迁移
     // v0.17.473 库存盘点 stock_adjustments 表 → 快检版本 '15'
+    // v0.17.476 AI 记忆/会话/消息 3 表 → 快检版本 '16'
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '15')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '16')",
     ).run();
     schemaReady = true;
     } catch (err) {

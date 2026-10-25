@@ -13,7 +13,8 @@ import {
   minimalWavBytes,
   sniffImageMime,
 } from '../services/ai-parse';
-import { assistantAnswer } from '../services/ai-assistant';
+import { assistantAnswer, listAiMemories, deleteAiMemory, clearAiMemories } from '../services/ai-assistant';
+import { randomId } from '../lib/password';
 import { getAiConfig } from './settings';
 import type { AuthUser, Env } from '../types';
 
@@ -113,9 +114,10 @@ aiRouter.post('/parse-voice', async (c) => {
   }
 });
 
-// POST /api/v1/ai/chat — AI 助手对话（问数）：客户端带多轮历史（messages），
-// 服务端注入业务数据快照（buildAssistantContext，店员打码）后调文字模型回答；
-// 无状态不存对话表（对齐参考项目）；未配置 Key 返回 400 引导到设置页。
+// POST /api/v1/ai/chat — AI 助手对话（问数+记忆）：客户端带多轮历史（messages），
+// 服务端注入业务快照/动态查询/知识库/记忆后调文字模型回答；
+// 对话历史服务端持久化（ai_conversations/ai_messages，跨设备续聊）；
+// 支持"记住/忘记"指令（ai_memories，对齐参考 App Agent 记忆）；未配置 Key 返回 400。
 aiRouter.post('/chat', async (c) => {
   const body = await c.req.json().catch(() => null) as {
     messages?: Array<{ role?: string; content?: string }>;
@@ -128,16 +130,86 @@ aiRouter.post('/chat', async (c) => {
   const totalLen = msgs.reduce((s, m) => s + m.content.length, 0);
   if (totalLen > 10000) return c.json({ error: '内容过长（多轮合计上限 10000 字）' }, 400);
   const cfg = await getAiConfig(c.env.DB);
+  const userId = c.get('user').id;
+  const nowIso = () => new Date().toISOString();
   try {
-    const { reply, sources } = await assistantAnswer(cfg, c.env.DB, msgs, c.get('user').role);
+    const { reply, sources } = await assistantAnswer(cfg, c.env.DB, msgs, c.get('user').role, userId);
+    // 对话历史落库（用户级单会话）：取或建会话 → 追加 user 消息 + 助手回复
+    const cur = await c.env.DB.prepare(
+      'SELECT id FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1',
+    ).bind(userId).first<{ id: string }>();
+    let conversationId = cur?.id ?? '';
+    if (!conversationId) {
+      conversationId = randomId();
+      await c.env.DB.prepare('INSERT INTO ai_conversations (id, user_id) VALUES (?, ?)')
+        .bind(conversationId, userId).run();
+    }
+    const lastUserMsg = [...msgs].reverse().find((m) => m.role === 'user');
+    const batch: D1PreparedStatement[] = [];
+    if (lastUserMsg) {
+      batch.push(c.env.DB.prepare(
+        'INSERT INTO ai_messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+      ).bind(randomId(), conversationId, 'user', lastUserMsg.content, nowIso()));
+    }
+    batch.push(c.env.DB.prepare(
+      'INSERT INTO ai_messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).bind(randomId(), conversationId, 'assistant', reply, nowIso()));
+    batch.push(c.env.DB.prepare('UPDATE ai_conversations SET updated_at = ? WHERE id = ?')
+      .bind(nowIso(), conversationId));
+    await c.env.DB.batch(batch);
     return c.json({
-      ok: true, reply,
+      ok: true, reply, conversation_id: conversationId,
       ...(sources.length > 0 ? { sources } : {}),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'AI 助手接口错误';
     return c.json({ error: msg }, msg.includes('未启用') ? 400 : 502);
   }
+});
+
+// GET /api/v1/ai/chat/history — 最近对话历史（跨设备续聊；无会话返回空）
+aiRouter.get('/chat/history', async (c) => {
+  const userId = c.get('user').id;
+  const cur = await c.env.DB.prepare(
+    'SELECT id FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1',
+  ).bind(userId).first<{ id: string }>();
+  if (!cur) return c.json({ conversation_id: null, messages: [] });
+  const rows = await c.env.DB.prepare(
+    `SELECT role, content FROM ai_messages WHERE conversation_id = ?
+     ORDER BY created_at ASC LIMIT 120`,
+  ).bind(cur.id).all<{ role: string; content: string }>();
+  return c.json({ conversation_id: cur.id, messages: rows.results });
+});
+
+// DELETE /api/v1/ai/chat/history — 清空对话历史（删会话+消息）
+aiRouter.delete('/chat/history', async (c) => {
+  const userId = c.get('user').id;
+  const cur = await c.env.DB.prepare(
+    'SELECT id FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1',
+  ).bind(userId).first<{ id: string }>();
+  if (cur) {
+    await c.env.DB.prepare('DELETE FROM ai_messages WHERE conversation_id = ?').bind(cur.id).run();
+    await c.env.DB.prepare('DELETE FROM ai_conversations WHERE id = ?').bind(cur.id).run();
+  }
+  return c.json({ ok: true });
+});
+
+// GET /api/v1/ai/memories — 助手记忆列表（记住的事项，管理页用）
+aiRouter.get('/memories', async (c) => {
+  const memories = await listAiMemories(c.env.DB, c.get('user').id);
+  return c.json({ memories });
+});
+
+// DELETE /api/v1/ai/memories/:id — 遗忘一条记忆
+aiRouter.delete('/memories/:id', async (c) => {
+  const deleted = await deleteAiMemory(c.env.DB, c.get('user').id, c.req.param('id'));
+  return c.json({ ok: true, deleted });
+});
+
+// DELETE /api/v1/ai/memories — 清空全部记忆
+aiRouter.delete('/memories', async (c) => {
+  await clearAiMemories(c.env.DB, c.get('user').id);
+  return c.json({ ok: true });
 });
 
 // POST /api/v1/ai/test?capability=text|vision|speech — 连通性测试（对齐参考项目 validate 三能力）：

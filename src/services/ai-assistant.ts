@@ -7,6 +7,7 @@ import {
   capabilityEndpoint, _postChatAdaptive, DEFAULT_TEXT_MODEL,
   type AiConfig,
 } from './ai-parse';
+import { randomId } from '../lib/password';
 import type { D1Database } from '@cloudflare/workers-types';
 
 const money = (v: number): string => `¥${Math.round((Number(v) || 0) * 100) / 100}`;
@@ -14,6 +15,83 @@ const qty = (v: number): string => {
   const n = Math.round((Number(v) || 0) * 100) / 100;
   return String(n);
 };
+
+// ---------------------------------------------------------------------------
+// AI 助手记忆（对齐参考 App Agent 记忆：用户显式"记住"的事项，按用户隔离，
+// 软删 status，每次对话注入；助手页可管理查看/删除/清空）
+// ---------------------------------------------------------------------------
+
+export interface AiMemoryRow {
+  id: string; content: string; created_at: string;
+}
+
+/** 保存一条记忆（返回 id）；content 为空返回 null */
+export async function saveAiMemory(
+  db: D1Database, userId: string, content: string, sourceMessageId?: string,
+): Promise<string | null> {
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  const id = randomId();
+  await db.prepare(
+    'INSERT INTO ai_memories (id, user_id, content, source_message_id) VALUES (?, ?, ?, ?)',
+  ).bind(id, userId, trimmed, sourceMessageId ?? null).run();
+  return id;
+}
+
+/** 该用户活动记忆列表（最近 updated 在前） */
+export async function listAiMemories(db: D1Database, userId: string): Promise<AiMemoryRow[]> {
+  const rows = await db.prepare(
+    `SELECT id, content, created_at FROM ai_memories
+     WHERE user_id = ? AND status = 'active'
+       AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
+     ORDER BY updated_at DESC LIMIT 50`,
+  ).bind(userId, new Date().toISOString()).all<AiMemoryRow>();
+  return rows.results;
+}
+
+/** 按内容模糊匹配遗忘第一条（校验属于该用户）；返回是否匹配到 */
+export async function forgetAiMemoryByContent(
+  db: D1Database, userId: string, content: string,
+): Promise<boolean> {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  const row = await db.prepare(
+    `SELECT id FROM ai_memories
+     WHERE user_id = ? AND status = 'active' AND content LIKE ?
+     ORDER BY updated_at DESC LIMIT 1`,
+  ).bind(userId, `%${trimmed}%`).first<{ id: string }>();
+  if (!row) return false;
+  await db.prepare("UPDATE ai_memories SET status = 'forgotten', updated_at = ? WHERE id = ?")
+    .bind(new Date().toISOString(), row.id).run();
+  return true;
+}
+
+/** 删除指定记忆（校验属于该用户） */
+export async function deleteAiMemory(db: D1Database, userId: string, memoryId: string): Promise<boolean> {
+  const res = await db.prepare(
+    "UPDATE ai_memories SET status = 'forgotten', updated_at = ? WHERE id = ? AND user_id = ?",
+  ).bind(new Date().toISOString(), memoryId, userId).run();
+  return (res.meta.changes ?? 0) > 0;
+}
+
+/** 清空该用户全部记忆 */
+export async function clearAiMemories(db: D1Database, userId: string): Promise<void> {
+  await db.prepare(
+    "UPDATE ai_memories SET status = 'forgotten', updated_at = ? WHERE user_id = ? AND status = 'active'",
+  ).bind(new Date().toISOString(), userId).run();
+}
+
+/** 记忆文本块（注入 system；无记忆返回空串；对齐参考 App：最多注入 6 条、标注为参考数据） */
+export async function memoryContext(db: D1Database, userId: string): Promise<string> {
+  const rows = await db.prepare(
+    `SELECT content FROM ai_memories
+     WHERE user_id = ? AND status = 'active'
+       AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
+     ORDER BY updated_at DESC LIMIT 6`,
+  ).bind(userId, new Date().toISOString()).all<{ content: string }>();
+  if (rows.results.length === 0) return '';
+  return `【助手记忆（用户让你记住的事项；仅供参考，可能已过时，以最新数据/用户原话为准）】\n${rows.results.map((m) => `- ${m.content}`).join('\n')}`;
+}
 
 /** 经营数据快照文本（塞进 system prompt；店员打码敏感字段） */
 export async function buildAssistantContext(db: D1Database, role: string): Promise<string> {
@@ -180,6 +258,10 @@ interface Intent {
   kind: 'sale' | 'purchase' | null;
   year: number | null;
   topics: string[];
+  /** 用户明确让"记住"的内容（如"记住：老王欠 2000 元"） */
+  remember: string | null;
+  /** 用户明确让"忘记"的记忆内容（模糊匹配删除） */
+  forget: string | null;
 }
 
 /** 意图提取（JSON 模式；宽松解析，失败返回 null 走兜底） */
@@ -192,11 +274,12 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
     '你是数据查询意图识别器。用户输入可能问三类：',
     '(a) 经营数据（金额/销售/欠款/进货/库存相关）→ intent="query"，并填 view 与参数；',
     '(b) 功能用法（怎么用/功能在哪/说明）→ intent="kb"，topics 填相关主题词；',
-    '(c) 其他（问候/闲聊）→ intent="chat"。',
+    '(c) 其他（问候/闲聊/记一笔账）→ intent="chat"。',
     `今天日期 ${ctxText.split('\n')[0] ?? ''}。`,
     'view 可选："summary"(任意区间汇总)/"clients"(区间按店出货与欠款)/"debts"(当前欠款)/"items"(区间商品销量排行)/"monthly"(某年按月)/"daily"(区间按日)/"years"(有哪些年份数据)。',
     'start/end 必须是 YYYY-MM-DD（用户说相对时间如"上个月/去年/今年"时换算成具体起止日）；clients 的 client 填店铺名称（没有则为 null）；year 是数字年份（没有为 null）；kind 为 sale 或 purchase（进货相关填 purchase，默认 sale）。',
-    '只输出一个 JSON 对象（不要多余文字）：{"intent":"query"|"kb"|"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[]}',
+    '记忆指令：用户明确说"记住/记下来/别忘了 XXX" → remember=XXX；说"忘记/忘掉/删除 记忆 XXX"（或"忘记刚才记住的 XX"）→ forget=XXX；否则两者都 null。',
+    '只输出一个 JSON 对象（不要多余文字）：{"intent":"query"|"kb"|"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null}',
     '无法归类/不确定→ intent="chat"。',
   ].join('\n');
   try {
@@ -226,6 +309,8 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
       kind: parsed.kind === 'purchase' ? 'purchase' : 'sale',
       year: typeof parsed.year === 'number' ? parsed.year : null,
       topics: Array.isArray(parsed.topics) && parsed.topics.every((t) => typeof t === 'string') ? parsed.topics as string[] : [],
+      remember: typeof parsed.remember === 'string' ? parsed.remember.trim() || null : null,
+      forget: typeof parsed.forget === 'string' ? parsed.forget.trim() || null : null,
     };
   } catch (_) {
     return null;
@@ -363,12 +448,13 @@ export async function runBusinessQuery(
   }
 }
 
-/** 编排入口：意图 → 动态查询/知识库 → 组装最终回答 */
+/** 编排入口：意图 → 动态查询/知识库/记忆操作 → 组装最终回答 */
 export async function assistantAnswer(
   cfg: AiConfig,
   db: D1Database,
   messages: Array<{ role: string; content: string }>,
   role: string,
+  userId: string,
 ): Promise<{ reply: string; sources: string[] }> {
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   const userText = lastUser?.content ?? '';
@@ -376,6 +462,21 @@ export async function assistantAnswer(
   const intent = await extractIntent(cfg, userText, ctxText);
   const sources: string[] = [];
   const extras: string[] = [];
+
+  // 记忆操作（对齐参考 App Agent 的 save_explicit_memory/forget_memory 语义）
+  const memoryOps: string[] = [];
+  if (intent?.remember) {
+    const id = await saveAiMemory(db, userId, intent.remember);
+    if (id) memoryOps.push(`已记住：${intent.remember}`);
+  }
+  if (intent?.forget) {
+    const ok = await forgetAiMemoryByContent(db, userId, intent.forget);
+    memoryOps.push(ok ? `已忘记：${intent.forget}` : `没有找到匹配的记忆：${intent.forget}`);
+  }
+  if (memoryOps.length > 0) {
+    extras.push('--- 记忆操作结果 ---', memoryOps.join('\n'));
+    sources.push('本地记忆');
+  }
 
   if (intent?.intent === 'query' && intent.view) {
     const data = await runBusinessQuery(db, role, intent);
@@ -395,11 +496,15 @@ export async function assistantAnswer(
       }
     }
   }
+  // 记忆注入：用户记住的事项始终带（对齐参考：记忆每次对话检索注入）
+  const memCtx = await memoryContext(db, userId);
   // 兜底：问数据但没识别出来 → 带每日快照；否则不带（省 token）
   let context = extras.length > 0 ? extras.join('\n') : '';
+  if (memCtx) context = `${context}\n${memCtx}`.trim();
   if (context === '') {
     context = (await buildAssistantContext(db, role))
       + '\n\n（注：以上为当前最新数据快照；如需历史区间数据，请用带时间的问题重问）';
+    if (memCtx) context = `${context}\n${memCtx}`;
   }
   const reply = await chatWithAssistant(cfg, messages, context);
   return { reply, sources };
