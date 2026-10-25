@@ -2,6 +2,7 @@
   <view class="page" :style="tv">
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <input class="search" v-model="search" placeholder="搜索商品（名称关键字）" @input="onSearch" />
+    <view class="bp-bar"><text class="op" @click="openBulkPrice">批量调价</text></view>
 
     <view v-for="it in items" :key="it.id" class="card">
       <view class="head">
@@ -44,6 +45,68 @@
       </view>
     </view>
     <button v-if="!showForm" class="btn-add" @click="openAdd()">+ 新增商品</button>
+
+    <!-- 批量调价弹层（选商品 → 规则 → 预览 → 执行；老板操作） -->
+    <view v-if="showBulk" class="mask" @click="showBulk = false">
+      <view class="sheet trace-sheet" @click.stop>
+        <view class="sheet-title">{{ bulkStep === 0 ? '批量调价 · 选商品' : (bulkStep === 1 ? '批量调价 · 规则' : '批量调价 · 预览') }}</view>
+        <template v-if="bulkStep === 0">
+          <input class="ipt" v-model="bulkQ" placeholder="搜索商品（在当前列表内）" />
+          <view class="bp-ops">
+            <text class="op" @click="toggleAllBulk">{{ bulkAll ? '取消全选' : '全选' }}</text>
+            <text class="bp-sel">已选 {{ bulkSel.length }} 个</text>
+          </view>
+          <scroll-view scroll-y class="trace-list">
+            <view v-for="(it, i) in bulkFiltered" :key="it.id" class="bp-row" @click="toggleBulk(it.id)">
+              <checkbox :checked="bulkSel.includes(it.id)" color="#409EFF" style="transform: scale(0.7)" />
+              <text class="bp-name">{{ it.name }}</text>
+              <text class="bp-price">{{ priceSummary(it) }}</text>
+            </view>
+            <view v-if="bulkFiltered.length === 0" class="empty">暂无商品</view>
+          </scroll-view>
+          <button class="btn-save" :disabled="bulkSel.length === 0" @click="bulkStep = 1">下一步：规则</button>
+        </template>
+        <template v-else-if="bulkStep === 1">
+          <view class="bp-rule">
+            <text class="bp-label">调价字段</text>
+            <view class="seg">
+              <text :class="['seg-item', { on: bulkField === 'sale_price' }]" @click="bulkField = 'sale_price'">售价</text>
+              <text :class="['seg-item', { on: bulkField === 'purchase_price' }]" @click="bulkField = 'purchase_price'">进价</text>
+              <text :class="['seg-item', { on: bulkField === 'both' }]" @click="bulkField = 'both'">都调</text>
+            </view>
+          </view>
+          <view class="bp-rule">
+            <text class="bp-label">调价方式</text>
+            <view class="seg">
+              <text :class="['seg-item', { on: bulkMode === 'percent' }]" @click="bulkMode = 'percent'">百分比 %</text>
+              <text :class="['seg-item', { on: bulkMode === 'fixed' }]" @click="bulkMode = 'fixed'">固定值</text>
+            </view>
+          </view>
+          <input class="ipt" v-model="bulkValue" type="digit" :placeholder="bulkMode === 'percent' ? '调整百分比（+上浮 / −下调）' : '调整金额（+加 / −减）'" />
+          <view class="bp-rule switch-row" @click="bulkGroup = !bulkGroup">
+            <text class="bp-label">价格组售价联动（零售/批发/VIP 同规则）</text>
+            <switch :checked="bulkGroup" color="#409EFF" style="transform: scale(0.7)" />
+          </view>
+          <button class="btn-save" :disabled="bulkBusy" @click="doBulkPreview">{{ bulkBusy ? '预览中…' : '预览调价' }}</button>
+        </template>
+        <template v-else>
+          <view class="form-item">共 {{ bulkPreviewRows.length }} 条价格行{{ bulkPreviewGroup.length ? ' + 价格组 ' + bulkPreviewGroup.length + ' 条' : '' }}，确认后执行（可点遮罩返回修改）</view>
+          <scroll-view scroll-y class="trace-list">
+            <view v-for="(r, i) in bulkPreviewRows" :key="'p' + i" class="t-row">
+              <view class="t-body">
+                <text class="t-name">{{ r.item_name }}（{{ r.unit }}）</text>
+              </view>
+              <text class="t-qty">¥{{ fmtAmount(bulkOldOf(r)) }} → <text class="q-in">¥{{ fmtAmount(bulkNewOf(r)) }}</text></text>
+            </view>
+            <view v-for="(g, i) in bulkPreviewGroup" :key="'g' + i" class="t-row">
+              <view class="t-body"><text class="t-date">{{ g.item_name }}（{{ g.unit }}·{{ g.group_name }}）</text></view>
+              <text class="t-qty">¥{{ fmtAmount(g.old) }} → ¥{{ fmtAmount(g.new) }}</text>
+            </view>
+          </scroll-view>
+          <button class="btn-save" :disabled="bulkBusy" @click="doBulkExec">{{ bulkBusy ? '执行中…' : '确认执行' }}</button>
+        </template>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -53,10 +116,11 @@ import { onWs, offWs } from '../../ws';
 
 import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 ;
 ;
 import { request, getToken } from '../../api';
+import { fmtAmount } from '../../utils/money';
 
 interface Price {
   id?: string;
@@ -85,6 +149,89 @@ const search = ref('');
 const showForm = ref(false);
 const saving = ref(false);
 const priceGroups = ref<Array<{ id: string; name: string }>>([]);
+// 批量调价（v0.17.473）：选商品 → 规则（字段/百分比或固定值/价格组联动）→ 预览 → 执行
+const showBulk = ref(false);
+const bulkStep = ref(0);
+const bulkQ = ref('');
+const bulkSel = ref<string[]>([]);
+const bulkField = ref('sale_price');
+const bulkMode = ref('percent');
+const bulkValue = ref('10');
+const bulkGroup = ref(true);
+const bulkBusy = ref(false);
+const bulkPreviewRows = ref<Array<{ item_name: string; unit: string; old_sale: number; new_sale: number; old_purchase: number; new_purchase: number }>>([]);
+const bulkPreviewGroup = ref<Array<{ item_name: string; unit: string; group_name: string; old: number; new: number }>>([]);
+const bulkFiltered = computed<Item[]>(() => {
+  const q2 = bulkQ.value.trim();
+  return items.value.filter((it) => !q2 || it.name.includes(q2));
+});
+const bulkAll = computed(() => bulkFiltered.value.length > 0 && bulkFiltered.value.every((x) => bulkSel.value.includes(x.id)));
+function toggleBulk(id: string) {
+  const i = bulkSel.value.indexOf(id);
+  if (i >= 0) bulkSel.value.splice(i, 1);
+  else bulkSel.value.push(id);
+}
+function toggleAllBulk() {
+  const ids = bulkFiltered.value.map((x) => x.id);
+  if (bulkAll.value) {
+    bulkSel.value = bulkSel.value.filter((x) => !ids.includes(x));
+  } else {
+    bulkSel.value = [...new Set([...bulkSel.value, ...ids])];
+  }
+}
+function priceSummary(it: Item): string {
+  return (it.prices || []).map((p) => `${p.unit} ¥${p.sale_price}`).join('、');
+}
+function bulkOldOf(r: { old_sale: number; old_purchase: number }): number {
+  return bulkField.value === 'purchase_price' ? Number(r.old_purchase) || 0 : Number(r.old_sale) || 0;
+}
+function bulkNewOf(r: { new_sale: number; new_purchase: number }): number {
+  return bulkField.value === 'purchase_price' ? Number(r.new_purchase) || 0 : Number(r.new_sale) || 0;
+}
+function openBulkPrice() {
+  bulkStep.value = 0;
+  bulkQ.value = '';
+  bulkSel.value = [];
+  bulkValue.value = '10';
+  bulkField.value = 'sale_price';
+  bulkMode.value = 'percent';
+  bulkGroup.value = true;
+  bulkPreviewRows.value = [];
+  bulkPreviewGroup.value = [];
+  showBulk.value = true;
+}
+async function doBulkPreview() {
+  bulkBusy.value = true;
+  try {
+    const pv = await request<{ rows: typeof bulkPreviewRows.value; group_rows: typeof bulkPreviewGroup.value }>('/items/bulk-price/preview', 'POST', {
+      item_ids: bulkSel.value, field: bulkField.value, mode: bulkMode.value,
+      value: Number(bulkValue.value) || 0, apply_group_prices: bulkGroup.value,
+    });
+    bulkPreviewRows.value = pv?.rows || [];
+    bulkPreviewGroup.value = pv?.group_rows || [];
+    bulkStep.value = 2;
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '预览失败', icon: 'none' });
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+async function doBulkExec() {
+  bulkBusy.value = true;
+  try {
+    await request('/items/bulk-price', 'POST', {
+      item_ids: bulkSel.value, field: bulkField.value, mode: bulkMode.value,
+      value: Number(bulkValue.value) || 0, apply_group_prices: bulkGroup.value,
+    });
+    uni.showToast({ title: `批量调价完成（${bulkSel.value.length} 个商品）`, icon: 'success' });
+    showBulk.value = false;
+    await load();
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '执行失败', icon: 'none' });
+  } finally {
+    bulkBusy.value = false;
+  }
+}
 const form = ref<{ id?: string; name: string; category: string; categoryId: string; topId: string; topName: string; subId: string; subName: string; prices: Price[] }>({
   id: undefined, name: '', category: '', categoryId: '', topId: '', topName: '', subId: '', subName: '', prices: [{ id: '', unit: '', purchase_price: '', sale_price: '', group_prices: {} }],
 });
@@ -331,6 +478,19 @@ async function remove(id: string) {
 .del { margin-left: 32rpx; color: #f56c6c; font-size: 26rpx; }
 .price { font-size: 26rpx; color: var(--text-sub); margin-top: 6rpx; }
 .empty { color: var(--text-sub); text-align: center; padding: 60rpx 0; font-size: 26rpx; }
+.bp-bar { display: flex; justify-content: flex-end; margin-bottom: 16rpx; }
+.bp-ops { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12rpx; }
+.bp-sel { font-size: 24rpx; color: var(--text-sub); }
+.bp-row { display: flex; align-items: center; gap: 12rpx; padding: 14rpx 0; border-bottom: 1rpx solid var(--divider); }
+.bp-row:last-child { border-bottom: none; }
+.bp-name { flex: 1; font-size: 28rpx; }
+.bp-price { font-size: 24rpx; color: var(--text-sub); max-width: 50%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bp-rule { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16rpx; }
+.bp-label { font-size: 28rpx; }
+.switch-row { justify-content: space-between; }
+.seg { display: flex; background: var(--input-bg); border-radius: 12rpx; padding: 6rpx; }
+.seg-item { padding: 10rpx 24rpx; font-size: 26rpx; border-radius: 10rpx; color: var(--text-sub); }
+.seg-item.on { background: var(--primary); color: #fff; }
 .mask { position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.4); display: flex; align-items: flex-end; z-index: 100; }
 .sheet { width: 100%; background: var(--sheet-bg); border-radius: 24rpx 24rpx 0 0; padding: 40rpx 32rpx; box-sizing: border-box; }
 .sheet-title { font-size: 34rpx; font-weight: bold; margin-bottom: 24rpx; text-align: center; }
@@ -348,4 +508,14 @@ async function remove(id: string) {
 .gp-row { display: flex; align-items: center; gap: 12rpx; margin-bottom: 8rpx; }
 .gp-label { font-size: 24rpx; color: var(--text-sub); width: 120rpx; flex-shrink: 0; }
 .btn-save { background: var(--primary); color: #fff; border-radius: 12rpx; font-size: 30rpx; }
+.trace-sheet { padding-bottom: 40rpx; max-height: 75vh; display: flex; flex-direction: column; }
+.trace-list { max-height: 60vh; }
+.t-row { display: flex; align-items: center; gap: 16rpx; padding: 16rpx 0; border-bottom: 1rpx solid var(--divider); }
+.t-row:last-child { border-bottom: none; }
+.t-body { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.t-name { font-size: 26rpx; font-weight: bold; }
+.t-date { font-size: 24rpx; color: var(--text-sub); }
+.t-qty { font-size: 26rpx; font-weight: bold; flex-shrink: 0; }
+.q-in { color: #16a34a; }
+.form-item { font-size: 28rpx; color: var(--text-main); margin-bottom: 16rpx; }
 </style>

@@ -220,6 +220,322 @@ class _ItemsPageState extends State<ItemsPage> {
     _load();
   }
 
+  bool _bulking = false; // 批量调价提交防连点
+
+  /// 批量调价（老板，需在线）：选商品 → 规则（字段/百分比或固定值/价格组联动）→
+  /// 预览（原价→新价）→ 确认执行（POST /items/bulk-price，逐商品变更流同步到各端）
+  Future<void> _bulkPrice() async {
+    if (_bulking) return;
+    if (!kIsWeb && Api.isOffline) {
+      toast(context, '批量调价需联网（当前离线，联网后再调）');
+      return;
+    }
+    try {
+      final d = await Api.instance.get('/items');
+      final items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (items.isEmpty) {
+        toast(context, '暂无商品');
+        return;
+      }
+      final cats = <String>{};
+      for (final it in items) {
+        final c = '${it['category'] ?? ''}';
+        if (c.isNotEmpty) cats.add(c);
+      }
+      final catList = cats.toList()..sort();
+      // 弹窗内部状态
+      var step = 0; // 0=选商品 1=规则+预览 2=预览清单
+      var cat = '';
+      var searchQ = '';
+      final selIds = <String>{};
+      var field = 'sale_price';
+      var mode = 'percent';
+      final valueCtrl = TextEditingController(text: '10');
+      var applyGroup = true;
+      var previewRows = <Map<String, dynamic>>[];
+      var previewGroup = <Map<String, dynamic>>[];
+      var previewBusy = false;
+      var executing = false;
+      List<Map<String, dynamic>> filtered() => [
+            for (final it in items)
+              if ((cat.isEmpty || '${it['category'] ?? ''}' == cat) &&
+                  (searchQ.isEmpty || '${it['name'] ?? ''}'.contains(searchQ)))
+                it
+          ];
+      final saved = await showCenterSheet<bool>(
+        context: context,
+        maxHeightFactor: 0.92,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) {
+            final list = filtered();
+            Future<void> doPreview() async {
+              setDlg(() { previewBusy = true; previewRows = []; previewGroup = []; });
+              try {
+                final ids = selIds.toList();
+                final pv = await Api.instance.post('/items/bulk-price/preview', {
+                  'item_ids': ids, 'field': field, 'mode': mode,
+                  'value': double.tryParse(valueCtrl.text.trim()) ?? 0,
+                  'apply_group_prices': applyGroup,
+                });
+                setDlg(() {
+                  previewRows = ((pv['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
+                  previewGroup = ((pv['group_rows'] as List?) ?? []).cast<Map<String, dynamic>>();
+                  previewBusy = false;
+                  step = 2;
+                });
+              } catch (e) {
+                setDlg(() => previewBusy = false);
+                toast(context, e.toString().replaceFirst('Exception: ', ''));
+              }
+            }
+            Future<void> doExec() async {
+              setDlg(() => executing = true);
+              try {
+                await Api.instance.post('/items/bulk-price', {
+                  'item_ids': selIds.toList(), 'field': field, 'mode': mode,
+                  'value': double.tryParse(valueCtrl.text.trim()) ?? 0,
+                  'apply_group_prices': applyGroup,
+                });
+                toast(context, '批量调价完成（${selIds.length} 个商品）');
+                Navigator.pop(ctx, true);
+              } catch (e) {
+                setDlg(() => executing = false);
+                toast(context, e.toString().replaceFirst('Exception: ', ''));
+              }
+            }
+            Widget stepTitle(String t) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Text(t, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                );
+            return Column(
+              children: [
+                stepTitle(step == 0 ? '批量调价 · 选商品' : (step == 1 ? '批量调价 · 规则' : '批量调价 · 预览')),
+                if (step == 0) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        if (catList.isNotEmpty) ...[
+                          DropdownButton<String>(
+                            value: cat,
+                            isDense: true,
+                            items: [const DropdownMenuItem(value: '', child: Text('全部分类')),
+                              for (final c in catList) DropdownMenuItem(value: c, child: Text(c))],
+                            onChanged: (v) => setDlg(() => cat = v ?? ''),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        Expanded(
+                          child: TextField(
+                            decoration: const InputDecoration(hintText: '搜索商品', isDense: true),
+                            onChanged: (v) => setDlg(() => searchQ = v),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                    child: Row(
+                      children: [
+                        TextButton(
+                          onPressed: () => setDlg(() {
+                            if (selIds.length == list.length) {
+                              selIds.clear();
+                            } else {
+                              selIds
+                                ..clear()
+                                ..addAll(list.map((x) => '${x['id']}'));
+                            }
+                          }),
+                          child: Text(selIds.length == list.length ? '取消全选' : '全选', style: const TextStyle(fontSize: 13)),
+                        ),
+                        const Spacer(),
+                        Text('已选 ${selIds.length} 个商品', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: list.length,
+                      itemBuilder: (_, i) {
+                        final it = list[i];
+                        final id = '${it['id']}';
+                        final prices = ((it['prices'] as List?) ?? []).cast<Map<String, dynamic>>();
+                        final summary = prices.map((p) => '${p['unit']} ¥${fmtMoney((p['sale_price'] as num?)?.toDouble() ?? 0)}').join('、');
+                        return CheckboxListTile(
+                          dense: true,
+                          value: selIds.contains(id),
+                          title: Text('${it['name']}', style: const TextStyle(fontSize: 13.5)),
+                          subtitle: summary.isNotEmpty ? Text(summary, style: const TextStyle(fontSize: 11, color: Colors.grey), maxLines: 1, overflow: TextOverflow.ellipsis) : null,
+                          onChanged: (v) => setDlg(() {
+                            if (v == true) {
+                              selIds.add(id);
+                            } else {
+                              selIds.remove(id);
+                            }
+                          }),
+                        );
+                      },
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+                      onPressed: selIds.isEmpty ? null : () => setDlg(() => step = 1),
+                      child: const Text('下一步：调价规则'),
+                    ),
+                  ),
+                ],
+                if (step == 1) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Row(
+                      children: [
+                        const Text('调价字段', style: TextStyle(fontSize: 13)),
+                        const Spacer(),
+                        SegmentedButton<String>(
+                          segments: const [
+                            ButtonSegment(value: 'sale_price', label: Text('售价')),
+                            ButtonSegment(value: 'purchase_price', label: Text('进价')),
+                            ButtonSegment(value: 'both', label: Text('都调')),
+                          ],
+                          selected: {field},
+                          onSelectionChanged: (s) => setDlg(() => field = s.first),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Row(
+                      children: [
+                        const Text('调价方式', style: TextStyle(fontSize: 13)),
+                        const Spacer(),
+                        SegmentedButton<String>(
+                          segments: const [
+                            ButtonSegment(value: 'percent', label: Text('百分比 %')),
+                            ButtonSegment(value: 'fixed', label: Text('固定值')),
+                          ],
+                          selected: {mode},
+                          onSelectionChanged: (s) => setDlg(() => mode = s.first),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: NumberPadField(
+                            controller: valueCtrl,
+                            label: mode == 'percent' ? '调整百分比（+上浮 / −下调）' : '调整金额（+加 / −减）',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SwitchListTile(
+                    dense: true,
+                    value: applyGroup,
+                    title: const Text('价格组售价联动（零售/批发/VIP 同规则）', style: TextStyle(fontSize: 13)),
+                    onChanged: (v) => setDlg(() => applyGroup = v),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        TextButton(onPressed: () => setDlg(() => step = 0), child: const Text('上一步')),
+                        const Spacer(),
+                        FilledButton(
+                          style: FilledButton.styleFrom(minimumSize: const Size(160, 46)),
+                          onPressed: previewBusy ? null : doPreview,
+                          child: const Text('预览调价'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (step == 2) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                    child: Text(
+                      '共 ${previewRows.length} 条价格行${previewGroup.isNotEmpty ? ' + 价格组 ${previewGroup.length} 条' : ''}，'
+                      '确认后执行（可上一步修改规则）',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: previewRows.length + previewGroup.length,
+                      itemBuilder: (_, i) {
+                        if (i < previewRows.length) {
+                          final r = previewRows[i];
+                          final isPurchase = field == 'purchase_price';
+                          final oldV = isPurchase ? (r['old_purchase'] as num?)?.toDouble() ?? 0 : (r['old_sale'] as num?)?.toDouble() ?? 0;
+                          final newV = isPurchase ? (r['new_purchase'] as num?)?.toDouble() ?? 0 : (r['new_sale'] as num?)?.toDouble() ?? 0;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text('${r['item_name']}（${r['unit']}）',
+                                      style: const TextStyle(fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                ),
+                                Text('¥${fmtMoney(oldV)} → ', style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                                Text('¥${fmtMoney(newV)}', style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+                              ],
+                            ),
+                          );
+                        }
+                        final g = previewGroup[i - previewRows.length];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text('${g['item_name']}（${g['unit']}·${g['group_name']}）',
+                                    style: const TextStyle(fontSize: 12, color: Colors.grey), maxLines: 1, overflow: TextOverflow.ellipsis),
+                              ),
+                              Text('¥${fmtMoney((g['old'] as num?)?.toDouble() ?? 0)} → ¥${fmtMoney((g['new'] as num?)?.toDouble() ?? 0)}',
+                                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        TextButton(onPressed: () => setDlg(() => step = 1), child: const Text('上一步')),
+                        const Spacer(),
+                        FilledButton(
+                          style: FilledButton.styleFrom(minimumSize: const Size(160, 46)),
+                          onPressed: executing ? null : doExec,
+                          child: Text(executing ? '执行中…' : '确认执行'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            );
+          },
+        ),
+      );
+      valueCtrl.dispose();
+      if (saved == true) _load(); // 执行成功返回后刷新商品列表
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -235,6 +551,13 @@ class _ItemsPageState extends State<ItemsPage> {
                 await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const _ItemEditPage()));
                 _load();
               },
+            ),
+          // 批量调价（老板）：一次选多个商品按百分比/固定值整体调价（价格组联动可选）
+          if (!_isStaff)
+            IconButton(
+              tooltip: '批量调价',
+              icon: const Icon(Icons.price_change_outlined),
+              onPressed: _bulkPrice,
             ),
         ],
       ),

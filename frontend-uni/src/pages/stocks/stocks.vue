@@ -3,8 +3,12 @@
   <image v-if="patternSrc" class="bg-pattern" :src="patternSrc" mode="aspectFill" />
     <view class="toolbar">
       <input class="search" v-model="q" placeholder="搜索商品" @input="onSearch" />
-      <view class="pill" @click="openLossList">损耗记录</view>
+      <view class="pill" @click="openCount">盘点</view>
       <view :class="['pill', { active: belowOnly }]" @click="toggleBelow">只看预警</view>
+    </view>
+    <view class="toolbar sub-toolbar">
+      <view class="pill" @click="openLossList">损耗记录</view>
+      <view class="pill" @click="openAdjustList">盘点调整</view>
     </view>
 
     <view v-if="totalLabel" class="total">{{ totalLabel }}</view>
@@ -56,14 +60,53 @@
       </view>
     </view>
 
-    <!-- 调整弹层 -->
+    <!-- 调整弹层（仅预警阈值；库存=流水自动计算，数量不再手填） -->
     <view v-if="showForm" class="mask" @click="showForm = false">
       <view class="sheet" @click.stop>
-        <view class="sheet-title">库存调整</view>
-        <view class="form-item">{{ cur.item_name }}（{{ cur.unit }}）</view>
-        <input class="ipt" v-model="formQty" type="digit" placeholder="库存数量" />
+        <view class="sheet-title">预警阈值</view>
+        <view class="form-item">{{ cur.item_name }}（{{ cur.unit }}）· 当前库存 {{ fmtQty(curQuantity) }}</view>
         <input class="ipt" v-model="formMin" type="digit" placeholder="低库存预警阈值" />
         <button class="btn-save" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+      </view>
+    </view>
+
+    <!-- 盘点弹层：全部商品×单位，填实际数（差异=盘盈/盘亏自动调整）+ 可顺手设阈值 -->
+    <view v-if="showCount" class="mask" @click="showCount = false">
+      <view class="sheet trace-sheet" @click.stop>
+        <view class="sheet-title">库存盘点（填实际数，差异自动调整）</view>
+        <view class="form-item count-hint">盘盈（实际＞账面）/ 盘亏（实际＜账面）自动记调整流水</view>
+        <scroll-view scroll-y class="trace-list">
+          <view v-if="countRows.length === 0" class="empty">暂无商品，请先添加商品与价格</view>
+          <view v-for="(r, i) in countRows" :key="i" class="count-row">
+            <view class="count-info">
+              <text class="t-name">{{ r.item_name }}（{{ r.unit }}）</text>
+              <text class="t-date">账面 {{ fmtQty(r.quantity) }}</text>
+            </view>
+            <input class="count-ipt" v-model="r.actual" type="digit" placeholder="实际数" />
+            <input class="count-ipt" v-model="r.min" type="digit" placeholder="阈值" />
+          </view>
+        </scroll-view>
+        <button class="btn-save" :disabled="saving" @click="submitCount">{{ saving ? '提交中…' : '保存盘点' }}</button>
+      </view>
+    </view>
+
+    <!-- 盘点调整记录弹层 -->
+    <view v-if="showAdjustList" class="mask" @click="showAdjustList = false">
+      <view class="sheet trace-sheet" @click.stop>
+        <view class="sheet-title">盘点调整记录（共 {{ adjustRows.length }} 笔）</view>
+        <view class="form-item">盘盈 {{ fmtQty(adjustSurplusQty) }} · 盘亏 {{ fmtQty(adjustShortageQty) }}</view>
+        <scroll-view scroll-y class="trace-list">
+          <view v-if="adjustRows.length === 0" class="empty">暂无盘点调整（库存页点「盘点」按实际数量校对）</view>
+          <view v-for="(r, i) in adjustRows" :key="i" class="t-row">
+            <view class="t-body">
+              <text class="t-name">{{ r.item_name }}（{{ r.unit }}）</text>
+              <text class="t-date">{{ r.happened_at }}{{ r.note ? ' · ' + r.note : '' }}</text>
+            </view>
+            <text :class="['t-qty', Number(r.qty) > 0 ? 'q-in' : 'q-out']">
+              {{ Number(r.qty) > 0 ? '+' : '−' }}{{ fmtQty(Math.abs(Number(r.qty))) }}{{ adjustCostVisible && Number(r.amount) ? ' · ¥' + fmtAmount(r.amount) : '' }}
+            </text>
+          </view>
+        </scroll-view>
       </view>
     </view>
 
@@ -118,8 +161,8 @@ const totalLabel = ref('');
 const showForm = ref(false);
 const saving = ref(false);
 const cur = ref<{ id: string; item_id: string; item_name: string; unit: string; count_unit?: string }>({ id: '', item_id: '', item_name: '', unit: '' });
-const formQty = ref('');
 const formMin = ref('');
+const curQuantity = ref(0);
 const showTrace = ref(false);
 const traceRows = ref<Array<{ kind: string; happened_at: string; quantity: number; unit: string; eff_qty: number; count_qty: number | null; note: string | null }>>([]);
 const showLoss = ref(false);
@@ -127,12 +170,19 @@ const lossQty = ref('');
 const lossNote = ref('');
 const lossUnits = ref<string[]>([]);
 const lossUnitIndex = ref(0);
-const curQuantity = ref(0);
 const showLossList = ref(false);
 const lossRows = ref<Array<{ item_name: string; unit: string; qty: number; amount: number; happened_at: string; note: string; cost_visible?: boolean }>>([]);
 const lossTotalQty = ref(0);
 const lossTotalAmount = ref(0);
 const lossCostVisible = ref(true);
+// 盘点（v0.17.473）：全商品×单位填实际数，差异=盘盈/盘亏自动调整；可顺手设阈值
+const showCount = ref(false);
+const countRows = ref<Array<{ item_id: string; item_name: string; unit: string; quantity: number; min_stock: number; actual: string; min: string }>>([]);
+const showAdjustList = ref(false);
+const adjustRows = ref<Array<{ item_name: string; unit: string; qty: number; amount: number; happened_at: string; note: string; cost_visible?: boolean }>>([]);
+const adjustSurplusQty = ref(0);
+const adjustShortageQty = ref(0);
+const adjustCostVisible = ref(true);
 
 /** 数量显示：整数不显示小数（后端已舍入两位），小数最多两位去尾 0（防 1.7000000000000002 斤） */
 function fmtQty(v: number | string | null | undefined): string {
@@ -220,21 +270,25 @@ function toggleBelow() {
 
 function edit(s: Stock) {
   cur.value = { id: s.id, item_id: s.item_id, item_name: s.item_name, unit: s.unit, count_unit: s.count_unit };
-  formQty.value = String(s.quantity);
+  curQuantity.value = Number(s.quantity) || 0;
   formMin.value = String(s.min_stock);
   showForm.value = true;
 }
 
 async function save() {
-  const qty = Number(formQty.value);
   const min = Number(formMin.value) || 0;
-  if (!(qty >= 0)) {
-    uni.showToast({ title: '数量须为非负数字', icon: 'none' });
+  if (!(min >= 0)) {
+    uni.showToast({ title: '阈值须为非负数字', icon: 'none' });
     return;
   }
   saving.value = true;
   try {
-    await request(`/stocks/${cur.value.id}`, 'PATCH', { quantity: qty, min_stock: min });
+    if (cur.value.id) {
+      await request(`/stocks/${cur.value.id}`, 'PATCH', { min_stock: min });
+    } else {
+      // 未配置过阈值的商品（计算型列表无 stocks 行）→ 批量端点按商品+单位创建阈值
+      await request('/stocks', 'PUT', { rows: [{ item_id: cur.value.item_id, unit: cur.value.unit, min_stock: min }] });
+    }
     uni.showToast({ title: '已保存', icon: 'success' });
     showForm.value = false;
     await load();
@@ -242,6 +296,96 @@ async function save() {
     uni.showToast({ title: (e as Error).message || '保存失败', icon: 'none' });
   } finally {
     saving.value = false;
+  }
+}
+
+/** 盘点弹层：全部商品×单位，填实际数（差异=盘盈/盘亏自动调整）+ 阈值可顺手修改 */
+async function openCount() {
+  try {
+    const [itemsD, stocksD] = await Promise.all([
+      request<{ items: Array<{ id: string; name: string; prices: Array<{ unit: string }> }> }>('/items', 'GET'),
+      request<{ stocks: Array<{ item_id: string; unit: string; quantity: number; min_stock: number }> }>('/stocks', 'GET'),
+    ]);
+    const stockMap = new Map<string, { quantity: number; min_stock: number }>();
+    for (const s of (stocksD?.stocks || [])) stockMap.set(`${s.item_id}/${s.unit}`, s);
+    const rows: Array<{ item_id: string; item_name: string; unit: string; quantity: number; min_stock: number; actual: string; min: string }> = [];
+    for (const it of (itemsD?.items || [])) {
+      for (const p of (it.prices || [])) {
+        const cur2 = stockMap.get(`${it.id}/${p.unit}`);
+        rows.push({
+          item_id: it.id, item_name: it.name, unit: p.unit,
+          quantity: Number(cur2?.quantity) || 0,
+          min_stock: Number(cur2?.min_stock) || 0,
+          actual: '', min: String(Number(cur2?.min_stock) || 0),
+        });
+      }
+    }
+    if (!rows.length) {
+      uni.showToast({ title: '暂无商品，请先添加商品与价格', icon: 'none' });
+      return;
+    }
+    countRows.value = rows;
+    showCount.value = true;
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
+  }
+}
+
+/** 保存盘点：差异≠0 的实际数 → POST /stocks/adjust；阈值变化 → PUT /stocks；防连点 */
+async function submitCount() {
+  const adjustRows2: Array<{ item_id: string; unit: string; actual_qty: number }> = [];
+  const thresholdRows: Array<{ item_id: string; unit: string; min_stock: number }> = [];
+  for (const r of countRows.value) {
+    const v = Number(r.actual);
+    if (r.actual.trim() !== '' && v >= 0 && Math.abs(v - r.quantity) > 0.001) {
+      adjustRows2.push({ item_id: r.item_id, unit: r.unit, actual_qty: v });
+    }
+    const m = Number(r.min);
+    if (!isNaN(m) && m >= 0 && Math.abs(m - r.min_stock) > 0.001) {
+      thresholdRows.push({ item_id: r.item_id, unit: r.unit, min_stock: m });
+    }
+  }
+  if (!adjustRows2.length && !thresholdRows.length) {
+    uni.showToast({ title: '没有变化，无需保存', icon: 'none' });
+    return;
+  }
+  saving.value = true;
+  try {
+    let msg = '';
+    if (adjustRows2.length) {
+      const r = await request<{ adjusted: number; surplus: number; shortage: number }>('/stocks/adjust', 'POST', {
+        id: 'c' + Date.now() + Math.floor(Math.random() * 9000 + 1000),
+        rows: adjustRows2,
+        happened_at: new Date().toISOString().slice(0, 10),
+      });
+      msg = `调整 ${r?.adjusted ?? adjustRows2.length} 项`
+        + (Number(r?.surplus) ? `，盘盈 ${fmtQty(r!.surplus)}` : '')
+        + (Number(r?.shortage) ? `，盘亏 ${fmtQty(r!.shortage)}` : '');
+    }
+    if (thresholdRows.length) {
+      await request('/stocks', 'PUT', { rows: thresholdRows });
+    }
+    uni.showToast({ title: msg ? `已保存：${msg}` : '阈值已保存', icon: 'success' });
+    showCount.value = false;
+    await load();
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '保存失败', icon: 'none' });
+  } finally {
+    saving.value = false;
+  }
+}
+
+/** 盘点调整记录：GET /stocks/adjustments 列表 + 盘盈/盘亏汇总（金额/单价仅老板可见） */
+async function openAdjustList() {
+  try {
+    const d = await request<{ rows: Array<{ item_name: string; unit: string; qty: number; amount: number; happened_at: string; note: string; cost_visible: boolean }>; surplus_qty: number; shortage_qty: number }>('/stocks/adjustments', 'GET');
+    adjustRows.value = d?.rows || [];
+    adjustSurplusQty.value = Number(d?.surplus_qty) || 0;
+    adjustShortageQty.value = Number(d?.shortage_qty) || 0;
+    adjustCostVisible.value = adjustRows.value.length ? adjustRows.value[0].cost_visible !== false : true;
+    showAdjustList.value = true;
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '加载失败', icon: 'none' });
   }
 }
 
@@ -330,6 +474,7 @@ async function viewTrace(s: Stock) {
 .bg-pattern { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.9; pointer-events: none; }
 .page { min-height: 100vh;  background: var(--page-bg); }
 .toolbar { display: flex; align-items: center; gap: 16rpx; margin-bottom: 16rpx; }
+.sub-toolbar { margin-top: -8rpx; margin-bottom: 20rpx; }
 .search { flex: 1; background: var(--card-bg); border-radius: 12rpx; padding: 16rpx 24rpx; font-size: 28rpx; }
 .pill { padding: 12rpx 24rpx; background: var(--card-bg); border-radius: 24rpx; font-size: 26rpx; color: var(--text-sub); border: 1rpx solid var(--divider); }
 .pill.active { color: #f56c6c; border-color: #f56c6c; background: var(--danger-bg); }
@@ -363,4 +508,9 @@ async function viewTrace(s: Stock) {
 .t-qty { font-size: 26rpx; font-weight: bold; flex-shrink: 0; }
 .q-in { color: #16a34a; }
 .q-out { color: #dc2626; }
+.count-hint { font-size: 24rpx; color: var(--text-sub); }
+.count-row { display: flex; align-items: center; gap: 12rpx; padding: 12rpx 0; border-bottom: 1rpx solid var(--divider); }
+.count-row:last-child { border-bottom: none; }
+.count-info { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.count-ipt { width: 150rpx; background: var(--input-bg); border-radius: 10rpx; padding: 10rpx 12rpx; font-size: 26rpx; }
 </style>

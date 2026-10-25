@@ -312,10 +312,20 @@ syncRouter.get('/full', async (c) => {
     return isStaff ? { ...r, price: 0, amount: 0 } : r;
   });
 
+  // 盘点调整流水（v0.17.473）：本地库存聚合需要（库存=进−出−损耗±盘点调整）；金额/单价店员打码
+  const adjRows = await db.prepare(
+    `SELECT sa.id, sa.adjust_id, sa.item_id, sa.unit, sa.qty, sa.price, sa.amount, sa.happened_at, sa.note, sa.created_at, i.name AS item_name
+     FROM stock_adjustments sa JOIN items i ON i.id = sa.item_id ORDER BY sa.happened_at, sa.created_at`,
+  ).all();
+  const adjustments = adjRows.results.map((x) => {
+    const r = x as Record<string, unknown>;
+    return isStaff ? { ...r, price: 0, amount: 0 } : r;
+  });
+
   return c.json({ clients, items, categories, payment_accounts, price_groups,
     // 去单据化主结构：行级商品记录数组（前端 fullSync 主读数），sales/purchases 整单仅作兼容
     sale_items: saleItems.results, purchase_items: purchaseItems.results,
-    sales, purchases, payments, stocks, loss_records: losses, server_cursor: await maxCursor(db) });
+    sales, purchases, payments, stocks, loss_records: losses, stock_adjustments: adjustments, server_cursor: await maxCursor(db) });
 });
 
 // GET /sync/stats — 服务器端各实体计数 + 变更流游标（同步状态面板/差异诊断用）

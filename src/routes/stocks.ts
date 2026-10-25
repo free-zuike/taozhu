@@ -6,7 +6,7 @@ import { stockUpsert, stockUpsertMin } from '../lib/stock';
 import { chunkQuery } from '../lib/query';
 import { consumeFifoStatements, consumeLossStatements } from '../lib/fifo';
 import { randomId } from '../lib/password';
-import { recordChange } from '../lib/sync';
+import { recordChange, type SyncChangeInput } from '../lib/sync';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -15,6 +15,18 @@ export const stocksRouter = new Hono<{ Bindings: Env; Variables: V }>();
 stocksRouter.use('*', authMiddleware());
 
 const nowIso = () => new Date().toISOString();
+
+/** 库存账面聚合（公共）：Σ进货(+) − 出货(−) − 报损(−) ± 盘点调整（v0.17.473 起，盘点差异=流水）
+ *  与 /rebuild 同构；单位=行单位（盘点按显示单位校对，GET / 展示同维度） */
+const STOCK_AGG_SQL = `SELECT item_id, unit, SUM(qty) AS quantity FROM (
+  SELECT item_id, unit, COALESCE(quantity, 0) AS qty FROM purchase_items
+  UNION ALL
+  SELECT item_id, unit, -COALESCE(quantity, 0) AS qty FROM sale_items
+  UNION ALL
+  SELECT item_id, unit, -COALESCE(qty, 0) AS qty FROM loss_records
+  UNION ALL
+  SELECT item_id, unit, COALESCE(qty, 0) AS qty FROM stock_adjustments
+) GROUP BY item_id, unit`;
 
 // GET /stocks?q=&below=1 — 库存列表（含商品名；below=1 仅低于阈值）
 // 库存 = 计算值：Σ进货(+)/出货(−) 流水按 商品+单位 累计（用户"库存应该是计算出来的不是写入数据库"）；
@@ -26,15 +38,7 @@ stocksRouter.get('/', async (c) => {
   // 库存 = 计算值：Σ进货(+)/出货(−) 流水按 商品+单位 累计（用户"库存应该是计算出来的不是写入数据库"）；
   // 与 /rebuild 同构（一层 UNION ALL + GROUP BY，兼容 FakeD1/生产），商品名/阈值/进价在 JS 侧合并，
   // stocks.quantity 不再读取（旧盘点/手动填写残留=没进货却显示正数根因），min_stock 阈值保留。
-  const agg = await c.env.DB.prepare(
-    `SELECT item_id, unit, SUM(qty) AS quantity FROM (
-       SELECT item_id, unit, COALESCE(quantity, 0) AS qty FROM purchase_items
-       UNION ALL
-       SELECT item_id, unit, -COALESCE(quantity, 0) AS qty FROM sale_items
-       UNION ALL
-       SELECT item_id, unit, -COALESCE(qty, 0) AS qty FROM loss_records
-     ) GROUP BY item_id, unit`,
-  ).all<{ item_id: string; unit: string; quantity: number }>();
+  const agg = await c.env.DB.prepare(STOCK_AGG_SQL).all<{ item_id: string; unit: string; quantity: number }>();
   const itemIds = [...new Set(agg.results.map((r) => r.item_id))];
   const [itemRows, stockRows, batchCostRows, priceRows] = await Promise.all([
     itemIds.length
@@ -109,15 +113,7 @@ stocksRouter.get('/alerts', async (c) => {
   const today = new Date().toISOString().slice(0, 10);
   const limitDate = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
   const [agg, stockRows, itemRows, expRows] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT item_id, unit, SUM(qty) AS quantity FROM (
-         SELECT item_id, unit, COALESCE(quantity, 0) AS qty FROM purchase_items
-         UNION ALL
-         SELECT item_id, unit, -COALESCE(quantity, 0) AS qty FROM sale_items
-         UNION ALL
-         SELECT item_id, unit, -COALESCE(qty, 0) AS qty FROM loss_records
-       ) GROUP BY item_id, unit`,
-    ).all<{ item_id: string; unit: string; quantity: number }>(),
+    c.env.DB.prepare(STOCK_AGG_SQL).all<{ item_id: string; unit: string; quantity: number }>(),
     c.env.DB.prepare('SELECT item_id, unit, min_stock FROM stocks').all<{ item_id: string; unit: string; min_stock: number }>(),
     c.env.DB.prepare('SELECT id, name FROM items WHERE deleted_at IS NULL').all<{ id: string; name: string }>(),
     c.env.DB.prepare(
@@ -220,6 +216,9 @@ stocksRouter.post('/rebuild', adminOnly(), async (c) => {
        UNION ALL
        SELECT i.id AS item_id, COALESCE(NULLIF(i.count_unit, ''), lr.unit) AS unit, -COALESCE(lr.qty, 0) AS qty
          FROM loss_records lr JOIN items i ON i.id = lr.item_id
+       UNION ALL
+       SELECT i.id AS item_id, COALESCE(NULLIF(i.count_unit, ''), sa.unit) AS unit, COALESCE(sa.qty, 0) AS qty
+         FROM stock_adjustments sa JOIN items i ON i.id = sa.item_id
      ) GROUP BY item_id, unit`,
   ).all<{ item_id: string; unit: string; quantity: number }>();
   const batch = rows.results.map((r) => {
@@ -233,12 +232,18 @@ stocksRouter.post('/rebuild', adminOnly(), async (c) => {
   );
   await c.env.DB.batch(batch);
   const purchaseRows = await c.env.DB.prepare(
-    `SELECT id, item_id, unit, purchase_price, quantity, happened_at, created_at
-     FROM purchase_items ORDER BY happened_at ASC, created_at ASC, id ASC`,
-  ).all<{ id: string; item_id: string; unit: string | null; purchase_price: number; quantity: number; happened_at: string | null; created_at: string }>();
+    `SELECT id, item_id, unit, price, quantity, happened_at, created_at FROM (
+       SELECT pi.id, pi.item_id, pi.unit, pi.purchase_price AS price, pi.quantity AS quantity, pi.happened_at, pi.created_at
+         FROM purchase_items pi
+       UNION ALL
+       SELECT sa.id, sa.item_id, sa.unit, sa.price, sa.qty AS quantity, sa.happened_at, sa.created_at
+         FROM stock_adjustments sa WHERE sa.qty > 0
+     )
+     ORDER BY happened_at ASC, created_at ASC, id ASC`,
+  ).all<{ id: string; item_id: string; unit: string | null; price: number; quantity: number; happened_at: string | null; created_at: string }>();
   const batchP: D1PreparedStatement[] = purchaseRows.results.map((r) => c.env.DB.prepare(
     'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).bind(r.id, r.item_id, r.unit ?? '', Number(r.purchase_price) || 0, Number(r.quantity) || 0, r.happened_at ?? '', r.created_at ?? ''));
+  ).bind(r.id, r.item_id, r.unit ?? '', Number(r.price) || 0, Number(r.quantity) || 0, r.happened_at ?? '', r.created_at ?? ''));
   for (let i = 0; i < batchP.length; i += 200) {
     await c.env.DB.batch(batchP.slice(i, i + 200));
   }
@@ -284,9 +289,27 @@ stocksRouter.post('/rebuild', adminOnly(), async (c) => {
     }
   }
   if (lossBatch.length > 0) await c.env.DB.batch(lossBatch);
+  // 盘点盘亏重放：按时间序从剩余批次扣减（不写 uses；盘盈批次已在上方建批）
+  const adjRows = await c.env.DB.prepare(
+    `SELECT id, item_id, unit, -qty AS qty FROM stock_adjustments
+     WHERE qty < 0
+     ORDER BY happened_at ASC, created_at ASC, id ASC`,
+  ).all<{ id: string; item_id: string; unit: string | null; qty: number }>();
+  const adjBatch: D1PreparedStatement[] = [];
+  for (const a of adjRows.results) {
+    const qty = Number(a.qty) || 0;
+    if (qty <= 0) continue;
+    const { stmts } = await consumeLossStatements(c.env.DB, a.item_id, a.unit ?? '', qty);
+    adjBatch.push(...stmts);
+    if (adjBatch.length >= 200) {
+      await c.env.DB.batch(adjBatch);
+      adjBatch.length = 0;
+    }
+  }
+  if (adjBatch.length > 0) await c.env.DB.batch(adjBatch);
   await recordAudit(c.env.DB, {
     username: c.get('user').username, action: 'rebuild', entity_type: 'stocks',
-    detail: `全量重算库存+批次成本：${batch.length} 个商品+单位、${purchaseRows.results.length} 个进货批次、${saleRows.results.length} 个出货行、${lossRows.results.length} 条损耗`,
+    detail: `全量重算库存+批次成本：${batch.length} 个商品+单位、${purchaseRows.results.length} 个进货批次（含盘点盘盈）、${saleRows.results.length} 个出货行、${lossRows.results.length} 条损耗、${adjRows.results.length} 条盘点盘亏`,
   });
   return c.json({ ok: true, rebuilt: batch.length });
 });
@@ -372,5 +395,139 @@ stocksRouter.get('/loss', async (c) => {
     })),
     total_amount: canSeeCost ? Math.round((sum?.amount ?? 0) * 100) / 100 : 0,
     total_qty: Math.round((sum?.qty ?? 0) * 100) / 100,
+  });
+});
+
+// POST /stocks/adjust — 库存盘点提交（老板操作）：按实际数量校对，差异=盘盈(+) / 盘亏(−)。
+// 服务端按账面（Σ进−出−损耗±已调整）算差异，盘盈往 FIFO 批次加新批（单价=档案进价），
+// 盘亏从最早批次扣减（复用报损扣批逻辑）；差异记 stock_adjustments 流水（可追溯+同步到端）。
+// body: { id: 盘点单标识（客户端生成，防重复提交）, rows: [{item_id, unit, actual_qty, note?}],
+//         happened_at?: 'YYYY-MM-DD', note?: string }
+stocksRouter.post('/adjust', adminOnly(), async (c) => {
+  const body = await c.req.json().catch(() => null) as {
+    id?: string; rows?: Array<{ item_id?: string; unit?: string; actual_qty?: number; note?: string }>;
+    happened_at?: string; note?: string;
+  } | null;
+  const adjustId = body?.id?.trim() ?? '';
+  const rows = (body?.rows ?? []).filter((r) => r.item_id?.trim() && r.unit?.trim());
+  if (!adjustId) return c.json({ error: '缺少盘点单标识' }, 400);
+  if (rows.length === 0) return c.json({ error: '缺少盘点商品行' }, 400);
+  // 防重复提交：同一盘点单只允许执行一次（连点/重试不会二次调整库存）
+  const dup = await c.env.DB.prepare('SELECT 1 FROM stock_adjustments WHERE adjust_id = ? LIMIT 1').bind(adjustId).first();
+  if (dup) return c.json({ error: '该盘点单已提交过，请勿重复提交' }, 400);
+  const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
+  const note = body?.note?.trim() ?? '';
+  const username = c.get('user').username;
+  const batch: D1PreparedStatement[] = [];
+  const changes: SyncChangeInput[] = [];
+  let surplusCount = 0; // 盘盈行数
+  let shortageCount = 0; // 盘亏行数
+  let surplusQty = 0, shortageQty = 0, surplusAmount = 0, shortageAmount = 0;
+  for (const r of rows) {
+    const itemId = (r.item_id ?? '').trim();
+    const unit = (r.unit ?? '').trim();
+    const actual = Number(r.actual_qty);
+    if (!Number.isFinite(actual) || actual < 0) {
+      return c.json({ error: `「${itemId}」实际数量不合法（须为非负数字）` }, 400);
+    }
+    // 账面数量（含此前已提交的盘点调整）
+    const bookRow = await c.env.DB.prepare(
+      `SELECT SUM(qty) AS q FROM (
+         SELECT item_id, unit, COALESCE(quantity, 0) AS qty FROM purchase_items
+         UNION ALL
+         SELECT item_id, unit, -COALESCE(quantity, 0) AS qty FROM sale_items
+         UNION ALL
+         SELECT item_id, unit, -COALESCE(qty, 0) AS qty FROM loss_records
+         UNION ALL
+         SELECT item_id, unit, COALESCE(qty, 0) AS qty FROM stock_adjustments
+       ) WHERE item_id = ? AND unit = ?`,
+    ).bind(itemId, unit).first<{ q: number | null }>();
+    const book = Math.round((Number(bookRow?.q) || 0) * 100) / 100;
+    const diff = Math.round((actual - book) * 100) / 100;
+    if (diff === 0) continue; // 账面=实际，无需调整
+    const adjId = randomId();
+    let price = 0;
+    let amount = 0;
+    if (diff > 0) {
+      // 盘盈：往 FIFO 批次加新批（单价=档案进价，无则 0）——此后出货按先进先出消耗此批计成本
+      price = (await c.env.DB.prepare(
+        'SELECT purchase_price FROM item_prices WHERE item_id = ? AND unit = ? AND active = 1 ORDER BY created_at DESC LIMIT 1',
+      ).bind(itemId, unit).first<{ purchase_price: number }>())?.purchase_price ?? 0;
+      amount = Math.round(diff * price * 100) / 100;
+      batch.push(c.env.DB.prepare(
+        'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).bind(adjId, itemId, unit, Number(price) || 0, diff, happenedAt, nowIso()));
+      surplusCount += 1;
+      surplusQty += diff;
+      surplusAmount += amount;
+    } else {
+      // 盘亏：从最早批次扣减（复用报损扣批逻辑）；超过账面库存则拒绝（先查流水补单，不静默丢弃）
+      const { amount: lossAmount, leftover, stmts } = await consumeLossStatements(c.env.DB, itemId, unit, -diff);
+      if (leftover > 0) {
+        return c.json({ error: `「${itemId}（${unit}）」盘亏超过账面库存（还差 ${Math.round(leftover * 100) / 100}${unit}），请先核对进货/出货流水` }, 400);
+      }
+      price = diff === 0 ? 0 : lossAmount / (-diff);
+      amount = Math.round(lossAmount * 100) / 100;
+      batch.push(...stmts);
+      shortageCount += 1;
+      shortageQty += -diff;
+      shortageAmount += amount;
+    }
+    const rowNote = r.note?.trim() ?? '';
+    batch.push(c.env.DB.prepare(
+      'INSERT INTO stock_adjustments (id, adjust_id, item_id, unit, qty, price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(adjId, adjustId, itemId, unit, diff, Math.round(price * 100) / 100, amount, happenedAt, rowNote || note, c.get('user').id));
+    changes.push({ entity_type: 'stock_adjustment', entity_sync_id: adjId, payload: {
+      id: adjId, adjust_id: adjustId, item_id: itemId, unit, qty: diff, price: Math.round(price * 100) / 100,
+      amount, happened_at: happenedAt, note: rowNote || note, created_by: c.get('user').id, created_at: nowIso(),
+    }, updated_by_username: username });
+  }
+  if (batch.length === 0) return c.json({ ok: true, adjusted: 0, message: '账面与盘点一致，无需调整' });
+  await c.env.DB.batch(batch);
+  // 变更流逐行（App/小程序本地库存聚合需要盘点差异流水才能两端一致）
+  for (const ch of changes) await recordChange(c.env.DB, ch);
+  await recordAudit(c.env.DB, {
+    username, action: 'adjust', entity_type: 'stocks', entity_id: adjustId,
+    detail: `库存盘点：${rows.length} 个商品${surplusCount > 0 ? `，盘盈 ${Math.round(surplusQty * 100) / 100}（金额 ¥${Math.round(surplusAmount * 100) / 100}）` : ''}${shortageCount > 0 ? `，盘亏 ${Math.round(shortageQty * 100) / 100}（金额 ¥${Math.round(shortageAmount * 100) / 100}）` : ''}`,
+  });
+  return c.json({ ok: true, adjusted: changes.length, surplus: Math.round(surplusQty * 100) / 100, shortage: Math.round(shortageQty * 100) / 100 });
+});
+
+// GET /stocks/adjustments — 盘点调整流水列表（含商品名；盘盈 + 盘亏 −；金额/单价仅老板可见）+ 区间汇总
+stocksRouter.get('/adjustments', async (c) => {
+  const canSeeCost = c.get('user').role === 'admin';
+  const dateFrom = c.req.query('date_from')?.trim();
+  const dateTo = c.req.query('date_to')?.trim();
+  const q = c.req.query('q')?.trim() ?? '';
+  let where = ' WHERE 1=1';
+  const params: string[] = [];
+  if (dateFrom) { where += ' AND sa.happened_at >= ?'; params.push(dateFrom); }
+  if (dateTo) { where += ' AND sa.happened_at <= ?'; params.push(dateTo); }
+  if (q) { where += ' AND i.name LIKE ?'; params.push(`%${q}%`); }
+  const rows = await c.env.DB.prepare(
+    `SELECT sa.id, sa.adjust_id, sa.item_id, sa.unit, sa.qty, sa.price, sa.amount, sa.happened_at, sa.note, sa.created_at, i.name AS item_name
+     FROM stock_adjustments sa JOIN items i ON i.id = sa.item_id${where}
+     ORDER BY sa.happened_at DESC, sa.created_at DESC`,
+  ).bind(...params).all<{ id: string; adjust_id: string; item_id: string; unit: string; qty: number; price: number; amount: number; happened_at: string; note: string | null; created_at: string; item_name: string }>();
+  const sum = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(CASE WHEN sa.qty > 0 THEN sa.qty ELSE 0 END), 0) AS surplus_qty,
+            COALESCE(SUM(CASE WHEN sa.qty > 0 THEN sa.amount ELSE 0 END), 0) AS surplus_amount,
+            COALESCE(SUM(CASE WHEN sa.qty < 0 THEN -sa.qty ELSE 0 END), 0) AS shortage_qty,
+            COALESCE(SUM(CASE WHEN sa.qty < 0 THEN sa.amount ELSE 0 END), 0) AS shortage_amount
+     FROM stock_adjustments sa JOIN items i ON i.id = sa.item_id${where}`,
+  ).bind(...params).first<{ surplus_qty: number; surplus_amount: number; shortage_qty: number; shortage_amount: number }>();
+  return c.json({
+    rows: rows.results.map((r) => ({
+      id: r.id, adjust_id: r.adjust_id, item_id: r.item_id, item_name: r.item_name, unit: r.unit,
+      qty: Math.round(r.qty * 100) / 100,
+      amount: Math.round(r.amount * 100) / 100,
+      price: Math.round(r.price * 100) / 100,
+      happened_at: r.happened_at, note: r.note ?? '',
+      cost_visible: canSeeCost,
+    })),
+    surplus_qty: Math.round((sum?.surplus_qty ?? 0) * 100) / 100,
+    surplus_amount: canSeeCost ? Math.round((sum?.surplus_amount ?? 0) * 100) / 100 : 0,
+    shortage_qty: Math.round((sum?.shortage_qty ?? 0) * 100) / 100,
+    shortage_amount: canSeeCost ? Math.round((sum?.shortage_amount ?? 0) * 100) / 100 : 0,
   });
 });

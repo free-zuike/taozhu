@@ -272,3 +272,125 @@ itemsRouter.delete('/item-group-prices/:id', adminOnly(), async (c) => {
   }
   return c.body(null, 204);
 });
+
+// ---------------------------------------------------------------------------
+// 批量调价（v0.17.473）：一次选多个商品，按百分比/固定值整体调进价/售价（价格组售价联动可选）。
+// 两段式：preview 返回"原价→新价"清单（执行前确认），执行时服务端重算（不信任预览值）。
+// ---------------------------------------------------------------------------
+
+interface BulkPriceBody {
+  item_ids?: string[];
+  field?: 'sale_price' | 'purchase_price' | 'both';
+  mode?: 'percent' | 'fixed';
+  value?: number;
+  apply_group_prices?: boolean;
+}
+
+function calcNewPrice(old: number, mode: 'percent' | 'fixed', value: number): number {
+  const v = mode === 'percent' ? old * (1 + value / 100) : old + value;
+  return Math.round(v * 100) / 100;
+}
+
+/** 校验批量调价请求；非法返回错误信息，合法返回规范化参数 */
+function parseBulkPrice(body: BulkPriceBody | null): { err?: string; field: 'sale_price' | 'purchase_price' | 'both'; mode: 'percent' | 'fixed'; value: number; applyGroup: boolean; itemIds: string[] } {
+  const itemIds = (body?.item_ids ?? []).map((x) => String(x).trim()).filter((x) => x.length > 0);
+  if (itemIds.length === 0) return { err: '未选择商品', field: 'sale_price', mode: 'percent', value: 0, applyGroup: true, itemIds };
+  const field = body?.field ?? 'sale_price';
+  if (!['sale_price', 'purchase_price', 'both'].includes(field)) return { err: '调价字段不合法（sale_price/purchase_price/both）', field: 'sale_price', mode: 'percent', value: 0, applyGroup: true, itemIds };
+  const mode = body?.mode ?? 'percent';
+  if (!['percent', 'fixed'].includes(mode)) return { err: '调价方式不合法（percent/fixed）', field, mode: 'percent', value: 0, applyGroup: true, itemIds };
+  const value = Number(body?.value);
+  if (!Number.isFinite(value)) return { err: '调价数值不合法', field, mode, value: 0, applyGroup: true, itemIds };
+  if (mode === 'percent' && (value < -100 || value > 1000)) return { err: '百分比范围应为 -100 ~ 1000', field, mode, value, applyGroup: true, itemIds };
+  if (mode === 'fixed' && (value < -1000000 || value > 1000000)) return { err: '固定值超出合理范围', field, mode, value, applyGroup: true, itemIds };
+  return { field, mode, value, applyGroup: body?.apply_group_prices !== false, itemIds };
+}
+
+// POST /items/bulk-price/preview — 批量调价预览（不落库）：返回每个价格行/价格组行的 原价→新价
+itemsRouter.post('/bulk-price/preview', adminOnly(), async (c) => {
+  const body = await c.req.json().catch(() => null) as BulkPriceBody | null;
+  const p = parseBulkPrice(body);
+  if (p.err) return c.json({ error: p.err }, 400);
+  const ids = p.itemIds;
+  const itemName = new Map((await c.env.DB.prepare(
+    `SELECT id, name FROM items WHERE id IN (${ids.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+  ).bind(...ids).all<{ id: string; name: string }>()).results.map((r) => [r.id, r.name]));
+  const validIds = [...itemName.keys()];
+  if (validIds.length === 0) return c.json({ error: '所选商品不存在或已删除' }, 400);
+  const rows = (await c.env.DB.prepare(
+    `SELECT * FROM item_prices WHERE active = 1 AND item_id IN (${validIds.map(() => '?').join(',')}) ORDER BY unit`,
+  ).bind(...validIds).all()).results.map((r) => {
+    const x = r as { id: string; item_id: string; unit: string; purchase_price: number; sale_price: number };
+    const saleNew = p.field === 'purchase_price' ? x.sale_price : calcNewPrice(Number(x.sale_price) || 0, p.mode, p.value);
+    const purchaseNew = p.field === 'sale_price' ? x.purchase_price : calcNewPrice(Number(x.purchase_price) || 0, p.mode, p.value);
+    return {
+      price_id: x.id, item_id: x.item_id, item_name: itemName.get(x.item_id) ?? '', unit: x.unit,
+      old_sale: Number(x.sale_price) || 0, new_sale: saleNew,
+      old_purchase: Number(x.purchase_price) || 0, new_purchase: purchaseNew,
+    };
+  });
+  const groupRows = p.applyGroup
+    ? (await c.env.DB.prepare(
+      `SELECT gp.*, g.name AS group_name FROM item_group_prices gp JOIN price_groups g ON g.id = gp.group_id
+       WHERE gp.item_id IN (${validIds.map(() => '?').join(',')}) ORDER BY gp.unit, gp.group_id`,
+    ).bind(...validIds).all()).results.map((r) => {
+      const x = r as { id: string; item_id: string; unit: string; group_id: string; group_name: string; sale_price: number };
+      return {
+        price_id: x.id, item_id: x.item_id, item_name: itemName.get(x.item_id) ?? '', unit: x.unit,
+        group_id: x.group_id, group_name: x.group_name,
+        old: Number(x.sale_price) || 0, new: calcNewPrice(Number(x.sale_price) || 0, p.mode, p.value),
+      };
+    })
+    : [];
+  return c.json({ items: validIds.length, rows, group_rows: groupRows });
+});
+
+// POST /items/bulk-price — 批量调价执行：按规则重算并落库（item_prices + 可选价格组售价），
+// 逐商品记变更流（App/小程序本地价格目录同步更新）+ 审计留痕
+itemsRouter.post('/bulk-price', adminOnly(), async (c) => {
+  const body = await c.req.json().catch(() => null) as BulkPriceBody | null;
+  const p = parseBulkPrice(body);
+  if (p.err) return c.json({ error: p.err }, 400);
+  const ids = p.itemIds;
+  const itemName = new Map((await c.env.DB.prepare(
+    `SELECT id, name FROM items WHERE id IN (${ids.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+  ).bind(...ids).all<{ id: string; name: string }>()).results.map((r) => [r.id, r.name]));
+  const validIds = [...itemName.keys()];
+  if (validIds.length === 0) return c.json({ error: '所选商品不存在或已删除' }, 400);
+  // 落库（服务端重算，与预览同规则）
+  const priceRows = await c.env.DB.prepare(
+    `SELECT * FROM item_prices WHERE active = 1 AND item_id IN (${validIds.map(() => '?').join(',')})`,
+  ).bind(...validIds).all();
+  const stmts: D1PreparedStatement[] = [];
+  let changedPrices = 0;
+  for (const r of priceRows.results) {
+    const x = r as { id: string; sale_price: number; purchase_price: number };
+    const saleNew = p.field === 'purchase_price' ? Number(x.sale_price) || 0 : calcNewPrice(Number(x.sale_price) || 0, p.mode, p.value);
+    const purchaseNew = p.field === 'sale_price' ? Number(x.purchase_price) || 0 : calcNewPrice(Number(x.purchase_price) || 0, p.mode, p.value);
+    if (saleNew === (Number(x.sale_price) || 0) && purchaseNew === (Number(x.purchase_price) || 0)) continue;
+    stmts.push(c.env.DB.prepare('UPDATE item_prices SET sale_price = ?, purchase_price = ? WHERE id = ?')
+      .bind(saleNew, purchaseNew, x.id));
+    changedPrices += 1;
+  }
+  if (p.applyGroup) {
+    const groupRows = await c.env.DB.prepare(
+      `SELECT id, sale_price FROM item_group_prices WHERE item_id IN (${validIds.map(() => '?').join(',')})`,
+    ).bind(...validIds).all();
+    for (const r of groupRows.results) {
+      const x = r as { id: string; sale_price: number };
+      const gNew = calcNewPrice(Number(x.sale_price) || 0, p.mode, p.value);
+      if (gNew === (Number(x.sale_price) || 0)) continue;
+      stmts.push(c.env.DB.prepare('UPDATE item_group_prices SET sale_price = ? WHERE id = ?').bind(gNew, x.id));
+      changedPrices += 1;
+    }
+  }
+  if (stmts.length === 0) return c.json({ ok: true, items: validIds.length, changed: 0, message: '价格未变化' });
+  await c.env.DB.batch(stmts);
+  // 逐商品变更流（价格目录同步到 App/小程序本地）
+  for (const id of validIds) await noteItemChange(c.env.DB, id, c.get('user').username);
+  await recordAudit(c.env.DB, {
+    username: c.get('user').username, action: 'bulk_price', entity_type: 'item',
+    detail: `批量调价：${validIds.length} 个商品${p.field === 'both' ? '（进价+售价）' : p.field === 'purchase_price' ? '（进价）' : '（售价）'}，${p.mode === 'percent' ? `${p.value > 0 ? '+' : ''}${p.value}%` : `±${p.value}元`}${p.applyGroup ? '（含价格组）' : ''}，共改 ${changedPrices} 条价格`,
+  });
+  return c.json({ ok: true, items: validIds.length, changed: changedPrices });
+});

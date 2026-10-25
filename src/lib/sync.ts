@@ -14,7 +14,7 @@ import { consumeFifoStatements, releaseSaleUsesStatements } from './fifo';
 import { recordAudit } from '../routes/audit';
 import type { Env } from '../types';
 
-export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'price_group', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item'] as const;
+export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'price_group', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item', 'loss_record', 'stock_adjustment'] as const;
 export type SyncEntityType = (typeof SYNC_ENTITIES)[number];
 
 export interface SyncChangeInput {
@@ -185,6 +185,15 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
         attachments: refs.results.map((x) => x.file_key),
       };
     }
+    case 'stock_adjustment': {
+      const r = await db.prepare('SELECT * FROM stock_adjustments WHERE id = ?').bind(id).first<Record<string, unknown>>();
+      if (!r) return null;
+      return {
+        id: r.id, adjust_id: r.adjust_id, item_id: r.item_id, unit: r.unit,
+        qty: r.qty, price: r.price, amount: r.amount, happened_at: r.happened_at,
+        note: r.note ?? '', created_by: r.created_by ?? null, created_at: r.created_at ?? '',
+      };
+    }
     default:
       return null;
   }
@@ -206,6 +215,10 @@ export function maskPayload(entityType: string, payload: unknown): unknown {
     return { ...p, purchase_price: 0 };
   }
   if (entityType === 'loss_record') {
+    const p = payload as Record<string, unknown>;
+    return { ...p, price: 0, amount: 0 };
+  }
+  if (entityType === 'stock_adjustment') {
     const p = payload as Record<string, unknown>;
     return { ...p, price: 0, amount: 0 };
   }

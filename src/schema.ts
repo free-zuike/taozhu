@@ -261,6 +261,23 @@ const DDL: string[] = [
     size INTEGER,
     log_text TEXT NOT NULL DEFAULT ''
   )`,
+  // 库存盘点调整流水（v0.17.473）：盘点按实际数校对，差异=盘盈(+) / 盘亏(−) 记流水，
+  // 库存聚合纳入（盘点差异=一条流水，不破坏"库存=流水计算"）；adjust_id=盘点单 id（防重复提交）
+  `CREATE TABLE IF NOT EXISTS stock_adjustments (
+    id TEXT PRIMARY KEY,
+    adjust_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    qty REAL NOT NULL DEFAULT 0,
+    price REAL NOT NULL DEFAULT 0,
+    amount REAL NOT NULL DEFAULT 0,
+    happened_at TEXT NOT NULL DEFAULT '',
+    note TEXT DEFAULT '',
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_adjustments_item ON stock_adjustments (item_id, unit)`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_adjustments_date ON stock_adjustments (happened_at)`,
   // 建表迁移标记：已初始化的库冷启动只查这一行即跳过下方 20+ 次 PRAGMA（首请求提速，避免 Web 首访超时）
   `CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
@@ -307,18 +324,22 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // 短路之后的建表逻辑永远不跑。0.17.471 事故根因：backup_runs 建表写在短路后且版本号未 bump，
     // 老库被短路卡死 → /backup/runs/latest 报 no such table:backup_runs → 备份页状态卡 500。
     // 规则：以后新增表，除在 DDL 数组 + 下方增量迁移里加，还必须加入此清单（CREATE TABLE IF NOT EXISTS 幂等）。
-    for (const marker of ['CREATE TABLE IF NOT EXISTS backup_runs']) {
+    for (const marker of [
+      'CREATE TABLE IF NOT EXISTS backup_runs',
+      'CREATE TABLE IF NOT EXISTS stock_adjustments',
+    ]) {
       const i = DDL.findIndex((s) => s.includes(marker));
       if (i >= 0) await db.prepare(DDL[i]).run();
     }
     // 已初始化库：只查一次标记即返回（冷启动首请求不再跑下方 20+ 次 PRAGMA/ALTER 迁移链）
     // 注意：短路值必须与末尾写入值一致，否则新增列的迁移永远不跑（生产曾缺 round_carry/price_group_id → 全接口 500）；
-    // 每新增一次表/列迁移，版本号 +1（0.17.472：backup_runs 缺表事故后，前置建表兜底 + 快检版本升 '14' 让老库重走全量迁移）
+    // 每新增一次表/列迁移，版本号 +1（0.17.472：backup_runs 缺表事故后，前置建表兜底 + 快检版本升 '14' 让老库重走全量迁移；
+    // 0.17.473：库存盘点 stock_adjustments 表 → '15'）
     try {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '14') {
+      if (meta?.value === '15') {
         schemaReady = true;
         return;
       }
@@ -387,6 +408,14 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     if (!brTable) {
       const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS backup_runs'));
       await db.batch([db.prepare(DDL[i])]);
+    }
+    // v0.17.473：库存盘点调整流水 stock_adjustments（差异=盘盈/盘亏，库存聚合纳入）；存量库补建
+    const adjTable = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'stock_adjustments'",
+    ).first<{ name: string }>();
+    if (!adjTable) {
+      const i = DDL.findIndex((s) => s.includes('CREATE TABLE IF NOT EXISTS stock_adjustments'));
+      await db.batch([db.prepare(DDL[i]), db.prepare(DDL[i + 1]), db.prepare(DDL[i + 2])]);
     }
     // 分享链接表（v0.16.17.0）：对账单分享页面用
     const shareTable = await db.prepare(
@@ -632,8 +661,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
     // v0.17.229 设备 IP/版本列 → 快检版本 +1：老库重走全量迁移补齐新表/新列
     // v0.17.472 backup_runs 缺表事故 → 前置建表兜底 + 快检版本 '14'：老库（标记 13）重走全量迁移
+    // v0.17.473 库存盘点 stock_adjustments 表 → 快检版本 '15'
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '14')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '15')",
     ).run();
     schemaReady = true;
     } catch (err) {

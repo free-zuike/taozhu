@@ -121,7 +121,7 @@ class _StocksPageState extends State<StocksPage> {
     }
   }
 
-  /// 库存本地计算（用户"库存应该是计算出来的不是写入数据库"）：Σ进货 − Σ出货 − Σ损耗（按商品×单位），
+  /// 库存本地计算（用户"库存应该是计算出来的不是写入数据库"）：Σ进货 − Σ出货 − Σ损耗 ± Σ盘点调整（按商品×单位），
   /// 不依赖服务端 stocks 表数量；min_stock 阈值配置保留（stocks 表里用户设的）。
   /// 聚合口径对齐服务端 /stocks：单位用商品计数单位 count_unit（若有，否则原单位），
   /// 数量用折合 count_qty（>0 时，否则原数量）——交易页折合由商品管理 per 统一后两端一致。
@@ -129,6 +129,7 @@ class _StocksPageState extends State<StocksPage> {
     final buys = await LocalDb.getAll('purchase_items');
     final sells = await LocalDb.getAll('sale_items');
     final losses = await LocalDb.getAll('loss_records');
+    final adjustments = await LocalDb.getAll('stock_adjustments');
     final cfg = <String, Map<String, dynamic>>{};
     try {
       for (final s in await LocalDb.getAll('stocks')) {
@@ -157,6 +158,7 @@ class _StocksPageState extends State<StocksPage> {
     add(buys, 1);
     add(sells, -1);
     add(losses, -1);
+    add(adjustments, 1); // 盘点调整 qty 带符号：盘盈(+) / 盘亏(−) 直接累加
     final nameOf = {for (final i in items) '${i['id']}': '${i['name'] ?? ''}'};
     final out = <Map<String, dynamic>>[];
     for (final e in agg.entries) {
@@ -416,8 +418,17 @@ class _StocksPageState extends State<StocksPage> {
     }
   }
 
-  /// 盘点弹层：列出所有商品价格单位，填写/修改库存与阈值，批量保存（可初始化期初库存）
+  bool _counting = false; // 盘点提交防连点（一次只允许一单）
+
+  /// 盘点弹层：列出所有商品价格单位，填「实际数量」——与账面差异=盘盈(+)/盘亏(−)，
+  /// 提交后服务端按 FIFO 批次调整库存并记调整流水（可追溯）；可顺手同步设预警阈值。
+  /// 需在线（调整走服务端批次账）；防连点。
   Future<void> _count() async {
+    if (_counting) return;
+    if (!kIsWeb && Api.isOffline) {
+      toast(context, '盘点需联网（当前离线，联网后再盘点）');
+      return;
+    }
     try {
       final items = await Api.instance.get('/items');
       final stocks = await Api.instance.get('/stocks');
@@ -436,9 +447,10 @@ class _StocksPageState extends State<StocksPage> {
             'item_id': it['id'],
             'item_name': it['name'],
             'unit': p['unit'],
-            'quantity': cur?['quantity'] ?? '0',
+            'quantity': (cur?['quantity'] as num?)?.toDouble() ?? 0,
+            'min_stock': (cur?['min_stock'] as num?)?.toDouble() ?? 0,
             // 阈值：已有手设值保留；未设置（0）且库存≥1 时自动带出建议值（近30天平均出货×40%）
-            'min_stock': _defaultMin(cur),
+            'min_default': _defaultMin(cur),
           });
         }
       }
@@ -446,93 +458,260 @@ class _StocksPageState extends State<StocksPage> {
         toast(context, '暂无商品，请先添加商品与价格');
         return;
       }
-      // 弹层内用本地可变状态：库存为计算值只读展示，仅编辑预警阈值
-      final ctrls = rows
-          .map((r) => {
-                'min': TextEditingController(text: '${r['min_stock']}'),
-              })
-          .toList();
+      // 实际数量输入（空=不盘点该行）+ 阈值输入（预填现有/建议值）
+      final qtyCtrls = rows.map((_) => TextEditingController()).toList();
+      final minCtrls = rows.map((r) => TextEditingController(text: '${r['min_default']}')).toList();
       final saved = await showCenterSheet<bool>(
         context: context,
         maxHeightFactor: 0.9,
-        builder: (ctx) => Column(
-          children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('库存盘点', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-            ),
-            Flexible(
-              child: ListView.builder(
-                itemCount: rows.length,
-                itemBuilder: (_, i) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) {
+            // 汇总预览：盘盈/盘亏项数
+            var surplus = 0, shortage = 0;
+            for (var i = 0; i < rows.length; i++) {
+              final v = double.tryParse(qtyCtrls[i].text.trim());
+              if (v == null) continue;
+              final book = rows[i]['quantity'] as double;
+              if (v > book + 0.001) surplus++;
+              else if (v < book - 0.001) shortage++;
+            }
+            return Column(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('库存盘点', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                ),
+                Text(
+                  '填实际数量，差异自动调整（盘盈+/盘亏−）；阈值列可顺手修改',
+                  style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.outline),
+                ),
+                const SizedBox(height: 4),
+                Flexible(
+                  child: ListView.builder(
+                    itemCount: rows.length,
+                    itemBuilder: (_, i) {
+                      final book = rows[i]['quantity'] as double;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text('${rows[i]['item_name']}（${rows[i]['unit']}）',
+                                      style: const TextStyle(fontSize: 13)),
+                                  ValueListenableBuilder<TextEditingValue>(
+                                    valueListenable: qtyCtrls[i],
+                                    builder: (_, v, __) {
+                                      final x = double.tryParse(v.text.trim());
+                                      if (x == null) {
+                                        return Text('账面 ${fmtQty(book)}',
+                                            style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.outline));
+                                      }
+                                      final diff = x - book;
+                                      final color = diff > 0.001 ? const Color(0xFF16A34A) : (diff < -0.001 ? const Color(0xFFDC2626) : Theme.of(context).colorScheme.outline);
+                                      return Text(
+                                        '账面 ${fmtQty(book)}${(diff).abs() > 0.001 ? ' · 差异 ${diff > 0 ? '+' : ''}${fmtQty(diff)}' : '（一致）'}',
+                                        style: TextStyle(fontSize: 11, color: color),
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            SizedBox(
+                              width: 74,
+                              child: NumberPadField(
+                                controller: qtyCtrls[i],
+                                label: '实际数',
+                                decoration: const InputDecoration(labelText: '实际', isDense: true),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            SizedBox(
+                              width: 74,
+                              child: NumberPadField(
+                                controller: minCtrls[i],
+                                label: '阈值',
+                                decoration: const InputDecoration(labelText: '阈值', isDense: true),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('${rows[i]['item_name']}（${rows[i]['unit']}）',
-                                style: const TextStyle(fontSize: 13)),
-                            Text('库存 ${fmtQty((rows[i]['quantity'] as num?)?.toDouble() ?? 0)}',
-                                style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.outline)),
-                          ],
+                        child: Text(
+                          surplus + shortage > 0
+                              ? '${surplus > 0 ? '盘盈 $surplus 项 ' : ''}${shortage > 0 ? '盘亏 $shortage 项' : ''}'
+                              : '无差异（可仅调阈值）',
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: 84,
-                        child: NumberPadField(
-                          controller: ctrls[i]['min']!,
-                          label: '阈值',
-                          decoration: const InputDecoration(labelText: '阈值', isDense: true),
-                        ),
+                      FilledButton(
+                        style: FilledButton.styleFrom(minimumSize: const Size(150, 46)),
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('保存盘点'),
                       ),
                     ],
                   ),
                 ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: FilledButton(
-                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('保存盘点'),
-              ),
-            ),
-          ],
+              ],
+            );
+          },
         ),
       );
       if (saved != true) {
-        for (final c in ctrls) {
-          c['min']!.dispose();
-        }
+        for (final c in qtyCtrls) { c.dispose(); }
+        for (final c in minCtrls) { c.dispose(); }
         return;
       }
-      final payload = <Map<String, dynamic>>[];
+      // 收集：差异≠0 的实际数 → 盘点调整；阈值变化 → 阈值批量
+      final adjustRows = <Map<String, dynamic>>[];
+      final thresholdRows = <Map<String, dynamic>>[];
       for (var i = 0; i < rows.length; i++) {
-        final min = double.tryParse(ctrls[i]['min']!.text.trim());
-        if (min != null && min >= 0) {
-          payload.add({
-            'item_id': rows[i]['item_id'],
-            'unit': rows[i]['unit'],
-            'min_stock': min,
-          });
+        final v = double.tryParse(qtyCtrls[i].text.trim());
+        final book = rows[i]['quantity'] as double;
+        if (v != null && v >= 0 && (v - book).abs() > 0.001) {
+          adjustRows.add({'item_id': rows[i]['item_id'], 'unit': rows[i]['unit'], 'actual_qty': v});
+        }
+        final min = double.tryParse(minCtrls[i].text.trim());
+        if (min != null && min >= 0 && (min - (rows[i]['min_stock'] as double)).abs() > 0.001) {
+          thresholdRows.add({'item_id': rows[i]['item_id'], 'unit': rows[i]['unit'], 'min_stock': min});
         }
       }
-      for (final c in ctrls) {
-        c['min']!.dispose();
-      }
-      if (payload.isEmpty) {
-        toast(context, '没有有效的阈值数据');
+      for (final c in qtyCtrls) { c.dispose(); }
+      for (final c in minCtrls) { c.dispose(); }
+      if (adjustRows.isEmpty && thresholdRows.isEmpty) {
+        toast(context, '没有变化，无需保存');
         return;
       }
-      await Api.instance.put('/stocks', {'rows': payload});
-      toast(context, '阈值已保存（库存按进货−出货自动计算）');
-      SyncService.notifyStockChanged(); // 我的页低库存红字实时刷新
-      _refresh();
+      setState(() => _counting = true);
+      try {
+        String? adjMsg;
+        if (adjustRows.isNotEmpty) {
+          final r = await Api.instance.post('/stocks/adjust', {
+            'id': 'c${DateTime.now().millisecondsSinceEpoch}${_countingNonce()}',
+            'rows': adjustRows,
+            'happened_at': DateTime.now().toIso8601String().substring(0, 10),
+          });
+          final surplus = (r['surplus'] as num?)?.toDouble() ?? 0;
+          final shortage = (r['shortage'] as num?)?.toDouble() ?? 0;
+          adjMsg = '调整 ${r['adjusted'] ?? adjustRows.length} 项'
+              '${surplus > 0 ? '，盘盈 ${fmtQty(surplus)}' : ''}'
+              '${shortage > 0 ? '，盘亏 ${fmtQty(shortage)}' : ''}';
+        }
+        if (thresholdRows.isNotEmpty) {
+          await Api.instance.put('/stocks', {'rows': thresholdRows});
+        }
+        toast(context, '已保存${adjMsg != null ? '：$adjMsg' : ''}（阈值 ${thresholdRows.length} 项）');
+        SyncService.notifyStockChanged(); // 我的页低库存红字实时刷新
+        _refresh();
+      } catch (e) {
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      } finally {
+        setState(() => _counting = false);
+      }
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  int _countingNonce() => (DateTime.now().microsecondsSinceEpoch % 900000) + 100000;
+
+  /// 盘点调整记录：GET /stocks/adjustments 列表 + 盘盈/盘亏汇总（金额/单价仅老板可见）
+  Future<void> _adjustmentsList() async {
+    try {
+      final d = await Api.instance.get('/stocks/adjustments');
+      final rows = ((d['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final costVisible = rows.isEmpty || rows.first['cost_visible'] != false;
+      final surplusQty = (d['surplus_qty'] as num?)?.toDouble() ?? 0;
+      final shortageQty = (d['shortage_qty'] as num?)?.toDouble() ?? 0;
+      final surplusAmount = (d['surplus_amount'] as num?)?.toDouble() ?? 0;
+      final shortageAmount = (d['shortage_amount'] as num?)?.toDouble() ?? 0;
+      if (!mounted) return;
+      await showCenterSheet<void>(
+        context: context,
+        maxHeightFactor: 0.85,
+        builder: (ctx) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text('盘点调整记录', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                  ),
+                  Text('共 ${rows.length} 笔', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Text(
+                '盘盈 ${fmtQty(surplusQty)}${costVisible && surplusAmount > 0 ? '（¥${fmtMoney(surplusAmount)}）' : ''}'
+                ' · 盘亏 ${fmtQty(shortageQty)}${costVisible && shortageAmount > 0 ? '（¥${fmtMoney(shortageAmount)}）' : ''}',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+            ),
+            if (rows.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: Text('暂无盘点调整（库存页右上角「盘点」按实际数量校对）', style: TextStyle(fontSize: 13))),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: rows.length,
+                  itemBuilder: (_, i) {
+                    final r = rows[i];
+                    final qty = (r['qty'] as num?)?.toDouble() ?? 0;
+                    final isSurplus = qty > 0;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${r['item_name']}（${r['unit']}）',
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                                Text('${r['happened_at'] ?? ''}${'${r['note'] ?? ''}'.isNotEmpty ? ' · ${r['note']}' : ''}',
+                                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            '${isSurplus ? '+' : '−'}${fmtQty(qty.abs())}'
+                            '${costVisible && ((r['amount'] as num?)?.toDouble() ?? 0) != 0 ? ' · ¥${fmtMoney((r['amount'] as num?)?.toDouble() ?? 0)}' : ''}',
+                            style: TextStyle(
+                              fontSize: 13.5, fontWeight: FontWeight.w700,
+                              color: isSurplus ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
     } catch (e) {
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -710,6 +889,11 @@ class _StocksPageState extends State<StocksPage> {
             tooltip: '损耗记录',
             icon: const Icon(Icons.receipt_long_outlined),
             onPressed: _lossList,
+          ),
+          IconButton(
+            tooltip: '盘点调整',
+            icon: const Icon(Icons.balance_outlined),
+            onPressed: _adjustmentsList,
           ),
           IconButton(
             tooltip: '只看预警',
