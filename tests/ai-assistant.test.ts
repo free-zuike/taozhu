@@ -9,6 +9,7 @@ import { createFakeD1, fakeAssets, type FakeD1 } from './helpers/fake-d1';
 import {
   buildAssistantContext, chatWithAssistant, extractIntent, runBusinessQuery,
   pickKbEntries, assistantAnswer,
+  saveAiMemory, listAiMemories, forgetAiMemoryByContent, deleteAiMemory, clearAiMemories,
 } from '../src/services/ai-assistant';
 import { DEFAULT_AI_CONFIG, type AiConfig } from '../src/services/ai-parse';
 
@@ -321,5 +322,162 @@ describe('动态查询与知识库（0.17.475）', () => {
     expect(r.reply).toContain('盘点');
     expect(r.sources).toContain('库存与盘点');
     vi.unstubAllGlobals();
+  });
+});
+
+describe('AI 记忆与对话历史（0.17.476）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let db: FakeD1;
+  let token: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    db = env.DB;
+    token = await loginAdmin(env);
+  });
+
+  /** 配置文字能力 Key（路由层 /ai/chat 依赖） */
+  async function configureAi() {
+    const r = await call(env, 'PUT', '/api/v1/settings/ai', token, {
+      providers: [{ id: 'zhipu_glm', name: '智谱GLM', is_built_in: true, api_key: 'sk-test' }],
+      binding: { textProviderId: 'zhipu_glm', visionProviderId: 'zhipu_glm', speechProviderId: 'zhipu_glm' },
+    });
+    expect(r.status).toBe(200);
+  }
+
+  /** mock fetch：第 1 次调用（意图提取）返回 intentJson，第 2 次（最终回答）返回 reply */
+  function stubTwoStep(intentJson: string, reply: string) {
+    let n = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      n++;
+      const content = n === 1 ? intentJson : reply;
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }));
+  }
+
+  const chatIntent = '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null}';
+
+  it('记忆 service：保存/列出/按内容遗忘/删除/清空 + 用户隔离', async () => {
+    const id1 = await saveAiMemory(db as never, 'u1', '老王欠款 2000 元');
+    expect(id1).toBeTruthy();
+    await saveAiMemory(db as never, 'u1', '老张喜欢 3 号箱苹果');
+    await saveAiMemory(db as never, 'u2', '用户二的私密记忆');
+
+    let list = await listAiMemories(db as never, 'u1');
+    expect(list).toHaveLength(2);
+    expect(list.map((m) => m.content)).toContain('老王欠款 2000 元');
+    // 用户隔离：u1 看不到 u2 的记忆
+    const listU2 = await listAiMemories(db as never, 'u2');
+    expect(listU2).toHaveLength(1);
+    expect(listU2[0].content).toBe('用户二的私密记忆');
+
+    // 按内容模糊匹配遗忘（软删）
+    expect(await forgetAiMemoryByContent(db as never, 'u1', '老王欠款')).toBe(true);
+    list = await listAiMemories(db as never, 'u1');
+    expect(list).toHaveLength(1);
+    expect(list[0].content).toBe('老张喜欢 3 号箱苹果');
+
+    // 删除指定 id；别人的 id 删不动
+    expect(await deleteAiMemory(db as never, 'u1', list[0].id)).toBe(true);
+    expect(await deleteAiMemory(db as never, 'u1', listU2[0].id)).toBe(false);
+    expect(await listAiMemories(db as never, 'u1')).toHaveLength(0);
+
+    // 清空
+    await saveAiMemory(db as never, 'u2', '再来一条');
+    await clearAiMemories(db as never, 'u2');
+    expect(await listAiMemories(db as never, 'u2')).toHaveLength(0);
+  });
+
+  it('POST /ai/chat 落库对话历史 → GET /ai/chat/history 回读 → DELETE /ai/chat/history 清空', async () => {
+    await configureAi();
+    stubTwoStep(chatIntent, '你好！有什么经营问题想问我？');
+    try {
+      const post = await call(env, 'POST', '/api/v1/ai/chat', token, {
+        messages: [
+          { role: 'user', content: '你好' },
+          { role: 'assistant', content: '你好！' },
+          { role: 'user', content: '今天生意怎么样？' },
+        ],
+      });
+      expect(post.status).toBe(200);
+      const postBody = (await post.json()) as { ok: boolean; reply: string; conversation_id: string };
+      expect(postBody.ok).toBe(true);
+      expect(postBody.conversation_id).toBeTruthy();
+
+      const hist = (await (await call(env, 'GET', '/api/v1/ai/chat/history', token)).json()) as {
+        conversation_id: string | null;
+        messages: Array<{ role: string; content: string }>;
+      };
+      expect(hist.conversation_id).toBe(postBody.conversation_id);
+      // 落库最后一条 user 消息 + 助手回复（created_at 同毫秒时顺序不定，按内容断言）
+      expect(hist.messages.filter((m) => m.role === 'user')).toHaveLength(1);
+      expect(hist.messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+      expect(hist.messages.map((m) => `${m.role}:${m.content}`)).toContain('user:今天生意怎么样？');
+      expect(hist.messages.map((m) => `${m.role}:${m.content}`)).toContain(`assistant:${postBody.reply}`);
+
+      expect((await call(env, 'DELETE', '/api/v1/ai/chat/history', token)).status).toBe(200);
+      const after = (await (await call(env, 'GET', '/api/v1/ai/chat/history', token)).json()) as {
+        conversation_id: string | null; messages: unknown[];
+      };
+      expect(after.conversation_id).toBeNull();
+      expect(after.messages).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('对话"记住/忘记"走路由落库/遗忘记忆；管理端点单删与清空', async () => {
+    await configureAi();
+    try {
+      // 记住
+      stubTwoStep(
+        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"老王欠款 2000 元","forget":null}',
+        '好的，我记住了。',
+      );
+      const post1 = await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: '记住：老王欠款 2000 元' }] });
+      expect(post1.status).toBe(200);
+      const mem1 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: Array<{ id: string; content: string }> };
+      expect(mem1.memories).toHaveLength(1);
+      expect(mem1.memories[0].content).toBe('老王欠款 2000 元');
+
+      // 忘记（按内容模糊匹配软删）
+      stubTwoStep(
+        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":"老王欠款"}',
+        '好的，已忘记。',
+      );
+      const post2 = await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: '忘记老王欠款' }] });
+      expect(post2.status).toBe(200);
+      const mem2 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: unknown[] };
+      expect(mem2.memories).toHaveLength(0);
+
+      // 管理端点：单删
+      stubTwoStep(
+        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"临时事项","forget":null}',
+        '好的。',
+      );
+      await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: '记住：临时事项' }] });
+      const mem3 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: Array<{ id: string }> };
+      expect(mem3.memories).toHaveLength(1);
+      const delOne = await call(env, 'DELETE', `/api/v1/ai/memories/${mem3.memories[0].id}`, token);
+      expect(delOne.status).toBe(200);
+      const mem4 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: unknown[] };
+      expect(mem4.memories).toHaveLength(0);
+
+      // 管理端点：清空全部
+      stubTwoStep(
+        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"再来一条","forget":null}',
+        '好的。',
+      );
+      await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: '记住：再来一条' }] });
+      const mem5 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: unknown[] };
+      expect(mem5.memories).toHaveLength(1);
+      expect((await call(env, 'DELETE', '/api/v1/ai/memories', token)).status).toBe(200);
+      const mem6 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: unknown[] };
+      expect(mem6.memories).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

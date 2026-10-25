@@ -92,7 +92,10 @@ export class FakeStatement {
     const stmt = this.db.prepare(this.sql);
     try {
       stmt.run(this.params);
-      return { success: true, meta: { last_row_id: 0, changes: 1 }, results: [] };
+      // sql.js 的 Database.getRowsModified() 返回最近一条 INSERT/UPDATE/DELETE 的真实影响行数
+      //（DELETE/UPDATE 无匹配行时返回 0；此前恒返回 1 会让"删除不存在/他人数据"类分支在测试中失真）
+      const changes = this.db.getRowsModified();
+      return { success: true, meta: { last_row_id: 0, changes }, results: [] };
     } finally {
       stmt.free();
     }
