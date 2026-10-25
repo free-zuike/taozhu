@@ -6,6 +6,13 @@
         :class="['bubble-row', m.role === 'user' ? 'mine' : 'peer']">
         <view :class="['bubble', m.role === 'user' ? 'b-mine' : 'b-peer']">
           <text>{{ m.content }}</text>
+          <view v-if="m.role !== 'user' && m.order" class="order-card">
+            <view class="oc-head">📋 {{ m.order.type === 'sale' ? '出货' : '进货' }}{{ m.order.client ? ' · ' + m.order.client : '' }} · 合计 ¥{{ m.order.total }}</view>
+            <view v-for="(l, li) in (m.order.lines || []).slice(0, 3)" :key="li" class="oc-line">{{ l.name }} {{ l.quantity }}{{ l.unit }} × ¥{{ l.price }}</view>
+            <view v-if="(m.order.lines || []).length > 3" class="oc-line">…</view>
+            <view class="oc-done">合计 ¥{{ m.order.total }}（已在账本中）</view>
+          </view>
+          <view v-if="m.role !== 'user' && m.tools" class="src">🛠 使用了：{{ m.tools }}</view>
           <view v-if="m.role !== 'user' && m.sources" class="src">📖 依据：{{ m.sources }}</view>
         </view>
       </view>
@@ -62,7 +69,14 @@ import { request } from '../../api';
 const { tv, patternSrc } = useThemeVars();
 
 const HIST_KEY = 'ai_assistant_history';
-interface Msg { role: 'user' | 'assistant'; content: string; sources?: string }
+interface OrderLine { name?: string; unit?: string; quantity?: number; price?: number }
+interface Msg {
+  role: 'user' | 'assistant';
+  content: string;
+  sources?: string;
+  tools?: string;
+  order?: { type?: string; client?: string; total?: number; lines?: OrderLine[] }
+}
 const messages = ref<Msg[]>([]);
 const input = ref('');
 const thinking = ref(false);
@@ -157,22 +171,76 @@ async function send(preset?: string) {
   scrollBottom();
   try {
     // 多轮历史一并带上（服务端无状态，客户端负责上下文）
-    const d = await request<{ reply: string; sources?: string[] }>('/ai/chat', 'POST', {
+    const d = await request<Record<string, unknown>>('/ai/chat', 'POST', {
       messages: messages.value.map((m) => ({ role: m.role, content: m.content })),
     });
+    // 写操作（落单/记忆）待授权：弹层确认 → approve 后连同结果落库
+    if (d?.need_approval) {
+      thinking.value = false;
+      const decision = await showApproval(d);
+      if (!decision) return;
+      try {
+        const r = await request<Record<string, unknown>>('/ai/chat/approve', 'POST', {
+          approval_id: d.approval_id,
+          decision,
+          messages: messages.value.map((m) => ({ role: m.role, content: m.content })),
+        });
+        thinking.value = false;
+        applyReply(r);
+        uni.showToast({ title: decision === 'always_allow' ? '已设为总是允许' : '已设为总是拒绝', icon: 'none' });
+      } catch (e) {
+        thinking.value = false;
+        uni.showToast({ title: (e as Error).message || '操作失败', icon: 'none' });
+      }
+      return;
+    }
     thinking.value = false;
-    const sources = (d?.sources || []).join('、');
-    messages.value.push({
-      role: 'assistant',
-      content: (d?.reply || '').trim() || '（模型没有返回内容，请稍后再试）',
-      ...(sources ? { sources } : {}),
-    });
-    saveHistory();
-    scrollBottom();
+    applyReply(d);
   } catch (e) {
     thinking.value = false;
     uni.showToast({ title: (e as Error).message || 'AI 助手请求失败', icon: 'none' });
   }
+}
+
+function applyReply(d: Record<string, unknown> | undefined) {
+  const tools = ((d?.tools as Array<{ label?: string; name?: string }>) || []).map((t) => t.label || t.name || '').filter(Boolean).join('、');
+  const sources = ((d?.sources as string[]) || []).join('、');
+  const order = d?.order as Record<string, unknown> | undefined;
+  messages.value.push({
+    role: 'assistant',
+    content: (d?.reply as string || '').trim() || '（模型没有返回内容，请稍后再试）',
+    ...(sources ? { sources } : {}),
+    ...(tools ? { tools } : {}),
+    ...(order ? { order } : {}),
+  });
+  saveHistory();
+  scrollBottom();
+}
+
+/** 写工具授权弹层：允许/拒绝/总是允许/总是拒绝（对齐参考 App 授权门） */
+function showApproval(d: Record<string, unknown>): Promise<string | null> {
+  const tool = (d.tool as Record<string, unknown>) || {};
+  return new Promise((resolve) => {
+    uni.showModal({
+      title: `允许「${tool.label || 'AI 操作'}」？`,
+      content: `${d.preview || ''}${tool.description ? '\n' + tool.description : ''}`,
+      confirmText: '允许',
+      cancelText: '拒绝',
+      success: (r) => {
+        if (r.confirm) return resolve('allow');
+        uni.showActionSheet({
+          itemList: ['总是拒绝', '总是允许', '取消'],
+          success: (a) => {
+            if (a.tapIndex === 0) return resolve('always_deny');
+            if (a.tapIndex === 1) return resolve('always_allow');
+            resolve(null);
+          },
+          fail: () => resolve(null),
+        });
+      },
+      fail: () => resolve(null),
+    });
+  });
 }
 </script>
 
@@ -187,6 +255,10 @@ async function send(preset?: string) {
 .b-peer { background: var(--card-bg); color: var(--text-main); border: 1rpx solid var(--divider); border-bottom-left-radius: 6rpx; }
 .typing { color: var(--text-sub); }
 .src { margin-top: 10rpx; font-size: 22rpx; color: var(--text-sub); }
+.order-card { margin-top: 12rpx; padding: 14rpx 16rpx; background: var(--input-bg); border-radius: 14rpx; border: 1rpx solid var(--divider); }
+.oc-head { font-size: 24rpx; font-weight: 600; color: var(--text-main); }
+.oc-line { margin-top: 6rpx; font-size: 22rpx; color: var(--text-sub); }
+.oc-done { margin-top: 8rpx; font-size: 22rpx; color: var(--primary); }
 .tool-row { display: flex; justify-content: flex-end; gap: 32rpx; padding: 4rpx 24rpx 8rpx; box-sizing: border-box; }
 .tool-row .op { font-size: 26rpx; color: var(--text-sub); }
 .count-hint { font-size: 24rpx; color: var(--text-sub); }

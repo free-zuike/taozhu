@@ -13,8 +13,14 @@ import {
   minimalWavBytes,
   sniffImageMime,
 } from '../services/ai-parse';
-import { assistantAnswer, listAiMemories, deleteAiMemory, clearAiMemories } from '../services/ai-assistant';
+import { assistantAnswer, execApprovedAction, listAiMemories, deleteAiMemory, clearAiMemories } from '../services/ai-assistant';
+import {
+  toolDef, setToolPolicy, resetToolPolicies, listToolPolicies, listAiRuns,
+  takePendingAction, finishAiRun,
+  type ToolPolicy,
+} from '../services/ai-tools';
 import { randomId } from '../lib/password';
+import { ApiError } from '../lib/api-error';
 import { getAiConfig } from './settings';
 import type { AuthUser, Env } from '../types';
 
@@ -114,10 +120,10 @@ aiRouter.post('/parse-voice', async (c) => {
   }
 });
 
-// POST /api/v1/ai/chat — AI 助手对话（问数+记忆）：客户端带多轮历史（messages），
+// POST /api/v1/ai/chat — AI 助手对话（问数+记忆+落单）：客户端带多轮历史（messages），
 // 服务端注入业务快照/动态查询/知识库/记忆后调文字模型回答；
-// 对话历史服务端持久化（ai_conversations/ai_messages，跨设备续聊）；
-// 支持"记住/忘记"指令（ai_memories，对齐参考 App Agent 记忆）；未配置 Key 返回 400。
+// 写操作（落单/记忆）经授权门：ask → 返回 need_approval（前端弹窗确认后走 /ai/chat/approve）；
+// 对话历史服务端持久化（ai_conversations/ai_messages，跨设备续聊）；未配置 Key 返回 400。
 aiRouter.post('/chat', async (c) => {
   const body = await c.req.json().catch(() => null) as {
     messages?: Array<{ role?: string; content?: string }>;
@@ -133,7 +139,18 @@ aiRouter.post('/chat', async (c) => {
   const userId = c.get('user').id;
   const nowIso = () => new Date().toISOString();
   try {
-    const { reply, sources } = await assistantAnswer(cfg, c.env.DB, msgs, c.get('user').role, userId);
+    const outcome = await assistantAnswer(cfg, c.env.DB, msgs, c.get('user').role, userId);
+    // 写工具待授权：不落库对话（approve 确认后统一落库），前端弹授权窗
+    if (outcome.needApproval) {
+      return c.json({
+        ok: false,
+        need_approval: true,
+        approval_id: outcome.needApproval.approval_id,
+        tool: outcome.needApproval.tool,
+        preview: outcome.needApproval.preview,
+      });
+    }
+    const { reply, sources, tools, order } = outcome;
     // 对话历史落库（用户级单会话）：取或建会话 → 追加 user 消息 + 助手回复
     const cur = await c.env.DB.prepare(
       'SELECT id FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1',
@@ -160,11 +177,136 @@ aiRouter.post('/chat', async (c) => {
     return c.json({
       ok: true, reply, conversation_id: conversationId,
       ...(sources.length > 0 ? { sources } : {}),
+      ...(tools.length > 0 ? { tools } : {}),
+      ...(order ? { order } : {}),
     });
   } catch (err) {
+    if (err instanceof ApiError) return c.json({ error: err.message }, err.status as 400 | 404);
     const msg = err instanceof Error ? err.message : 'AI 助手接口错误';
     return c.json({ error: msg }, msg.includes('未启用') ? 400 : 502);
   }
+});
+
+// POST /api/v1/ai/chat/approve — 授权门确认：写工具（落单/记忆）执行前用户选择
+// allow/deny 本次；always_allow/always_deny 同时写入该工具策略；执行后落库对话并返回结果
+aiRouter.post('/chat/approve', async (c) => {
+  const body = await c.req.json().catch(() => null) as {
+    approval_id?: string;
+    decision?: string;
+    messages?: Array<{ role?: string; content?: string }>;
+  } | null;
+  const approvalId = body?.approval_id?.trim() ?? '';
+  const decision = body?.decision?.trim() ?? '';
+  if (!approvalId) return c.json({ error: '缺少授权凭证' }, 400);
+  if (!['allow', 'deny', 'always_allow', 'always_deny'].includes(decision)) {
+    return c.json({ error: '非法的授权决定' }, 400);
+  }
+  const user = c.get('user');
+  const pending = await takePendingAction(c.env.DB, user.id, approvalId);
+  if (!pending) return c.json({ error: '授权已过期或不存在，请重新发起' }, 400);
+
+  const msgs = (body?.messages ?? [])
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && (m.content ?? '').trim().length > 0)
+    .map((m) => ({ role: m.role as 'user' | 'assistant', content: (m.content ?? '').trim().slice(0, 2000) }))
+    .slice(-12);
+  if (msgs.length === 0) return c.json({ error: '缺少对话上下文' }, 400);
+  const cfg = await getAiConfig(c.env.DB);
+  const nowIso = () => new Date().toISOString();
+
+  if (decision === 'always_allow' || decision === 'always_deny') {
+    await setToolPolicy(c.env.DB, user.id, pending.tool_name, decision === 'always_allow' ? 'allow' : 'deny');
+  }
+
+  let outcome: Awaited<ReturnType<typeof execApprovedAction>>;
+  try {
+    if (decision === 'allow' || decision === 'always_allow') {
+      outcome = await execApprovedAction(cfg, c.env.DB, user, pending.tool_name, pending.args, msgs);
+    } else {
+      const def = toolDef(pending.tool_name);
+      const parsed = (() => { try { return JSON.parse(pending.args) as { runId?: string }; } catch { return {}; } })();
+      const reply = `已取消：未执行「${def?.label ?? pending.tool_name}」。（可在「AI 助手 → 工具权限」调整授权）`;
+      if (parsed.runId) await finishAiRun(c.env.DB, parsed.runId, 'ok', '用户拒绝执行');
+      outcome = { reply, sources: [], tools: [], order: undefined, runId: parsed.runId ?? null };
+    }
+  } catch (err) {
+    if (err instanceof ApiError) return c.json({ error: err.message }, err.status as 400 | 404);
+    const msg = err instanceof Error ? err.message : '执行失败';
+    return c.json({ error: msg }, 502);
+  }
+
+  // 落库对话（user 消息 + 结果回复；authorization 后历史完整）
+  const cur = await c.env.DB.prepare(
+    'SELECT id FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1',
+  ).bind(user.id).first<{ id: string }>();
+  let conversationId = cur?.id ?? '';
+  if (!conversationId) {
+    conversationId = randomId();
+    await c.env.DB.prepare('INSERT INTO ai_conversations (id, user_id) VALUES (?, ?)')
+      .bind(conversationId, user.id).run();
+  }
+  const lastUserMsg = [...msgs].reverse().find((m) => m.role === 'user');
+  const batch: D1PreparedStatement[] = [];
+  if (lastUserMsg) {
+    batch.push(c.env.DB.prepare(
+      'INSERT INTO ai_messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).bind(randomId(), conversationId, 'user', lastUserMsg.content, nowIso()));
+  }
+  batch.push(c.env.DB.prepare(
+    'INSERT INTO ai_messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+  ).bind(randomId(), conversationId, 'assistant', outcome.reply, nowIso()));
+  batch.push(c.env.DB.prepare('UPDATE ai_conversations SET updated_at = ? WHERE id = ?')
+    .bind(nowIso(), conversationId));
+  await c.env.DB.batch(batch);
+  return c.json({
+    ok: true, reply: outcome.reply, conversation_id: conversationId,
+    ...(outcome.sources.length > 0 ? { sources: outcome.sources } : {}),
+    ...(outcome.tools.length > 0 ? { tools: outcome.tools } : {}),
+    ...(outcome.order ? { order: outcome.order } : {}),
+  });
+});
+
+// GET /api/v1/ai/tools — 工具清单 + 该用户授权策略（权限页）
+aiRouter.get('/tools', async (c) => {
+  const policies = await listToolPolicies(c.env.DB, c.get('user').id);
+  return c.json({
+    tools: policies.map((p) => {
+      const def = toolDef(p.tool_name);
+      return {
+        name: p.tool_name,
+        label: def?.label ?? p.tool_name,
+        description: def?.description ?? '',
+        permission: def?.permission ?? 'write',
+        default_policy: def?.defaultPolicy ?? 'ask',
+        policy: p.policy,
+        is_default: p.is_default,
+      };
+    }),
+  });
+});
+
+// PUT /api/v1/ai/tools/:name — 设置某工具授权策略（ask/allow/deny）
+aiRouter.put('/tools/:name', async (c) => {
+  const body = await c.req.json().catch(() => null) as { policy?: string } | null;
+  const policy = body?.policy;
+  if (!['ask', 'allow', 'deny'].includes(policy ?? '')) return c.json({ error: '非法策略' }, 400);
+  try {
+    await setToolPolicy(c.env.DB, c.get('user').id, c.req.param('name'), policy as ToolPolicy);
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST /api/v1/ai/tools/reset — 恢复全部工具为缺省策略
+aiRouter.post('/tools/reset', async (c) => {
+  await resetToolPolicies(c.env.DB, c.get('user').id);
+  return c.json({ ok: true });
+});
+
+// GET /api/v1/ai/activity — 最近运行与工具调用（活动页；对齐参考 App agentRuns/agentToolCalls）
+aiRouter.get('/activity', async (c) => {
+  const activity = await listAiRuns(c.env.DB, c.get('user').id, 30);
+  return c.json({ activity });
 });
 
 // GET /api/v1/ai/chat/history — 最近对话历史（跨设备续聊；无会话返回空）

@@ -357,6 +357,14 @@ describe('AI 记忆与对话历史（0.17.476）', () => {
     }));
   }
 
+  /** mock fetch：所有调用都返回同一文本（approve 流程只需最终回答一次） */
+  function stubReply(text: string) {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ choices: [{ message: { content: text } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )));
+  }
+
   const chatIntent = '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null}';
 
   it('记忆 service：保存/列出/按内容遗忘/删除/清空 + 用户隔离', async () => {
@@ -428,36 +436,66 @@ describe('AI 记忆与对话历史（0.17.476）', () => {
     }
   });
 
-  it('对话"记住/忘记"走路由落库/遗忘记忆；管理端点单删与清空', async () => {
+  it('对话"记住/忘记"走授权门（ask → approve 后落库）；管理端点单删与清空', async () => {
     await configureAi();
     try {
-      // 记住
+      // 记住：POST /chat 返回 need_approval → approve allow 后落库
       stubTwoStep(
-        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"老王欠款 2000 元","forget":null}',
+        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"老王欠款 2000 元","forget":null,"record":null}',
         '好的，我记住了。',
       );
       const post1 = await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: '记住：老王欠款 2000 元' }] });
       expect(post1.status).toBe(200);
+      const pend = (await post1.json()) as { need_approval: boolean; approval_id: string; tool: { name: string } };
+      expect(pend.need_approval).toBe(true);
+      expect(pend.tool.name).toBe('save_memory');
+      expect(pend.approval_id).toBeTruthy();
+      stubReply('好的，我记住了。');
+      const appr1 = await call(env, 'POST', '/api/v1/ai/chat/approve', token, {
+        approval_id: pend.approval_id,
+        decision: 'allow',
+        messages: [{ role: 'user', content: '记住：老王欠款 2000 元' }],
+      });
+      expect(appr1.status).toBe(200);
+      expect(((await appr1.json()) as { reply: string }).reply).toContain('记住');
       const mem1 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: Array<{ id: string; content: string }> };
       expect(mem1.memories).toHaveLength(1);
       expect(mem1.memories[0].content).toBe('老王欠款 2000 元');
 
-      // 忘记（按内容模糊匹配软删）
+      // 忘记（同样走授权门）
       stubTwoStep(
-        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":"老王欠款"}',
+        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":"老王欠款","record":null}',
         '好的，已忘记。',
       );
       const post2 = await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: '忘记老王欠款' }] });
-      expect(post2.status).toBe(200);
+      const pend2 = (await post2.json()) as { approval_id: string; tool: { name: string } };
+      expect(pend2.tool.name).toBe('forget_memory');
+      stubReply('好的，已忘记。');
+      await call(env, 'POST', '/api/v1/ai/chat/approve', token, {
+        approval_id: pend2.approval_id,
+        decision: 'allow',
+        messages: [{ role: 'user', content: '忘记老王欠款' }],
+      });
       const mem2 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: unknown[] };
       expect(mem2.memories).toHaveLength(0);
 
-      // 管理端点：单删
+      // always_allow：写入策略，后续免询问
       stubTwoStep(
-        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"临时事项","forget":null}',
+        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"临时事项","forget":null,"record":null}',
         '好的。',
       );
-      await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: '记住：临时事项' }] });
+      const post3 = await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: '记住：临时事项' }] });
+      const pend3 = (await post3.json()) as { approval_id: string };
+      stubReply('好的。');
+      await call(env, 'POST', '/api/v1/ai/chat/approve', token, {
+        approval_id: pend3.approval_id,
+        decision: 'always_allow',
+        messages: [{ role: 'user', content: '记住：临时事项' }],
+      });
+      const tools = (await (await call(env, 'GET', '/api/v1/ai/tools', token)).json()) as { tools: Array<{ name: string; policy: string }> };
+      expect(tools.tools.find((t) => t.name === 'save_memory')?.policy).toBe('allow');
+
+      // 管理端点：单删
       const mem3 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: Array<{ id: string }> };
       expect(mem3.memories).toHaveLength(1);
       const delOne = await call(env, 'DELETE', `/api/v1/ai/memories/${mem3.memories[0].id}`, token);
@@ -465,9 +503,9 @@ describe('AI 记忆与对话历史（0.17.476）', () => {
       const mem4 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: unknown[] };
       expect(mem4.memories).toHaveLength(0);
 
-      // 管理端点：清空全部
+      // 管理端点：清空全部（策略 allow 后免询问直接记住）
       stubTwoStep(
-        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"再来一条","forget":null}',
+        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"再来一条","forget":null,"record":null}',
         '好的。',
       );
       await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: '记住：再来一条' }] });

@@ -3,21 +3,21 @@ import { Hono } from 'hono';
 import { orderIdWith, randomId } from '../lib/password';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
-import { stockDelta, stockDeltaFor } from '../lib/stock';
+import { stockDeltaFor } from '../lib/stock';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
 import { getRoundingConfig, roundMoney } from '../lib/money';
 import { chunkQuery } from '../lib/query';
 import { consumeFifoStatements, releaseSaleUsesStatements } from '../lib/fifo';
 import { recordAudit } from './audit';
+import { createSaleOrder } from '../services/records';
+import { ApiError } from '../lib/api-error';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
 export const salesRouter = new Hono<{ Bindings: Env; Variables: V }>();
 
 salesRouter.use('*', authMiddleware());
-
-const nowIso = () => new Date().toISOString();
 
 interface SaleItemInput {
   id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
@@ -33,101 +33,28 @@ interface SaleItemInput {
   sort?: number;             // 行序（批量直编跨单全局录入序；缺省服务端按数组序）
 }
 
-// POST /sales — 记一张出货单（原子事务）
+// POST /sales — 记一张出货单（原子事务；核心逻辑在 services/records，AI 落单共用）
 salesRouter.post('/', async (c) => {
-  const user = c.get('user');
   const body = await c.req.json().catch(() => null) as {
     client_id?: string;
     happened_at?: string;
     note?: string;
-    sync_key?: string; // 客户端幂等键（离线重放/多端提交不重复建单）
+    sync_key?: string;
     items?: SaleItemInput[];
   } | null;
-  const clientId = body?.client_id;
-  const items = body?.items ?? [];
-  const syncKey = body?.sync_key?.trim() || '';
-  if (!clientId) return c.json({ error: '请选择店铺' }, 400);
-  if (!Array.isArray(items) || items.length === 0) return c.json({ error: '请至少添加一种商品' }, 400);
-
-  // 幂等：同一 sync_key 已存在（如离线重放重复投递）→ 直接返回已有单据，不重复建单/不重复扣库存
-  // （去单据化后行即主记录：按行级 sync_key 查重，返回该批首行所在 sale_id）
-  if (syncKey) {
-    const existed = await c.env.DB.prepare('SELECT sale_id FROM sale_items WHERE sync_key = ?').bind(syncKey).first<{ sale_id: string }>();
-    if (existed) {
-      return c.json({ id: existed.sale_id, client_id: clientId, dup: true, total: 0, items: 0 });
-    }
+  try {
+    const r = await createSaleOrder(c.env.DB, c.get('user'), {
+      client_id: body?.client_id ?? '',
+      happened_at: body?.happened_at,
+      note: body?.note,
+      sync_key: body?.sync_key,
+      items: body?.items ?? [],
+    });
+    return c.json({ id: r.id, client_id: r.client_id, happened_at: r.happened_at, note: r.note, total: r.total, items: r.items, ...(r.dup ? { dup: true } : {}) }, r.dup ? 200 : 201);
+  } catch (err) {
+    if (err instanceof ApiError) return c.json({ error: err.message }, err.status as 400 | 404);
+    throw err;
   }
-
-  const client = await c.env.DB.prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first();
-  if (!client) return c.json({ error: '店铺不存在' }, 404);
-
-  // 校验商品价格并取进价快照
-  const priceIds = items.map((i) => i.price_id);
-  if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
-  const priceRows = await chunkQuery(priceIds, (chunk) =>
-    c.env.DB.prepare(
-      `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.sale_price, p.active, p.per, i.count_unit
-       FROM item_prices p LEFT JOIN items i ON i.id = p.item_id WHERE p.id IN (${chunk.map(() => '?').join(',')})`,
-    ).bind(...chunk).all<{ id: string; item_id: string; unit: string; purchase_price: number; sale_price: number; active: number; per?: number | null; count_unit?: string | null }>().then((r) => r.results));
-
-  const priceMap = new Map(priceRows.map((p) => [p.id, p]));
-  // 批次 id 与客户端录入同格式（s{毫秒}{随机}）：内嵌创建时间，客户端按数字段还原批次创建序
-  const saleId = orderIdWith('s');
-  const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
-  const note = body?.note?.trim() ?? '';
-  const saleItemIds: string[] = [];
-  let total = 0;
-  const money = await getRoundingConfig(c.env.DB);
-
-  const batch = [
-    // 去单据化：无 sales 头表（已物理删除），行即主记录，销售批次由 sale_id 关联
-  ];
-
-  for (const [i, item] of items.entries()) {
-    const price = priceMap.get(item.price_id);
-    if (!price || !price.active) {
-      return c.json({ error: `价格不存在或已停用: ${item.price_id}` }, 400);
-    }
-    const qty = Number(item.quantity);
-    if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
-    const salePrice = Number(item.sale_price);
-    const effectiveSale = Number.isFinite(salePrice) && salePrice > 0 ? salePrice : price.sale_price;
-    // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
-    const amount = qty * effectiveSale;
-    total += amount;
-    const siId = randomId();
-    saleItemIds.push(siId);
-    // FIFO 批次消耗：无论成本是否手动指定都消耗批次（保证批次总量与库存一致），批次不足部分按档案进价兜底
-    const { result: fifo, stmts: fifoStmts } = await consumeFifoStatements(
-        c.env.DB, price.item_id, price.unit, qty, siId);
-    // 出货成本（进价快照）：老板显式传手动进价 >0 优先；否则 = 各批次先进先出加权成本
-    const manualCost = item.cost_price !== undefined && Number(item.cost_price) > 0 ? Number(item.cost_price) : null;
-    const costPrice = user.role === 'admin' && manualCost !== null
-      ? manualCost
-      : (fifo.leftover > 0 ? (fifo.cost + fifo.leftover * price.purchase_price) / qty : fifo.cost / qty);
-    batch.push(...fifoStmts);
-    // 折合计数数量：记单时显式填 > 价格行规格 per > 缺省 quantity（按原单位）
-    const countQty = Number(item.count_qty);
-    const per = Number(price.per ?? 0);
-    const effCount = Number.isFinite(countQty) && countQty > 0 ? countQty : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
-    // 行序：客户端显式传 sort（批量直编跨单全局录入序）优先，缺省回退数组索引（批内扫描顺序）
-    const lineSort = Number.isFinite(Number(item.sort)) && Number(item.sort) >= 0 ? Number(item.sort) : i;
-    batch.push(
-      c.env.DB.prepare(
-        'INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, created_by, sync_key, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).bind(siId, saleId, clientId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effectiveSale, costPrice, amount,
-        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', user.id, syncKey || null, lineSort),
-    );
-    // 出货扣减库存（进销单位换算：折合过则按计数单位扣减，否则按原单位）
-    batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, -1));
-  }
-
-  await c.env.DB.batch(batch);
-  await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(c.env.DB, 'sale', saleId), updated_by_username: user.username });
-  // 审计留痕带店铺名（不是 id 长串）：创建时店铺必存在
-  const clientName = (await c.env.DB.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>())?.name ?? clientId;
-  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'sale', entity_id: saleId, detail: `添加出货：店铺 ${clientName}，${items.length} 件商品，合计 ¥${roundMoney(total, money).toFixed(money.digits)}` });
-  return c.json({ id: saleId, client_id: clientId, happened_at: happenedAt, note, total: roundMoney(total, money), items: saleItemIds.length }, 201);
 });
 
 // GET /sales?client_id=&date_from=&date_to=&limit=&offset= — 出货单列表（含明细与总额，分页）

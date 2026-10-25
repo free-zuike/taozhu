@@ -3,20 +3,20 @@ import { Hono } from 'hono';
 import { orderIdWith, randomId } from '../lib/password';
 import { adminOnly, authMiddleware } from '../middleware/auth';
 import { parsePage } from '../lib/paging';
-import { stockDelta, stockDeltaFor } from '../lib/stock';
+import { stockDeltaFor } from '../lib/stock';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
 import { getRoundingConfig, roundMoney } from '../lib/money';
 import { chunkQuery } from '../lib/query';
 import { recordAudit } from './audit';
+import { createPurchaseOrder } from '../services/records';
+import { ApiError } from '../lib/api-error';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
 export const purchasesRouter = new Hono<{ Bindings: Env; Variables: V }>();
 
 purchasesRouter.use('*', authMiddleware());
-
-const nowIso = () => new Date().toISOString();
 
 interface PurchaseItemInput {
   id?: string;               // 行 id（编辑/批量直编保留原行 id，缺省服务端生成）
@@ -34,85 +34,24 @@ interface PurchaseItemInput {
 
 // POST /purchases
 purchasesRouter.post('/', async (c) => {
-  const user = c.get('user');
   const body = await c.req.json().catch(() => null) as {
     happened_at?: string;
     note?: string;
     items?: PurchaseItemInput[];
     sync_key?: string;
   } | null;
-  const items = body?.items ?? [];
-  const syncKey = body?.sync_key?.trim() || '';
-  if (!Array.isArray(items) || items.length === 0) return c.json({ error: '请至少添加一种商品' }, 400);
-
-  // 幂等：同一 sync_key 已存在（离线重放重复投递）→ 返回已有记录，不重复建单/不重复加库存
-  // （去单据化后行即主记录：按行级 sync_key 查重，返回该批首行所在 purchase_id）
-  if (syncKey) {
-    const existed = await c.env.DB.prepare('SELECT purchase_id FROM purchase_items WHERE sync_key = ?').bind(syncKey).first<{ purchase_id: string }>();
-    if (existed) {
-      return c.json({ id: existed.purchase_id, dup: true, total: 0, items: 0 });
-    }
+  try {
+    const r = await createPurchaseOrder(c.env.DB, c.get('user'), {
+      happened_at: body?.happened_at,
+      note: body?.note,
+      sync_key: body?.sync_key,
+      items: body?.items ?? [],
+    });
+    return c.json({ id: r.id, happened_at: r.happened_at, note: r.note, total: r.total, items: r.items, ...(r.dup ? { dup: true } : {}) }, r.dup ? 200 : 201);
+  } catch (err) {
+    if (err instanceof ApiError) return c.json({ error: err.message }, err.status as 400 | 404);
+    throw err;
   }
-
-  const priceIds = items.map((i) => i.price_id);
-  if (priceIds.some((p) => !p)) return c.json({ error: '商品缺单位价格' }, 400);
-  const priceRows = await chunkQuery(priceIds, (chunk) =>
-    c.env.DB.prepare(
-      `SELECT p.id, p.item_id, p.unit, p.purchase_price, p.per, i.count_unit
-       FROM item_prices p LEFT JOIN items i ON i.id = p.item_id WHERE p.id IN (${chunk.map(() => '?').join(',')})`,
-    ).bind(...chunk).all<{ id: string; item_id: string; unit: string; purchase_price: number; per?: number | null; count_unit?: string | null }>().then((r) => r.results));
-
-  const priceMap = new Map(priceRows.map((p) => [p.id, p]));
-  // 批次 id 与客户端录入同格式（p{毫秒}{随机}）：内嵌创建时间，客户端按数字段还原批次创建序
-  const purchaseId = orderIdWith('p');
-  const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
-  const note = body?.note?.trim() ?? '';
-  let total = 0;
-  const money = await getRoundingConfig(c.env.DB);
-
-  const batch = [
-    // 去单据化：无 purchases 头表（已物理删除），行即主记录，进货批次由 purchase_id 关联
-  ];
-
-  for (const [i, item] of items.entries()) {
-    const price = priceMap.get(item.price_id);
-    if (!price) return c.json({ error: `价格不存在: ${item.price_id}` }, 400);
-    const qty = Number(item.quantity);
-    if (!Number.isFinite(qty) || qty <= 0) return c.json({ error: '数量必须大于 0' }, 400);
-    const priceIn = Number(item.purchase_price);
-    const effective = Number.isFinite(priceIn) && priceIn > 0 ? priceIn : price.purchase_price;
-    // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
-    const amount = qty * effective;
-    total += amount;
-    // 折合计数数量：记单时显式填（count_qty）> 价格行规格 per（quantity×per）> 缺省 quantity（按原单位）
-    const countQty = Number(item.count_qty);
-    const per = Number(price.per ?? 0);
-    const effCount = Number.isFinite(countQty) && countQty > 0
-      ? countQty
-      : (per > 0 ? Math.round(qty * per * 100) / 100 : qty);
-    // 行序：客户端显式传 sort（批量直编跨单全局录入序）优先，缺省回退数组索引（批内扫描顺序）
-    const lineSort = Number.isFinite(Number(item.sort)) && Number(item.sort) >= 0 ? Number(item.sort) : i;
-    const piId = randomId();
-    batch.push(
-      c.env.DB.prepare(
-        'INSERT INTO purchase_items (id, purchase_id, item_id, unit, quantity, count_qty, purchase_price, amount, happened_at, note, expiry_date, created_by, sync_key, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).bind(piId, purchaseId, price.item_id, price.unit, qty, effCount === qty ? null : effCount, effective, amount,
-        item.happened_at?.trim() || happenedAt, item.note?.trim() ?? '', item.expiry_date?.trim() ?? '', user.id, syncKey || null, lineSort),
-    );
-    // FIFO 批次账：进货每行一个批次（batch_id=进货行 id），出货按先进先出逐批扣减并算成本
-    batch.push(
-      c.env.DB.prepare(
-        'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at, expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).bind(piId, price.item_id, price.unit, effective, qty, item.happened_at?.trim() || happenedAt, item.expiry_date?.trim() || ''),
-    );
-    // 进货增加库存（进销单位换算：折合过则按计数单位累计，否则按原单位）
-    batch.push(stockDeltaFor(c.env.DB, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
-  }
-
-  await c.env.DB.batch(batch);
-  await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: purchaseId, payload: await buildPayload(c.env.DB, 'purchase', purchaseId), updated_by_username: user.username });
-  await recordAudit(c.env.DB, { username: user.username, action: 'create', entity_type: 'purchase', entity_id: purchaseId, detail: `添加进货：${items.length} 件商品，合计 ¥${roundMoney(total, money).toFixed(money.digits)}` });
-  return c.json({ id: purchaseId, happened_at: happenedAt, note, total: roundMoney(total, money), items: items.length }, 201);
 });
 
 // GET /purchases?date_from=&date_to=&limit=&offset=

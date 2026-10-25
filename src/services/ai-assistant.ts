@@ -8,6 +8,11 @@ import {
   type AiConfig,
 } from './ai-parse';
 import { randomId } from '../lib/password';
+import {
+  toolDef, gateFor, startAiRun, finishAiRun, recordToolCall, createPendingAction,
+} from './ai-tools';
+import { ApiError } from '../lib/api-error';
+import { recordTransactionFromText } from './ai-record';
 import type { D1Database } from '@cloudflare/workers-types';
 
 const money = (v: number): string => `¥${Math.round((Number(v) || 0) * 100) / 100}`;
@@ -250,7 +255,7 @@ export function pickKbEntries(text: string, limit = 3): Array<{ title: string; b
 }
 
 interface Intent {
-  intent: 'query' | 'kb' | 'chat';
+  intent: 'query' | 'kb' | 'chat' | 'record';
   view: string | null;
   start: string | null;
   end: string | null;
@@ -262,6 +267,8 @@ interface Intent {
   remember: string | null;
   /** 用户明确让"忘记"的记忆内容（模糊匹配删除） */
   forget: string | null;
+  /** 用户要记一笔账（一句话落单；文本=用户原话，purpose 默认进货，出货须含店名/卖/送等） */
+  record: { purpose: 'purchase' | 'sale'; text: string } | null;
 }
 
 /** 意图提取（JSON 模式；宽松解析，失败返回 null 走兜底） */
@@ -271,15 +278,16 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
   const baseUrl = ep.baseUrl.replace(/\/+$/, '');
   const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
   const system = [
-    '你是数据查询意图识别器。用户输入可能问三类：',
+    '你是数据查询意图识别器。用户输入可能分四类：',
     '(a) 经营数据（金额/销售/欠款/进货/库存相关）→ intent="query"，并填 view 与参数；',
     '(b) 功能用法（怎么用/功能在哪/说明）→ intent="kb"，topics 填相关主题词；',
-    '(c) 其他（问候/闲聊/记一笔账）→ intent="chat"。',
+    '(c) 要记一笔账（如"记一笔：白菜2斤3元一斤""给老王送2箱苹果"）→ intent="record"，record 填 {purpose:"sale"|"purchase", text:用户原话}——出货（卖/送/给XX）填 sale，进货填 purchase（默认 purchase）；',
+    '(d) 其他（问候/闲聊）→ intent="chat"。',
     `今天日期 ${ctxText.split('\n')[0] ?? ''}。`,
     'view 可选："summary"(任意区间汇总)/"clients"(区间按店出货与欠款)/"debts"(当前欠款)/"items"(区间商品销量排行)/"monthly"(某年按月)/"daily"(区间按日)/"years"(有哪些年份数据)。',
     'start/end 必须是 YYYY-MM-DD（用户说相对时间如"上个月/去年/今年"时换算成具体起止日）；clients 的 client 填店铺名称（没有则为 null）；year 是数字年份（没有为 null）；kind 为 sale 或 purchase（进货相关填 purchase，默认 sale）。',
     '记忆指令：用户明确说"记住/记下来/别忘了 XXX" → remember=XXX；说"忘记/忘掉/删除 记忆 XXX"（或"忘记刚才记住的 XX"）→ forget=XXX；否则两者都 null。',
-    '只输出一个 JSON 对象（不要多余文字）：{"intent":"query"|"kb"|"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null}',
+    '只输出一个 JSON 对象（不要多余文字）：{"intent":"query"|"kb"|"chat"|"record","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null,"record":null}',
     '无法归类/不确定→ intent="chat"。',
   ].join('\n');
   try {
@@ -300,8 +308,9 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
     const m = raw.match(/\{[\s\S]*\}/);
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as Partial<Intent>;
+    const rec = parsed.record as { purpose?: string; text?: string } | null;
     return {
-      intent: parsed.intent === 'query' || parsed.intent === 'kb' ? parsed.intent : 'chat',
+      intent: parsed.intent === 'query' || parsed.intent === 'kb' || parsed.intent === 'record' ? parsed.intent : 'chat',
       view: typeof parsed.view === 'string' ? parsed.view : null,
       start: typeof parsed.start === 'string' ? parsed.start : null,
       end: typeof parsed.end === 'string' ? parsed.end : null,
@@ -311,6 +320,9 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
       topics: Array.isArray(parsed.topics) && parsed.topics.every((t) => typeof t === 'string') ? parsed.topics as string[] : [],
       remember: typeof parsed.remember === 'string' ? parsed.remember.trim() || null : null,
       forget: typeof parsed.forget === 'string' ? parsed.forget.trim() || null : null,
+      record: rec && typeof rec.text === 'string' && rec.text.trim()
+        ? { purpose: rec.purpose === 'sale' ? 'sale' : 'purchase', text: rec.text.trim() }
+        : null,
     };
   } catch (_) {
     return null;
@@ -448,40 +460,138 @@ export async function runBusinessQuery(
   }
 }
 
-/** 编排入口：意图 → 动态查询/知识库/记忆操作 → 组装最终回答 */
+/** 工具执行结果（活动时间线/前端气泡展示） */
+export interface AssistantToolResult {
+  name: string;
+  label: string;
+  result: string;
+}
+
+/** assistantAnswer 返回：正常回答 / 或写工具需用户授权（needApproval） */
+export interface AssistantOutcome {
+  reply: string;
+  sources: string[];
+  tools: AssistantToolResult[];
+  order?: import('./ai-record').RecordResult;
+  needApproval?: {
+    approval_id: string;
+    tool: { name: string; label: string; description: string };
+    preview: string;
+  };
+}
+
+/** 编排入口：意图 → 授权门（写工具）→ 动态查询/知识库/记忆操作 → 组装最终回答 */
 export async function assistantAnswer(
   cfg: AiConfig,
   db: D1Database,
   messages: Array<{ role: string; content: string }>,
   role: string,
   userId: string,
-): Promise<{ reply: string; sources: string[] }> {
+): Promise<AssistantOutcome> {
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   const userText = lastUser?.content ?? '';
   const ctxText = await (async () => (await buildAssistantContext(db, role)).split('\n')[0])();
   const intent = await extractIntent(cfg, userText, ctxText);
   const sources: string[] = [];
   const extras: string[] = [];
+  const tools: AssistantToolResult[] = [];
+  let order: import('./ai-record').RecordResult | undefined;
+  const runId = await startAiRun(db, userId, intent?.intent ?? 'chat');
 
-  // 记忆操作（对齐参考 App Agent 的 save_explicit_memory/forget_memory 语义）
-  const memoryOps: string[] = [];
+  const noteTool = (name: string, result: string) => {
+    const def = toolDef(name);
+    tools.push({ name, label: def?.label ?? name, result });
+    void recordToolCall(db, { runId, userId, toolName: name, args: userText.slice(0, 200), result });
+  };
+
+  // ① 写工具授权门（对齐参考 App：落单/记忆写操作默认询问，可设总是允许/拒绝）
+  if (intent?.record) {
+    const gate = await gateFor(db, userId, 'record_transaction');
+    const kind = intent.record.purpose === 'purchase' ? '进货' : '出货';
+    if (gate === 'ask') {
+      const preview = `一句话记账（${kind}）：「${userText.slice(0, 60)}」确认后将直接入账`;
+      const approvalId = await createPendingAction(db, userId, 'record_transaction',
+        JSON.stringify({ purpose: intent.record.purpose, text: userText, runId }), preview);
+      return {
+        reply: '', sources: [], tools,
+        needApproval: { approval_id: approvalId, tool: { name: 'record_transaction', label: toolDef('record_transaction')!.label, description: toolDef('record_transaction')!.description }, preview },
+      };
+    }
+    if (gate === 'deny') {
+      extras.push('--- 写操作被拒 ---', '未授权 AI 落单（可在「AI 助手 → 工具权限」改为允许）。');
+      noteTool('record_transaction', '拒绝：未授权');
+    } else if (gate === 'allow') {
+      // 策略 allow：直接执行落单（与 approve 后执行同一链路，审计/库存一致）
+      const username = (await db.prepare('SELECT username FROM users WHERE id = ?').bind(userId).first<{ username: string }>())?.username ?? '';
+      try {
+        const o = await recordTransactionFromText(db, { id: userId, username, role }, intent.record.purpose, intent.record.text);
+        order = o;
+        noteTool('record_transaction', `落单成功 ${o.type === 'purchase' ? '进货' : '出货'} ${o.lines.length} 项 合计 ¥${o.total}`);
+        extras.push(
+          '--- 落单结果（已入账） ---',
+          `${o.type === 'purchase' ? '进货' : '出货'}${o.client ? ` 店铺 ${o.client}` : ''} ${o.date}：`,
+          o.lines.map((l) => `${l.name} ${l.quantity}${l.unit} × ¥${l.price}${l.auto_created ? '（新商品已自动建档）' : ''}`).join('；'),
+          `合计 ¥${o.total}`,
+        );
+      } catch (e) {
+        if (e instanceof ApiError) {
+          extras.push('--- 落单失败 ---', e.message);
+          noteTool('record_transaction', `失败：${e.message}`);
+        } else {
+          throw e;
+        }
+      }
+    }
+  }
   if (intent?.remember) {
-    const id = await saveAiMemory(db, userId, intent.remember);
-    if (id) memoryOps.push(`已记住：${intent.remember}`);
+    const gate = await gateFor(db, userId, 'save_memory');
+    if (gate === 'ask') {
+      const preview = `记住事项：「${intent.remember.slice(0, 60)}」`;
+      const approvalId = await createPendingAction(db, userId, 'save_memory',
+        JSON.stringify({ content: intent.remember, runId }), preview);
+      return {
+        reply: '', sources: [], tools,
+        needApproval: { approval_id: approvalId, tool: { name: 'save_memory', label: toolDef('save_memory')!.label, description: toolDef('save_memory')!.description }, preview },
+      };
+    }
+    if (gate === 'allow') {
+      await saveAiMemory(db, userId, intent.remember);
+      noteTool('save_memory', `已记住：${intent.remember}`);
+      extras.push('--- 记忆操作结果 ---', `已记住：${intent.remember}`);
+      sources.push('本地记忆');
+    } else {
+      extras.push('--- 写操作被拒 ---', '未授权写入记忆（可在「AI 助手 → 工具权限」改为允许）。');
+      noteTool('save_memory', '拒绝：未授权');
+    }
   }
   if (intent?.forget) {
-    const ok = await forgetAiMemoryByContent(db, userId, intent.forget);
-    memoryOps.push(ok ? `已忘记：${intent.forget}` : `没有找到匹配的记忆：${intent.forget}`);
-  }
-  if (memoryOps.length > 0) {
-    extras.push('--- 记忆操作结果 ---', memoryOps.join('\n'));
-    sources.push('本地记忆');
+    const gate = await gateFor(db, userId, 'forget_memory');
+    if (gate === 'ask') {
+      const preview = `遗忘记忆：「${intent.forget.slice(0, 60)}」`;
+      const approvalId = await createPendingAction(db, userId, 'forget_memory',
+        JSON.stringify({ content: intent.forget, runId }), preview);
+      return {
+        reply: '', sources: [], tools,
+        needApproval: { approval_id: approvalId, tool: { name: 'forget_memory', label: toolDef('forget_memory')!.label, description: toolDef('forget_memory')!.description }, preview },
+      };
+    }
+    if (gate === 'allow') {
+      const ok = await forgetAiMemoryByContent(db, userId, intent.forget);
+      noteTool('forget_memory', ok ? `已忘记：${intent.forget}` : `没有找到匹配的记忆：${intent.forget}`);
+      extras.push('--- 记忆操作结果 ---', ok ? `已忘记：${intent.forget}` : `没有找到匹配的记忆：${intent.forget}`);
+      sources.push('本地记忆');
+    } else {
+      extras.push('--- 写操作被拒 ---', '未授权写入记忆（可在「AI 助手 → 工具权限」改为允许）。');
+      noteTool('forget_memory', '拒绝：未授权');
+    }
   }
 
+  // ② 读工具：动态问数 / 内置知识库（只读，无需授权）
   if (intent?.intent === 'query' && intent.view) {
     const data = await runBusinessQuery(db, role, intent);
     if (data != null) {
       extras.push('--- 查询结果（本次问数按你口吻查出的数据，以此为准） ---', data);
+      noteTool('query_business_data', data.split('\n')[0]);
     } else {
       extras.push('--- 查询结果 ---', '（该查询当前暂不支持或权限不足）');
     }
@@ -494,9 +604,11 @@ export async function assistantAnswer(
         extras.push(`【${p.title}】${p.body}`);
         sources.push(p.title);
       }
+      noteTool('pick_kb_entry', picked.map((p) => p.title).join('、'));
     }
   }
-  // 记忆注入：用户记住的事项始终带（对齐参考：记忆每次对话检索注入）
+
+  // ③ 记忆注入：用户记住的事项始终带（对齐参考：记忆每次对话检索注入）
   const memCtx = await memoryContext(db, userId);
   // 兜底：问数据但没识别出来 → 带每日快照；否则不带（省 token）
   let context = extras.length > 0 ? extras.join('\n') : '';
@@ -507,5 +619,61 @@ export async function assistantAnswer(
     if (memCtx) context = `${context}\n${memCtx}`;
   }
   const reply = await chatWithAssistant(cfg, messages, context);
-  return { reply, sources };
+  await finishAiRun(db, runId, 'ok', reply.slice(0, 100));
+  return { reply, sources, tools, ...(order ? { order } : {}) };
+}
+
+/** 授权确认后执行暂存的写工具（approve 端点用）：执行 → 组装最终回答 */
+export async function execApprovedAction(
+  cfg: AiConfig,
+  db: D1Database,
+  user: { id: string; username: string; role: string },
+  toolName: string,
+  args: string,
+  messages: Array<{ role: string; content: string }>,
+): Promise<{ reply: string; sources: string[]; tools: AssistantToolResult[]; order?: import('./ai-record').RecordResult; runId: string | null }> {
+  const parsed = JSON.parse(args) as Record<string, string>;
+  const runId = parsed.runId ?? null;
+  const tools: AssistantToolResult[] = [];
+  const extras: string[] = [];
+  const sources: string[] = [];
+  let order: import('./ai-record').RecordResult | undefined;
+
+  const noteTool = (name: string, result: string) => {
+    const def = toolDef(name);
+    tools.push({ name, label: def?.label ?? name, result });
+    if (runId) void recordToolCall(db, { runId, userId: user.id, toolName: name, args: args.slice(0, 200), result });
+  };
+
+  if (toolName === 'record_transaction') {
+    const purpose = parsed.purpose === 'sale' ? 'sale' : 'purchase';
+    const o = await recordTransactionFromText(db, user, purpose, parsed.text ?? '');
+    order = o;
+    noteTool('record_transaction', `落单成功 ${o.type === 'purchase' ? '进货' : '出货'} ${o.lines.length} 项 合计 ¥${o.total}`);
+    extras.push(
+      '--- 落单结果（已入账） ---',
+      `${o.type === 'purchase' ? '进货' : '出货'}${o.client ? ` 店铺 ${o.client}` : ''} ${o.date}：`,
+      o.lines.map((l) => `${l.name} ${l.quantity}${l.unit} × ¥${l.price}${l.auto_created ? '（新商品已自动建档）' : ''}`).join('；'),
+      `合计 ¥${o.total}`,
+    );
+  } else if (toolName === 'save_memory') {
+    await saveAiMemory(db, user.id, parsed.content ?? '');
+    noteTool('save_memory', `已记住：${parsed.content}`);
+    extras.push('--- 记忆操作结果 ---', `已记住：${parsed.content}`);
+    sources.push('本地记忆');
+  } else if (toolName === 'forget_memory') {
+    const ok = await forgetAiMemoryByContent(db, user.id, parsed.content ?? '');
+    noteTool('forget_memory', ok ? `已忘记：${parsed.content}` : `没有找到匹配的记忆：${parsed.content}`);
+    extras.push('--- 记忆操作结果 ---', ok ? `已忘记：${parsed.content}` : `没有找到匹配的记忆：${parsed.content}`);
+    sources.push('本地记忆');
+  } else {
+    throw new ApiError('未知待执行工具', 400);
+  }
+
+  const memCtx = await memoryContext(db, user.id);
+  let context = extras.join('\n');
+  if (memCtx) context = `${context}\n${memCtx}`;
+  const reply = await chatWithAssistant(cfg, messages, context);
+  if (runId) await finishAiRun(db, runId, 'ok', reply.slice(0, 100));
+  return { reply, sources, tools, order, runId };
 }

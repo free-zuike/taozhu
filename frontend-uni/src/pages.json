@@ -129,6 +129,24 @@
 			}
 		},
 		{
+			"path": "pages/ai-tools/ai-tools",
+			"style": {
+				"navigationBarTitleText": "工具权限"
+			}
+		},
+		{
+			"path": "pages/ai-activity/ai-activity",
+			"style": {
+				"navigationBarTitleText": "最近活动"
+			}
+		},
+		{
+			"path": "pages/ai-memory/ai-memory",
+			"style": {
+				"navigationBarTitleText": "本地记忆"
+			}
+		},
+		{
 			"path": "pages/rounding-settings/rounding-settings",
 			"style": {
 				"navigationBarTitleText": "金额舍入"

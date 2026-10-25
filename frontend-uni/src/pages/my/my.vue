@@ -43,7 +43,16 @@
     <view class="group-title">AI 助手</view>
     <view class="grp">
       <view class="row" @click="go('/pages/ai-assistant/ai-assistant')">
-        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE0B7;</text></view><view class="r-body"><text class="r-tx">AI 助手</text><text class="r-sub">问问经营数据：今天卖了多少 / 谁欠款 / 该补什么货</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE0B7;</text></view><view class="r-body"><text class="r-tx">AI 助手</text><text class="r-sub">问经营数据 / 一句话记一笔（落单经授权确认）</text></view><text class="r-arrow">›</text>
+      </view>
+      <view class="row" @click="go('/pages/ai-tools/ai-tools')">
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE8B8;</text></view><view class="r-body"><text class="r-tx">工具权限</text><text class="r-sub">控制 AI 哪些操作要询问（落单/记忆默认询问）</text></view><text class="r-arrow">›</text>
+      </view>
+      <view class="row" @click="go('/pages/ai-activity/ai-activity')">
+        <view class="r-ic ic-green"><text class="mi ic-tx">&#xE889;</text></view><view class="r-body"><text class="r-tx">最近活动</text><text class="r-sub">AI 执行记录：查询 / 落单 / 记忆</text></view><text class="r-arrow">›</text>
+      </view>
+      <view class="row" @click="go('/pages/ai-memory/ai-memory')">
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE866;</text></view><view class="r-body"><text class="r-tx">本地记忆</text><text class="r-sub">记住的事项：查看 / 遗忘 / 清空</text></view><text class="r-arrow">›</text>
       </view>
     </view>
 

@@ -123,26 +123,84 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
       final d = await Api.instance.post('/ai/chat', {
         'messages': _messages.map((m) => {'role': m['role'], 'content': m['content']}).toList(),
       });
-      final reply = '${d['reply'] ?? ''}'.trim();
-      final sources = ((d['sources'] as List?) ?? []).cast<String>();
-      setState(() {
-        _thinking = false;
-        if (reply.isNotEmpty) {
-          _messages.add({
-            'role': 'assistant',
-            'content': reply,
-            if (sources.isNotEmpty) 'sources': sources.join('、'),
+      // 写操作（落单/记忆）待授权：弹窗确认 → 调 approve，通过后连同结果一起落库
+      if (d['need_approval'] == true) {
+        setState(() => _thinking = false);
+        final decision = await _showApprovalDialog(d);
+        if (decision == null || !mounted) return;
+        try {
+          final r = await Api.instance.post('/ai/chat/approve', {
+            'approval_id': d['approval_id'],
+            'decision': decision,
+            'messages': _messages.map((m) => {'role': m['role'], 'content': m['content']}).toList(),
           });
-        } else {
-          _messages.add({'role': 'assistant', 'content': '（模型没有返回内容，请稍后再试）'});
+          setState(() => _thinking = false);
+          _applyReply(r);
+          if (decision == 'always_allow') toast(context, '已设为总是允许（「我的 → AI 助手 → 工具权限」可改回）');
+          if (decision == 'always_deny') toast(context, '已设为总是拒绝（「我的 → AI 助手 → 工具权限」可改回）');
+        } catch (e) {
+          setState(() => _thinking = false);
+          toast(context, e.toString().replaceFirst('Exception: ', ''));
         }
-      });
-      _saveHistory();
-      _scrollToBottom();
+      } else {
+        setState(() => _thinking = false);
+        _applyReply(d);
+      }
     } catch (e) {
       setState(() => _thinking = false);
       toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
+  }
+
+  void _applyReply(Map<dynamic, dynamic> d) {
+    final reply = '${d['reply'] ?? ''}'.trim();
+    final sources = ((d['sources'] as List?) ?? []).cast<String>();
+    final tools = ((d['tools'] as List?) ?? []).cast<Map<String, dynamic>>();
+    final order = d['order'] as Map<String, dynamic>?;
+    setState(() {
+      if (reply.isNotEmpty) {
+        _messages.add({
+          'role': 'assistant',
+          'content': reply,
+          if (sources.isNotEmpty) 'sources': sources.join('、'),
+          if (tools.isNotEmpty) 'tools': tools.map((t) => '${t['label'] ?? t['name']}').join('、'),
+          if (order != null) 'order': jsonEncode(order),
+        });
+      } else {
+        _messages.add({'role': 'assistant', 'content': '（模型没有返回内容，请稍后再试）'});
+      }
+    });
+    _saveHistory();
+    _scrollToBottom();
+  }
+
+  /// 写工具授权弹窗：允许/拒绝/总是允许/总是拒绝（对齐参考 App 授权门）
+  Future<String?> _showApprovalDialog(Map<dynamic, dynamic> d) async {
+    final tool = (d['tool'] as Map<String, dynamic>?) ?? {};
+    final preview = '${d['preview'] ?? ''}';
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('允许「${tool['label'] ?? 'AI 操作'}」？', style: const TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(preview, style: const TextStyle(fontSize: 13.5, height: 1.5)),
+            if ('${tool['description'] ?? ''}'.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text('${tool['description']}', style: const TextStyle(fontSize: 11.5, color: Colors.grey)),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'deny'), child: const Text('拒绝', style: TextStyle(fontSize: 13))),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'always_deny'), child: const Text('总是拒绝', style: TextStyle(fontSize: 13))),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'always_allow'), child: const Text('总是允许', style: TextStyle(fontSize: 13))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, 'allow'), child: const Text('允许', style: TextStyle(fontSize: 13))),
+        ],
+      ),
+    );
   }
 
   /// 记忆管理弹层（对齐参考 App「本地记忆」：查看/删除/清空）
@@ -367,6 +425,13 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
                 color: isUser ? Colors.white : Theme.of(context).colorScheme.onSurface,
               ),
             ),
+            if (!isUser && (m['order'] ?? '').isNotEmpty) _orderCard(m['order']!),
+            if (!isUser && (m['tools'] ?? '').isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('🛠 使用了：${m['tools']}',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              ),
             if (!isUser && (m['sources'] ?? '').isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -375,6 +440,59 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 一句话落单结果卡片（对齐参考 App 记账结果卡片）
+  Widget _orderCard(String jsonStr) {
+    Map<String, dynamic> o;
+    try {
+      o = jsonDecode(jsonStr) as Map<String, dynamic>;
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+    final isPurchase = '${o['type'] ?? 'purchase'}' == 'purchase';
+    final total = o['total'];
+    final client = '${o['client'] ?? ''}';
+    final lines = ((o['lines'] as List?) ?? []).cast<Map<String, dynamic>>();
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(10),
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: _c.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _c.primary.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.receipt_long_outlined, size: 15, color: _c.primary),
+              const SizedBox(width: 6),
+              Text('${isPurchase ? '进货' : '出货'}${client.isNotEmpty ? ' · $client' : ''}${total != null ? ' · ¥$total' : ''}',
+                  style: TextStyle(fontSize: 12.5, color: _c.primary, fontWeight: FontWeight.w600)),
+            ],
+          ),
+          for (final l in lines.take(3))
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text('${l['name']} ${l['quantity']}${l['unit']} × ¥${l['price']}',
+                  style: const TextStyle(fontSize: 11.5)),
+            ),
+          if (lines.length > 3)
+            const Padding(
+              padding: EdgeInsets.only(top: 3),
+              child: Text('…', style: TextStyle(fontSize: 11.5)),
+            ),
+          if (total != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text('合计 ¥$total（已在账本中）', style: TextStyle(fontSize: 11, color: _c.primary)),
+            ),
+        ],
       ),
     );
   }

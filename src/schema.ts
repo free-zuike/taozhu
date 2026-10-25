@@ -308,6 +308,53 @@ const DDL: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, created_at)`,
+  // AI 工具权限（v0.17.478，对齐参考 App Agent 权限体系）：每用户每工具的授权策略
+  // （ask=执行前询问 / allow=总是允许 / deny=总是拒绝；缺省读工具 allow、写工具 ask）
+  `CREATE TABLE IF NOT EXISTS ai_tool_permissions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    policy TEXT NOT NULL DEFAULT 'ask',
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_tool_permissions_user_tool ON ai_tool_permissions (user_id, tool_name)`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_tool_permissions_user ON ai_tool_permissions (user_id)`,
+  // AI 助手运行审计（v0.17.478，对齐参考 App Agent 活动页 agentRuns）：每次对话一条运行记录
+  `CREATE TABLE IF NOT EXISTS ai_runs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    intent TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'ok',
+    started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    finished_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    summary TEXT NOT NULL DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_runs_user ON ai_runs (user_id, started_at DESC)`,
+  // AI 工具调用明细（v0.17.478）：每次对话内各工具执行记录（查数据/记忆/落单；活动页时间线）
+  `CREATE TABLE IF NOT EXISTS ai_tool_calls (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    args TEXT NOT NULL DEFAULT '',
+    result TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'ok',
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_tool_calls_run ON ai_tool_calls (run_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_tool_calls_user ON ai_tool_calls (user_id, created_at DESC)`,
+  // AI 待授权动作（v0.17.478）：写工具（落单/记忆）执行前需用户确认时暂存（approval_id 一次性）
+  `CREATE TABLE IF NOT EXISTS ai_pending_actions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    args TEXT NOT NULL,
+    preview TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    expires_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_pending_actions_user ON ai_pending_actions (user_id, expires_at)`,
   // 建表迁移标记：已初始化的库冷启动只查这一行即跳过下方 20+ 次 PRAGMA（首请求提速，避免 Web 首访超时）
   `CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
@@ -360,6 +407,10 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       'CREATE TABLE IF NOT EXISTS ai_memories',
       'CREATE TABLE IF NOT EXISTS ai_conversations',
       'CREATE TABLE IF NOT EXISTS ai_messages',
+      'CREATE TABLE IF NOT EXISTS ai_tool_permissions',
+      'CREATE TABLE IF NOT EXISTS ai_runs',
+      'CREATE TABLE IF NOT EXISTS ai_tool_calls',
+      'CREATE TABLE IF NOT EXISTS ai_pending_actions',
     ]) {
       const i = DDL.findIndex((s) => s.includes(marker));
       if (i >= 0) await db.prepare(DDL[i]).run();
@@ -367,12 +418,13 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // 已初始化库：只查一次标记即返回（冷启动首请求不再跑下方 20+ 次 PRAGMA/ALTER 迁移链）
     // 注意：短路值必须与末尾写入值一致，否则新增列的迁移永远不跑（生产曾缺 round_carry/price_group_id → 全接口 500）；
     // 每新增一次表/列迁移，版本号 +1（0.17.472：backup_runs 缺表事故后，前置建表兜底 + 快检版本升 '14' 让老库重走全量迁移；
-    // 0.17.473：库存盘点 stock_adjustments 表 → '15'；0.17.476：AI 记忆/对话历史 3 表 → '16'）
+    // 0.17.473：库存盘点 stock_adjustments 表 → '15'；0.17.476：AI 记忆/对话历史 3 表 → '16'；
+    // 0.17.478：AI 工具权限/运行审计/待授权 4 表 → '17'）
     try {
       const meta = await db.prepare(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'",
       ).first<{ value: string }>();
-      if (meta?.value === '16') {
+      if (meta?.value === '17') {
         schemaReady = true;
         return;
       }
@@ -452,6 +504,11 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     // v0.17.476：AI 助手记忆/会话/消息 3 表（记住的事项 + 跨设备对话历史）；存量库补建
     for (const marker of ['CREATE TABLE IF NOT EXISTS ai_memories', 'CREATE TABLE IF NOT EXISTS ai_conversations', 'CREATE TABLE IF NOT EXISTS ai_messages']) {
+      const i = DDL.findIndex((s) => s.includes(marker));
+      if (i >= 0) await db.prepare(DDL[i]).run();
+    }
+    // v0.17.478：AI 工具权限/运行审计/待授权 4 表（权限体系 + 活动页 + 授权门）；存量库补建
+    for (const marker of ['CREATE TABLE IF NOT EXISTS ai_tool_permissions', 'CREATE TABLE IF NOT EXISTS ai_runs', 'CREATE TABLE IF NOT EXISTS ai_tool_calls', 'CREATE TABLE IF NOT EXISTS ai_pending_actions']) {
       const i = DDL.findIndex((s) => s.includes(marker));
       if (i >= 0) await db.prepare(DDL[i]).run();
     }
@@ -701,8 +758,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.472 backup_runs 缺表事故 → 前置建表兜底 + 快检版本 '14'：老库（标记 13）重走全量迁移
     // v0.17.473 库存盘点 stock_adjustments 表 → 快检版本 '15'
     // v0.17.476 AI 记忆/会话/消息 3 表 → 快检版本 '16'
+    // v0.17.478 AI 工具权限/运行审计/待授权 4 表 → 快检版本 '17'
     await db.prepare(
-      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '16')",
+      "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '17')",
     ).run();
     schemaReady = true;
     } catch (err) {

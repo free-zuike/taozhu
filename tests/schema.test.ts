@@ -112,8 +112,9 @@ describe('schema.sql 完整建表与幂等', () => {
     // 0.17.472 backup_runs 缺表事故 → 前置建表兜底 + 快检版本 '14'
     // 0.17.473 库存盘点 → stock_adjustments 表 → '15'
     // 0.17.476 AI 记忆/会话/消息 3 表 → '16'
+    // 0.17.478 AI 工具权限/运行审计/待授权 4 表 → '17'
     const meta = await db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").first<{ value: string }>();
-    expect(meta?.value).toBe('16');
+    expect(meta?.value).toBe('17');
     // 二次调用（模拟后续请求）不抛
     resetSchemaState();
     await expect(ensureSchema(db as never)).resolves.toBeUndefined();
@@ -136,9 +137,9 @@ describe('schema.sql 完整建表与幂等', () => {
     await db.prepare("INSERT INTO backup_runs (id, status, started_at, message, log_text) VALUES ('R1', 'running', '2026-10-22T00:00:00.000Z', '开始备份…', '')").run();
     const row = await db.prepare("SELECT status FROM backup_runs WHERE id = 'R1'").first<{ status: string }>();
     expect(row?.status).toBe('running');
-    // 迁移标记已升级到 16（后续冷启动走快检）
+    // 迁移标记已升级到 17（后续冷启动走快检）
     const meta = await db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").first<{ value: string }>();
-    expect(meta?.value).toBe('16');
+    expect(meta?.value).toBe('17');
   });
 
   it('v0.17.114 彻底删表迁移：旧库（含头表+FK 与数据）跑 ensureSchema → 头表删除、行表无 FK、数据保留自包含', async () => {

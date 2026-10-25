@@ -10,6 +10,7 @@ import {
   saveAiMemory, listAiMemories, forgetAiMemoryByContent,
   deleteAiMemory, clearAiMemories, memoryContext, assistantAnswer,
 } from '../src/services/ai-assistant';
+import { setToolPolicy } from '../src/services/ai-tools';
 import type { AiConfig } from '../src/services/ai-parse';
 
 const JWT_SECRET = 'test-secret';
@@ -91,7 +92,8 @@ describe('ai_memories 记忆服务', () => {
     expect(await memoryContext(db as never, 'u3')).toBe('');
   });
 
-  it('assistantAnswer 执行记住指令并落库（mock fetch）', async () => {
+  it('assistantAnswer 执行记住指令并落库（mock fetch；策略 allow 直执行）', async () => {
+    await setToolPolicy(db as never, 'u1', 'save_memory', 'allow');
     let n = 0;
     vi.stubGlobal('fetch', vi.fn(async () => {
       n++;
@@ -104,10 +106,22 @@ describe('ai_memories 记忆服务', () => {
     }));
     const r = await assistantAnswer(cfg, db as never, [{ role: 'user', content: '记住：A店每次出货都打8折' }], 'admin', 'u1');
     expect(r.reply).toBe('好的，记住了。');
+    expect(r.tools.map((t) => t.name)).toContain('save_memory');
     vi.unstubAllGlobals();
     const list = await listAiMemories(db as never, 'u1');
     expect(list.length).toBe(1);
     expect(list[0].content).toContain('A店');
+  });
+
+  it('写工具默认 ask：assistantAnswer 返回 needApproval、不落库（授权门）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":"记住：A店打8折","forget":null,"record":null}' } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    const r = await assistantAnswer(cfg, db as never, [{ role: 'user', content: '记住：A店打8折' }], 'admin', 'u1');
+    expect(r.needApproval?.tool.name).toBe('save_memory');
+    expect(r.reply).toBe('');
+    vi.unstubAllGlobals();
+    expect(await listAiMemories(db as never, 'u1')).toHaveLength(0);
   });
 });
 

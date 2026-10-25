@@ -35,6 +35,9 @@ import 'logs_page.dart';
 import 'audit_page.dart';
 import 'backup_page.dart';
 import 'ai_assistant_page.dart';
+import 'ai_tools_page.dart';
+import 'ai_activity_page.dart';
+import 'ai_memory_page.dart';
 import 'payment_accounts_page.dart';
 import 'update_sources_page.dart';
 import '../widgets/user_avatar.dart';
@@ -1289,11 +1292,21 @@ class _MyPageState extends State<MyPage> {
                     .push(MaterialPageRoute(builder: (_) => const DevicesPage()))),
           ]),
           const SizedBox(height: 18),
-          // AI 助手：问数入口（全员可见；店员打码，问数据/库存可问）
+          // AI 助手区（对话 + 工具权限/最近活动/本地记忆，对齐参考 App Agent 体系）
+          _groupTitle('AI 助手'),
           _card([
             _item(Icons.smart_toy_outlined, c.primary, 'AI 助手',
-                '问问经营数据：今天卖了多少 / 谁欠款 / 该补什么货',
+                '问经营数据 / 一句话记一笔（落单经授权确认）',
                 () => goPage(context, const AiAssistantPage())),
+            _item(Icons.tune_outlined, c.primary, '工具权限',
+                '控制 AI 哪些操作要询问（落单/记忆默认询问）',
+                () => goPage(context, const AiToolsPage())),
+            _item(Icons.history_outlined, c.primary, '最近活动',
+                'AI 执行记录：查询 / 落单 / 记忆',
+                () => goPage(context, const AiActivityPage())),
+            _item(Icons.bookmark_outline, c.primary, '本地记忆',
+                '记住的事项：查看 / 遗忘 / 清空',
+                () => goPage(context, const AiMemoryPage())),
           ]),
           const SizedBox(height: 18),
           // 店员账号：仅送货视角，隐藏经营类功能（收款/对账/店铺管理）
