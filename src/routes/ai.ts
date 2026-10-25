@@ -13,7 +13,7 @@ import {
   minimalWavBytes,
   sniffImageMime,
 } from '../services/ai-parse';
-import { buildAssistantContext, chatWithAssistant } from '../services/ai-assistant';
+import { assistantAnswer } from '../services/ai-assistant';
 import { getAiConfig } from './settings';
 import type { AuthUser, Env } from '../types';
 
@@ -129,9 +129,11 @@ aiRouter.post('/chat', async (c) => {
   if (totalLen > 10000) return c.json({ error: '内容过长（多轮合计上限 10000 字）' }, 400);
   const cfg = await getAiConfig(c.env.DB);
   try {
-    const context = await buildAssistantContext(c.env.DB, c.get('user').role);
-    const reply = await chatWithAssistant(cfg, msgs, context);
-    return c.json({ ok: true, reply });
+    const { reply, sources } = await assistantAnswer(cfg, c.env.DB, msgs, c.get('user').role);
+    return c.json({
+      ok: true, reply,
+      ...(sources.length > 0 ? { sources } : {}),
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'AI 助手接口错误';
     return c.json({ error: msg }, msg.includes('未启用') ? 400 : 502);

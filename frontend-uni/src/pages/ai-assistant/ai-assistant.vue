@@ -4,7 +4,10 @@
     <scroll-view scroll-y class="chat" :scroll-into-view="bottomAnchor" scroll-with-animation>
       <view v-for="(m, i) in messages" :key="i" :id="'m' + i"
         :class="['bubble-row', m.role === 'user' ? 'mine' : 'peer']">
-        <view :class="['bubble', m.role === 'user' ? 'b-mine' : 'b-peer']">{{ m.content }}</view>
+        <view :class="['bubble', m.role === 'user' ? 'b-mine' : 'b-peer']">
+          <text>{{ m.content }}</text>
+          <view v-if="m.role !== 'user' && m.sources" class="src">📖 依据：{{ m.sources }}</view>
+        </view>
       </view>
       <view v-if="thinking" class="bubble-row peer">
         <view class="bubble b-peer typing">AI 思考中…</view>
@@ -32,7 +35,7 @@ import { request } from '../../api';
 const { tv, patternSrc } = useThemeVars();
 
 const HIST_KEY = 'ai_assistant_history';
-interface Msg { role: 'user' | 'assistant'; content: string }
+interface Msg { role: 'user' | 'assistant'; content: string; sources?: string }
 const messages = ref<Msg[]>([]);
 const input = ref('');
 const thinking = ref(false);
@@ -81,11 +84,16 @@ async function send(preset?: string) {
   scrollBottom();
   try {
     // 多轮历史一并带上（服务端无状态，客户端负责上下文）
-    const d = await request<{ reply: string }>('/ai/chat', 'POST', {
+    const d = await request<{ reply: string; sources?: string[] }>('/ai/chat', 'POST', {
       messages: messages.value.map((m) => ({ role: m.role, content: m.content })),
     });
     thinking.value = false;
-    messages.value.push({ role: 'assistant', content: (d?.reply || '').trim() || '（模型没有返回内容，请稍后再试）' });
+    const sources = (d?.sources || []).join('、');
+    messages.value.push({
+      role: 'assistant',
+      content: (d?.reply || '').trim() || '（模型没有返回内容，请稍后再试）',
+      ...(sources ? { sources } : {}),
+    });
     saveHistory();
     scrollBottom();
   } catch (e) {
@@ -105,6 +113,7 @@ async function send(preset?: string) {
 .b-mine { background: var(--primary); color: #fff; border-bottom-right-radius: 6rpx; }
 .b-peer { background: var(--card-bg); color: var(--text-main); border: 1rpx solid var(--divider); border-bottom-left-radius: 6rpx; }
 .typing { color: var(--text-sub); }
+.src { margin-top: 10rpx; font-size: 22rpx; color: var(--text-sub); }
 .quick-bar { white-space: nowrap; padding: 8rpx 16rpx; box-sizing: border-box; }
 .chip { display: inline-block; padding: 12rpx 24rpx; margin-right: 16rpx; background: var(--card-bg); border-radius: 28rpx; font-size: 26rpx; color: var(--text-sub); border: 1rpx solid var(--divider); }
 .input-bar { display: flex; align-items: center; gap: 16rpx; padding: 20rpx 24rpx calc(20rpx + env(safe-area-inset-bottom)); box-sizing: border-box; }

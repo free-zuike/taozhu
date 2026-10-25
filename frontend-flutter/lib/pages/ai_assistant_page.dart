@@ -103,10 +103,15 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
         'messages': _messages.map((m) => {'role': m['role'], 'content': m['content']}).toList(),
       });
       final reply = '${d['reply'] ?? ''}'.trim();
+      final sources = ((d['sources'] as List?) ?? []).cast<String>();
       setState(() {
         _thinking = false;
         if (reply.isNotEmpty) {
-          _messages.add({'role': 'assistant', 'content': reply});
+          _messages.add({
+            'role': 'assistant',
+            'content': reply,
+            if (sources.isNotEmpty) 'sources': sources.join('、'),
+          });
         } else {
           _messages.add({'role': 'assistant', 'content': '（模型没有返回内容，请稍后再试）'});
         }
@@ -186,6 +191,9 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
                           minLines: 1,
                           maxLines: 3,
                           textInputAction: TextInputAction.send,
+                          // 输入内容变化必须重建，否则发送按钮的可用状态（_input.text 非空判断）
+                          // 永远停在初始值 → 自己打字发送不出去（仅快捷提问能发）
+                          onChanged: (_) => setState(() {}),
                           onSubmitted: (_) => _send(),
                           decoration: InputDecoration(
                             hintText: '问问经营数据…（需在线）',
@@ -241,13 +249,25 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
           ),
           border: isUser ? null : Border.all(color: _c.divider),
         ),
-        child: Text(
-          content,
-          style: TextStyle(
-            fontSize: 14,
-            height: 1.45,
-            color: isUser ? Colors.white : Theme.of(context).colorScheme.onSurface,
-          ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              content,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.45,
+                color: isUser ? Colors.white : Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            if (!isUser && (m['sources'] ?? '').isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('📖 依据：${m['sources']}',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              ),
+          ],
         ),
       ),
     );
