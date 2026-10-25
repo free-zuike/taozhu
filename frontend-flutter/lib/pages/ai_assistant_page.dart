@@ -239,7 +239,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
             bottomLeft: Radius.circular(isUser ? 14 : 4),
             bottomRight: Radius.circular(isUser ? 4 : 14),
           ),
-          border: isUser ? null : BorderSide(color: _c.divider),
+          border: isUser ? null : Border.all(color: _c.divider),
         ),
         child: Text(
           content,
