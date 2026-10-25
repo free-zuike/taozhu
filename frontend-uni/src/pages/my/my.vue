@@ -40,6 +40,13 @@
       </view>
     </view>
 
+    <view class="group-title">AI 助手</view>
+    <view class="grp">
+      <view class="row" @click="go('/pages/ai-assistant/ai-assistant')">
+        <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE0B7;</text></view><view class="r-body"><text class="r-tx">AI 助手</text><text class="r-sub">问问经营数据：今天卖了多少 / 谁欠款 / 该补什么货</text></view><text class="r-arrow">›</text>
+      </view>
+    </view>
+
     <view class="group-title">经营</view>
     <view class="grp">
       <view v-if="isAdmin" class="row" @click="go('/pages/clients/clients')">

@@ -296,7 +296,8 @@ function _rejectedParam(payload: Record<string, unknown>, statusCode: number, bo
   return null;
 }
 
-async function _postChatAdaptive(
+/** 调用 OpenAI 兼容 chat/completions（带参数自适应剥离）；AI 助手对话也复用此容错 */
+export async function _postChatAdaptive(
   url: string,
   headers: Record<string, string>,
   payload: Record<string, unknown>,

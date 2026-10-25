@@ -13,6 +13,7 @@ import {
   minimalWavBytes,
   sniffImageMime,
 } from '../services/ai-parse';
+import { buildAssistantContext, chatWithAssistant } from '../services/ai-assistant';
 import { getAiConfig } from './settings';
 import type { AuthUser, Env } from '../types';
 
@@ -109,6 +110,31 @@ aiRouter.post('/parse-voice', async (c) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : '识别失败';
     return c.json({ error: msg }, 502);
+  }
+});
+
+// POST /api/v1/ai/chat — AI 助手对话（问数）：客户端带多轮历史（messages），
+// 服务端注入业务数据快照（buildAssistantContext，店员打码）后调文字模型回答；
+// 无状态不存对话表（对齐参考项目）；未配置 Key 返回 400 引导到设置页。
+aiRouter.post('/chat', async (c) => {
+  const body = await c.req.json().catch(() => null) as {
+    messages?: Array<{ role?: string; content?: string }>;
+  } | null;
+  const msgs = (body?.messages ?? [])
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && (m.content ?? '').trim().length > 0)
+    .map((m) => ({ role: m.role as 'user' | 'assistant', content: (m.content ?? '').trim().slice(0, 2000) }))
+    .slice(-12);
+  if (msgs.length === 0) return c.json({ error: '请输入要说的话' }, 400);
+  const totalLen = msgs.reduce((s, m) => s + m.content.length, 0);
+  if (totalLen > 10000) return c.json({ error: '内容过长（多轮合计上限 10000 字）' }, 400);
+  const cfg = await getAiConfig(c.env.DB);
+  try {
+    const context = await buildAssistantContext(c.env.DB, c.get('user').role);
+    const reply = await chatWithAssistant(cfg, msgs, context);
+    return c.json({ ok: true, reply });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'AI 助手接口错误';
+    return c.json({ error: msg }, msg.includes('未启用') ? 400 : 502);
   }
 });
 

@@ -34,6 +34,7 @@ import 'members_page.dart';
 import 'logs_page.dart';
 import 'audit_page.dart';
 import 'backup_page.dart';
+import 'ai_assistant_page.dart';
 import 'payment_accounts_page.dart';
 import 'update_sources_page.dart';
 import '../widgets/user_avatar.dart';
@@ -1286,6 +1287,13 @@ class _MyPageState extends State<MyPage> {
             _item(Icons.devices_outlined, c.primary, '设备管理', '登录设备列表，可删除',
                 () => Navigator.of(context)
                     .push(MaterialPageRoute(builder: (_) => const DevicesPage()))),
+          ]),
+          const SizedBox(height: 18),
+          // AI 助手：问数入口（全员可见；店员打码，问数据/库存可问）
+          _card([
+            _item(Icons.smart_toy_outlined, c.primary, 'AI 助手',
+                '问问经营数据：今天卖了多少 / 谁欠款 / 该补什么货',
+                () => goPage(context, const AiAssistantPage())),
           ]),
           const SizedBox(height: 18),
           // 店员账号：仅送货视角，隐藏经营类功能（收款/对账/店铺管理）

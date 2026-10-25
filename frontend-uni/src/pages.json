@@ -123,6 +123,12 @@
 			}
 		},
 		{
+			"path": "pages/ai-assistant/ai-assistant",
+			"style": {
+				"navigationBarTitleText": "AI 助手"
+			}
+		},
+		{
 			"path": "pages/rounding-settings/rounding-settings",
 			"style": {
 				"navigationBarTitleText": "金额舍入"
