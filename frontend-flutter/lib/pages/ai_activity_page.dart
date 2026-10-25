@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
+import 'router.dart';
 
 /// 最近活动（对齐参考 App Agent 活动页）：每次对话 = 一条运行记录（意图/时间/状态）
 /// + 工具调用明细（Query/记忆/落单，含耗时）；数据存服务端 ai_runs/ai_tool_calls。
@@ -44,9 +45,10 @@ class _AiActivityPageState extends State<AiActivityPage> {
         flexibleSpace: appBarBackground(context),
         title: const Text('最近活动', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
       ),
-      body: themePageBackground(
-        context,
-        child: activity == null
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          activity == null
             ? const Center(child: CircularProgressIndicator())
             : RefreshIndicator(
                 onRefresh: _load,
@@ -63,6 +65,7 @@ class _AiActivityPageState extends State<AiActivityPage> {
                   ],
                 ),
               ),
+        ],
       ),
     );
   }

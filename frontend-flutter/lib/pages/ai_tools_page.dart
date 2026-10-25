@@ -107,9 +107,10 @@ class _AiToolsPageState extends State<AiToolsPage> {
           TextButton(onPressed: _tools == null ? null : _reset, child: const Text('恢复默认', style: TextStyle(fontSize: 13))),
         ],
       ),
-      body: themePageBackground(
-        context,
-        child: tools == null
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          tools == null
             ? const Center(child: CircularProgressIndicator())
             : ListView(
                 padding: const EdgeInsets.all(16),
@@ -133,6 +134,7 @@ class _AiToolsPageState extends State<AiToolsPage> {
                   ],
                 ],
               ),
+        ],
       ),
     );
   }

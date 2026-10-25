@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
+import 'router.dart';
 
 /// 本地记忆独立页（对齐参考 App agent_memory_page）：记住的事项 查看/遗忘/清空。
 /// 数据存服务端 ai_memories（对话里说「记住：…」/「忘记…」维护，授权门默认询问）。
@@ -73,9 +74,10 @@ class _AiMemoryPageState extends State<AiMemoryPage> {
             TextButton(onPressed: _clearAll, child: const Text('清空', style: TextStyle(fontSize: 13))),
         ],
       ),
-      body: themePageBackground(
-        context,
-        child: memories == null
+      body: Stack(
+        children: [
+          Positioned.fill(child: themePageBackground(context)),
+          memories == null
             ? const Center(child: CircularProgressIndicator())
             : ListView(
                 padding: const EdgeInsets.all(16),
@@ -114,6 +116,7 @@ class _AiMemoryPageState extends State<AiMemoryPage> {
                       ),
                 ],
               ),
+        ],
       ),
     );
   }
