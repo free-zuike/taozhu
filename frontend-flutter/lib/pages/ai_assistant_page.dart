@@ -1,9 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
 import '../theme.dart';
+import '../utils/ai_local.dart' show aiPreparePhoto;
+import '../widgets/ai_md_text.dart';
 import 'router.dart';
 
 /// AI 助手（对话问数）：聊天气泡 + 快捷提问，多轮历史本地持久化
@@ -17,10 +24,14 @@ class AiAssistantPage extends StatefulWidget {
 class _AiAssistantPageState extends State<AiAssistantPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   static const _histKey = 'ai_assistant_history';
-  final List<Map<String, String>> _messages = []; // {role: user|assistant, content}
+  final List<Map<String, String>> _messages = []; // {role: user|assistant, content, sources?, toolsJson?, order?, typing?}
   final ScrollController _scroll = ScrollController();
   final TextEditingController _input = TextEditingController();
   bool _thinking = false;
+  // 打字机：最新一条助手回复逐字显示（对齐参考 App typewriter_text）
+  Timer? _typingTimer;
+  int _typingMsgIdx = -1;
+  int _typingIndex = 0;
 
   static const _quickQs = [
     '今天卖了多少？',
@@ -39,6 +50,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
 
   @override
   void dispose() {
+    _typingTimer?.cancel();
     _scroll.dispose();
     _input.dispose();
     super.dispose();
@@ -92,7 +104,9 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
       final list = _messages.length > 60
           ? _messages.sublist(_messages.length - 60)
           : _messages;
-      await p.setString(_histKey, jsonEncode(list));
+      // 打字机进度字段不持久化（历史恢复后整条显示）
+      final clean = list.map((m) => Map<String, String>.from(m)..remove('typing')).toList();
+      await p.setString(_histKey, jsonEncode(clean));
     } catch (_) {}
   }
 
@@ -157,21 +171,40 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
     final sources = ((d['sources'] as List?) ?? []).cast<String>();
     final tools = ((d['tools'] as List?) ?? []).cast<Map<String, dynamic>>();
     final order = d['order'] as Map<String, dynamic>?;
+    final msg = {
+      'role': 'assistant',
+      'content': reply.isNotEmpty ? reply : '（模型没有返回内容，请稍后再试）',
+      if (sources.isNotEmpty) 'sources': sources.join('、'),
+      if (tools.isNotEmpty) 'toolsJson': jsonEncode(tools),
+      if (order != null) 'order': jsonEncode(order),
+    };
     setState(() {
-      if (reply.isNotEmpty) {
-        _messages.add({
-          'role': 'assistant',
-          'content': reply,
-          if (sources.isNotEmpty) 'sources': sources.join('、'),
-          if (tools.isNotEmpty) 'tools': tools.map((t) => '${t['label'] ?? t['name']}').join('、'),
-          if (order != null) 'order': jsonEncode(order),
-        });
-      } else {
-        _messages.add({'role': 'assistant', 'content': '（模型没有返回内容，请稍后再试）'});
-      }
+      _thinking = false;
+      _messages.add(msg);
+      if (reply.isNotEmpty && reply.length > 24) _startTyping(_messages.length - 1, reply);
     });
     _saveHistory();
     _scrollToBottom();
+  }
+
+  /// 打字机：逐字显示最新一条助手回复（对齐参考 App typewriter_text）
+  void _startTyping(int idx, String full) {
+    _typingTimer?.cancel();
+    _typingMsgIdx = idx;
+    _typingIndex = 0;
+    _typingTimer = Timer.periodic(const Duration(milliseconds: 24), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      _typingIndex += 2;
+      setState(() {});
+      if (_typingIndex >= full.length) {
+        t.cancel();
+        _typingTimer = null;
+        _typingMsgIdx = -1;
+      }
+    });
   }
 
   /// 写工具授权弹窗：允许/拒绝/总是允许/总是拒绝（对齐参考 App 授权门）
@@ -201,6 +234,101 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
         ],
       ),
     );
+  }
+
+  /// 语音提问：录音 → 后端 /ai/stt 转文字 → 填入输入框发送
+  Future<void> _voiceAsk() async {
+    if (!kIsWeb && Api.isOffline) {
+      toast(context, '语音识别需联网');
+      return;
+    }
+    final perm = await Permission.microphone.request();
+    if (!perm.isGranted) {
+      toast(context, '需要麦克风权限才能语音提问');
+      return;
+    }
+    final rec = AudioRecorder();
+    final dir = await getTemporaryDirectory();
+    final path = '${dir.path}/taozhu_ai_voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    await rec.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
+    if (!mounted) {
+      await rec.stop();
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('语音提问', style: TextStyle(fontSize: 16)),
+        content: const Text('正在录音，说完点击「结束」', style: TextStyle(fontSize: 13.5)),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('结束', style: TextStyle(fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+    await rec.stop();
+    final bytes = await XFile(path).readAsBytes();
+    toast(context, '识别中…');
+    try {
+      final d = await Api.instance.uploadAudio('/ai/stt', bytes, 'voice.m4a', 'audio/mp4');
+      final text = '${d['text'] ?? ''}'.trim();
+      if (text.isEmpty) {
+        toast(context, '没有听清，请再说一遍');
+        return;
+      }
+      _input.text = text;
+      setState(() {});
+      _send();
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// 拍小票识别记账：拍照/相册 → /ai/parse-photo → 生成记账消息发送（走落单授权门）
+  Future<void> _photoAsk() async {
+    if (!kIsWeb && Api.isOffline) {
+      toast(context, 'AI 识别需联网');
+      return;
+    }
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(leading: const Icon(Icons.photo_camera_outlined), title: const Text('拍照', style: TextStyle(fontSize: 14)), onTap: () => Navigator.pop(ctx, ImageSource.camera)),
+            ListTile(leading: const Icon(Icons.photo_library_outlined), title: const Text('从相册选', style: TextStyle(fontSize: 14)), onTap: () => Navigator.pop(ctx, ImageSource.gallery)),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    final picked = await ImagePicker().pickImage(source: source);
+    if (picked == null) return;
+    toast(context, '识别中…');
+    try {
+      final bytes = await picked.readAsBytes();
+      final prep = await aiPreparePhoto(bytes, 'image/jpeg');
+      final d = await Api.instance.uploadPhoto('/ai/parse-photo?purpose=purchase', prep.bytes, 'photo.jpg', prep.mime);
+      final items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      if (items.isEmpty) {
+        toast(context, '没识别到商品，请拍清楚些（可拍进货小票）');
+        return;
+      }
+      final client = '${d['client'] ?? ''}';
+      final date = '${d['date'] ?? ''}';
+      final summary = items
+          .map((i) => '${i['name'] ?? ''} ${i['quantity'] ?? ''}${i['unit'] ?? ''}@¥${i['price'] ?? ''}')
+          .join('、');
+      final msg = '识别到进货小票：$summary。${client.isNotEmpty ? '购货单位 $client。' : ''}${date.isNotEmpty ? '日期 $date。' : ''}请帮我记一笔进货';
+      _send(msg);
+    } catch (e) {
+      toast(context, e.toString().replaceFirst('Exception: ', ''));
+    }
   }
 
   /// 记忆管理弹层（对齐参考 App「本地记忆」：查看/删除/清空）
@@ -321,7 +449,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
                   controller: _scroll,
                   padding: const EdgeInsets.all(16),
                   itemCount: _messages.length,
-                  itemBuilder: (_, i) => _bubble(_messages[i]),
+                  itemBuilder: (_, i) => _bubble(_messages[i], i),
                 ),
               ),
               // 快捷提问
@@ -349,6 +477,18 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
                   padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
                   child: Row(
                     children: [
+                      IconButton(
+                        tooltip: '语音提问',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.mic_none, size: 20),
+                        onPressed: _thinking ? null : _voiceAsk,
+                      ),
+                      IconButton(
+                        tooltip: '拍小票识别记账',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.photo_camera_outlined, size: 20),
+                        onPressed: _thinking ? null : _photoAsk,
+                      ),
                       Expanded(
                         child: TextField(
                           controller: _input,
@@ -360,7 +500,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
                           onChanged: (_) => setState(() {}),
                           onSubmitted: (_) => _send(),
                           decoration: InputDecoration(
-                            hintText: '问问经营数据…（需在线）',
+                            hintText: '问问经营数据…（语音/拍小票也可以）',
                             isDense: true,
                             filled: true,
                             fillColor: Theme.of(context).colorScheme.surface,
@@ -394,15 +534,18 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
     );
   }
 
-  Widget _bubble(Map<String, String> m) {
+  Widget _bubble(Map<String, String> m, int idx) {
     final isUser = m['role'] == 'user';
     final content = m['content'] ?? '';
+    // 打字机：最新一条未打完时只显示前缀
+    final isTyping = !isUser && idx == _typingMsgIdx && _typingIndex < content.length;
+    final shown = isTyping ? content.substring(0, _typingIndex) : content;
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
         decoration: BoxDecoration(
           color: isUser ? _c.primary : _c.card,
           borderRadius: BorderRadius.only(
@@ -417,21 +560,15 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              content,
-              style: TextStyle(
-                fontSize: 14,
-                height: 1.45,
-                color: isUser ? Colors.white : Theme.of(context).colorScheme.onSurface,
-              ),
-            ),
+            if (isUser)
+              Text(
+                content,
+                style: const TextStyle(fontSize: 14, height: 1.45, color: Colors.white),
+              )
+            else
+              AiMdText(shown, style: TextStyle(fontSize: 14, height: 1.45, color: Theme.of(context).colorScheme.onSurface)),
             if (!isUser && (m['order'] ?? '').isNotEmpty) _orderCard(m['order']!),
-            if (!isUser && (m['tools'] ?? '').isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text('🛠 使用了：${m['tools']}',
-                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
-              ),
+            if (!isUser && (m['toolsJson'] ?? '').isNotEmpty) _toolTimeline(m['toolsJson']!),
             if (!isUser && (m['sources'] ?? '').isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -440,6 +577,55 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 工具执行时间线（对齐参考 App agent_execution_timeline：每个工具一行，图标+名称+结果）
+  Widget _toolTimeline(String jsonStr) {
+    List<Map<String, dynamic>> tools;
+    try {
+      tools = (jsonDecode(jsonStr) as List).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+    final iconFor = <String, IconData>{
+      'query_business_data': Icons.bar_chart_outlined,
+      'get_business_snapshot': Icons.today_outlined,
+      'pick_kb_entry': Icons.menu_book_outlined,
+      'record_transaction': Icons.receipt_long_outlined,
+      'save_memory': Icons.bookmark_add_outlined,
+      'forget_memory': Icons.bookmark_remove_outlined,
+    };
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: _c.card.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _c.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final t in tools)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  Icon(iconFor['${t['name']}'] ?? Icons.smart_toy_outlined, size: 14, color: _c.primary),
+                  const SizedBox(width: 6),
+                  Text('${t['label'] ?? t['name']}',
+                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text('${t['result'] ?? ''}',
+                        style: const TextStyle(fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }

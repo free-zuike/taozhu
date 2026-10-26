@@ -252,3 +252,39 @@ describe('record_transaction 授权门与落单', () => {
     expect(reset.tools.every((x) => x.is_default)).toBe(true);
   });
 });
+
+describe('POST /ai/stt 语音转文字', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let token: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    token = await loginAdmin(env);
+  });
+
+  it('未配置 Key → 400；配置后 multipart audio → 返回文本（mock STT）', async () => {
+    expect((await call(env, 'POST', '/api/v1/ai/stt', token, {})).status).toBe(400);
+    expect((await call(env, 'PUT', '/api/v1/settings/ai', token, {
+      providers: [{ id: 'zhipu_glm', name: '智谱GLM', is_built_in: true, api_key: 'sk-test' }],
+      binding: { textProviderId: 'zhipu_glm', visionProviderId: 'zhipu_glm', speechProviderId: 'zhipu_glm' },
+    })).status).toBe(200);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ text: '今天卖了多少？' }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })));
+    try {
+      // multipart 构造：最小 WAV 字节
+      const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45]);
+      const form = new FormData();
+      form.append('audio', new File([wav], 'voice.wav', { type: 'audio/wav' }));
+      const r = await app.request(`${BASE}/api/v1/ai/stt`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      }, env as never);
+      expect(r.status).toBe(200);
+      expect(((await r.json()) as { text: string }).text).toBe('今天卖了多少？');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

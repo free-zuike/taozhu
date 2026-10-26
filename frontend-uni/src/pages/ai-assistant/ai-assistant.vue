@@ -5,14 +5,21 @@
       <view v-for="(m, i) in messages" :key="i" :id="'m' + i"
         :class="['bubble-row', m.role === 'user' ? 'mine' : 'peer']">
         <view :class="['bubble', m.role === 'user' ? 'b-mine' : 'b-peer']">
-          <text>{{ m.content }}</text>
+          <rich-text v-if="m.role !== 'user'" :nodes="mdHtml(shownContent(m, i))"></rich-text>
+          <text v-else>{{ m.content }}</text>
           <view v-if="m.role !== 'user' && m.order" class="order-card">
             <view class="oc-head">📋 {{ m.order.type === 'sale' ? '出货' : '进货' }}{{ m.order.client ? ' · ' + m.order.client : '' }} · 合计 ¥{{ m.order.total }}</view>
             <view v-for="(l, li) in (m.order.lines || []).slice(0, 3)" :key="li" class="oc-line">{{ l.name }} {{ l.quantity }}{{ l.unit }} × ¥{{ l.price }}</view>
             <view v-if="(m.order.lines || []).length > 3" class="oc-line">…</view>
             <view class="oc-done">合计 ¥{{ m.order.total }}（已在账本中）</view>
           </view>
-          <view v-if="m.role !== 'user' && m.tools" class="src">🛠 使用了：{{ m.tools }}</view>
+          <view v-if="m.role !== 'user' && m.toolsJson" class="tl">
+            <view v-for="(t, ti) in toolsOf(m)" :key="ti" class="tl-row">
+              <text class="tl-ic">🛠</text>
+              <text class="tl-name">{{ t.label || t.name }}</text>
+              <text class="tl-res">{{ cut(t.result, 26) }}</text>
+            </view>
+          </view>
           <view v-if="m.role !== 'user' && m.sources" class="src">📖 依据：{{ m.sources }}</view>
         </view>
       </view>
@@ -32,7 +39,9 @@
     </view>
 
     <view class="input-bar">
-      <input class="ipt" v-model="input" placeholder="问问经营数据…（需在线）" confirm-type="send" @confirm="send()" />
+      <text class="op mic" @click="voiceAsk">🎤</text>
+      <text class="op cam" @click="photoAsk">📷</text>
+      <input class="ipt" v-model="input" placeholder="问问经营数据…（语音/拍小票也可以）" confirm-type="send" @confirm="send()" />
       <button class="btn-send" :disabled="thinking || !input.trim()" @click="send()">{{ thinking ? '…' : '发送' }}</button>
     </view>
 
@@ -62,9 +71,9 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { onLoad } from '@dcloudio/uni-app';
+import { onLoad, onUnload } from '@dcloudio/uni-app';
 import { useThemeVars } from '../../theme';
-import { request } from '../../api';
+import { request, uploadAi } from '../../api';
 
 const { tv, patternSrc } = useThemeVars();
 
@@ -74,7 +83,7 @@ interface Msg {
   role: 'user' | 'assistant';
   content: string;
   sources?: string;
-  tools?: string;
+  toolsJson?: string;
   order?: { type?: string; client?: string; total?: number; lines?: OrderLine[] }
 }
 const messages = ref<Msg[]>([]);
@@ -84,6 +93,10 @@ const bottomAnchor = ref('');
 const quickQs = ['今天卖了多少？', '本月毛利多少？', '哪个店欠款最多？', '哪些货快卖完了？', '有什么快过期？', '怎么记一笔账？'];
 const showMemories = ref(false);
 const memories = ref<Array<{ id: string; content: string; created_at: string }>>([]);
+// 打字机：最新一条助手回复逐字显示
+const typingIdx = ref(-1);
+const typingAt = ref(0);
+let typingTimer: ReturnType<typeof setInterval> | null = null;
 
 const WELCOME = '你好，我是 AI 助手。可以问我经营数据，比如：今天卖了多少？哪个店欠款多？哪些货该补了？也可以说「记住：…」让我帮你记下重要事项，或问功能怎么用。';
 
@@ -123,6 +136,10 @@ onLoad(() => {
   scrollBottom();
   uni.setNavigationBarTitle({ title: 'AI 助手' });
   loadServerHistory();
+});
+
+onUnload(() => {
+  if (typingTimer) clearInterval(typingTimer);
 });
 
 async function clearChat() {
@@ -203,18 +220,166 @@ async function send(preset?: string) {
 }
 
 function applyReply(d: Record<string, unknown> | undefined) {
-  const tools = ((d?.tools as Array<{ label?: string; name?: string }>) || []).map((t) => t.label || t.name || '').filter(Boolean).join('、');
+  const tools = ((d?.tools as Array<{ name?: string; label?: string; result?: string }>) || []);
   const sources = ((d?.sources as string[]) || []).join('、');
   const order = d?.order as Record<string, unknown> | undefined;
+  const reply = (d?.reply as string || '').trim() || '（模型没有返回内容，请稍后再试）';
   messages.value.push({
     role: 'assistant',
-    content: (d?.reply as string || '').trim() || '（模型没有返回内容，请稍后再试）',
+    content: reply,
     ...(sources ? { sources } : {}),
-    ...(tools ? { tools } : {}),
+    ...(tools.length ? { toolsJson: JSON.stringify(tools) } : {}),
     ...(order ? { order } : {}),
   });
+  if (reply.length > 24 && (d?.reply as string || '').trim()) startTyping(messages.value.length - 1, reply);
   saveHistory();
   scrollBottom();
+}
+
+/** 打字机：逐字显示最新一条助手回复 */
+function startTyping(idx: number, full: string) {
+  if (typingTimer) clearInterval(typingTimer);
+  typingIdx.value = idx;
+  typingAt.value = 0;
+  typingTimer = setInterval(() => {
+    typingAt.value += 2;
+    if (typingAt.value >= full.length) {
+      if (typingTimer) clearInterval(typingTimer);
+      typingTimer = null;
+      typingIdx.value = -1;
+    }
+  }, 24);
+}
+
+function shownContent(m: Msg, i: number): string {
+  if (i === typingIdx.value && typingAt.value < m.content.length) {
+    return m.content.slice(0, typingAt.value);
+  }
+  return m.content;
+}
+
+function cut(s: string | undefined, n: number) {
+  s = s || '';
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+interface ToolRow { label?: string; name?: string; result?: string }
+function toolsOf(m: Msg): ToolRow[] {
+  try {
+    return (JSON.parse(m.toolsJson || '[]') as ToolRow[]) || [];
+  } catch (_) {
+    return [];
+  }
+}
+
+/** 轻量 Markdown → HTML（rich-text 渲染）：标题/列表/加粗/代码/表格行 */
+function mdHtml(s: string): string {
+  const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = (x: string) => esc(x)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  const lines = s.split('\n');
+  const html: string[] = [];
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (!t) { html.push('<br/>'); continue; }
+    const head = /^(#{1,3})\s+(.*)$/.exec(t);
+    if (head) {
+      const size = head[1].length === 1 ? '18px' : head[1].length === 2 ? '16px' : '15px';
+      html.push(`<div style="font-size:${size};font-weight:600;margin:4rpx 0">${inline(head[2])}</div>`);
+      continue;
+    }
+    const bullet = /^[-*•]\s+(.*)$/.exec(t);
+    if (bullet) {
+      html.push(`<div style="padding-left:16rpx">• ${inline(bullet[1])}</div>`);
+      continue;
+    }
+    const num = /^(\d+)[.、]\s+(.*)$/.exec(t);
+    if (num) {
+      html.push(`<div style="padding-left:16rpx">${num[1]}. ${inline(num[2])}</div>`);
+      continue;
+    }
+    if (t.startsWith('|') && t.endsWith('|') && t.split('|').length > 2) {
+      const cells = t.split('|').filter((c) => c.trim()).map((c) => c.trim()).join('　　');
+      html.push(`<div style="font-size:13px">${inline(cells)}</div>`);
+      continue;
+    }
+    html.push(`<div>${inline(t)}</div>`);
+  }
+  return html.join('');
+}
+
+/** 语音提问：录音 → /ai/stt 转文字 → 填入输入框发送 */
+function voiceAsk() {
+  if (thinking.value) return;
+  uni.authorize({
+    scope: 'scope.record',
+    success: () => {
+      const rec = uni.getRecorderManager();
+      let stopped = false;
+      rec.onStart(() => {
+        uni.showModal({
+          title: '语音提问',
+          content: '正在录音，说完点「结束」',
+          showCancel: false,
+          confirmText: '结束',
+          success: () => {
+            stopped = true;
+            rec.stop();
+          },
+        });
+      });
+      rec.onStop(async (res) => {
+        const fp = (res as { tempFilePath?: string }).tempFilePath;
+        if (!fp) {
+          uni.showToast({ title: '录音失败', icon: 'none' });
+          return;
+        }
+        uni.showToast({ title: '识别中…', icon: 'none' });
+        try {
+          const d = await uploadAi<{ text?: string }>('/ai/stt', 'audio', fp);
+          const text = (d?.text || '').trim();
+          if (!text) {
+            uni.showToast({ title: '没有听清，请再说一遍', icon: 'none' });
+            return;
+          }
+          input.value = text;
+          send();
+        } catch (e) {
+          uni.showToast({ title: (e as Error).message || '转写失败', icon: 'none' });
+        }
+      });
+      rec.start({ format: 'mp3', duration: 60000 });
+    },
+    fail: () => uni.showToast({ title: '需要麦克风权限才能语音提问', icon: 'none' }),
+  });
+}
+
+/** 拍小票识别记账：拍照/相册 → /ai/parse-photo → 生成记账消息发送（走落单授权门） */
+function photoAsk() {
+  if (thinking.value) return;
+  uni.chooseImage({
+    sourceType: ['camera', 'album'],
+    success: async (r) => {
+      const up = (r as { tempFiles?: Array<{ path: string }> }).tempFiles?.[0];
+      if (!up) return;
+      uni.showToast({ title: '识别中…', icon: 'none' });
+      try {
+        const d = await uploadAi<{ items?: Array<Record<string, any>>; client?: string; date?: string }>('/ai/parse-photo?purpose=purchase', 'photo', up.path);
+        const items = d?.items || [];
+        if (!items.length) {
+          uni.showToast({ title: '没识别到商品，请拍清楚些（可拍进货小票）', icon: 'none' });
+          return;
+        }
+        const summary = items.map((i) => `${i.name || ''} ${i.quantity ?? ''}${i.unit || ''}@¥${i.price ?? ''}`).join('、');
+        const msg = `识别到进货小票：${summary}。${d?.client ? `购货单位 ${d.client}。` : ''}${d?.date ? `日期 ${d.date}。` : ''}请帮我记一笔进货`;
+        send(msg);
+      } catch (e) {
+        uni.showToast({ title: (e as Error).message || '识别失败', icon: 'none' });
+      }
+    },
+  });
 }
 
 /** 写工具授权弹层：允许/拒绝/总是允许/总是拒绝（对齐参考 App 授权门） */
@@ -255,6 +420,12 @@ function showApproval(d: Record<string, unknown>): Promise<string | null> {
 .b-peer { background: var(--card-bg); color: var(--text-main); border: 1rpx solid var(--divider); border-bottom-left-radius: 6rpx; }
 .typing { color: var(--text-sub); }
 .src { margin-top: 10rpx; font-size: 22rpx; color: var(--text-sub); }
+.tl { margin-top: 12rpx; padding: 10rpx 14rpx; background: var(--input-bg); border-radius: 14rpx; border: 1rpx solid var(--divider); }
+.tl-row { display: flex; align-items: center; gap: 8rpx; padding: 4rpx 0; }
+.tl-ic { font-size: 22rpx; }
+.tl-name { font-size: 22rpx; font-weight: 600; color: var(--text-main); flex-shrink: 0; }
+.tl-res { flex: 1; font-size: 22rpx; color: var(--text-sub); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mic, .cam { font-size: 32rpx; }
 .order-card { margin-top: 12rpx; padding: 14rpx 16rpx; background: var(--input-bg); border-radius: 14rpx; border: 1rpx solid var(--divider); }
 .oc-head { font-size: 24rpx; font-weight: 600; color: var(--text-main); }
 .oc-line { margin-top: 6rpx; font-size: 22rpx; color: var(--text-sub); }

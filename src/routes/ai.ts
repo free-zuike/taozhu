@@ -120,6 +120,35 @@ aiRouter.post('/parse-voice', async (c) => {
   }
 });
 
+// POST /api/v1/ai/stt — 语音转文字（AI 助手语音提问用：纯转写，不解析记账）
+aiRouter.post('/stt', async (c) => {
+  const cfg = await getAiConfig(c.env.DB);
+  const ep = capabilityEndpoint(cfg, 'speech');
+  if (!ep.apiKey) {
+    return c.json({ error: 'AI 语音未启用：请老板在「我的 → AI 识别设置」配置 API Key 并绑定语音能力' }, 400);
+  }
+  let file: File | null = null;
+  try {
+    const form = await c.req.formData();
+    const f = form.get('audio');
+    if (f && typeof f === 'object') file = f as unknown as File;
+  } catch {
+    return c.json({ error: '请以 multipart 方式上传 audio 字段（录音）' }, 400);
+  }
+  if (!file) return c.json({ error: '请选择录音上传' }, 400);
+  if (file.size === 0) return c.json({ error: '录音为空' }, 400);
+  if (file.size > 10 * 1024 * 1024) return c.json({ error: '音频过大（上限 10MB）' }, 400);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  try {
+    const text = await speechToText(ep, file.type, bytes, file.name || 'voice.webm');
+    if (!text.trim()) return c.json({ error: '没有听清，请再说一遍' }, 400);
+    return c.json({ ok: true, text });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : '转写失败';
+    return c.json({ error: msg }, 502);
+  }
+});
+
 // POST /api/v1/ai/chat — AI 助手对话（问数+记忆+落单）：客户端带多轮历史（messages），
 // 服务端注入业务快照/动态查询/知识库/记忆后调文字模型回答；
 // 写操作（落单/记忆）经授权门：ask → 返回 need_approval（前端弹窗确认后走 /ai/chat/approve）；
