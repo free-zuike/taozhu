@@ -418,28 +418,50 @@ export async function applyChange(
         await db.prepare(
           `INSERT INTO items (id, name, category, category_id, deleted_at) VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET name = excluded.name, category = excluded.category,
-             category_id = excluded.category_id, deleted_at = excluded.deleted_at`,
+             category_id = excluded.category_id, deleted_at = excluded.deleted_at
+           WHERE items.name IS NOT excluded.name OR items.category IS NOT excluded.category
+             OR items.category_id IS NOT excluded.category_id OR items.deleted_at IS NOT excluded.deleted_at`,
         ).bind(id, p.name ?? '', p.category ?? '', p.category_id ?? null, p.deleted_at ?? null).run();
-        // 整体替换价格组合：先停用旧行，再恢复 payload 中 active 的行（保留原 id 防单据引用断裂）
-        await db.prepare('UPDATE item_prices SET active = 0 WHERE item_id = ?').bind(id).run();
-        for (const price of ((p.prices as Record<string, any>[]) ?? [])) {
+        // 整体替换价格组合：仅停用 payload 中**不再 active** 的旧行（条件写，避免每次推送改写全表价格行 → 写入放大）。
+        // 保留原 id 防单据引用断裂；值未变的价格行不再被反复 UPDATE。
+        const prices = ((p.prices as Record<string, any>[]) ?? []);
+        const activeIds = prices.filter((pr) => String(pr?.id ?? '') && Number(pr.active) === 1).map((pr) => String(pr.id));
+        if (activeIds.length === 0) {
+          await db.prepare('UPDATE item_prices SET active = 0 WHERE item_id = ? AND active = 1').bind(id).run();
+        } else {
+          const ph = activeIds.map(() => '?').join(',');
+          await db.prepare(`UPDATE item_prices SET active = 0 WHERE item_id = ? AND active = 1 AND id NOT IN (${ph})`).bind(id, ...activeIds).run();
+        }
+        for (const price of prices) {
           const pid = String(price?.id ?? '');
           if (!pid || Number(price.active) !== 1) continue;
           await db.prepare(
             `INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price, active) VALUES (?, ?, ?, ?, ?, 1)
              ON CONFLICT(id) DO UPDATE SET item_id = excluded.item_id, unit = excluded.unit,
-               purchase_price = excluded.purchase_price, sale_price = excluded.sale_price, active = 1`,
+               purchase_price = excluded.purchase_price, sale_price = excluded.sale_price, active = 1
+             WHERE item_prices.active IS NOT 1 OR item_prices.unit IS NOT excluded.unit
+               OR item_prices.purchase_price IS NOT excluded.purchase_price
+               OR item_prices.sale_price IS NOT excluded.sale_price`,
           ).bind(pid, id, price.unit ?? '', Number(price.purchase_price) || 0, Number(price.sale_price) || 0).run();
         }
-        // v0.17.368.0 价格组售价：整体替换 item_group_prices（先删后插，保留原 id）
-        await db.prepare('DELETE FROM item_group_prices WHERE item_id = ?').bind(id).run();
-        for (const gp of ((p.group_prices as Record<string, any>[]) ?? [])) {
+        // v0.17.368.0 价格组售价：仅删除 payload 中**不再存在**的行（条件写，避免每次推送删全表 → 写入放大）
+        const groupPrices = ((p.group_prices as Record<string, any>[]) ?? []);
+        const gpIds = groupPrices.filter((g) => String(g?.id ?? '')).map((g) => String(g.id));
+        if (gpIds.length === 0) {
+          await db.prepare('DELETE FROM item_group_prices WHERE item_id = ?').bind(id).run();
+        } else {
+          const gph = gpIds.map(() => '?').join(',');
+          await db.prepare(`DELETE FROM item_group_prices WHERE item_id = ? AND id NOT IN (${gph})`).bind(id, ...gpIds).run();
+        }
+        for (const gp of groupPrices) {
           const gid = String(gp?.id ?? '');
           if (!gid) continue;
           await db.prepare(
             `INSERT INTO item_group_prices (id, item_id, unit, group_id, sale_price) VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET item_id = excluded.item_id, unit = excluded.unit,
-               group_id = excluded.group_id, sale_price = excluded.sale_price`,
+               group_id = excluded.group_id, sale_price = excluded.sale_price
+             WHERE item_group_prices.unit IS NOT excluded.unit OR item_group_prices.group_id IS NOT excluded.group_id
+               OR item_group_prices.sale_price IS NOT excluded.sale_price`,
           ).bind(gid, id, gp.unit ?? '', gp.group_id ?? '', Number(gp.sale_price) || 0).run();
         }
         break;
