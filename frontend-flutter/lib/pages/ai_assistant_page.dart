@@ -9,7 +9,8 @@ import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
 import '../theme.dart';
-import '../utils/ai_local.dart' show aiPreparePhoto;
+import '../utils/ai_local.dart' show aiPreparePhoto, aiLoadConfig;
+import '../services/ai_local_assistant.dart' show chatWithAssistantLocal, recordLocalSale, recordLocalPurchase;
 import '../widgets/ai_md_text.dart';
 import 'router.dart';
 
@@ -122,10 +123,8 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
   Future<void> _send([String? preset]) async {
     final text = (preset ?? _input.text).trim();
     if (text.isEmpty || _thinking) return;
-    if (!kIsWeb && Api.isOffline) {
-      toast(context, 'AI 助手需联网（当前离线，联网后再问）');
-      return;
-    }
+    // 不再离线硬拦截：D1 不可用 / 网络异常时由 catch 降级到端上本地快照问答（方案 A）。
+    // 完全无网时端上直连服务商也会失败，降级无效，仍走原有错误提示。
     _input.clear();
     setState(() {
       _messages.add({'role': 'user', 'content': text});
@@ -161,9 +160,63 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
         _applyReply(d);
       }
     } catch (e) {
-      setState(() => _thinking = false);
-      toast(context, e.toString().replaceFirst('Exception: ', ''));
+      // 云端数据库（D1）不可用 / 离线 / 网络异常：降级到端上本地处理（方案 A）。
+      // 先尝试本地记账落单（一句话记账），失败则回退本地快照问答。
+      // App 端有本地 sembast 镜像 + 本地 Key，可离线完成；Web 端无本地库则不降级。
+      final local = await _tryLocalChat(text);
+      if (local != null && mounted) {
+        setState(() => _thinking = false);
+        _applyReply({'reply': local['reply'], 'sources': [local['source'] ?? '']});
+        _saveHistory();
+        return;
+      }
+      if (mounted) {
+        setState(() => _thinking = false);
+        toast(context, e.toString().replaceFirst('Exception: ', ''));
+      }
     }
+  }
+
+  /// 尝试用本地能力完成请求（D1 不可用时的降级路径）。
+  /// 先尝试本地记账落单（一句话记账），再回退本地快照问答。
+  /// 仅在移动端（kIsWeb=false）且有本地 Key 时尝试；任何失败返回 null，由调用方回退错误提示。
+  Future<Map<String, String>?> _tryLocalChat(String text) async {
+    if (kIsWeb) return null;
+    try {
+      // 1) 记账意图：本地解析 + 本地落单 + 入队回推（不依赖 D1）。
+      // 仅当含记账信号词才触发，避免"卖了多少"这类问句误调解析/误落单。
+      if (_looksLikeBooking(text)) {
+        final recorded = _isPurchaseIntent(text)
+            ? await recordLocalPurchase(text)
+            : await recordLocalSale(text);
+        if (recorded != null) {
+          return {'reply': recorded, 'source': '本地记账（联网后自动同步到云端）'};
+        }
+      }
+      // 2) 问数意图：本地快照 + 本地 Key 直连
+      final cfg = await aiLoadConfig();
+      if (!cfg.providers.any((p) => p.apiKey.trim().isNotEmpty)) return null;
+      final messages = _messages
+          .map((m) => <String, dynamic>{'role': m['role'], 'content': m['content']})
+          .toList();
+      final reply = await chatWithAssistantLocal(messages);
+      return {'reply': reply, 'source': '本地数据快照（云端数据库不可用，已本地问答）'};
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 轻量启发式：是否像"记账描述"而非"问数"。仅用于降级模式下决定是否尝试本地落单，
+  /// 真正的结构化判断仍交由 aiParseText（描述非商品清单时返回空 items → 不落单）。
+  bool _looksLikeBooking(String t) {
+    const kw = ['记', '拿', '卖', '买', '收', '欠', '赊', '给', '要', '出库', '入库', '进货', '出货', '赊账', '记账', '录单', '下单'];
+    return kw.any((k) => t.contains(k));
+  }
+
+  /// 在"像记账"的前提下，区分进货还是出货，决定金额语义（成本 vs 售价）与实体类型。
+  bool _isPurchaseIntent(String t) {
+    const kw = ['进货', '采购', '入库', '进', '供货', '供应商', '厂商', '买'];
+    return kw.any((k) => t.contains(k));
   }
 
   void _applyReply(Map<dynamic, dynamic> d) {

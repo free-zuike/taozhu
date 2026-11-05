@@ -27,6 +27,7 @@ import { auditRouter } from './routes/audit';
 import { devicesRouter } from './routes/devices';
 import { ensureSchema } from './schema';
 import { verifyToken } from './lib/jwt';
+import { isDbUnavailable, DB_UNAVAILABLE_MESSAGE } from './lib/db-availability';
 import { setHubEnv, SyncHub } from './services/sync-hub';
 
 // Durable Object 需从入口导出（wrangler 按 class_name 绑定）
@@ -36,6 +37,18 @@ export { BackupPack } from './services/backup-pack';
 type AppEnv = { Bindings: Env; Variables: { user: import('./types').AuthUser } };
 
 const app = new Hono<AppEnv>();
+
+// 全局异常兜底：D1 额度耗尽时不再返回裸 500（前端只会显示「请求失败(500)」），
+// 换成可读的中文 503 + 错误码，让客户端能识别并退回本地数据。
+app.onError((err, c) => {
+  c.header('Access-Control-Allow-Origin', '*');
+  if (isDbUnavailable(err)) {
+    console.error('[taozhu] D1 不可用:', err);
+    return c.json({ error: DB_UNAVAILABLE_MESSAGE, code: 'DB_UNAVAILABLE' }, 503);
+  }
+  console.error('[taozhu] 未处理异常:', err);
+  return c.json({ error: '服务器内部错误，请稍后重试', code: 'INTERNAL_ERROR' }, 500);
+});
 
 // CORS：允许跨域（Android App / 自托管端访问后端）
 app.use('*', async (c, next) => {
@@ -48,9 +61,21 @@ app.use('*', async (c, next) => {
 
 app.get('/healthz', (c) => c.json({ ok: true }));
 
-// 首次 API 请求触发幂等建表（不鉴权）
+// 首次 API 请求触发幂等建表（不鉴权）。
+// D1 额度耗尽时建表必然失败，绝不能让它把故障放大到全部 /api/v1/*（此前所有接口都 500）：
+// 失败后冷却 60s 不再重试，请求继续交给路由——只读接口可降级为空数据/本地缓存，
+// 确实需要 DB 的接口由 onError 返回中文 503。
+let schemaFailureUntil = 0;
 app.use('/api/v1/*', async (c, next) => {
-  await ensureSchema(c.env.DB);
+  if (Date.now() >= schemaFailureUntil) {
+    try {
+      await ensureSchema(c.env.DB);
+      schemaFailureUntil = 0;
+    } catch (e) {
+      console.error('[taozhu] ensureSchema 失败，进入降级模式:', e);
+      schemaFailureUntil = Date.now() + 60_000;
+    }
+  }
   // 记录环境绑定：recordChange 写入变更流后用于实时同步广播（单实例共享同一绑定）
   setHubEnv(c.env);
   await next();

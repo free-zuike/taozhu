@@ -23,6 +23,15 @@ function statements(): string[] {
   return sql.split(';').map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
+/** 从 DDL 文本里抽取 CREATE TABLE / CREATE INDEX 的对象名（两处格式统一带 IF NOT EXISTS） */
+function schemaObjects(text: string): { tables: Set<string>; indexes: Set<string> } {
+  const tables = new Set<string>();
+  const indexes = new Set<string>();
+  for (const m of text.matchAll(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)\s*\(/gi)) tables.add(m[1]);
+  for (const m of text.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+(\w+)\s+ON\s+\w+/gi)) indexes.add(m[1]);
+  return { tables, indexes };
+}
+
 describe('schema.sql 完整建表与幂等', () => {
   it('schema.sql 能在空库建出全部核心表（含新表 categories/settings）', async () => {
     const db = await createFakeD1();
@@ -181,5 +190,39 @@ describe('schema.sql 完整建表与幂等', () => {
     await ensureSchema(db as never);
     const after = await db.prepare('SELECT COUNT(*) AS cnt FROM sale_items').first<{ cnt: number }>();
     expect(after?.cnt).toBe(1);
+  });
+
+  // CI 部署执行 schema.sql；已初始化的生产库不会重跑 ensureSchema 的全量 DDL。
+  // 两份 DDL 一旦漂移，新表/新索引就永远落不了地 → 全表扫描烧穿 D1 rows_read 额度。
+  it('schema.sql 与 schema.ts 的表/索引集合一致（防漂移回归）', () => {
+    const ts = schemaObjects(readFileSync('src/schema.ts', 'utf8'));
+    const sql = schemaObjects(readFileSync('src/schema.sql', 'utf8'));
+    expect([...sql.tables].sort()).toEqual([...ts.tables].sort());
+    // 唯一例外：payments 上的 UNIQUE 索引。存量库若有历史重复 sync_key，
+    // wrangler d1 execute --file 会整批失败并阻断部署，故交由运行时 ensureIndexes 带容错补齐。
+    const expected = [...ts.indexes].filter((n) => n !== 'idx_payments_sync_key').sort();
+    expect([...sql.indexes].sort()).toEqual(expected);
+  });
+
+  it('已初始化老库（schema_version 最新、索引全缺）冷启动仍会补齐索引', async () => {
+    const db = await createFakeD1();
+    for (const stmt of statements()) await db.prepare(stmt).run();
+    // 模拟事故现场：表都在、schema_version 已是最新，但一个业务索引都没有
+    const existing = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'",
+    ).all<{ name: string }>();
+    for (const r of existing.results) await db.prepare(`DROP INDEX ${r.name}`).run();
+    await db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '17')").run();
+    resetSchemaState();
+    await expect(ensureSchema(db as never)).resolves.toBeUndefined();
+    const names = (await db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all<{ name: string }>())
+      .results.map((r) => r.name);
+    // 覆盖：原有索引、新表索引、rows_read 止血索引
+    for (const n of [
+      'idx_sale_items_sale', 'idx_sale_items_client_date', 'idx_sale_items_sync_key',
+      'idx_attachment_refs_entity', 'idx_stock_batches_expiry', 'idx_ai_messages_conv',
+      'idx_payments_sync_key',
+    ]) expect(names, `索引 ${n} 应被补齐`).toContain(n);
+    expect(names.length).toBeGreaterThanOrEqual(40);
   });
 });

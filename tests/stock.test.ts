@@ -266,4 +266,24 @@ describe('库存（stocks）', () => {
     expect(perBox.per).toBe(10);
     expect(perPiece.per).toBe(20);
   });
+
+  it('GET /stocks 下行最近批次到期日（离线降级临期预警用）', async () => {
+    await call(env, 'POST', '/api/v1/purchases', token, { items: [{ price_id: priceId, quantity: 10 }] });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ id: string }>;
+    };
+    const itemId = items.items[0].id;
+    // 直接插两批不同到期日（剩余>0），验证 /stocks 聚合取最早到期（MIN(expiry_date)）
+    await env.DB.prepare(
+      'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, expiry_date) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind('b-exp-1', itemId, '斤', 1, 5, '2026-11-20').run();
+    await env.DB.prepare(
+      'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, expiry_date) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind('b-exp-2', itemId, '斤', 1, 3, '2026-12-01').run();
+    const d = (await (await call(env, 'GET', '/api/v1/stocks', token)).json()) as {
+      stocks: Array<{ item_id: string; expiry_date: string }>;
+    };
+    const stock = d.stocks.find((s) => s.item_id === itemId);
+    expect(stock?.expiry_date).toBe('2026-11-20'); // 取最早到期批次
+  });
 });

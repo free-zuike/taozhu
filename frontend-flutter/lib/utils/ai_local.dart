@@ -184,6 +184,16 @@ Future<String> _chatCompletion(AiProvider p, String cap, List<Map<String, dynami
   throw Exception('AI 通道请求失败（已按上游提示剥离参数重试仍失败）');
 }
 
+/// 客户端直连文字对话（对齐服务器 ai-assistant 的 chatWithAssistant）。
+/// 用于 AI 助手降级：云端数据库（D1）不可用时，由端上用本地业务快照 + 本地存储的 Key
+/// 直接调服务商问数，不经过服务器代理（方案 A）。
+/// 返回模型回复文本；若本地未配置任何 Key 则抛错（由调用方决定降级提示）。
+Future<String> aiLocalChat(List<Map<String, dynamic>> messages) async {
+  final cfg = await aiLoadConfig();
+  final p = _providerFor(cfg, 'text');
+  return _chatCompletion(p, 'text', messages);
+}
+
 String _pick(Map<String, dynamic> o, List<String> keys) {
   for (final k in keys) {
     final v = o[k];

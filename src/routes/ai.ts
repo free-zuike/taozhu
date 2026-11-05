@@ -21,6 +21,7 @@ import {
 } from '../services/ai-tools';
 import { randomId } from '../lib/password';
 import { ApiError } from '../lib/api-error';
+import { isDbUnavailable, DB_UNAVAILABLE_MESSAGE, readOrFallback } from '../lib/db-availability';
 import { getAiConfig } from './settings';
 import type { AuthUser, Env } from '../types';
 
@@ -211,6 +212,8 @@ aiRouter.post('/chat', async (c) => {
     });
   } catch (err) {
     if (err instanceof ApiError) return c.json({ error: err.message }, err.status as 400 | 404);
+    // D1 额度耗尽时不能报「502 + 英文 D1 报错」，与其他接口统一为中文 503
+    if (isDbUnavailable(err)) return c.json({ error: DB_UNAVAILABLE_MESSAGE, code: 'DB_UNAVAILABLE' }, 503);
     const msg = err instanceof Error ? err.message : 'AI 助手接口错误';
     return c.json({ error: msg }, msg.includes('未启用') ? 400 : 502);
   }
@@ -296,7 +299,9 @@ aiRouter.post('/chat/approve', async (c) => {
 
 // GET /api/v1/ai/tools — 工具清单 + 该用户授权策略（权限页）
 aiRouter.get('/tools', async (c) => {
-  const policies = await listToolPolicies(c.env.DB, c.get('user').id);
+  // 只读展示：D1 不可用时返回空清单，权限页仍能打开（避免整页 500）
+  const policies = await readOrFallback('ai/tools',
+    () => listToolPolicies(c.env.DB, c.get('user').id), []);
   return c.json({
     tools: policies.map((p) => {
       const def = toolDef(p.tool_name);
@@ -334,22 +339,27 @@ aiRouter.post('/tools/reset', async (c) => {
 
 // GET /api/v1/ai/activity — 最近运行与工具调用（活动页；对齐参考 App agentRuns/agentToolCalls）
 aiRouter.get('/activity', async (c) => {
-  const activity = await listAiRuns(c.env.DB, c.get('user').id, 30);
+  const activity = await readOrFallback('ai/activity',
+    () => listAiRuns(c.env.DB, c.get('user').id, 30), []);
   return c.json({ activity });
 });
 
 // GET /api/v1/ai/chat/history — 最近对话历史（跨设备续聊；无会话返回空）
 aiRouter.get('/chat/history', async (c) => {
   const userId = c.get('user').id;
-  const cur = await c.env.DB.prepare(
-    'SELECT id FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1',
-  ).bind(userId).first<{ id: string }>();
-  if (!cur) return c.json({ conversation_id: null, messages: [] });
-  const rows = await c.env.DB.prepare(
-    `SELECT role, content FROM ai_messages WHERE conversation_id = ?
-     ORDER BY created_at ASC LIMIT 120`,
-  ).bind(cur.id).all<{ role: string; content: string }>();
-  return c.json({ conversation_id: cur.id, messages: rows.results });
+  // 历史拉取失败时前端已有本地聊天缓存兜底：这里返回空历史即可，绝不能让 AI 页面打不开
+  const history = await readOrFallback('ai/chat/history', async () => {
+    const cur = await c.env.DB.prepare(
+      'SELECT id FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1',
+    ).bind(userId).first<{ id: string }>();
+    if (!cur) return { conversation_id: null, messages: [] as { role: string; content: string }[] };
+    const rows = await c.env.DB.prepare(
+      `SELECT role, content FROM ai_messages WHERE conversation_id = ?
+       ORDER BY created_at ASC LIMIT 120`,
+    ).bind(cur.id).all<{ role: string; content: string }>();
+    return { conversation_id: cur.id, messages: rows.results };
+  }, { conversation_id: null, messages: [] as { role: string; content: string }[] });
+  return c.json(history);
 });
 
 // DELETE /api/v1/ai/chat/history — 清空对话历史（删会话+消息）
@@ -367,7 +377,8 @@ aiRouter.delete('/chat/history', async (c) => {
 
 // GET /api/v1/ai/memories — 助手记忆列表（记住的事项，管理页用）
 aiRouter.get('/memories', async (c) => {
-  const memories = await listAiMemories(c.env.DB, c.get('user').id);
+  const memories = await readOrFallback('ai/memories',
+    () => listAiMemories(c.env.DB, c.get('user').id), []);
   return c.json({ memories });
 });
 

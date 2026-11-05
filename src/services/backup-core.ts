@@ -8,6 +8,7 @@
 import type { Env } from '../types';
 import { createStorage, type AttachmentStorage } from './storage';
 import { APP_VERSION } from '../version';
+import { expireSnapshots } from '../lib/snapshot';
 
 /** 备份排除表（内部/运行时，非业务数据）：login_attempts 限流/登录防爆破、schema_meta 建表标记、
  *  sync_changes 变更流(恢复后由 fullSync 重建，导入会导致客户端重放旧游标)、audit_logs 操作审计（量大且可再生成）、
@@ -125,6 +126,9 @@ export async function importBackupData(
       totalInserted += restored;
     }
   }
+  // 恢复逐表 INSERT OR IGNORE，不经过 recordChange → 变更流游标不变，版本化快照会误判「数据没变」。
+  // 主动清空，让下一次面板/库存请求立即重算（否则要等 60s TTL 兜底）。
+  await expireSnapshots(db);
   return { report, total_inserted: totalInserted };
 }
 

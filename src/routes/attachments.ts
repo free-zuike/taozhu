@@ -7,6 +7,8 @@ import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
 import { attachmentContentKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from '../lib/image-key';
 import { recordChange } from '../lib/sync';
+import { versionedSnapshot } from '../lib/snapshot';
+import { computeGlobalCounts } from '../lib/global-counts';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -202,10 +204,9 @@ attachmentsRouter.post('/counts', async (c) => {
 // 口径=引用表 DISTINCT file_key（本地下载只下在用文件、同图一份，与此一致）——
 // 不计 R2 孤儿/历史残留对象（孤儿由清理页单独扫描删除，避免"本地7/服务器11"类虚高差异）。
 attachmentsRouter.get('/total', async (c) => {
-  const row = await c.env.DB.prepare(
-    'SELECT COUNT(DISTINCT file_key) AS n FROM attachment_refs',
-  ).first<{ n: number }>();
-  return c.json({ total: row?.n ?? 0 });
+  // 与同步面板共用版本化快照：DISTINCT 全表扫描只在数据版本变化后跑一次
+  const { data: g } = await versionedSnapshot(c.env.DB, 'sync_counts', () => computeGlobalCounts(c.env.DB));
+  return c.json({ total: g.attach_file_total });
 });
 
 // GET /attachments/in-use — 列出云端"在用"附件（与 orphans 对称）：

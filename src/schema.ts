@@ -1,5 +1,34 @@
 /** 幂等建表：首次请求时执行 DDL（CREATE TABLE IF NOT EXISTS），重复跑无副作用 */
 
+/**
+ * D1 rows_read 止血索引。
+ *
+ * 刻意不放进 DDL 数组：全量建表是 db.batch 原子事务，而存量库的行表可能还是旧结构
+ * （sync_key/category_id 等列要等后面的 ALTER 才补上），batch 里任何一条 CREATE INDEX
+ * 引用缺列 → 整批回滚 → ensureSchema 抛错 → 所有 API 500。
+ * 这些索引统一交给 ensureIndexes 逐条建立（单条失败独立吞掉），且在迁移链末尾还会再跑一次，
+ * 保证「先补列、后建索引」。
+ * 同理切勿插到 DDL 表定义中间：存量库补建靠 DDL[i+1] / DDL[i+2] 取紧邻的索引，中间插入会全盘错位。
+ *
+ * 选型原则：等值列在前、范围列在后（现有 idx_*_date_client 是 (happened_at, client_id)，
+ * 前导列是范围，WHERE client_id = ? AND happened_at 区间 用不上）；只补高频过滤列，
+ * 不加覆盖索引，避免每行写入要更新过多索引反而推高 rows_written。
+ */
+const PERF_INDEX_DDL: string[] = [
+  // 店铺 + 日期：对账单/统计/附件/同步面板/AI 查询最密集的组合
+  `CREATE INDEX IF NOT EXISTS idx_sale_items_client_date ON sale_items (client_id, happened_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_payments_client_date ON payments (client_id, happened_at)`,
+  // 写入幂等查重（每单必查，无索引＝每写一次全表扫）
+  `CREATE INDEX IF NOT EXISTS idx_sale_items_sync_key ON sale_items (sync_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_purchase_items_sync_key ON purchase_items (sync_key)`,
+  // 分类筛选 / 分类对账单
+  `CREATE INDEX IF NOT EXISTS idx_clients_category ON clients (category_id, deleted_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_items_category ON items (category_id, deleted_at)`,
+  // 临期提醒（批次量与进货行同量级）、盘点单防重
+  `CREATE INDEX IF NOT EXISTS idx_stock_batches_expiry ON stock_batches (expiry_date, remaining)`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_adjustments_adjust ON stock_adjustments (adjust_id)`,
+];
+
 const DDL: string[] = [
   `CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -33,6 +62,7 @@ const DDL: string[] = [
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     category TEXT DEFAULT '',
+    category_id TEXT,
     count_unit TEXT DEFAULT '',
     deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -362,6 +392,12 @@ const DDL: string[] = [
   )`,
 ];
 
+/** 全部索引 DDL：DDL 里的历史索引 + 止血索引（逐条容错补齐，见 PERF_INDEX_DDL 注释） */
+const INDEX_DDL = [
+  ...DDL.filter((s) => /^\s*CREATE\s+(UNIQUE\s+)?INDEX\b/i.test(s)),
+  ...PERF_INDEX_DDL,
+];
+
 let schemaReady = false;
 /** 进程内互斥：同一 Worker isolate 并发请求同时触发冷启动迁移时串行化（多 isolate 场景靠 ensureColumn 幂等兜底） */
 let schemaLock: Promise<void> = Promise.resolve();
@@ -392,6 +428,40 @@ async function ensureColumn(
   }
 }
 
+/**
+ * 存量库索引补齐：必须在 schema_version 快检之前调用。
+ *
+ * 事故根因：全量 DDL（含索引）只在 users 表不存在时执行，老库永远跳过；
+ * 而快检 `schema_version='17'` 会直接 return，把迁移链末尾的索引补齐也短路，
+ * 于是已初始化的生产库里除 schema.sql 那 18 条外一个索引都没有，
+ * 每次带条件的查询都退化成全表扫描 → D1 rows_read 额度被烧穿。
+ *
+ * 代价控制：只查一次 sqlite_master（表名单 + 索引名单），
+ * 仅对「表存在且索引缺失」的语句发 DDL；补齐后冷启动只有这 1 次读，
+ * 不 bump 版本号（避免老库重跑整条 ALTER / DROP 重建迁移链）。
+ * 单条失败独立吞掉：UNIQUE 索引遇历史重复 sync_key 时不能让全体 API 500。
+ */
+async function ensureIndexes(db: D1Database): Promise<void> {
+  const rows = await db.prepare(
+    "SELECT name, tbl_name, type FROM sqlite_master WHERE type IN ('table', 'index')",
+  ).all<{ name: string; tbl_name: string; type: string }>();
+  const tables = new Set(rows.results.filter((r) => r.type === 'table').map((r) => r.name));
+  const indexes = new Set(rows.results.filter((r) => r.type === 'index').map((r) => r.name));
+  for (const sql of INDEX_DDL) {
+    const m = /CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+(\w+)\s+ON\s+(\w+)\s*\(/i.exec(sql);
+    if (!m) continue;
+    const [, name, table] = m;
+    // 表还不存在（残缺老库 / 前置建表未覆盖）：跳过，不能对不存在的表建索引
+    if (!tables.has(table) || indexes.has(name)) continue;
+    try {
+      await db.prepare(sql).run();
+      indexes.add(name);
+    } catch (e) {
+      console.warn(`[taozhu] skip index ${name}:`, e);
+    }
+  }
+}
+
 /** 首次调用时建表；失败不置标志，下次重试 */
 export async function ensureSchema(db: D1Database): Promise<void> {
   if (schemaReady) return;
@@ -415,6 +485,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const i = DDL.findIndex((s) => s.includes(marker));
       if (i >= 0) await db.prepare(DDL[i]).run();
     }
+    // 索引补齐必须先于版本快检：上面的前置建表只建表不建索引，且快检会短路整条迁移链。
+    // 存量库（schema_version 已是最新）靠这里把缺失索引一次性补上，不再需要 bump 版本号。
+    await ensureIndexes(db);
     // 已初始化库：只查一次标记即返回（冷启动首请求不再跑下方 20+ 次 PRAGMA/ALTER 迁移链）
     // 注意：短路值必须与末尾写入值一致，否则新增列的迁移永远不跑（生产曾缺 round_carry/price_group_id → 全接口 500）；
     // 每新增一次表/列迁移，版本号 +1（0.17.472：backup_runs 缺表事故后，前置建表兜底 + 快检版本升 '14' 让老库重走全量迁移；
@@ -742,15 +815,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     await db.prepare('DROP TABLE IF EXISTS sales').run();
     await db.prepare('DROP TABLE IF EXISTS purchases').run();
-    // CREATE INDEX IF NOT EXISTS 幂等：已存在时 no-op（不耗 D1 写配额），新库补齐索引
-    for (const marker of [
-      'idx_payments_sync_key', 'idx_payments_date', 'idx_sale_items_item',
-      'idx_sale_items_date', 'idx_purchase_items_date',
-      'idx_sale_items_client', 'idx_sale_items_date_client', 'idx_payments_date_client',
-    ]) {
-      const i = DDL.findIndex((s) => s.includes(marker));
-      if (i >= 0) await db.prepare(DDL[i]).run();
-    }
+    // 上面的行表重建（DROP TABLE）会连索引一起删掉：迁移链末尾再补一次全部索引。
+    // 用完整清单而非旧的 8 个 marker，避免新增索引只在全新库生效。
+    await ensureIndexes(db);
     // 迁移完成：写标记（INSERT OR REPLACE——老库首次部署后也置位，此后冷启动走快检）
     // v0.17.175 进销单位换算新增三列（items.count_unit/item_prices.per/行 count_qty）→
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→

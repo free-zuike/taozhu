@@ -7,6 +7,8 @@ import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { chunkQuery } from '../lib/query';
 import { applyChange, buildPayload, latestChange, maskPayload, maxCursor, recordChange } from '../lib/sync';
+import { versionedSnapshot } from '../lib/snapshot';
+import { computeGlobalCounts } from '../lib/global-counts';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -330,38 +332,35 @@ syncRouter.get('/full', async (c) => {
 
 // GET /sync/stats — 服务器端各实体计数 + 变更流游标（同步状态面板/差异诊断用）
 // 支持可选 ?client_id=X：传入时 sales/payments 只统计该店铺（同步面板"当前店铺"差异行）
+// 全局计数走版本化快照（与 /sync/panel、/attachments/total 共用）：命中时只读取游标+快照 2 行，
+// 不再每次把 8 张表全表 COUNT 一遍；任何写操作 bump 游标 → 快照立即失效，数字保持精确。
 syncRouter.get('/stats', async (c) => {
   const db = c.env.DB;
   const clientId = c.req.query('client_id')?.trim() ?? '';
-  const [clients, items, catItems, catClients, paymentAccounts, saleItems, purchaseItems, purchases, payments] = await Promise.all([
-    db.prepare('SELECT COUNT(*) AS n FROM clients WHERE deleted_at IS NULL').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM items WHERE deleted_at IS NULL').first<{ n: number }>(),
-    db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'item'").first<{ n: number }>(),
-    db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'client'").first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>(),
-    // 出货/进货按商品明细行数统计（不是单据数：一张单多商品 = 多明细行；商品行自带 client_id）
-    clientId
-      ? db.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE client_id = ?').bind(clientId).first<{ n: number }>()
-      : db.prepare('SELECT COUNT(*) AS n FROM sale_items').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM purchase_items').first<{ n: number }>(),
-    // 去单据化：无 purchases 头表，保留字段语义=进货商品行数（与 purchase_items 一致）
-    db.prepare('SELECT COUNT(*) AS n FROM purchase_items').first<{ n: number }>(),
-    clientId
-      ? db.prepare('SELECT COUNT(*) AS n FROM payments WHERE client_id = ?').bind(clientId).first<{ n: number }>()
-      : db.prepare('SELECT COUNT(*) AS n FROM payments').first<{ n: number }>(),
-  ]);
+  const { data: g, cursor } = await versionedSnapshot(db, 'sync_counts', () => computeGlobalCounts(db));
+  let saleItems = g.sale_items;
+  let paymentCount = g.payments;
+  if (clientId) {
+    // 店铺级必须实时，且这两个字段在带 client_id 时语义变为「该店铺」——不能取全局快照
+    const [cs, cp] = await Promise.all([
+      db.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE client_id = ?').bind(clientId).first<{ n: number }>(),
+      db.prepare('SELECT COUNT(*) AS n FROM payments WHERE client_id = ?').bind(clientId).first<{ n: number }>(),
+    ]);
+    saleItems = cs?.n ?? 0;
+    paymentCount = cp?.n ?? 0;
+  }
   return c.json({
-    clients: clients?.n ?? 0,
-    items: items?.n ?? 0,
-    categories_item: catItems?.n ?? 0,
-    categories_client: catClients?.n ?? 0,
-    payment_accounts: paymentAccounts?.n ?? 0,
+    clients: g.clients,
+    items: g.items,
+    categories_item: g.categories_item,
+    categories_client: g.categories_client,
+    payment_accounts: g.payment_accounts,
     // 出货/进货按商品明细行数（并非单据数）
-    sale_items: saleItems?.n ?? 0,
-    purchase_items: purchaseItems?.n ?? 0,
-    purchases: purchases?.n ?? 0, // 保留（进货单数，供需要时使用）
-    payments: payments?.n ?? 0,
-    server_cursor: await maxCursor(db),
+    sale_items: saleItems,
+    purchase_items: g.purchase_items,
+    purchases: g.purchase_items, // 保留（进货单数，供需要时使用）
+    payments: paymentCount,
+    server_cursor: cursor,
   });
 });
 
@@ -422,34 +421,21 @@ syncRouter.get('/panel', async (c) => {
     }
     return { counts, total: Object.values(counts).reduce((a, b) => a + b, 0), ids };
   };
-  const [
-    clients, items, catItems, catClients, paymentAccounts, saleItems, purchaseItems, payments,
-    fileTotal, refCount,
-  ] = await Promise.all([
-    db.prepare('SELECT COUNT(*) AS n FROM clients WHERE deleted_at IS NULL').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM items WHERE deleted_at IS NULL').first<{ n: number }>(),
-    db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'item'").first<{ n: number }>(),
-    db.prepare("SELECT COUNT(*) AS n FROM categories WHERE type = 'client'").first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM payment_accounts').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM sale_items').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM purchase_items').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM payments').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(DISTINCT file_key) AS n FROM attachment_refs').first<{ n: number }>(),
-    db.prepare('SELECT COUNT(*) AS n FROM attachment_refs').first<{ n: number }>(),
-  ]);
+  // 全局部分与 /sync/stats、/attachments/total 共用同一份版本化快照（10 条全表 COUNT 只在版本变化时重算）
+  const { data: g, cursor } = await versionedSnapshot(db, 'sync_counts', () => computeGlobalCounts(db));
   const out: Record<string, unknown> = {
-    clients: clients?.n ?? 0,
-    items: items?.n ?? 0,
-    categories_item: catItems?.n ?? 0,
-    categories_client: catClients?.n ?? 0,
-    payment_accounts: paymentAccounts?.n ?? 0,
-    sale_items: saleItems?.n ?? 0,
-    purchase_items: purchaseItems?.n ?? 0,
-    purchases: purchaseItems?.n ?? 0,
-    payments: payments?.n ?? 0,
-    server_cursor: await maxCursor(db),
-    attach_file_total: fileTotal?.n ?? 0,
-    attach_ref_count: refCount?.n ?? 0,
+    clients: g.clients,
+    items: g.items,
+    categories_item: g.categories_item,
+    categories_client: g.categories_client,
+    payment_accounts: g.payment_accounts,
+    sale_items: g.sale_items,
+    purchase_items: g.purchase_items,
+    purchases: g.purchase_items,
+    payments: g.payments,
+    server_cursor: cursor,
+    attach_file_total: g.attach_file_total,
+    attach_ref_count: g.attach_ref_count,
   };
   if (clientId) {
     const [cSales, cPayments, saleAttach, payAttach, saleLineAttach] = await Promise.all([

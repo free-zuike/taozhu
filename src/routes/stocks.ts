@@ -7,6 +7,7 @@ import { chunkQuery } from '../lib/query';
 import { consumeFifoStatements, consumeLossStatements } from '../lib/fifo';
 import { randomId } from '../lib/password';
 import { recordChange, type SyncChangeInput } from '../lib/sync';
+import { versionedSnapshot } from '../lib/snapshot';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -28,6 +29,19 @@ const STOCK_AGG_SQL = `SELECT item_id, unit, SUM(qty) AS quantity FROM (
   SELECT item_id, unit, COALESCE(qty, 0) AS qty FROM stock_adjustments
 ) GROUP BY item_id, unit`;
 
+type StockAggRow = { item_id: string; unit: string; quantity: number };
+
+/**
+ * 库存仍严格「由流水实时计算、不落库」（既定口径），这里只缓存一次计算的结果：
+ * 四表 UNION ALL 全量聚合是 rows_read 大头，缓存后两次写之间打开库存页只读游标+快照 2 行。
+ * 版本号取 sync_changes 游标，进货/出货/报损/盘点写入都会 bump → 结果立即精确刷新，不会出现库存滞后。
+ */
+async function stockAgg(db: D1Database): Promise<{ results: StockAggRow[] }> {
+  const { data } = await versionedSnapshot(db, 'stock_agg', async () =>
+    (await db.prepare(STOCK_AGG_SQL).all<StockAggRow>()).results);
+  return { results: data };
+}
+
 // GET /stocks?q=&below=1 — 库存列表（含商品名；below=1 仅低于阈值）
 // 库存 = 计算值：Σ进货(+)/出货(−) 流水按 商品+单位 累计（用户"库存应该是计算出来的不是写入数据库"）；
 // 不再读取 stocks.quantity（旧盘点/手动填写残留=没进货却显示正数根因）；阈值 min_stock 保留。
@@ -38,9 +52,9 @@ stocksRouter.get('/', async (c) => {
   // 库存 = 计算值：Σ进货(+)/出货(−) 流水按 商品+单位 累计（用户"库存应该是计算出来的不是写入数据库"）；
   // 与 /rebuild 同构（一层 UNION ALL + GROUP BY，兼容 FakeD1/生产），商品名/阈值/进价在 JS 侧合并，
   // stocks.quantity 不再读取（旧盘点/手动填写残留=没进货却显示正数根因），min_stock 阈值保留。
-  const agg = await c.env.DB.prepare(STOCK_AGG_SQL).all<{ item_id: string; unit: string; quantity: number }>();
+  const agg = await stockAgg(c.env.DB);
   const itemIds = [...new Set(agg.results.map((r) => r.item_id))];
-  const [itemRows, stockRows, batchCostRows, priceRows] = await Promise.all([
+  const [itemRows, stockRows, batchCostRows, priceRows, expiryRows] = await Promise.all([
     itemIds.length
       ? chunkQuery(itemIds, (chunk) =>
           c.env.DB.prepare(
@@ -53,12 +67,20 @@ stocksRouter.get('/', async (c) => {
       'SELECT item_id, unit, SUM(price * remaining) AS amount, SUM(remaining) AS qty FROM stock_batches GROUP BY item_id, unit',
     ).all<{ item_id: string; unit: string; amount: number; qty: number }>(),
     c.env.DB.prepare('SELECT item_id, unit, purchase_price FROM item_prices WHERE active = 1').all<{ item_id: string; unit: string; purchase_price: number }>(),
+    // 临期：最近批次到期日（剩余>0 且有过期日）；本地 stocks 镜像下行该字段，离线降级可算临期
+    c.env.DB.prepare(
+      `SELECT item_id, unit, MIN(expiry_date) AS expiry_date
+       FROM stock_batches
+       WHERE expiry_date IS NOT NULL AND expiry_date != '' AND remaining > 0
+       GROUP BY item_id, unit`,
+    ).all<{ item_id: string; unit: string; expiry_date: string }>(),
   ]);
   const itemName = new Map(itemRows.map((x) => [x.id, x.name]));
   const itemCountUnit = new Map(itemRows.map((x) => [x.id, x.count_unit ?? '']));
   const stockCfg = new Map(stockRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, x]));
   const batchCost = new Map(batchCostRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, Number(x.qty) > 0 ? Number(x.amount) / Number(x.qty) : 0]));
   const archiveCost = new Map(priceRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, Number(x.purchase_price) || 0]));
+  const expiryMap = new Map(expiryRows.results.map((x) => [`${x.item_id}\u0000${x.unit}`, x.expiry_date]));
   const merged = agg.results
     .map((r) => ({ ...r, item_name: itemName.get(r.item_id) ?? '', count_unit: itemCountUnit.get(r.item_id) ?? '' }))
     .filter((r) => r.item_name !== '') // 商品已删除（deleted_at）→ 不显示
@@ -99,6 +121,7 @@ stocksRouter.get('/', async (c) => {
       quantity: Math.round(Math.max(Number(r.quantity) || 0, 0) * 100) / 100,
       min_stock: Number(r.min_stock) || 0,
       suggest_min: suggest.get(`${r.item_id}\u0000${r.unit}`) ?? 0,
+      expiry_date: expiryMap.get(`${r.item_id}\u0000${r.unit}`) ?? '',
       cost_price: canSeeCost ? (batchCost.get(`${r.item_id}\u0000${r.unit}`) || archiveCost.get(`${r.item_id}\u0000${r.unit}`) || 0) : 0,
       low: (Number(r.quantity) || 0) <= (Number(r.min_stock) || 0),
     })),
@@ -113,7 +136,7 @@ stocksRouter.get('/alerts', async (c) => {
   const today = new Date().toISOString().slice(0, 10);
   const limitDate = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
   const [agg, stockRows, itemRows, expRows] = await Promise.all([
-    c.env.DB.prepare(STOCK_AGG_SQL).all<{ item_id: string; unit: string; quantity: number }>(),
+    stockAgg(c.env.DB),
     c.env.DB.prepare('SELECT item_id, unit, min_stock FROM stocks').all<{ item_id: string; unit: string; min_stock: number }>(),
     c.env.DB.prepare('SELECT id, name FROM items WHERE deleted_at IS NULL').all<{ id: string; name: string }>(),
     c.env.DB.prepare(
