@@ -77,7 +77,7 @@ purchasesRouter.get('/', async (c) => {
     `SELECT pi.purchase_id AS id,
             MAX(COALESCE(pi.happened_at, '')) AS happened_at,
             SUM(pi.amount) AS total,
-            MIN(pi.note) AS note
+            MIN(NULLIF(pi.note, '')) AS note
      FROM purchase_items pi ${aggWhere}
      GROUP BY pi.purchase_id
      ORDER BY happened_at DESC, id DESC LIMIT ? OFFSET ?`,
@@ -236,7 +236,9 @@ purchasesRouter.patch('/:id', adminOnly(), async (c) => {
   if (body?.happened_at !== undefined && body.happened_at.trim()) {
     batch.push(c.env.DB.prepare('UPDATE purchase_items SET happened_at = ? WHERE purchase_id = ?').bind(body.happened_at.trim(), id));
   }
-  if (body?.note !== undefined) {
+  // 整单备注：仅"纯整单字段更新（不含明细 items）"时应用到所有行；含 items 时行备注由 items 决定，
+  // 不覆盖（否则保存单据会把已填的行备注冲掉——用户"整单备注一填、所有行备注丢失"根因）
+  if (body?.note !== undefined && body?.items === undefined) {
     batch.push(c.env.DB.prepare('UPDATE purchase_items SET note = ? WHERE purchase_id = ?').bind(body.note.trim() ?? '', id));
   }
   let total: number;

@@ -1633,7 +1633,7 @@ double _fifoCost(
         if (manualCost > 0) 'cost_manual': true, // 老板手动进价标记：服务端同步时用该值，不再按 FIFO 重算
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
-        'note': r.note, // 保留行原备注（payload 缺 note 会被同步 upsert 写成空）
+        'note': r.note.trim().isEmpty ? _noteCtrl.text.trim() : r.note, // 整单备注填充空行（落地整单框，不覆盖已填行备注）
         'sort': i, // 行序=展示/插入顺序（服务端/账本按 sort 展开，插入行不再排末尾）
       };
       r.itemsPayload = rowPayload;
@@ -1665,7 +1665,7 @@ double _fifoCost(
             // Web 留空=不传（服务端跟随最近进货价）；手动填 >0 才传（老板才生效）
             if ((double.tryParse(r.costCtrl.text.trim()) ?? 0) > 0) 'cost_price': double.tryParse(r.costCtrl.text.trim()),
             'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
-            'note': r.note,
+            'note': r.note.trim().isEmpty ? _noteCtrl.text.trim() : r.note,
             'sort': i, // 行序=展示顺序（服务端按 sort 存储，插入行不排末尾）
           },
       ];

@@ -73,6 +73,8 @@ class SyncService {
 
   static String? _deviceId;
   static bool _syncing = false;
+  static bool _syncRunning = false; // sync() 互斥（区别于 _syncing: pullChanges 内部专用）
+  static DateTime? _syncBackoffUntil; // 服务端不可用(额度耗尽/503/超时/断网)时自动同步退避截止时间
   static Timer? _debounce;
 
   /// 最近一次同步是否失败（full/pull/push 任一异常置 true；sync() 开始时清除，结束后供 UI 如实显示）
@@ -218,23 +220,13 @@ class SyncService {
         // 待上传但服务器未回的行保留（上传中/失败的本地登记；宁留勿丢）
         for (final r in await LocalDb.getAll('attachment_refs')) {
           final id3 = '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${'${r['file'] ?? ''}'.split('/').last}';
-          if (ids.contains(id3)) continue;
-          if (pendingUploads.isNotEmpty && pendingUploads.contains(id3)) {
-            merged.add(r);
-            ids.add(id3);
-            continue;
-          }
-          // 本地仍有物理副本的行也保留：识别即挂载草稿（提交前不入队，0.17.334 终局）靠副本
-          // 证明"用户添加过"，不能被服务器快照冲掉——否则提交后上传报"本地副本缺失"、
-          // 查看器看不到（用户反馈"添加之后单个交易看不到附件"的直接根因）
-          try {
-            final f = '${r['file'] ?? ''}'.split('/').last;
-            final root = await getApplicationDocumentsDirectory();
-            if (f.isNotEmpty && File('${root.path}/attachments/$f').existsSync()) {
-              merged.add(r);
-              ids.add(id3);
-            }
-          } catch (_) {}
+          if (ids.contains(id3)) continue; // 云端已回，跳过
+          if (tombstones.contains(id3)) continue; // 已删除标记，不再复活
+          // 宁留勿丢：本地独有的附件引用（含昨天未完成上传单据的附件）一律保留，
+          // 不被云端快照收敛删除——否则"本地引用表被服务器覆盖 → 附件被判孤儿误删"
+          // （用户昨天那批丢附件的直接根因）。只有云端已回或被墓碑标记删除的才移除。
+          merged.add(r);
+          ids.add(id3);
         }
         await LocalDb.putAll('attachment_refs', merged);
       } catch (_) {}
@@ -1195,8 +1187,10 @@ class SyncService {
       return totalAccepted;
     } catch (e) {
       _lastSyncFailed = true;
+      final msg = _friendlyError(e);
       // 推送失败也要有可读日志（用户曾遇"2条没推送但只有403原文"）：记录实体类型与失败原因
-      appLog('sync', '推送本地变更失败：${_friendlyError(e)}', level: 'error');
+      appLog('sync', '推送本地变更失败：$msg', level: 'error');
+      _maybeEnterBackoff(e, msg);
       return 0;
     }
   }
@@ -1286,8 +1280,16 @@ class SyncService {
   /// 编排对齐参考 sync()：①先上传待传附件（引用先写云端，push 单据时服务端才能带上附件）
   /// ②push 本地变更（LWW 先落服务端，避免 pull 把旧值覆盖本地排队编辑的镜像）
   /// ③全量/增量拉取 ④下载在用附件本地副本 ⑤资料同步。
-  static Future<void> sync() async {
+  static Future<void> sync({bool manual = false}) async {
     if (kIsWeb) return;
+    if (_syncRunning) return; // 互斥：防止重叠 sync 并发跑重活导致 UI 卡死/闪退
+    // 退避：服务端不可用(额度耗尽/503/超时/断网)时暂停自动同步，避免疯狂重推烧穿 D1
+    // 仅拦自动触发；用户手动点同步(manual=true)可绕过，便于 D1 恢复后主动重试
+    if (!manual && _syncBackoffUntil != null && DateTime.now().isBefore(_syncBackoffUntil!)) {
+      _setStatus('idle');
+      return;
+    }
+    _syncRunning = true;
     _lastSyncFailed = false;
     _setStatus('syncing');
     var pulled = 0;
@@ -1340,7 +1342,30 @@ class SyncService {
       appLog('sync', '同步失败: ${e.toString().split('\n').first}', level: 'error');
       // 任一异常都不外抛（bottom_shell 无 await 调用，抛了就成 unhandled error）
     } finally {
+      _syncRunning = false;
       _setStatus(_lastSyncFailed ? 'error' : 'idle');
+    }
+  }
+
+  /// 推送/同步遇到服务端不可用(503/额度耗尽/超时/断网) → 进入退避，暂停自动同步一段时间，
+  /// 避免疯狂重推把已烧穿的 D1 额度进一步拖垮（"一直同步/卡死闪退"根因）。
+  /// 退避只拦自动触发（回前台/WS/写后防抖）；用户手动点同步仍可绕过（手动调用不检查退避）。
+  static void _maybeEnterBackoff(Object e, String msg) {
+    final lower = msg.toLowerCase();
+    final unavailable = e is TimeoutException ||
+        msg.contains('503') ||
+        lower.contains('service unavailable') ||
+        lower.contains('额度') ||
+        lower.contains('quota') ||
+        lower.contains('timeout') ||
+        lower.contains('timed out') ||
+        lower.contains('etimedout') ||
+        lower.contains('socket') ||
+        lower.contains('网络') ||
+        lower.contains('network');
+    if (unavailable) {
+      _syncBackoffUntil = DateTime.now().add(const Duration(minutes: 5));
+      appLog('sync', '检测到服务端不可用，自动同步暂停 5 分钟（防烧穿 D1）', level: 'warn');
     }
   }
 

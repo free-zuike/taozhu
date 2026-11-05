@@ -1143,7 +1143,7 @@ class _PurchasePageState extends State<PurchasePage> {
         'purchase_price': r.purchasePrice,
         'amount': amount,
         'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
-        'note': r.note, // 保留行原备注（payload 缺 note 会被同步 upsert 写成空）
+        'note': r.note.trim().isEmpty ? _noteCtrl.text.trim() : r.note, // 整单备注填充空行（落地整单框，不覆盖已填行备注）
         'expiry_date': r.expiryDate,
         'sort': i, // 行序=展示/插入顺序（服务端/账本按 sort 展开，插入行不再排末尾）
       };
@@ -1171,7 +1171,7 @@ class _PurchasePageState extends State<PurchasePage> {
             'count_qty': _autoPCount(r) != r.quantity ? _autoPCount(r) : null,
             'purchase_price': r.purchasePrice,
             'happened_at': r.happenedAt.trim().isEmpty ? orderDate : r.happenedAt.trim(),
-            'note': r.note,
+            'note': r.note.trim().isEmpty ? _noteCtrl.text.trim() : r.note,
             'sort': i, // 行序=展示顺序（服务端按 sort 存储，插入行不排末尾）
           },
       ];

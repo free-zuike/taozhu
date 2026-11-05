@@ -326,7 +326,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
     setState(() => _syncing = true);
     try {
       await SyncService.resetSyncState();
-      await SyncService.sync().timeout(const Duration(seconds: 60));
+      await SyncService.sync(manual: true).timeout(const Duration(seconds: 60));
     } catch (_) {
     } finally {
       if (!mounted) return;
@@ -359,7 +359,7 @@ class _SyncPanelPageState extends State<SyncPanelPage> {
       final dir = Directory('${root.path}/attachments');
       if (dir.existsSync()) await dir.delete(recursive: true);
       // 引用表由 downloadInUseAttachments 每轮同步全量刷新（putAll），无需手动清
-      await SyncService.sync().timeout(const Duration(seconds: 60));
+      await SyncService.sync(manual: true).timeout(const Duration(seconds: 60));
     } catch (_) {
     } finally {
       if (!mounted) return;

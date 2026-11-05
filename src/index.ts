@@ -66,14 +66,18 @@ app.get('/healthz', (c) => c.json({ ok: true }));
 // 失败后冷却 60s 不再重试，请求继续交给路由——只读接口可降级为空数据/本地缓存，
 // 确实需要 DB 的接口由 onError 返回中文 503。
 let schemaFailureUntil = 0;
+let schemaFailStreak = 0;
 app.use('/api/v1/*', async (c, next) => {
   if (Date.now() >= schemaFailureUntil) {
     try {
       await ensureSchema(c.env.DB);
       schemaFailureUntil = 0;
+      schemaFailStreak = 0;
     } catch (e) {
       console.error('[taozhu] ensureSchema 失败，进入降级模式:', e);
-      schemaFailureUntil = Date.now() + 60_000;
+      // 指数退避：60s → 120s → 240s → ... → 上限 32min，避免 D1 额度耗尽时每请求重跑迁移链烧穿额度
+      schemaFailStreak = Math.min(schemaFailStreak + 1, 6);
+      schemaFailureUntil = Date.now() + (60_000 << schemaFailStreak);
     }
   }
   // 记录环境绑定：recordChange 写入变更流后用于实时同步广播（单实例共享同一绑定）
