@@ -27,6 +27,10 @@ const PERF_INDEX_DDL: string[] = [
   // 临期提醒（批次量与进货行同量级）、盘点单防重
   `CREATE INDEX IF NOT EXISTS idx_stock_batches_expiry ON stock_batches (expiry_date, remaining)`,
   `CREATE INDEX IF NOT EXISTS idx_stock_adjustments_adjust ON stock_adjustments (adjust_id)`,
+  // 库存建议/商品近 30 天均量：item_id IN + 时间范围（stocks.ts）——先按 item 定位再扫时间，避免全表
+  `CREATE INDEX IF NOT EXISTS idx_sale_items_item_date ON sale_items (item_id, happened_at)`,
+  // 单据列表计数：client_id 过滤 + GROUP BY sale_id（sales.ts 单据数）——sale_id 随 client 有序，免排序
+  `CREATE INDEX IF NOT EXISTS idx_sale_items_client_sale ON sale_items (client_id, sale_id)`,
 ];
 
 const DDL: string[] = [
