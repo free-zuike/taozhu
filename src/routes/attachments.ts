@@ -242,31 +242,17 @@ attachmentsRouter.get('/in-use', async (c) => {
   purchaseItems.results.forEach((r) => add('purchase_item', r.id));
   payments.results.forEach((r) => add('payment', r.id));
   // ① 引用表（权威）：entity/id/file 直接从表取，不做任何正则
-  // 引用自愈：目标实体已删（单据/明细行物理删除）但引用行残留 → 跳过并清除，
-  // 否则每次同步 in-use 都下发坏引用 → 客户端下载 404/失败日志刷屏
+  // 引用表即权威在用：遍历 attachment_refs 全部返回给前端下载补齐。
+  // 注意：不再基于"inUse 快照缺失"就删除引用并广播 delete 变更——交易尚未同步到云端
+  // （如 D1 额度耗尽期间）时实体本就在云端缺，会被误判为"已删除"，导致跨设备附件被删
+  // （用户"附件持续数天完全丢失"根因，v0.17.482 修复）。真正孤儿由 /attachments/orphans
+  // （手动触发且有在用防误删）处理，不在此自动广播删除。
   const refRows = await db.prepare('SELECT file_key, entity, entity_id FROM attachment_refs').all<{
     file_key: string; entity: string; entity_id: string;
   }>();
   for (const r of refRows.results) {
     const file = r.file_key.split('/').pop() ?? '';
     if (!file) continue;
-    if (!(inUse.get(r.entity) ?? new Set()).has(r.entity_id)) {
-      // 引用自愈：目标实体已删但引用行残留 → 删除并广播 delete 变更（对齐参考架构：
-      // 附件删除=变更流 delete，其他端 pull 到后清理本地引用/副本，不依赖 in-use 快照收敛）
-      try {
-        await db.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind(r.entity, r.entity_id).run();
-        try {
-          await recordChange(db, {
-            entity_type: 'attachment',
-            entity_sync_id: r.file_key,
-            action: 'delete',
-            payload: { file_key: r.file_key, file, entity: r.entity, id: r.entity_id },
-            updated_at: new Date().toISOString(),
-          });
-        } catch (_) {}
-      } catch (_) {}
-      continue;
-    }
     seen.add(r.file_key);
     out.push({ key: r.file_key, entity: r.entity, id: r.entity_id, file, size: 0 });
   }
