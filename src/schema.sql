@@ -381,6 +381,8 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 CREATE INDEX IF NOT EXISTS idx_sale_items_client_date ON sale_items (client_id, happened_at);
 CREATE INDEX IF NOT EXISTS idx_payments_client_date ON payments (client_id, happened_at);
 CREATE INDEX IF NOT EXISTS idx_sale_items_sync_key ON sale_items (sync_key);
+CREATE INDEX IF NOT EXISTS idx_sale_items_item_date ON sale_items (item_id, happened_at);
+CREATE INDEX IF NOT EXISTS idx_sale_items_client_sale ON sale_items (client_id, sale_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_items_sync_key ON purchase_items (sync_key);
 CREATE INDEX IF NOT EXISTS idx_clients_category ON clients (category_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_items_category ON items (category_id, deleted_at);
