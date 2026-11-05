@@ -124,9 +124,9 @@ Future<String> buildAssistantContextLocal(String role) async {
   // 临期（最近批次到期日落在 近7天已过期 ~ 7天内到期 且剩余>0）——店员也可见。
   // 依赖本地 stocks 镜像含 expiry_date（后端 /stocks 已下行该字段；旧镜像无则跳过，不误导）。
   final expiring = <Map<String, dynamic>>[];
-  final now = DateTime.now();
-  final expLower = now.subtract(const Duration(days: 7));
-  final expUpper = now.add(const Duration(days: 7));
+  final refNow = DateTime.now();
+  final expLower = refNow.subtract(const Duration(days: 7));
+  final expUpper = refNow.add(const Duration(days: 7));
   for (final r in stocks) {
     final exp = '${r['expiry_date'] ?? ''}'.trim();
     if (exp.isEmpty) continue;
