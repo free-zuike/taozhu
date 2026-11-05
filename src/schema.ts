@@ -399,6 +399,9 @@ const INDEX_DDL = [
 ];
 
 let schemaReady = false;
+// 索引补齐独立于 schemaReady：即使热 isolate（schemaReady 已真）也持续重试直到所有索引建成功，
+// 避免冷启动期间 D1 不可用导致 ensureIndexes 没跑成、却被 schemaReady 永久屏蔽（生产库缺索引根因）
+let indexesReady = false;
 /** 进程内互斥：同一 Worker isolate 并发请求同时触发冷启动迁移时串行化（多 isolate 场景靠 ensureColumn 幂等兜底） */
 let schemaLock: Promise<void> = Promise.resolve();
 
@@ -441,12 +444,21 @@ async function ensureColumn(
  * 不 bump 版本号（避免老库重跑整条 ALTER / DROP 重建迁移链）。
  * 单条失败独立吞掉：UNIQUE 索引遇历史重复 sync_key 时不能让全体 API 500。
  */
-async function ensureIndexes(db: D1Database): Promise<void> {
-  const rows = await db.prepare(
-    "SELECT name, tbl_name, type FROM sqlite_master WHERE type IN ('table', 'index')",
-  ).all<{ name: string; tbl_name: string; type: string }>();
+async function ensureIndexes(db: D1Database): Promise<boolean> {
+  let rows;
+  try {
+    rows = await db.prepare(
+      "SELECT name, tbl_name, type FROM sqlite_master WHERE type IN ('table', 'index')",
+    ).all<{ name: string; tbl_name: string; type: string }>();
+  } catch (e) {
+    // sqlite_master 查询失败（D1 不可用/额度耗尽）→ 视为未达成，下次请求重试，
+    // 避免冷启动期间 D1 不可用导致索引永久缺、每次查询全表扫描烧 D1 额度（生产事故根因）
+    console.warn('[taozhu] ensureIndexes 查询 sqlite_master 失败，下次重试:', e);
+    return false;
+  }
   const tables = new Set(rows.results.filter((r) => r.type === 'table').map((r) => r.name));
   const indexes = new Set(rows.results.filter((r) => r.type === 'index').map((r) => r.name));
+  let allOk = true;
   for (const sql of INDEX_DDL) {
     const m = /CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+(\w+)\s+ON\s+(\w+)\s*\(/i.exec(sql);
     if (!m) continue;
@@ -458,14 +470,19 @@ async function ensureIndexes(db: D1Database): Promise<void> {
       indexes.add(name);
     } catch (e) {
       console.warn(`[taozhu] skip index ${name}:`, e);
+      allOk = false;
     }
   }
+  return allOk;
 }
 
 /** 首次调用时建表；失败不置标志，下次重试 */
 export async function ensureSchema(db: D1Database): Promise<void> {
-  if (schemaReady) return;
-  return withSchemaLock(async () => {
+  if (schemaReady && indexesReady) return;
+  // schemaReady 已达成但索引补齐未达成（冷启动期间 D1 不可用导致 ensureIndexes 没跑成）：
+  // 仍补跑索引，避免被 schemaReady 永久屏蔽造成生产库缺索引、每次查询全表扫描烧 D1 额度
+  if (!schemaReady) {
+    await withSchemaLock(async () => {
     if (schemaReady) return;
     // 新增表的前置幂等建表：必须放在版本快检之前——快检短路后（老库 schema_version 已最新）
     // 短路之后的建表逻辑永远不跑。0.17.471 事故根因：backup_runs 建表写在短路后且版本号未 bump，
@@ -487,7 +504,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     }
     // 索引补齐必须先于版本快检：上面的前置建表只建表不建索引，且快检会短路整条迁移链。
     // 存量库（schema_version 已是最新）靠这里把缺失索引一次性补上，不再需要 bump 版本号。
-    await ensureIndexes(db);
+    indexesReady = await ensureIndexes(db);
     // 已初始化库：只查一次标记即返回（冷启动首请求不再跑下方 20+ 次 PRAGMA/ALTER 迁移链）
     // 注意：短路值必须与末尾写入值一致，否则新增列的迁移永远不跑（生产曾缺 round_carry/price_group_id → 全接口 500）；
     // 每新增一次表/列迁移，版本号 +1（0.17.472：backup_runs 缺表事故后，前置建表兜底 + 快检版本升 '14' 让老库重走全量迁移；
@@ -817,7 +834,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     await db.prepare('DROP TABLE IF EXISTS purchases').run();
     // 上面的行表重建（DROP TABLE）会连索引一起删掉：迁移链末尾再补一次全部索引。
     // 用完整清单而非旧的 8 个 marker，避免新增索引只在全新库生效。
-    await ensureIndexes(db);
+    indexesReady = await ensureIndexes(db);
     // 迁移完成：写标记（INSERT OR REPLACE——老库首次部署后也置位，此后冷启动走快检）
     // v0.17.175 进销单位换算新增三列（items.count_unit/item_prices.per/行 count_qty）→
     // v0.17.222 审计操作端列（audit_logs.client_type）+ 登录设备表（devices）→
@@ -834,10 +851,22 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       console.error('[taozhu] ensureSchema failed:', err);
       throw err;
     }
-  });
+    });
+  }
+  // 热 isolate 也补索引：schemaReady 已真但 indexesReady 未达成时持续重试，直到所有索引建成功，
+  // 否则冷启动期间 D1 不可用导致 ensureIndexes 没跑成会被 schemaReady 永久屏蔽
+  // （生产库缺索引、每次带条件查询退化全表扫描、D1 rows_read 额度被烧穿的根因）
+  if (!indexesReady) {
+    try {
+      indexesReady = await ensureIndexes(db);
+    } catch (e) {
+      console.warn('[taozhu] 索引补齐失败，下次请求重试:', e);
+    }
+  }
 }
 
 /** 仅供测试：重置建表缓存（每个用例用独立内存库时需要） */
 export function resetSchemaState(): void {
   schemaReady = false;
+  indexesReady = false;
 }
