@@ -289,7 +289,7 @@ describe('交易附件（R2）', () => {
     expect(row?.n ?? 0).toBe(1);
   });
 
-  it('in-use 引用自愈：实体已删但引用残留 → 不列出并清除坏引用（防同步下载 404 刷屏）', async () => {
+  it('in-use 不再自动清除引用（避免误删尚未同步到云端的交易附件）', async () => {
     // 真实单据 + 正常引用（应保留并列出）
     await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
     const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
@@ -305,7 +305,7 @@ describe('交易附件（R2）', () => {
     });
     const saleId = ((await sale.json()) as { id: string }).id;
     const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
-    // 坏引用：目标单据不存在（模拟删除交易时引用清理失败的残留）
+    // 坏引用：目标单据不存在（如实体尚未同步到云端 / 删除交易时引用清理失败残留）
     await (env.DB as FakeD1).prepare(
       "INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, 'sale', 'ghost-sale', 'taozhu/images/attachments/sale/ghost-sale/deadbeef.jpg', 'm0')",
     ).bind('ref-ghost').run();
@@ -313,12 +313,15 @@ describe('交易附件（R2）', () => {
     const scan = await (await call(env, 'GET', '/api/v1/attachments/in-use', token)).json() as {
       attachments: Array<{ key: string }>;
     };
-    // 坏引用不列出、真实引用保留
+    // 真实引用保留并列出
     expect(scan.attachments.some((o) => o.key === up.key)).toBe(true);
-    expect(scan.attachments.some((o) => o.key === 'taozhu/images/attachments/sale/ghost-sale/deadbeef.jpg')).toBe(false);
-    // 坏引用行已被自愈清除（下次同步不再下发）
+    // 引用表即权威在用：所有引用（含坏引用）都列出，不再基于"inUse 快照缺失"就删除并广播 delete——
+    // 否则交易尚未同步到云端（如 D1 额度耗尽期间）会被误判为"已删除"，导致跨设备附件被删
+    // （用户"附件持续数天完全丢失"根因，v0.17.482 修复）
+    expect(scan.attachments.some((o) => o.key === 'taozhu/images/attachments/sale/ghost-sale/deadbeef.jpg')).toBe(true);
+    // 坏引用行不再被 in-use 自愈清除（清理交给 /attachments/orphans，手动触发且有在用防误删）
     const ghost = await (env.DB as FakeD1).prepare("SELECT COUNT(*) AS n FROM attachment_refs WHERE id = 'ref-ghost'").first<{ n: number }>();
-    expect(ghost?.n ?? 0).toBe(0);
+    expect(ghost?.n ?? 0).toBe(1);
   });
 
   it('附件引用表：上传写引用、删附件清引用、删单据级联清引用', async () => {
