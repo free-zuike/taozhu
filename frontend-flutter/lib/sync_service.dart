@@ -742,7 +742,10 @@ class SyncService {
           saleItemRows.length + purchaseItemRows.length + stockRows.length + lossRows.length + adjRows.length;
     } catch (e) {
       _lastSyncFailed = true;
-      appLog('sync', '全量同步失败：${_friendlyError(e)}', level: 'error');
+      final msg = _friendlyError(e);
+      appLog('sync', '全量同步失败：$msg', level: 'error');
+      // 读额度耗尽(服务端 503+「额度」)等不可用 → 进入退避，避免自动同步持续重拉烧穿 D1 读额度
+      _maybeEnterBackoff(e, msg);
       return 0;
     }
   }
@@ -982,7 +985,10 @@ class SyncService {
       return total;
     } catch (e) {
       _lastSyncFailed = true;
-      appLog('sync', '增量拉取失败：${_friendlyError(e)}', level: 'error');
+      final msg = _friendlyError(e);
+      appLog('sync', '增量拉取失败：$msg', level: 'error');
+      // 读额度耗尽(服务端 503+「额度」)等不可用 → 进入退避，避免自动同步持续重拉烧穿 D1 读额度
+      _maybeEnterBackoff(e, msg);
       return 0;
     } finally {
       _syncing = false;
@@ -1339,8 +1345,11 @@ class SyncService {
       await _syncStocksLocal();
     } catch (e) {
       _lastSyncFailed = true;
-      appLog('sync', '同步失败: ${e.toString().split('\n').first}', level: 'error');
-      // 任一异常都不外抛（bottom_shell 无 await 调用，抛了就成 unhandled error）
+      final msg = _friendlyError(e);
+      appLog('sync', '同步失败: ${msg.split('\n').first}', level: 'error');
+      // 任一异常都不外抛（bottom_shell 无 await 调用，抛了就成 unhandled error）；
+      // 但服务端不可用(读额度耗尽 503/超时/断网)需进入退避，否则 ④~⑧ 的读取失败也会持续重拉烧穿 D1
+      _maybeEnterBackoff(e, msg);
     } finally {
       _syncRunning = false;
       _setStatus(_lastSyncFailed ? 'error' : 'idle');
