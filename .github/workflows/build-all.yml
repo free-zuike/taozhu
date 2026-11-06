@@ -882,9 +882,11 @@ jobs:
 
   deploy:
     needs: [check, miniprogram, linux, publish]
-    # 预发布分支只产出 Release 资产：不动生产 Worker、不刷新 latest.json、不上传微信小程序。
-    # 生产环境始终停留在最近一个正式版，验证通过合入 main 后再发正式版。
-    if: ${{ needs.check.outputs.is_preview != 'true' }}
+    # 内测模式：预发布（preview 分支）也部署到生产 Worker，与正式版共享同一个 D1 库 / R2 / DO。
+    # 隔离靠「客户端版本 + 请求 channel 标记」：员工/老板装正式版、走旧逻辑，不受影响；
+    # 测试者装内测版（带 channel=preview）走新逻辑。向后兼容的修正（如业务日历日）对所有人生效也安全。
+    # 不新建库、不复制数据 → D1 额度零额外消耗。
+    if: ${{ needs.check.outputs.should_run == 'true' }}
     runs-on: ubuntu-latest
     name: Deploy
     env:

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api.dart';
 import '../avatar_cache.dart';
@@ -644,6 +645,20 @@ class _MyPageState extends State<MyPage> {
     if (!mounted) return;
     setState(() => _updateChannel = picked);
     toast(context, '已切换为${updateChannelLabel(picked)}，可点「检查更新」立即查看');
+  }
+
+  /// 下载测试版：常驻入口，打开 GitHub Releases 页（含预发布版）。
+  /// 解决「第一版预发布只能手动装」的死结：正式版用户也能在此手动获取内测 APK，
+  /// 无需先切通道。仅老板/非员工可见，避免员工误装未验证版本。
+  Future<void> _openTestRelease() async {
+    final url = Uri.parse('https://github.com/free-zuike/taozhu/releases');
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } else {
+      if (!mounted) return;
+      await Clipboard.setData(ClipboardData(text: url.toString()));
+      toast(context, '已复制 GitHub Releases 链接');
+    }
   }
 
   /// 检查更新：直连 GitHub Release API（用户定案：不走服务器代理——服务器代查多一跳，
@@ -1510,6 +1525,9 @@ class _MyPageState extends State<MyPage> {
             _item(Icons.science_outlined, c.primary, '更新版本通道',
                 '当前：${updateChannelLabel(_updateChannel)}（预发布版可抢先验证 bug 修复）',
                 _pickUpdateChannel),
+            if (_role != 'staff')
+              _item(Icons.download_outlined, c.primary, '下载测试版',
+                  '获取内测预发布 APK（GitHub Releases，含预发布版）', _openTestRelease),
             _item(Icons.dns_outlined, c.primary, '下载源管理', '官方 GitHub 直连 + 自定义镜像（手动测试启用）',
                 () => goPage(context, const UpdateSourcesPage())),
             _item(Icons.cleaning_services_outlined, c.primary, '存储清理', '查看并删除安装包/临时文件，释放空间',
