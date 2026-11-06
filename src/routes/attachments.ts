@@ -220,27 +220,6 @@ attachmentsRouter.get('/in-use', async (c) => {
   const db = c.env.DB;
   const out: Array<{ key: string; entity: string; id: string; file: string; size: number }> = [];
   const seen = new Set<string>();
-  // 在用实体 id 集合（单据 id 由商品行去重聚合；② 历史兜底与 ① 引用校验共用）
-  const inUse = new Map<string, Set<string>>();
-  const add = (entity: string, id: string) => {
-    if (!id) return;
-    let s = inUse.get(entity);
-    if (!s) { s = new Set(); inUse.set(entity, s); }
-    s.add(id);
-  };
-  const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
-    // 去单据化：无 sales/purchases 头表，单据 id 由商品行去重聚合
-    db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
-    db.prepare('SELECT DISTINCT purchase_id AS id FROM purchase_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM payments').all<{ id: string }>(),
-  ]);
-  sales.results.forEach((r) => add('sale', r.id));
-  saleItems.results.forEach((r) => add('sale_item', r.id));
-  purchases.results.forEach((r) => add('purchase', r.id));
-  purchaseItems.results.forEach((r) => add('purchase_item', r.id));
-  payments.results.forEach((r) => add('payment', r.id));
   // ① 引用表（权威）：entity/id/file 直接从表取，不做任何正则
   // 引用表即权威在用：遍历 attachment_refs 全部返回给前端下载补齐。
   // 注意：不再基于"inUse 快照缺失"就删除引用并广播 delete 变更——交易尚未同步到云端
@@ -262,6 +241,7 @@ attachmentsRouter.get('/in-use', async (c) => {
   // 兜底扫描到在用对象后**补写引用表**（幂等 upsert）：引用表补全后 in-use 全引用表驱动，
   // 本地 putAll 与服务器 in-use 完全对齐（修"本地91/服务器95 差4"：4 个 R2 在用对象引用表没行，
   // 本地全量刷新始终少这几条）。
+  const legacy: Array<{ key: string; entity: string; id: string; file: string; size: number }> = [];
   const scanPrefixes = ['taozhu/images/attachments/', 'taozhu/attachments/', 'sale/', 'sale_item/', 'purchase/', 'purchase_item/', 'payment/'];
   for (const prefix of scanPrefixes) {
     let cursor: string | undefined;
@@ -271,32 +251,47 @@ attachmentsRouter.get('/in-use', async (c) => {
         if (seen.has(o.key)) continue; // 引用表已列
         const parsed = parseAttachmentKey(o.key);
         if (!parsed) continue;
-        if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) {
-          // 在用但引用表无行（v0.17.84 之前存量的旧格式 key）：补写引用表（id 幂等），
-          // 此后该对象走 ① 引用表权威路径（同 key 多实体共享时各实体各一行，补行不误删）
-          try {
-            await db.prepare(
-              'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
-            ).bind(
-              `${parsed.entity}:${parsed.id}:${o.key}`,
-              parsed.entity,
-              parsed.id,
-              o.key,
-              o.key.split('/').pop()?.replace('.jpg', '') ?? '',
-            ).run();
-          } catch (_) {}
-          seen.add(o.key);
-          out.push({
-            key: o.key,
-            entity: parsed.entity,
-            id: parsed.id,
-            file: o.key.split('/').pop() ?? '',
-            size: o.size,
-          });
-        }
+        // 先收集疑似遗留 key，待下方确有遗留才全表扫描实体 id 校验（现代库无遗留→跳过全表扫，省 D1 rows_read）
+        legacy.push({ key: o.key, entity: parsed.entity, id: parsed.id, file: o.key.split('/').pop() ?? '', size: o.size });
       }
       cursor = r.truncated ? r.cursor : undefined;
     } while (cursor);
+  }
+  // ② 历史兜底校验+补写（延迟）：仅当 R2 扫描发现遗留 key 才全表扫描实体 id 校验（现代库无遗留→整段跳过，省 D1 rows_read）
+  if (legacy.length > 0) {
+    const inUse = new Map<string, Set<string>>();
+    const add = (entity: string, id: string) => {
+      if (!id) return;
+      let s = inUse.get(entity);
+      if (!s) { s = new Set(); inUse.set(entity, s); }
+      s.add(id);
+    };
+    const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
+      // 去单据化：无 sales/purchases 头表，单据 id 由商品行去重聚合
+      db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items').all<{ id: string }>(),
+      db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
+      db.prepare('SELECT DISTINCT purchase_id AS id FROM purchase_items').all<{ id: string }>(),
+      db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
+      db.prepare('SELECT id FROM payments').all<{ id: string }>(),
+    ]);
+    sales.results.forEach((r) => add('sale', r.id));
+    saleItems.results.forEach((r) => add('sale_item', r.id));
+    purchases.results.forEach((r) => add('purchase', r.id));
+    purchaseItems.results.forEach((r) => add('purchase_item', r.id));
+    payments.results.forEach((r) => add('payment', r.id));
+    for (const lk of legacy) {
+      if ((inUse.get(lk.entity) ?? new Set()).has(lk.id)) {
+        // 在用但引用表无行（v0.17.84 之前存量的旧格式 key）：补写引用表（id 幂等），
+        // 此后该对象走 ① 引用表权威路径（同 key 多实体共享时各实体各一行，补行不误删）
+        try {
+          await db.prepare(
+            'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
+          ).bind(`${lk.entity}:${lk.id}:${lk.key}`, lk.entity, lk.id, lk.key, lk.key.split('/').pop()?.replace('.jpg', '') ?? '').run();
+        } catch (_) {}
+        seen.add(lk.key);
+        out.push({ key: lk.key, entity: lk.entity, id: lk.id, file: lk.file, size: lk.size });
+      }
+    }
   }
   // ③ 存量凭证收敛迁移（幂等，单条 SQL 无 JS 循环）：0.17.281-296 期间实现为「每商品行各挂
   // 一份行级引用」（识别原图扩散到每行），用户规格已回调=对齐参考实现「交易级单记录」——
@@ -332,8 +327,15 @@ attachmentsRouter.get('/in-use', async (c) => {
        )`,
     ).bind(lineType, lineType, orderType).run();
   };
-  await consolidateLineRefs('sale');
-  await consolidateLineRefs('purchase');
+  // 一次性收敛迁移：schema_meta 标记锁，跑过即不再每同步执行（避免每次同步 JOIN 扫描行表烧 D1 额度）
+  {
+    const consolidated = await db.prepare("SELECT value FROM schema_meta WHERE key = 'attachment_line_consolidated'").first<{ value: string }>();
+    if (!consolidated) {
+      await consolidateLineRefs('sale');
+      await consolidateLineRefs('purchase');
+      await db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('attachment_line_consolidated', '1')").run();
+    }
+  }
   return c.json({
     attachments: out,
     total: out.length,
