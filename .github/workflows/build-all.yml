@@ -708,9 +708,9 @@ jobs:
             const c=JSON.parse(fs.readFileSync(p,'utf8'));
             c.setting=c.setting||{};
             c.setting.minified=true;
-            // 现代微信基础库原生支持 ES2015+；关掉 es6→es5 转换可避免 babel
-            // 把已压缩的 Vite 产物重新展开（单这一项就多出约 600KB）。
-            c.setting.es6=false;
+            // es6 转换必须保留：Vite 产物含 ?. / ?? 等新语法，关闭后微信解析直接报
+            // -80057 SyntaxError: Unexpected token ?。靠 minified 压缩抵消 babel 膨胀。
+            c.setting.es6=true;
             fs.writeFileSync(p, JSON.stringify(c,null,2));
             console.log('上传设置: ' + JSON.stringify(c.setting));
           "
