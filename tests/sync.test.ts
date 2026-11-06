@@ -1,5 +1,5 @@
 /** 同步协议端到端测试：变更流 + LWW 冲突 + push/pull/full。 */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
 import { hashPassword, randomId } from '../src/lib/password';
@@ -395,6 +395,55 @@ describe('同步协议', () => {
     expect(Array.isArray(d.items)).toBe(true);
     expect(Array.isArray(d.sales)).toBe(true);
     expect(d.server_cursor).toBeGreaterThan(0);
+  });
+
+  it('full 首同步：120 单不再按 90 分批 IN 回表，明细字段仍完整（rows_read 护栏）', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    const clientId = clients.clients[0].id;
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ id: string; prices: Array<{ id: string }> }>;
+    };
+    const itemId = items.items[0].id;
+    // 120 个单据 × 2 明细行：超过 D1 单条 100 绑定参数上限，旧实现必然分批 IN
+    for (let i = 0; i < 120; i++) {
+      for (let j = 0; j < 2; j++) {
+        await env.DB.prepare(
+          `INSERT INTO sale_items (id, sale_id, item_id, client_id, unit, quantity, sale_price, cost_price, amount, happened_at)
+           VALUES (?, ?, ?, ?, '斤', 1, 2.5, 2, 2.5, '2026-01-03')`,
+        ).bind(`l-${i}-${j}`, `s-${i}`, itemId, clientId).run();
+      }
+    }
+
+    const sqls: string[] = [];
+    const orig = env.DB.prepare.bind(env.DB);
+    const spy = vi.spyOn(env.DB, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return orig(sql);
+    }) as typeof env.DB.prepare);
+    let d: { sales: Array<{ items: Array<Record<string, unknown>> }>; sale_items: unknown[] };
+    try {
+      const res = await call(env, 'GET', '/api/v1/sync/full', token);
+      expect(res.status).toBe(200);
+      d = (await res.json()) as typeof d;
+    } finally {
+      spy.mockRestore();
+    }
+
+    // 两条来源都已改为一次平铺读，不再有 sale_id/purchase_id IN(...) 分批回表
+    expect(sqls.filter((s) => /sale_id\s+IN\s*\(/i.test(s))).toHaveLength(0);
+    expect(sqls.filter((s) => /purchase_id\s+IN\s*\(/i.test(s))).toHaveLength(0);
+    expect(sqls.filter((s) => /FROM sale_items si ORDER BY si\.sort/i.test(s))).toHaveLength(1);
+    expect(sqls.filter((s) => /JOIN items i ON i\.id = si\.item_id/i.test(s))).toHaveLength(1); // 仅行级数组保留
+    expect(d.sales).toHaveLength(120);
+    expect(d.sale_items).toHaveLength(240);
+    expect(d.sales[0].items).toHaveLength(2);
+    expect(d.sales[0].items[0].item_name).toBe('白菜');
+    expect(d.sales[0].items[0]).toHaveProperty('item_category');
+    expect(d.sales[0].items[0].cost_price).toBe(2);
   });
 
   it('full 首同步快照：不含已软删的店铺/商品（删除后全量同步不得复活）', async () => {

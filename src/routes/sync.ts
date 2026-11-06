@@ -232,17 +232,30 @@ syncRouter.get('/full', async (c) => {
             SUM(si.amount) AS total, MIN(si.note) AS note
      FROM sale_items si GROUP BY si.sale_id ORDER BY happened_at DESC`,
   ).all();
-  const saleIds = salesRows.results.map((r) => (r as { id: string }).id);
   const clientIds = [...new Set(salesRows.results.map((r) => (r as { client_id: string }).client_id))];
   const clientNameRows = await chunkQuery(clientIds, (chunk) =>
     db.prepare(
       `SELECT id, name FROM clients WHERE id IN (${chunk.map(() => '?').join(',')})`,
     ).bind(...chunk).all<{ id: string; name: string }>().then((r) => r.results));
   const clientNameOf = new Map(clientNameRows.map((c) => [c.id, c.name]));
-  const saleDetail = await chunkQuery(saleIds, (chunk) =>
-    db.prepare(
-      `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id WHERE si.sale_id IN (${chunk.map(() => '?').join(',')}) ORDER BY si.sort, si.created_at`,
-    ).bind(...chunk).all().then((r) => r.results));
+  // full 本来就要下发全部明细：一次平铺读 sale_items + 一张小表 Map 拼装即可。
+  // 旧形态按 90 个 sale_id 分批 IN、且逐行 JOIN items 回表，是生产 Top #1 消耗源。
+  // 保留原 INNER JOIN 口径：商品已不存在（无 items 行）的明细不下发。
+  // 全表（含软删）：原明细 JOIN items 不带 deleted_at 条件，软删商品的明细仍要下发
+  const allItemRows = await db.prepare('SELECT id, name, category FROM items')
+    .all<{ id: string; name: string | null; category: string | null }>();
+  const itemInfo = new Map(allItemRows.results.map((i) => [i.id, {
+    name: i.name ?? '', category: i.category ?? '',
+  }]));
+  const saleFlat = await db.prepare(
+    'SELECT si.* FROM sale_items si ORDER BY si.sort, si.created_at',
+  ).all<Record<string, unknown>>();
+  const saleDetail: Array<Record<string, unknown>> = [];
+  for (const row of saleFlat.results) {
+    const info = itemInfo.get(String(row.item_id));
+    if (!info) continue;
+    saleDetail.push({ ...row, item_name: info.name, item_category: info.category });
+  }
   const bySale = new Map<string, unknown[]>();
   for (const d of saleDetail) {
     const list = bySale.get((d as { sale_id: string }).sale_id) ?? [];
@@ -271,11 +284,16 @@ syncRouter.get('/full', async (c) => {
             SUM(pi.amount) AS total, MIN(pi.note) AS note
      FROM purchase_items pi GROUP BY pi.purchase_id ORDER BY happened_at DESC`,
   ).all();
-  const purchaseIds = purchaseRows.results.map((r) => (r as { id: string }).id);
-  const purchaseDetail = await chunkQuery(purchaseIds, (chunk) =>
-    db.prepare(
-      `SELECT pi.*, i.name AS item_name FROM purchase_items pi JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id IN (${chunk.map(() => '?').join(',')}) ORDER BY pi.sort, pi.created_at`,
-    ).bind(...chunk).all().then((r) => r.results));
+  // 同样去掉按 purchase_id 分批 IN + JOIN items 回表，复用上面的商品小表 Map
+  const purchaseFlat = await db.prepare(
+    'SELECT pi.* FROM purchase_items pi ORDER BY pi.sort, pi.created_at',
+  ).all<Record<string, unknown>>();
+  const purchaseDetail: Array<Record<string, unknown>> = [];
+  for (const row of purchaseFlat.results) {
+    const info = itemInfo.get(String(row.item_id));
+    if (!info) continue;
+    purchaseDetail.push({ ...row, item_name: info.name });
+  }
   const byPurchase = new Map<string, unknown[]>();
   for (const d of purchaseDetail) {
     const list = byPurchase.get((d as { purchase_id: string }).purchase_id) ?? [];
