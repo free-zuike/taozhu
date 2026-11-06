@@ -698,6 +698,22 @@ jobs:
             console.log('WXSS 移除 H5 字体引用 ' + (before-s.length) + ' 字节');
           "
           rm -f "$MP/static/fonts/MaterialIcons-Regular.woff2"
+          # 微信 80051 的 source size 只统计「编译后的代码文件」：删静态资源不影响它。
+          # uni-app 生成的 project.config.json 默认 minified:false + es6:true，
+          # miniprogram-ci 会先 babel 转换再打包，把约 1.4MB 源码撑到 2077KB > 2MB。
+          # 打开上传时压缩（只压代码、不改语法语义），并让 ci 明确采用项目设置。
+          node -e "
+            const fs=require('fs');
+            const p='$MP/project.config.json';
+            const c=JSON.parse(fs.readFileSync(p,'utf8'));
+            c.setting=c.setting||{};
+            c.setting.minified=true;
+            // 现代微信基础库原生支持 ES2015+；关掉 es6→es5 转换可避免 babel
+            // 把已压缩的 Vite 产物重新展开（单这一项就多出约 600KB）。
+            c.setting.es6=false;
+            fs.writeFileSync(p, JSON.stringify(c,null,2));
+            console.log('上传设置: ' + JSON.stringify(c.setting));
+          "
           echo "清理完成"
 
       - name: Upload to WeChat platform (miniprogram-ci)
@@ -720,6 +736,8 @@ jobs:
             --upload-version "$MP_VER" \
             --upload-description "陶朱 v$VERSION 自动上传" \
             --enable-minify \
+            --enable-minify-js --enable-minify-wxml --enable-minify-wxss \
+            --use-project-config \
             -r 1 ; then
             echo "微信小程序 v${VERSION} 已上传成功"
           else
