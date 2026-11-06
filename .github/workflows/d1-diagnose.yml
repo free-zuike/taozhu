@@ -12,6 +12,10 @@ on:
         description: '累计排行时间窗（1h / 1d / 7d）'
         required: false
         default: '1d'
+  # 每 2 小时自动体检一次：不查业务表（GraphQL 分析 + sqlite_master + EXPLAIN），
+  # 但会按当前小时速率外推 UTC 日终累计，额度快见底时提前在日志里告警。
+  schedule:
+    - cron: '17 */2 * * *'
 
 permissions:
   contents: read
@@ -77,13 +81,24 @@ jobs:
             console.log('=== D1 每小时 rowsRead（UTC） ===');
             for(const k of Object.keys(h).sort()) console.log(k+':00Z  rowsRead='+h[k]);
             console.log('=== 今日累计 rowsRead = '+today+' | readQueries = '+queries+' | 分钟样本 = '+g.length+' ===');
+            // 按最近一个「完整 UTC 小时」的速率外推到 UTC 日终（D1 免费额度按 UTC 日重置）。
+            // 面板口径通常比 GraphQL Analytics 高 15~20%（含系统/内部读），阈值按此留余量。
+            const now=new Date();
+            const curKey=now.toISOString().slice(0,13);
+            const fullHours=Object.keys(h).filter(k=>k.startsWith(day)&&k<curKey).sort();
+            const last=fullHours[fullHours.length-1];
+            const rate=last?h[last]:0;
+            const remain=24-now.getUTCHours()-now.getUTCMinutes()/60;
+            const projected=Math.round(today+rate*remain);
+            console.log('=== 额度预测（GraphQL 口径）: 近一完整小时 '+last+':00Z = '+rate+' 行/时 | 距 UTC 重置 '+remain.toFixed(1)+'h | 预计日终 = '+projected+' / 5,000,000 ===');
+            if(projected>4200000) console.log('::warning::D1 免费额度可能不足：GraphQL 口径预计日终 '+projected+'，面板口径一般再高 15~20%，请降低同步频率或升级套餐');
             if(!g.length) console.log('(无数据) '+JSON.stringify(d).slice(0,800));
           " || true
 
       - name: D1 按 SQL 查询排行（wrangler d1 insights，官方 rows_read 排行）
         env:
           DB_ID: ${{ steps.ids.outputs.database_id }}
-          PERIOD: ${{ inputs.period }}
+          PERIOD: ${{ inputs.period || '1d' }}
         run: |
           echo "=== 最近 1 小时 Top 查询（部署后止血效果） ==="
           npx --yes wrangler@latest d1 insights "$DB_ID" --sort-by=reads --time-period=1h --limit=30 --json 2>&1 | tee /tmp/insights-1h.json
