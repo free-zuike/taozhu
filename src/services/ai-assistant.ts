@@ -13,6 +13,8 @@ import {
 } from './ai-tools';
 import { ApiError } from '../lib/api-error';
 import { recordTransactionFromText } from './ai-record';
+import { localTodayISO, dayRangeEnd, parseMonthRange } from '../lib/biz-date';
+import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesAggByConfig } from '../lib/money';
 import type { D1Database } from '@cloudflare/workers-types';
 
 const money = (v: number): string => `¥${Math.round((Number(v) || 0) * 100) / 100}`;
@@ -102,17 +104,20 @@ export async function memoryContext(db: D1Database, userId: string): Promise<str
 export async function buildAssistantContext(db: D1Database, role: string): Promise<string> {
   const isStaff = role !== 'admin';
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
+  const today = localTodayISO(now);
   const month = today.slice(0, 7) + '-01';
-  const limitDate = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-
+  const tomorrow = dayRangeEnd(today);
+  const limitDate = localTodayISO(new Date(now.getTime() + 7 * 86400000));
+  // 全部区间用 [起, 次日) 开区间：兼容 happened_at 的纯日期与带时分秒两种存量格式。
+  // 旧写法 payments 下界用 `${today} 00:00:00`，而 '2026-11-06' < '2026-11-06 00:00:00'，
+  // 会把纯日期存储的收款全部排除，导致今日/本月收款恒为 0。
   const [saleToday, saleMonth, payToday, payMonth, buyToday, buyMonth, cntItem, cntClient] = await Promise.all([
-    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s FROM sale_items WHERE happened_at LIKE ?').bind(`${today}%`).first<{ n: number; s: number }>(),
-    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s, COALESCE(SUM(quantity * cost_price),0) AS c FROM sale_items WHERE happened_at >= ?').bind(month).first<{ n: number; s: number; c: number }>(),
-    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE happened_at >= ?').bind(`${today} 00:00:00`).first<{ n: number; s: number }>(),
-    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE happened_at >= ?').bind(`${month} 00:00:00`).first<{ n: number; s: number }>(),
-    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s FROM purchase_items WHERE happened_at LIKE ?').bind(`${today}%`).first<{ n: number; s: number }>(),
-    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s FROM purchase_items WHERE happened_at >= ?').bind(month).first<{ n: number; s: number }>(),
+    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s FROM sale_items WHERE happened_at >= ? AND happened_at < ?').bind(today, tomorrow).first<{ n: number; s: number }>(),
+    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s, COALESCE(SUM(quantity * cost_price),0) AS c FROM sale_items WHERE happened_at >= ? AND happened_at < ?').bind(month, tomorrow).first<{ n: number; s: number; c: number }>(),
+    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE happened_at >= ? AND happened_at < ?').bind(today, tomorrow).first<{ n: number; s: number }>(),
+    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE happened_at >= ? AND happened_at < ?').bind(month, tomorrow).first<{ n: number; s: number }>(),
+    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s FROM purchase_items WHERE happened_at >= ? AND happened_at < ?').bind(today, tomorrow).first<{ n: number; s: number }>(),
+    db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s FROM purchase_items WHERE happened_at >= ? AND happened_at < ?').bind(month, tomorrow).first<{ n: number; s: number }>(),
     db.prepare("SELECT COUNT(*) AS n FROM items WHERE deleted_at IS NULL").first<{ n: number }>(),
     db.prepare("SELECT COUNT(*) AS n FROM clients WHERE deleted_at IS NULL").first<{ n: number }>(),
   ]);
@@ -128,7 +133,7 @@ export async function buildAssistantContext(db: D1Database, role: string): Promi
     const saleByClient = await db.prepare(
       `SELECT s.client_id, c.name AS name, COALESCE(SUM(s.amount),0) AS s
        FROM sale_items s JOIN clients c ON c.id = s.client_id
-       WHERE s.client_id != '' AND c.deleted_at IS NULL
+       WHERE c.deleted_at IS NULL
        GROUP BY s.client_id`,
     ).all<{ client_id: string; name: string; s: number }>();
     const payByClient = await db.prepare(
@@ -165,11 +170,11 @@ export async function buildAssistantContext(db: D1Database, role: string): Promi
   const expRows = await db.prepare(
     `SELECT i.name, sb.unit, SUM(sb.remaining) AS qty, MIN(sb.expiry_date) AS exp
      FROM stock_batches sb JOIN items i ON i.id = sb.item_id
-     WHERE sb.expiry_date IS NOT NULL AND sb.expiry_date != '' AND sb.expiry_date <= ? AND sb.remaining > 0 AND i.deleted_at IS NULL
+     WHERE sb.expiry_date IS NOT NULL AND sb.expiry_date != '' AND sb.expiry_date < ? AND sb.remaining > 0 AND i.deleted_at IS NULL
      GROUP BY sb.item_id, sb.unit
      ORDER BY exp ASC
      LIMIT 5`,
-  ).bind(limitDate).all<{ name: string; unit: string; qty: number; exp: string }>();
+  ).bind(dayRangeEnd(limitDate)).all<{ name: string; unit: string; qty: number; exp: string }>();
   if (expRows.results.length > 0) {
     lines.push(`临期（${limitDate} 前到期）：${expRows.results.map((r) => `${r.name} 剩 ${qty(r.qty)}${r.unit}（${r.exp} 到期）`).join('；')}。`);
   }
@@ -189,11 +194,11 @@ export async function chatWithAssistant(
   const baseUrl = ep.baseUrl.replace(/\/+$/, '');
   const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
   const system = [
-    '你是「陶朱进销存」的 AI 助手，帮店主查看经营数据、管理库存。以下是当前业务数据快照（不是编造，以它为准）：',
-    '--- 数据快照 ---',
+    '你是「陶朱进销存」的 AI 助手，帮店主查看经营数据、管理库存。以下是本次查到的业务数据（不是编造，以它为准）：',
+    '--- 数据快照 / 查询结果 ---',
     context,
     '--- 回答规则 ---',
-    '1. 只依据上面的数据快照作答；快照里没有的，老实说"暂无这项数据"，绝不编造数字。',
+    '1. 只依据上面的数据作答；没有的，老实说"暂无这项数据"，绝不编造数字。金额、笔数、日期区间必须原样引用，禁止自行求和、跨月推算、四舍五入或改用别的区间。',
     '2. 被问到"卖了多少/赚了多少/谁欠款/该补什么货/有什么临期"等经营问题时，直接给数字和清单，简洁、口语化。',
     '3. 如果用户想记一笔账/录单（如"帮我记一笔：老王拿了2箱苹果"），委婉引导：请到「记单」页用 AI 识别记账（拍照/语音/文字），本助手专注问数与提醒，不能直接落单。',
     '4. 被问"怎么用/功能在哪"等使用问题时，用一两句话说明（记单在底部「记单」页、统计在「统计」页、库存盘点在「库存」页右上角、对账单在「对账单」、备份在「我的→备份」）。',
@@ -283,9 +288,9 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
     '(b) 功能用法（怎么用/功能在哪/说明）→ intent="kb"，topics 填相关主题词；',
     '(c) 要记一笔账（如"记一笔：白菜2斤3元一斤""给老王送2箱苹果"）→ intent="record"，record 填 {purpose:"sale"|"purchase", text:用户原话}——出货（卖/送/给XX）填 sale，进货填 purchase（默认 purchase）；',
     '(d) 其他（问候/闲聊）→ intent="chat"。',
-    `今天日期 ${ctxText.split('\n')[0] ?? ''}。`,
+    `今天日期 ${localTodayISO()}（业务时区 UTC+8；按此日历日换算"上个月/本月/今年"等相对时间）。${ctxText.split('\n')[0] ?? ''}`,
     'view 可选："summary"(任意区间汇总)/"clients"(区间按店出货与欠款)/"debts"(当前欠款)/"items"(区间商品销量排行)/"monthly"(某年按月)/"daily"(区间按日)/"years"(有哪些年份数据)。',
-    'start/end 必须是 YYYY-MM-DD（用户说相对时间如"上个月/去年/今年"时换算成具体起止日）；clients 的 client 填店铺名称（没有则为 null）；year 是数字年份（没有为 null）；kind 为 sale 或 purchase（进货相关填 purchase，默认 sale）。',
+    'start/end 必须是 YYYY-MM-DD（含首日与末日整天）；说"上个月/某月"时 start=该月 1 日、end=该月最后一天（按真实天数，如 10 月 31 日、2 月 28/29 日），不要写成 30 日；clients 的 client 填店铺名称（没有则为 null）；year 是数字年份（没有为 null）；kind 为 sale 或 purchase（进货相关填 purchase，默认 sale）。',
     '记忆指令：用户明确说"记住/记下来/别忘了 XXX" → remember=XXX；说"忘记/忘掉/删除 记忆 XXX"（或"忘记刚才记住的 XX"）→ forget=XXX；否则两者都 null。',
     '只输出一个 JSON 对象（不要多余文字）：{"intent":"query"|"kb"|"chat"|"record","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null,"record":null}',
     '无法归类/不确定→ intent="chat"。',
@@ -334,7 +339,7 @@ export async function runBusinessQuery(
   db: D1Database, role: string, q: Intent,
 ): Promise<string | null> {
   const isStaff = role !== 'admin';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localTodayISO();
   let clientId: string | null = null;
   if (q.client) {
     const row = await db.prepare(
@@ -349,34 +354,52 @@ export async function runBusinessQuery(
       const start = q.start || `${today.slice(0, 4)}-01-01`;
       const end = q.end || today;
       if (end < start) return `${start} 至 ${end} 区间无效（开始晚于结束）`;
-      const where = `happened_at >= ? AND happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`;
-      const params: string[] = [start, end, ...(clientId ? [clientId] : [])];
-      const [sale, pay, buy] = await Promise.all([
-        db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s, COALESCE(SUM(quantity * cost_price),0) AS c FROM sale_items WHERE ${where}`).bind(...params).first<{ n: number; s: number; c: number }>(),
-        db.prepare(`SELECT COALESCE(SUM(amount + waived),0) AS s, COUNT(*) AS n FROM payments WHERE happened_at >= ? AND happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`).bind(...params).first<{ s: number; n: number }>(),
-        db.prepare(`SELECT COALESCE(SUM(amount),0) AS s FROM purchase_items WHERE happened_at >= ? AND happened_at <= ?`).bind(start, end).first<{ s: number }>(),
+      const endEx = dayRangeEnd(end);
+      // 上界开区间：闭区间 `<= 'YYYY-MM-DD'` 会漏掉末日带时分秒的历史/导入单据
+      const where = `happened_at >= ? AND happened_at < ?${clientId ? ' AND client_id = ?' : ''}`;
+      const params: string[] = [start, endEx, ...(clientId ? [clientId] : [])];
+      // 金额口径与 /stats/summary 一致：逐笔 roundMoney 累加 + 各店抹零配置，
+      // 不用 SQL SUM 原始浮点后一次四舍五入（digits=0/1 或抹零店会差出整元）。
+      const moneyCfg = await getRoundingConfig(db);
+      const r = (n: unknown) => roundMoney(Number(n || 0), moneyCfg);
+      const [cfgRows, saleRows, payRows, buyRows] = await Promise.all([
+        db.prepare('SELECT id, round_stage, round_unit, round_carry FROM clients')
+          .all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
+        db.prepare(`SELECT client_id, sale_id, happened_at, amount, quantity, cost_price FROM sale_items WHERE ${where}`)
+          .bind(...params).all<{ client_id: string | null; sale_id: string; happened_at: string | null; amount: number; quantity: number; cost_price: number }>(),
+        db.prepare(`SELECT amount, waived FROM payments WHERE ${where}`)
+          .bind(...params).all<{ amount: number; waived: number }>(),
+        db.prepare('SELECT amount FROM purchase_items WHERE happened_at >= ? AND happened_at < ?')
+          .bind(start, endEx).all<{ amount: number }>(),
       ]);
-      const profit = isStaff ? null : ((sale?.s ?? 0) - (sale?.c ?? 0));
+      const cfgMap = new Map(cfgRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
+      const salesTotal = salesAggByConfig(saleRows.results, cfgMap, moneyCfg);
+      const costTotal = saleRows.results.reduce((s, x) => s + r(Number(x.cost_price) * Number(x.quantity)), 0);
+      const profit = isStaff ? null : (salesTotal - costTotal);
+      const paidTotal = payRows.results.reduce((s, x) => s + r(Number(x.amount) + Number(x.waived)), 0);
+      const buyTotal = buyRows.results.reduce((s, x) => s + r(x.amount), 0);
       lines.push(`区间 ${start} ~ ${end}${clientId ? '（指定店铺）' : ''}：`);
-      lines.push(`出货 ${sale?.n ?? 0} 笔、${money(sale?.s ?? 0)}${profit !== null ? `，毛利 ${money(profit)}` : ''}；`);
-      lines.push(`进货 ${money(buy?.s ?? 0)}；收款 ${pay?.n ?? 0} 笔、${money(pay?.s ?? 0)}。`);
+      lines.push(`出货 ${saleRows.results.length} 笔、${money(salesTotal)}${profit !== null ? `，毛利 ${money(profit)}` : ''}；`);
+      lines.push(`进货 ${money(buyTotal)}；收款 ${payRows.results.length} 笔、${money(paidTotal)}。`);
       return lines.join('\n');
     }
     case 'clients': {
       const start = q.start || '2000-01-01';
       const end = q.end || today;
+      const endEx = dayRangeEnd(end);
+      // INNER JOIN clients 已保证 client_id 有效，旧条件 `!= ''` 会额外排除 NULL 散单
       const saleRows = await db.prepare(
         `SELECT s.client_id, c.name, COALESCE(SUM(s.amount),0) AS s
          FROM sale_items s JOIN clients c ON c.id = s.client_id
-         WHERE s.client_id != '' AND s.happened_at >= ? AND s.happened_at <= ? AND c.deleted_at IS NULL
+         WHERE s.happened_at >= ? AND s.happened_at < ? AND c.deleted_at IS NULL
          GROUP BY s.client_id ORDER BY s DESC LIMIT 10`,
-      ).bind(start, end).all<{ client_id: string; name: string; s: number }>();
+      ).bind(start, endEx).all<{ client_id: string; name: string; s: number }>();
       if (saleRows.results.length === 0) return '该区间没有出货记录';
       // 欠款=截止 end 全部出货−全部收款
       const cids = saleRows.results.map((r) => r.client_id);
       const payRows = await db.prepare(
-        `SELECT client_id, COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE happened_at <= ? AND client_id IN (${cids.map(() => '?').join(',')}) GROUP BY client_id`,
-      ).bind(end, ...cids).all<{ client_id: string; s: number }>();
+        `SELECT client_id, COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE happened_at < ? AND client_id IN (${cids.map(() => '?').join(',')}) GROUP BY client_id`,
+      ).bind(endEx, ...cids).all<{ client_id: string; s: number }>();
       const payMap = new Map(payRows.results.map((r) => [r.client_id, r.s]));
       lines.push(`区间 ${start} ~ ${end} 各店出货额：`);
       for (const r of saleRows.results) {
@@ -391,7 +414,7 @@ export async function runBusinessQuery(
         db.prepare(
           `SELECT s.client_id, c.name, COALESCE(SUM(s.amount),0) AS s
            FROM sale_items s JOIN clients c ON c.id = s.client_id
-           WHERE s.client_id != '' AND c.deleted_at IS NULL
+           WHERE c.deleted_at IS NULL
            GROUP BY s.client_id`,
         ).all<{ client_id: string; name: string; s: number }>(),
         db.prepare('SELECT client_id, COALESCE(SUM(amount + waived),0) AS s FROM payments GROUP BY client_id').all<{ client_id: string; s: number }>(),
@@ -410,12 +433,13 @@ export async function runBusinessQuery(
     case 'items': {
       const start = q.start || `${today.slice(0, 4)}-01-01`;
       const end = q.end || today;
+      const endEx = dayRangeEnd(end);
       const rows = await db.prepare(
         `SELECT i.name, s.unit, COALESCE(SUM(s.quantity),0) AS q, COALESCE(SUM(s.amount),0) AS a
          FROM sale_items s JOIN items i ON i.id = s.item_id
-         WHERE s.happened_at >= ? AND s.happened_at <= ? AND i.deleted_at IS NULL
+         WHERE s.happened_at >= ? AND s.happened_at < ? AND i.deleted_at IS NULL
          GROUP BY s.item_id, s.unit ORDER BY a DESC LIMIT 10`,
-      ).bind(start, end).all<{ name: string; unit: string; q: number; a: number }>();
+      ).bind(start, endEx).all<{ name: string; unit: string; q: number; a: number }>();
       if (rows.results.length === 0) return '该区间没有出货记录';
       lines.push(`区间 ${start} ~ ${end} 出货排行（按金额）：`);
       lines.push(rows.results.map((r) => `${r.name} ${qty(r.q)}${r.unit} · ${money(r.a)}`).join('；'));
@@ -425,9 +449,9 @@ export async function runBusinessQuery(
       const year = q.year || Number(today.slice(0, 4));
       const rows = await db.prepare(
         `SELECT substr(happened_at,1,7) AS m, COALESCE(SUM(amount),0) AS s, COALESCE(SUM(quantity*cost_price),0) AS c
-         FROM sale_items WHERE happened_at >= ? AND happened_at <= ?
+         FROM sale_items WHERE happened_at >= ? AND happened_at < ?
          GROUP BY m ORDER BY m`,
-      ).bind(`${year}-01-01`, `${year}-12-31`).all<{ m: string; s: number; c: number }>();
+      ).bind(`${year}-01-01`, `${year + 1}-01-01`).all<{ m: string; s: number; c: number }>();
       if (rows.results.length === 0) return `暂无 ${year} 年的出货数据`;
       lines.push(`${year} 年各月出货额：`);
       lines.push(rows.results.map((r) => `${r.m.slice(5)}月 ${money(r.s)}${isStaff ? '' : `（毛利 ${money(r.s - r.c)}）`}`).join('；'));
@@ -436,11 +460,12 @@ export async function runBusinessQuery(
     case 'daily': {
       const start = q.start || `${today.slice(0, 4)}-01-01`;
       const end = q.end || today;
+      const endEx = dayRangeEnd(end);
       const rows = await db.prepare(
         `SELECT substr(happened_at,1,10) AS d, COALESCE(SUM(amount),0) AS s
-         FROM sale_items WHERE happened_at >= ? AND happened_at <= ?
+         FROM sale_items WHERE happened_at >= ? AND happened_at < ?
          GROUP BY d ORDER BY d LIMIT 31`,
-      ).bind(start, end).all<{ d: string; s: number }>();
+      ).bind(start, endEx).all<{ d: string; s: number }>();
       if (rows.results.length === 0) return '该区间没有出货记录';
       lines.push(`区间 ${start} ~ ${end} 每日出货额：`);
       lines.push(rows.results.map((r) => `${r.d} ${money(r.s)}`).join('；'));
@@ -491,7 +516,25 @@ export async function assistantAnswer(
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   const userText = lastUser?.content ?? '';
   const ctxText = await (async () => (await buildAssistantContext(db, role)).split('\n')[0])();
-  const intent = await extractIntent(cfg, userText, ctxText);
+  let intent = await extractIntent(cfg, userText, ctxText);
+  // 「某个月」的起止日由服务端按业务时区确定性算出：LLM 常把月末写成 30 日，
+  // 或在北京时间月初按 UTC 今天把「上个月」算错整月。明确问某月数据却没识别成
+  // query 时也直接兜底为区间汇总（避免拿"今日/本月快照"去回答历史月份）。
+  const monthRange = parseMonthRange(userText);
+  const nonQuery = intent && (intent.intent === 'record' || intent.intent === 'kb'
+    || !!intent.record || !!intent.remember || !!intent.forget);
+  if (monthRange && !nonQuery) {
+    if (!intent || intent.intent !== 'query') {
+      intent = {
+        intent: 'query', view: 'summary', start: monthRange.start, end: monthRange.end,
+        client: null, kind: 'sale', year: null, topics: [], remember: null, forget: null, record: null,
+      };
+    } else {
+      intent.start = monthRange.start;
+      intent.end = monthRange.end;
+      if (!intent.view) intent.view = 'summary';
+    }
+  }
   const sources: string[] = [];
   const extras: string[] = [];
   const tools: AssistantToolResult[] = [];

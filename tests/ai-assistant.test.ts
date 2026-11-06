@@ -12,6 +12,7 @@ import {
   saveAiMemory, listAiMemories, forgetAiMemoryByContent, deleteAiMemory, clearAiMemories,
 } from '../src/services/ai-assistant';
 import { DEFAULT_AI_CONFIG, type AiConfig } from '../src/services/ai-parse';
+import { localTodayISO, parseMonthRange } from '../src/lib/biz-date';
 
 const JWT_SECRET = 'test-secret';
 const BASE = 'http://localhost';
@@ -514,6 +515,84 @@ describe('AI 记忆与对话历史（0.17.476）', () => {
       expect((await call(env, 'DELETE', '/api/v1/ai/memories', token)).status).toBe(200);
       const mem6 = (await (await call(env, 'GET', '/api/v1/ai/memories', token)).json()) as { memories: unknown[] };
       expect(mem6.memories).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('AI 月度问数：日期与金额口径（v0.17.504）', () => {
+  let env: { DB: FakeD1; ASSETS: typeof fakeAssets; JWT_SECRET: string };
+  let db: FakeD1;
+  let token: string;
+
+  beforeEach(async () => {
+    env = (await setup()).env;
+    db = env.DB;
+    token = await loginAdmin(env);
+  });
+
+  const summaryIntent = (start: string, end: string) => ({
+    intent: 'query' as const, view: 'summary' as const, start, end,
+    client: null, kind: 'sale' as const, year: null, topics: [],
+  });
+
+  const insSale = (id: string, date: string, amount = 10, cost = 5) =>
+    db.prepare(
+      `INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at)
+       VALUES (?, ?, NULL, 'i-x', '斤', 1, ?, ?, ?, ?)`,
+    ).bind(id, id, amount, cost, amount, date).run();
+
+  it('区间末日的单据计入、次日不计入（含带时分秒的历史/导入格式）', async () => {
+    await insSale('r1', '2026-10-31');
+    await insSale('r2', '2026-10-31 08:20:00');
+    await insSale('r3', '2026-11-01 00:00:00');
+    const out = await runBusinessQuery(db as never, 'admin', summaryIntent('2026-10-01', '2026-10-31'));
+    expect(out).toContain('出货 2 笔');
+    expect(out).toContain('¥20');
+  });
+
+  it('出货总额与 /stats/summary 同口径：逐笔舍入（digits=0 时 1.6+1.6=¥4，不是 ¥3）', async () => {
+    await db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('round_digits','0')").run();
+    await insSale('a1', '2026-10-15', 1.6, 0);
+    await insSale('a2', '2026-10-16', 1.6, 0);
+    const out = await runBusinessQuery(db as never, 'admin', summaryIntent('2026-10-01', '2026-10-31'));
+    expect(out).toContain('¥4');
+    const stat = await call(env, 'GET', '/api/v1/stats/summary?start=2026-10-01&end=2026-10-31', token)
+      .then((r) => r.json()) as { sales_total: number };
+    expect(stat.sales_total).toBe(4);
+  });
+
+  it('今日/本月收款：纯日期 happened_at 不再被 `00:00:00` 下界排除', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: 'A店' });
+    const cl = ((await call(env, 'GET', '/api/v1/clients', token).then((r) => r.json())) as {
+      clients: Array<{ id: string }>;
+    }).clients[0];
+    await db.prepare('INSERT INTO payments (id, client_id, happened_at, amount, waived) VALUES (?, ?, ?, ?, 0)')
+      .bind('p1', cl.id, localTodayISO(), 88).run();
+    const ctx = await buildAssistantContext(db as never, 'admin');
+    expect(ctx).toContain('¥88');
+  });
+
+  it('问「上个月」即使模型没识别出 query，也按业务时区的确定性区间查数', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: { body: string }) => {
+      bodies.push(init.body);
+      const content = bodies.length === 1
+        ? '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null,"record":null}'
+        : '好的。';
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }));
+    try {
+      // 直接调编排入口，传入内存 cfg，绕开 /ai/chat 对 settings 里 API Key 的要求
+      const outcome = await assistantAnswer(cfg, db as never, [
+        { role: 'user', content: '上个月一共卖了多少钱' },
+      ], 'admin', 'u-test');
+      expect(outcome.reply).toBeTruthy();
+      const m = parseMonthRange('上个月', localTodayISO())!;
+      expect(bodies.join('\n')).toContain(`区间 ${m.start} ~ ${m.end}`);
     } finally {
       vi.unstubAllGlobals();
     }
