@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
 import { hashPassword, randomId } from '../src/lib/password';
+import { localTodayISO } from '../src/lib/biz-date';
 import { createFakeD1, fakeAssets, type FakeD1 } from './helpers/fake-d1';
 
 const JWT_SECRET = 'test-secret';
@@ -300,7 +301,7 @@ describe('按店铺分类汇总对账（美食城多档口总账）', () => {
   });
 
   it('聚合分类下各档口出货/收款/期末欠款与总合计', async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localTodayISO();
     // 1号档出货 5 斤（100 元，单价 2 → sale_items amount=10，重复两次=20）、2号档出货 10 斤=20
     // 用直接插入保证可控金额（happened_at 用纯日期，与生产格式一致：YYYY-MM-DD）——去单据化：无 sales 头
     await env.DB.prepare('INSERT INTO sale_items (id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')

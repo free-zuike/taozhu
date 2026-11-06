@@ -18,12 +18,16 @@ export function localTodayISO(now: Date = new Date()): string {
  * 纯日历次日（YYYY-MM-DD），用 UTC 构造避免运行环境时区二次偏移。
  * 非法输入原样返回，避免 AI/前端传来的脏日期打断整段回答。
  */
-export function nextDayISO(day: string): string {
+export function addDaysISO(day: string, days: number): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
   if (!m) return day;
   const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-  d.setUTCDate(d.getUTCDate() + 1);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+export function nextDayISO(day: string): string {
+  return addDaysISO(day, 1);
 }
 
 /**

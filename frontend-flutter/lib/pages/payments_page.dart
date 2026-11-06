@@ -9,6 +9,7 @@ import '../log.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../utils/biz_date.dart';
 import '../widgets/date_field.dart';
 import '../widgets/number_pad_field.dart';
 import 'router.dart';
@@ -36,11 +37,8 @@ class _PaymentsPageState extends State<PaymentsPage> {
   bool _busy = false;
   bool _loading = true;
 
-  /// 今日日期（YYYY-MM-DD），登记默认值；可改=补录历史日期
-  static String _today() {
-    final n = DateTime.now();
-    return '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
-  }
+  /// 今日日期（YYYY-MM-DD，业务时区 UTC+8），登记默认值；可改=补录历史日期
+  static String _today() => bizTodayISO();
 
   @override
   void initState() {

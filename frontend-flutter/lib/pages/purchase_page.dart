@@ -17,6 +17,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/ai_local.dart';
 import '../utils/money.dart';
+import '../utils/biz_date.dart';
 import '../widgets/date_field.dart';
 import '../widgets/center_sheet.dart';
 import '../widgets/number_pad_field.dart';
@@ -104,11 +105,8 @@ class _PurchasePageState extends State<PurchasePage> {
   late final String _purchaseId =
       _editing ? widget.editId! : 'p${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(0x7fffffff)}';
 
-  /// 今日日期（YYYY-MM-DD），表单默认值；可改=补录历史日期
-  static String _today() {
-    final n = DateTime.now();
-    return '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
-  }
+  /// 今日日期（YYYY-MM-DD，业务时区 UTC+8），表单默认值；可改=补录历史日期
+  static String _today() => bizTodayISO();
 
   /// 批量直编模式（进货历史某日进入：该日全部行平铺，按原单分组 PATCH）
   bool get isDateRows => widget.dateRows != null && widget.dateRows!.isNotEmpty;

@@ -8,12 +8,12 @@
 /// 暂不支持（依赖服务端写库）：记忆读写、动态数据查询。一句话落单（出货/进货）已本地化。
 /// Web 端无本地库，调用方不应降级到此。
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:intl/intl.dart';
 import 'dart:math' show Random;
 import '../api.dart';
 import '../local_db.dart';
 import '../sync_service.dart' show SyncService;
 import '../utils/ai_local.dart' show aiLocalChat, aiLoadConfig, aiParseText;
+import '../utils/biz_date.dart' show bizTodayISO;
 
 String _fmt(num v) {
   if ((v.roundToDouble() - v).abs() < 0.005) return v.round().toString();
@@ -25,7 +25,7 @@ String _fmt(num v) {
 Future<String> buildAssistantContextLocal(String role) async {
   final isStaff = role != 'admin';
   final now = DateTime.now();
-  final today = DateFormat('yyyy-MM-dd').format(now);
+  final today = bizTodayISO(now);
   final month = '${today.substring(0, 7)}-01';
 
   final sales = await LocalDb.getAll('sale_items');

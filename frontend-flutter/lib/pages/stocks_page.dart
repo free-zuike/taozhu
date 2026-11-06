@@ -6,6 +6,7 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../utils/biz_date.dart';
 import '../widgets/center_sheet.dart';
 import '../widgets/number_pad_field.dart';
 import 'router.dart';
@@ -602,7 +603,7 @@ class _StocksPageState extends State<StocksPage> {
           final r = await Api.instance.post('/stocks/adjust', {
             'id': 'c${DateTime.now().millisecondsSinceEpoch}${_countingNonce()}',
             'rows': adjustRows,
-            'happened_at': DateTime.now().toIso8601String().substring(0, 10),
+            'happened_at': bizTodayISO(),
           });
           final surplus = (r['surplus'] as num?)?.toDouble() ?? 0;
           final shortage = (r['shortage'] as num?)?.toDouble() ?? 0;

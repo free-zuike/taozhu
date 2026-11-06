@@ -14,6 +14,8 @@ import '../theme.dart';
 import '../utils/money.dart';
 import '../utils/update_sources.dart';
 import '../utils/github_release.dart';
+import '../utils/update_channel.dart';
+import '../utils/pending_download.dart';
 import '../version.dart';
 import 'router.dart';
 import 'items_page.dart';
@@ -83,10 +85,15 @@ class _MyPageState extends State<MyPage> {
   int _lastTapAt = 0;
   /// 检查更新请求进行中（防止连点重复发请求/弹多个更新窗）
   bool _checkingUpdate = false;
+  /// 更新通道（默认正式版；用户可在「我的 → 系统」切换到预发布版参与验证）
+  UpdateChannel _updateChannel = UpdateChannel.stable;
 
   @override
   void initState() {
     super.initState();
+    loadUpdateChannel().then((c) {
+      if (mounted) setState(() => _updateChannel = c);
+    });
     Api.instance.getBase().then((b) {
       if (mounted) setState(() => _base = b);
     });
@@ -605,6 +612,40 @@ class _MyPageState extends State<MyPage> {
     return false;
   }
 
+  /// 切换更新通道：默认正式版；打开预发布后才会收到 bugfix 独立分支产出的 prerelease。
+  /// 设置只存本机（SharedPreferences），不影响其它设备，也不改变服务端的强制更新门禁。
+  Future<void> _pickUpdateChannel() async {
+    final picked = await showDialog<UpdateChannel>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('更新版本通道'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, UpdateChannel.stable),
+            child: const ListTile(
+              leading: Icon(Icons.verified_outlined),
+              title: Text('正式版（默认）'),
+              subtitle: Text('只接收已确认的正式 Release，稳定优先'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, UpdateChannel.preview),
+            child: const ListTile(
+              leading: Icon(Icons.science_outlined),
+              title: Text('预发布版'),
+              subtitle: Text('抢先接收 bugfix 预发布版本用于验证，可能不稳定'),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    await saveUpdateChannel(picked);
+    if (!mounted) return;
+    setState(() => _updateChannel = picked);
+    toast(context, '已切换为${updateChannelLabel(picked)}，可点「检查更新」立即查看');
+  }
+
   /// 检查更新：直连 GitHub Release API（用户定案：不走服务器代理——服务器代查多一跳，
   /// 国内网络反而更不稳；APK 下载已有镜像加速，检查只需拿到版本号与更新日志）
   Future<void> _checkUpdate() async {
@@ -627,7 +668,7 @@ class _MyPageState extends State<MyPage> {
     // Web 端特殊处理：版本由部署方控制，刷新不升级（fork 实例需重新部署）。仅如实提示版本号
     if (kIsWeb) {
       try {
-        final d = await fetchLatestRelease();
+        final d = await fetchLatestRelease(channel: _updateChannel);
         final ver = '${d['latest'] ?? ''}';
         toast(context, ver.isEmpty
             ? '当前部署版本 v$APP_VERSION'
@@ -644,7 +685,7 @@ class _MyPageState extends State<MyPage> {
     var d = <String, dynamic>{};
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
-        d = await fetchLatestRelease();
+        d = await fetchLatestRelease(channel: _updateChannel);
         if ('${d['latest'] ?? ''}'.isNotEmpty) break;
       } catch (_) {}
       if (attempt < 2) await Future.delayed(const Duration(milliseconds: 600));
@@ -694,6 +735,9 @@ class _MyPageState extends State<MyPage> {
           defaultTargetPlatform == TargetPlatform.linux;
       // 本地已有该版本安装包（下载完未安装）→ 直接引导安装，不再重复下载
       final localApk = (isAndroid || isDesktop) ? await _findLocalApk(ver) : null;
+      // 有未完成下载记录 → 更新弹窗改叫「继续下载」，明确告诉用户可从断点接着下
+      final pending = await loadPendingDownload();
+      final hasPending = pending?.ver == ver && localApk == null;
       if (!mounted) return;
       final action = await showDialog<String>(
         context: context,
@@ -708,6 +752,16 @@ class _MyPageState extends State<MyPage> {
                 children: [
                   Text('当前 v$APP_VERSION → 最新 v$ver',
                       style: const TextStyle(fontWeight: FontWeight.w600)),
+                  if (hasPending) ...[
+                    const SizedBox(height: 6),
+                    const Text('检测到上次中断的下载，点「继续下载」从断点接着下',
+                        style: TextStyle(fontSize: 12, color: Colors.blue)),
+                  ],
+                  if ('${d['channel'] ?? 'stable'}' == 'preview') ...[
+                    const SizedBox(height: 6),
+                    const Text('⚠️ 预发布版本（更新通道=预发布）：仅供验证，可能不稳定',
+                        style: TextStyle(fontSize: 12, color: Colors.orange)),
+                  ],
                   if (notes.isNotEmpty) ...[
                     const SizedBox(height: 10),
                     const Text('更新内容', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
@@ -757,7 +811,8 @@ class _MyPageState extends State<MyPage> {
                 FilledButton(onPressed: () => Navigator.pop(ctx, 'installLocal'), child: const Text('直接安装')),
               if (isAndroid || isDesktop) ...[
                 TextButton(onPressed: () => Navigator.pop(ctx, 'pick'), child: const Text('选择下载源')),
-                FilledButton(onPressed: () => Navigator.pop(ctx, 'update'), child: const Text('立即更新')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, 'update'),
+                    child: Text(hasPending ? '继续下载' : '立即更新')),
               ] else
                 FilledButton(onPressed: () => Navigator.pop(ctx, 'copy'), child: const Text('复制下载链接')),
             ],
@@ -825,7 +880,7 @@ class _MyPageState extends State<MyPage> {
           if (results.isEmpty) {
             Future.microtask(() async {
               final r = await Future.wait(prefixes.map((p) async {
-                final ms = await probeDownloadSource(p);
+                final ms = await probeDownloadSource(p, ver: ver);
                 return (p, ms);
               }));
               if (ctx.mounted) {
@@ -870,7 +925,13 @@ class _MyPageState extends State<MyPage> {
         },
       ),
     );
-    if (picked != null) await _downloadAndInstall(ver, forcedPrefix: picked);
+    if (picked == null) return;
+    // 桌面端不走 Android DownloadManager（MethodChannel 不存在，旧实现会报「启动下载失败」）
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      await _downloadAndInstall(ver, forcedPrefix: picked);
+    } else {
+      await _downloadDesktop(ver, forcedPrefix: picked);
+    }
   }
 
   /// 构建中就绪自动重试：每 30 秒查一次，安装包就绪后提醒（最多约 2 分钟）
@@ -879,7 +940,7 @@ class _MyPageState extends State<MyPage> {
       await Future.delayed(const Duration(seconds: 30));
       if (!mounted) return;
       try {
-        final d = await fetchLatestRelease();
+        final d = await fetchLatestRelease(channel: _updateChannel);
         if ('${d['latest'] ?? ''}' == ver && d['ready'] != false) {
           toast(context, 'v$ver 安装包已就绪，可以更新了');
           return;
@@ -973,15 +1034,33 @@ class _MyPageState extends State<MyPage> {
   Future<void> _downloadAndInstall(String ver, {String? forcedPrefix}) async {
     _downloading = true;
     final fileName = 'taozhu-update-$ver.apk';
-    // 清理同名残留（上次中断/未下完的旧文件）：避免系统下载器续接/覆盖损坏包，也防残留再被误判可安装
-    try {
-      final dir = await getDownloadsDirectory();
-      final stale = File('${dir?.path}/$fileName');
-      if (await stale.exists()) await stale.delete();
-    } catch (_) {}
-    try {
-      await _dlChannel.invokeMethod('deleteFiles', {'names': [fileName]});
-    } catch (_) {}
+    // 先尝试接上「上次中断」的系统下载：DownloadManager 自己会断点续传，旧实现一进来
+    // 就删文件 + remove 记录，把正在重试的下载取消掉；随后 15 分钟轮询又因切页 unmount
+    // 直接退出，App 再也想不起来这个下载 → 用户看到「下载中断后不再继续」。
+    // 用户手动「选择下载源」时不恢复旧下载：明确指定新源 = 想换个源从头重下
+    if (forcedPrefix != null) await clearPendingDownload();
+    final saved = forcedPrefix == null ? await loadPendingDownload() : null;
+    int? resumeId;
+    if (saved != null && saved.ver == ver && saved.androidId != null) {
+      try {
+        final st = await _dlChannel.invokeMethod<Map>('status', {'id': saved.androidId}) ?? const {};
+        final s = (st['status'] as int?) ?? -1;
+        // 1=PENDING / 2=RUNNING / 4=PAUSED（等网络/WiFi）：都还活着，直接恢复轮询
+        if (s == 1 || s == 2 || s == 4) resumeId = saved.androidId;
+      } catch (_) {}
+      if (resumeId == null) await clearPendingDownload();
+    }
+    if (resumeId == null) {
+      // 只有全新下载才清理残留（未下完的坏包 / 被镜像拦截页污染的假文件）
+      try {
+        final dir = await getDownloadsDirectory();
+        final stale = File('${dir?.path}/$fileName');
+        if (await stale.exists()) await stale.delete();
+      } catch (_) {}
+      try {
+        await _dlChannel.invokeMethod('deleteFiles', {'names': [fileName]});
+      } catch (_) {}
+    }
     final custom = await loadUpdateSources();
     final specified = specifiedSource;
     final prefixes = forcedPrefix != null
@@ -1006,22 +1085,38 @@ class _MyPageState extends State<MyPage> {
     try {
       // 下载前并行轻量探测（HEAD Range 0-0），过滤不可达源，避免直接失败；
       // 置顶源（用户指定镜像）可达时固定第一优先
-      final usable = await _probeSources(prefixes, pinned: forcedPrefix ?? specified);
-      if (usable.isEmpty) {
+      // 恢复已有下载时无需再探测（省 10s，也避免弱网时把全部源误判为不可达）
+      var usable = resumeId == null
+          ? await _probeSources(prefixes, pinned: forcedPrefix ?? specified, ver: ver)
+          : <String>[];
+      if (resumeId == null && usable.isEmpty) {
         toast(context, '所有下载源均不可达，请稍后重试或从 GitHub Release 页手动下载');
         return;
       }
       var urlIdx = 0;
-      while (urlIdx < usable.length) {
-        final id = await _dlChannel
-            .invokeMethod<int>('enqueue', {'url': '${usable[urlIdx]}$base', 'fileName': fileName});
-        if (id == null) {
-          urlIdx++;
-          continue;
+      while (resumeId != null || urlIdx < usable.length) {
+        final int id;
+        final rid = resumeId;
+        if (rid != null) {
+          id = rid;
+          resumeId = null; // 只恢复一次；若仍失败则回到正常换源流程
+          if (mounted) toast(context, '已继续上次中断的下载，下拉通知栏查看进度');
+        } else {
+          final enq = await _dlChannel
+              .invokeMethod<int>('enqueue', {'url': '${usable[urlIdx]}$base', 'fileName': fileName});
+          if (enq == null) {
+            urlIdx++;
+            continue;
+          }
+          id = enq;
+          await savePendingDownload(PendingDownload(
+            ver: ver, fileName: fileName, url: '${usable[urlIdx]}$base', androidId: id,
+          ));
+          if (mounted) {
+            toast(context,
+                urlIdx == 0 ? '已在后台开始下载，下拉通知栏查看进度' : '该下载源失败，已自动切换下一个源…');
+          }
         }
-        if (!mounted) return;
-        toast(context,
-            urlIdx == 0 ? '已在后台开始下载，下拉通知栏查看进度' : '该下载源失败，已自动切换下一个源…');
         var failed = false;
         // 轮询系统下载状态（每 3 秒，上限 15 分钟；通知栏本身也在实时显示进度）
         for (var i = 0; i < 300; i++) {
@@ -1051,28 +1146,39 @@ class _MyPageState extends State<MyPage> {
               failed = true;
               break;
             }
+            await clearPendingDownload();
             await _installFromDownloads(fileName, size);
             return;
           }
           if (status == -1 || status == 12) {
             // -1 = 下载记录已消失（通知栏取消，DownloadManager 移除记录）｜
             // 12 = DownloadManager.STATUS_CANCELED。用户手动取消 → 立即停止，不换源
+            await clearPendingDownload();
             toast(context, '已取消下载');
             return;
           }
           if (status == 16) {
-            // DownloadManager.STATUS_FAILED → 换下一个可用源重试
+            // DownloadManager.STATUS_FAILED → 旧记录作废，换下一个可用源重试
+            await clearPendingDownload();
             failed = true;
             break;
           }
         }
         if (failed) {
-          urlIdx++;
+          if (usable.isEmpty) {
+            // 恢复的旧下载最终失败：重新探测源，自动换源从头再下一次，不把用户卡在「已中断」
+            usable = await _probeSources(prefixes, pinned: forcedPrefix ?? specified, ver: ver);
+            urlIdx = 0;
+          } else {
+            urlIdx++;
+          }
           continue;
         }
-        // 超时（大文件/慢网）：下载仍由系统继续，用户可从通知栏查看
+        // 轮询到上限（大文件/慢网）或页面已销毁：不清除 pending，下载仍在系统后台继续；
+        // 下次点「继续下载」按 id 接回同一个下载，而不是从头重来。
         return;
       }
+      await clearPendingDownload();
       toast(context, '下载失败（所有可用源均失败），请稍后重试或从 GitHub Release 页手动下载');
     } catch (e) {
       toast(context, '启动下载失败：${e.toString().replaceFirst('Exception: ', '')}');
@@ -1085,9 +1191,9 @@ class _MyPageState extends State<MyPage> {
   /// 按响应耗时升序返回（最快源优先，避免固定顺序导致"第一次不是最快的"）。
   /// 入参为下载前缀列表（'' = 官方直连），探测函数内部拼完整资产 URL。
   /// [pinned] 非空 = 置顶源（「下载源管理」指定的镜像）：可达时固定第一位，不被耗时排序挤掉。
-  Future<List<String>> _probeSources(List<String> prefixes, {String pinned = ''}) async {
+  Future<List<String>> _probeSources(List<String> prefixes, {String pinned = '', String? ver}) async {
     final results = await Future.wait(prefixes.map((p) async {
-      final ms = await probeDownloadSource(p);
+      final ms = await probeDownloadSource(p, ver: ver);
       return ms == null ? null : (p, ms);
     }));
     final usable = <(String, int)>[];
@@ -1137,7 +1243,7 @@ class _MyPageState extends State<MyPage> {
 
   /// 桌面端（Windows/macOS/Linux）：应用内下载对应系统安装包（前台进度条），
   /// 直链失败自动换镜像，保存到下载目录后引导解压覆盖安装。
-  Future<void> _downloadDesktop(String ver) async {
+  Future<void> _downloadDesktop(String ver, {String? forcedPrefix}) async {
     final fileName = switch (defaultTargetPlatform) {
       TargetPlatform.windows => 'taozhu-windows-$ver.zip',
       TargetPlatform.macOS => 'taozhu-macos-$ver.zip',
@@ -1153,6 +1259,21 @@ class _MyPageState extends State<MyPage> {
       'https://gh-proxy.com/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/$fileName',
       'https://ghfast.top/https://github.com/free-zuike/taozhu/releases/download/taozhu-v$ver/$fileName',
     ];
+    // 断点续传：上次中断的 .part 与源 URL 一起保留。只有同一个源才允许 Range 续传——
+    // 不同镜像返回的内容不一定逐字节一致，跨源拼接会产出坏包；换源一律从头开始。
+    // 用户手动「选择下载源」= 明确要换个源重下，此时清进度、只用指定源。
+    if (forcedPrefix != null) await clearPendingDownload();
+    final pending = forcedPrefix == null ? await loadPendingDownload() : null;
+    final canResume = pending != null &&
+        pending.ver == ver && pending.fileName == fileName && pending.url.isNotEmpty;
+    final official = urls.first;
+    final ordered = forcedPrefix != null
+        ? <String>[forcedPrefix.isEmpty ? official : '$forcedPrefix$official']
+        : <String>[...urls];
+    if (canResume && ordered.contains(pending!.url)) {
+      ordered.remove(pending.url);
+      ordered.insert(0, pending.url);
+    }
     var downloaded = 0;
     var total = 0;
     final progress = ValueNotifier<double>(0);
@@ -1185,26 +1306,44 @@ class _MyPageState extends State<MyPage> {
     );
     try {
       final dir = await getDownloadsDirectory();
-      final file = File('${dir?.path}/$fileName');
+      if (dir == null) throw Exception('找不到下载目录');
+      final file = File('${dir.path}/$fileName');
+      final part = File('${dir.path}/$fileName.part');
       var ok = false;
-      for (final url in urls) {
+      for (var i = 0; i < ordered.length; i++) {
+        final url = ordered[i];
+        // 只有首选源（与上次中断同一个源）才允许 Range 续传；
+        // 换源或服务端不支持 Range 一律从头写，避免拼出坏包
+        var offset = 0;
+        if (i == 0 && canResume && url == pending!.url && await part.exists()) {
+          offset = await part.length();
+        }
         downloaded = 0;
         total = 0;
         progress.value = 0;
         final client = http.Client();
         try {
-          final res = await client.send(http.Request('GET', Uri.parse(url)));
-          // 非 200 或响应明显不是安装包（镜像返回 HTML 错误页）→ 换下一个源
-          if (res.statusCode != 200 || (res.contentLength ?? 0) < 1000000) {
+          final req = http.Request('GET', Uri.parse(url));
+          if (offset > 0) req.headers['Range'] = 'bytes=$offset-';
+          final res = await client.send(req);
+          final code = res.statusCode;
+          final remaining = res.contentLength ?? 0;
+          // 206=断点续传成功；200=服务端忽略 Range，从头重下；其它状态/拦截页 → 换源
+          if ((code != 200 && code != 206) || (code == 200 && remaining < 1000000)) {
             client.close();
             continue;
           }
-          total = res.contentLength ?? 0;
-          final sink = file.openWrite();
+          final appending = code == 206 && offset > 0;
+          final baseBytes = appending ? offset : 0;
+          total = baseBytes + remaining;
+          downloaded = baseBytes;
+          // 先记下本轮所用源，中断后下次仍用同一个源续传
+          await savePendingDownload(PendingDownload(ver: ver, fileName: fileName, url: url));
+          final sink = part.openWrite(mode: appending ? FileMode.append : FileMode.write);
           try {
             await for (final chunk in res.stream) {
               downloaded += chunk.length;
-              if (total > 0) progress.value = downloaded / total;
+              if (total > 0) progress.value = (downloaded / total).clamp(0.0, 1.0).toDouble();
               sink.add(chunk);
             }
             await sink.flush();
@@ -1213,7 +1352,7 @@ class _MyPageState extends State<MyPage> {
           }
           ok = true;
         } catch (_) {
-          // 网络/超时：换下一个源
+          // 网络中断：保留 .part 与进度记录，下次点「继续下载」从已落盘字节续传
         } finally {
           client.close();
         }
@@ -1221,9 +1360,21 @@ class _MyPageState extends State<MyPage> {
       }
       if (!ok) {
         if (mounted) Navigator.of(context, rootNavigator: true).pop();
-        toast(context, '下载失败（直链与镜像均不可达），可稍后重试');
+        toast(context, '下载中断，已保留进度；再点「继续下载」会从断点接着下');
         return;
       }
+      // 完整落盘后才改成正式文件名：未下完的 .part 永远不会被当成可安装的成品
+      final size = await part.length();
+      if (size < 1000000) {
+        await part.delete();
+        await clearPendingDownload();
+        if (mounted) Navigator.of(context, rootNavigator: true).pop();
+        toast(context, '下载内容异常（疑似拦截页），已清除进度，请重试');
+        return;
+      }
+      if (await file.exists()) await file.delete();
+      await part.rename(file.path);
+      await clearPendingDownload();
       progress.value = 1;
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
       if (!mounted) return;
@@ -1356,6 +1507,9 @@ class _MyPageState extends State<MyPage> {
                 () => goPage(context, const ThemeSettingsPage())),
             _item(Icons.system_update_alt_outlined, c.primary, '检查更新',
                 kIsWeb ? 'Web 版随部署更新' : '对比最新版本，应用内下载安装', _checkUpdate),
+            _item(Icons.science_outlined, c.primary, '更新版本通道',
+                '当前：${updateChannelLabel(_updateChannel)}（预发布版可抢先验证 bug 修复）',
+                _pickUpdateChannel),
             _item(Icons.dns_outlined, c.primary, '下载源管理', '官方 GitHub 直连 + 自定义镜像（手动测试启用）',
                 () => goPage(context, const UpdateSourcesPage())),
             _item(Icons.cleaning_services_outlined, c.primary, '存储清理', '查看并删除安装包/临时文件，释放空间',

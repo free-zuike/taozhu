@@ -79,7 +79,7 @@ describe('buildAssistantContext 业务快照', () => {
   it('admin 快照含毛利与欠款；店员快照打码不含', async () => {
     await call(env, 'POST', '/api/v1/clients', token, { name: 'A店' });
     const it = await mkItem('白菜');
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localTodayISO();
     await call(env, 'POST', '/api/v1/purchases', token, { happened_at: today, items: [{ price_id: it.price_id, quantity: 10 }] });
     await call(env, 'POST', '/api/v1/sales', token, { client_id: '', happened_at: today, items: [{ price_id: it.price_id, quantity: 2 }] });
     // 出货指定 A 店（欠款）：直接插行更可控

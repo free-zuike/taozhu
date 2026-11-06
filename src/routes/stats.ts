@@ -7,6 +7,7 @@ import { authMiddleware } from '../middleware/auth';
 import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesSideRounded, salesAggByConfig } from '../lib/money';
 import { versionedSnapshot, unaffectedTypes } from '../lib/snapshot';
 import { loadLedgerDerived } from '../lib/ledger-derived';
+import { localTodayISO } from '../lib/biz-date';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -16,8 +17,6 @@ statsRouter.use('*', authMiddleware());
 // 店员可见统计但隐藏毛利：各接口已按 can_see_profit（admin 才 true）把 gross_profit 归零，
 // 出货/收款/欠款对店员可见（送货视角需要）。不再全局 403（小程序工作台/统计页店员需能看）。
 // 历史 v0.16.21 曾全挡 staff → 403，导致小程序店员「统计页没有权限查看」。
-
-const nowIso = () => new Date().toISOString();
 
 /** overview 依赖 sale_items / payments / clients / items 计数；下列写入都不影响。
  *  item 不能列入（item_count 会变）；未知/新增 entity_type 一律保守重算。 */
@@ -32,7 +31,7 @@ const OVERVIEW_UNRELATED_TYPES = [
 
 // GET /stats/overview?date=YYYY-MM-DD — 工作台卡片（今日出货/毛利/收款 + 全局欠款/规模）
 statsRouter.get('/overview', async (c) => {
-  const date = c.req.query('date')?.trim() || nowIso().slice(0, 10);
+  const date = c.req.query('date')?.trim() || localTodayISO();
   const db = c.env.DB;
   const canSeeProfit = c.get('user').role === 'admin';
   const money = await getRoundingConfig(db);
@@ -379,7 +378,7 @@ statsRouter.get('/summary', async (c) => {
 statsRouter.get('/debts', async (c) => {
   const db = c.env.DB;
   const money = await getRoundingConfig(c.env.DB);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localTodayISO();
   // v0.17.499：与 /summary 同源的截止明细全表扫，缓存按店聚合后的小结果（today 进指纹，跨天自动重算）
   const { data } = await versionedSnapshot(
     db, 'stats_debts',

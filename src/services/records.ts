@@ -9,9 +9,8 @@ import { consumeFifoStatements } from '../lib/fifo';
 import { getRoundingConfig, roundMoney } from '../lib/money';
 import { recordAudit } from '../routes/audit';
 import { ApiError } from '../lib/api-error';
+import { localTodayISO } from '../lib/biz-date';
 import type { D1Database } from '@cloudflare/workers-types';
-
-const nowIso = () => new Date().toISOString();
 
 export interface PurchaseLineInput {
   price_id: string;
@@ -76,7 +75,7 @@ export async function createPurchaseOrder(
 
   const priceMap = new Map(priceRows.map((p) => [p.id, p]));
   const purchaseId = orderIdWith('p');
-  const happenedAt = input.happened_at?.trim() || nowIso().slice(0, 10);
+  const happenedAt = input.happened_at?.trim() || localTodayISO();
   const note = input.note?.trim() ?? '';
   let total = 0;
   const money = await getRoundingConfig(db);
@@ -148,7 +147,7 @@ export async function createSaleOrder(
 
   const priceMap = new Map(priceRows.map((p) => [p.id, p]));
   const saleId = orderIdWith('s');
-  const happenedAt = input.happened_at?.trim() || nowIso().slice(0, 10);
+  const happenedAt = input.happened_at?.trim() || localTodayISO();
   const note = input.note?.trim() ?? '';
   const saleItemIds: string[] = [];
   let total = 0;

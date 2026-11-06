@@ -146,6 +146,7 @@ import { ref, computed } from 'vue';
 ;
 import { request, getToken } from '../../api';
 import { fmtAmount } from '../../utils/money';
+import { localTodayISO } from '../../utils/biz-date';
 
 interface Stock { id: string; item_id: string; item_name: string; unit: string; quantity: number; min_stock: number; low: boolean; count_unit?: string; _others?: Stock[] }
 
@@ -356,7 +357,7 @@ async function submitCount() {
       const r = await request<{ adjusted: number; surplus: number; shortage: number }>('/stocks/adjust', 'POST', {
         id: 'c' + Date.now() + Math.floor(Math.random() * 9000 + 1000),
         rows: adjustRows2,
-        happened_at: new Date().toISOString().slice(0, 10),
+        happened_at: localTodayISO(),
       });
       msg = `调整 ${r?.adjusted ?? adjustRows2.length} 项`
         + (Number(r?.surplus) ? `，盘盈 ${fmtQty(r!.surplus)}` : '')

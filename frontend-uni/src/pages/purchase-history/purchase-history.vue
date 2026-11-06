@@ -140,6 +140,7 @@ import { ref, computed } from 'vue';
 import { request, getToken, getAttachments, uploadAttachment, deleteAttachment, attachmentUrl } from '../../api';
 import { attachIconSrc } from '../../attach-icon';
 import { fmtAmount, fmtPrice } from '../../utils/money';
+import { localTodayISO } from '../../utils/biz-date';
 
 const selYear = ref(new Date().getFullYear());
 const selMonth = ref(new Date().getMonth() + 1);
@@ -218,7 +219,7 @@ const itemForm = ref<{
   category: string;
 }>({ show: false, orderId: '', itemId: '', itemName: '', quantity: '', unit: '', salePrice: '', countQty: '', countUnit: '', date: '', note: '', category: '' });
 
-const today = new Date().toISOString().slice(0, 10);
+const today = localTodayISO();
 
 function onFormDate(e: { detail: { value: string } }) {
   itemForm.value.date = e.detail.value;

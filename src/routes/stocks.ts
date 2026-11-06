@@ -8,6 +8,7 @@ import { consumeFifoStatements, consumeLossStatements } from '../lib/fifo';
 import { randomId } from '../lib/password';
 import { recordChange, type SyncChangeInput } from '../lib/sync';
 import { versionedSnapshot } from '../lib/snapshot';
+import { localTodayISO, addDaysISO } from '../lib/biz-date';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
 
@@ -125,16 +126,18 @@ stocksRouter.get('/', async (c) => {
     .sort((a, b) => a.item_name.localeCompare(b.item_name) || a.unit.localeCompare(b.unit));
   // 建议预警阈值 = 近 30 天平均每笔出货量 × 40%（无出货记录则 0）。
   // 前端仅"阈值未手动设置（min_stock=0）且库存 ≥1"时自动填充，不覆盖用户手设值。
-  // 这是**建议值**而非账面数字：允许日级陈旧。按 UTC 日期做 fingerprint + 一天 TTL，
+  // 这是**建议值**而非账面数字：允许日级陈旧。按业务日历日做 fingerprint + 一天 TTL，
   // 写操作不打掉它（affectedSince 恒 false），一天只跑一次全量聚合；旧实现每次打开库存页
   // 都 chunkQuery 分批扫 sale_items（当日 10.9 万行来源）。全量聚合不带 item_id IN 过滤，
   // 与 q / below 过滤无关，缓存不会因搜索词碎片化。
-  const suggestDay = new Date().toISOString().slice(0, 10);
+  const suggestDay = localTodayISO();
+  // SQLite date('now') 是 UTC 日历日，北京时间 00:00–08:00 会少算一天；按业务日历日传参
+  const suggestFrom = addDaysISO(suggestDay, -30);
   const { data: avgRows } = await versionedSnapshot(c.env.DB, 'stock_suggest', async () =>
     (await c.env.DB.prepare(
       `SELECT item_id, unit, AVG(quantity) AS avg_qty FROM sale_items
-       WHERE happened_at >= date('now','-30 day') GROUP BY item_id, unit`,
-    ).all<{ item_id: string; unit: string; avg_qty: number }>()).results,
+       WHERE happened_at >= ? GROUP BY item_id, unit`,
+    ).bind(suggestFrom).all<{ item_id: string; unit: string; avg_qty: number }>()).results,
     suggestDay, { ttlMs: 24 * 60 * 60_000, affectedSince: async () => false });
   const suggest = new Map(avgRows.map((r) => [
     `${r.item_id}\u0000${r.unit}`,
@@ -165,8 +168,8 @@ stocksRouter.get('/', async (c) => {
 // 首页/「我的」提醒用；同商品+单位多批合并显示最早到期批，剩余量=各批合计。
 stocksRouter.get('/alerts', async (c) => {
   const days = Math.min(Math.max(Number(c.req.query('days')) || 7, 1), 90);
-  const today = new Date().toISOString().slice(0, 10);
-  const limitDate = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+  const today = localTodayISO();
+  const limitDate = addDaysISO(today, days);
   const [agg, stockRows, itemRows, expRows] = await Promise.all([
     stockAgg(c.env.DB),
     c.env.DB.prepare('SELECT item_id, unit, min_stock FROM stocks').all<{ item_id: string; unit: string; min_stock: number }>(),
@@ -395,7 +398,7 @@ stocksRouter.post('/loss', adminOnly(), async (c) => {
   if (!itemId || !unit || !Number.isFinite(qty) || qty <= 0) {
     return c.json({ error: '请填写商品/单位/损耗数量（>0）' }, 400);
   }
-  const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
+  const happenedAt = body?.happened_at?.trim() || localTodayISO();
   const { amount, leftover, stmts } = await consumeLossStatements(c.env.DB, itemId, unit, qty);
   if (leftover > 0) {
     return c.json({ error: `损耗数量超过当前库存（还差 ${Math.round(leftover * 100) / 100}${unit}）` }, 400);
@@ -470,7 +473,7 @@ stocksRouter.post('/adjust', adminOnly(), async (c) => {
   // 防重复提交：同一盘点单只允许执行一次（连点/重试不会二次调整库存）
   const dup = await c.env.DB.prepare('SELECT 1 FROM stock_adjustments WHERE adjust_id = ? LIMIT 1').bind(adjustId).first();
   if (dup) return c.json({ error: '该盘点单已提交过，请勿重复提交' }, 400);
-  const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
+  const happenedAt = body?.happened_at?.trim() || localTodayISO();
   const note = body?.note?.trim() ?? '';
   const username = c.get('user').username;
   const batch: D1PreparedStatement[] = [];

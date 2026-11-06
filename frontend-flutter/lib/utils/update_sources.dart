@@ -85,7 +85,7 @@ Future<void> saveUpdateSources(List<Map<String, dynamic>> list, {String specifie
 /// Web 端浏览器不能跨域直连 GitHub，借服务器探测（/me/probe-source）；
 /// 原生端本地 GET + Range 前 1KB 直连（镜像普遍拒绝 HEAD 或 HEAD 不带 Content-Length，
 /// GET 与真实下载同一路径才不误判；用 Content-Range 的总大小 ≥ 1MB 判定，拦截页仍会被识别）。
-Future<int?> probeDownloadSource(String prefix) async {
+Future<int?> probeDownloadSource(String prefix, {String? ver}) async {
   if (kIsWeb) {
     try {
       final d = await Api.instance.post('/me/probe-source', {'prefix': prefix});
@@ -99,7 +99,7 @@ Future<int?> probeDownloadSource(String prefix) async {
   try {
     final client = http.Client();
     try {
-      final req = http.Request('GET', Uri.parse('$prefix${officialAssetUrl(APP_VERSION)}'));
+      final req = http.Request('GET', Uri.parse('$prefix${officialAssetUrl(ver ?? APP_VERSION)}'));
       req.headers['Range'] = 'bytes=0-1023';
       req.headers['User-Agent'] = 'Mozilla/5.0';
       res = await client.send(req).timeout(const Duration(seconds: 10));

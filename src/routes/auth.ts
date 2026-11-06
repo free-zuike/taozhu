@@ -6,7 +6,7 @@ import { randomSecret, verifyTotp } from '../lib/totp';
 import { authMiddleware } from '../middleware/auth';
 import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
-import { APP_NAME, APP_VERSION, MIN_SUPPORTED_VERSION } from '../version';
+import { APP_NAME, APP_VERSION, MIN_SUPPORTED_VERSION, versionBelow } from '../version';
 import { clientTypeOf, recordAudit } from './audit';
 import { upsertDevice } from './devices';
 import type { Env, UserRow } from '../types';
@@ -303,7 +303,12 @@ authRouter.get('/ping', (c) => c.json({ ok: true, now: nowIso(), app: APP_NAME, 
 // 源3 jsDelivr CDN 镜像读取仓库版本文件（GitHub API 不可达时的兜底，国内可达性好）。
 // 返回 ready=false 表示该版本 release 已创建但安装包（CI 构建）尚未就绪——前端应提示"构建中"而非引导下载。
 // 全部失败返回 latest=''，前端手动兜底。60 秒内复用成功结果（构建中→就绪切换更及时）。
-let latestCache: { at: number; latest: string; ready: boolean; building: boolean; source: 'github' | 'backup'; notes: string } | null = null;
+type LatestCacheEntry = {
+  at: number; latest: string; ready: boolean; building: boolean;
+  source: 'github' | 'backup'; notes: string; channel: 'stable' | 'preview';
+};
+// 按 channel 分开缓存：预发布用户与正式用户拿到的版本号不同，共用缓存会互相污染。
+const latestCache: Partial<Record<'stable' | 'preview', LatestCacheEntry>> = {};
 const LATEST_CACHE_MS = 60 * 1000;
 // 最近一次 GitHub Release 的更新日志（release body）长缓存：GitHub 探测失败走备源时，
 // 版本号来自备源、更新日志复用最近一次拿到的 notes——避免弹窗只剩"当前→最新"没有更新内容。
@@ -318,19 +323,57 @@ interface VersionProbe {
   notes?: string;
 }
 
+const GH_RELEASES = 'https://api.github.com/repos/free-zuike/taozhu/releases';
+const ghHeaders = { 'User-Agent': 'taozhu-worker', Accept: 'application/vnd.github+json' };
+// 拆包产物（taozhu-app-{v}-{abi}.apk）或 universal（taozhu-app-{v}.apk）任一存在即视为有安装文件
+const releaseHasApk = (v: string, assets: Array<{ name?: string }>): boolean =>
+  assets.some((a) => String(a.name ?? '').startsWith(`taozhu-app-${v}-`) && String(a.name ?? '').endsWith('.apk'))
+  || assets.some((a) => a.name === `taozhu-app-${v}.apk`);
+
 authRouter.get('/latest-version', async (c) => {
+  // ?channel=preview 查 GitHub prerelease；缺省/stable 完全保持原有行为。
+  // 预发布与正式版共用 tag 格式 taozhu-vX.Y.Z（下载 URL 只依赖版本号），
+  // /releases/latest 自动跳过 prerelease，正式通道用户不会被误升级。
+  const channel: 'stable' | 'preview' = c.req.query('channel')?.trim().toLowerCase() === 'preview' ? 'preview' : 'stable';
   const now = Date.now();
-  if (latestCache && now - latestCache.at < LATEST_CACHE_MS) {
+  const cached = latestCache[channel];
+  if (cached && now - cached.at < LATEST_CACHE_MS) {
     return c.json({
       current: APP_VERSION,
-      latest: latestCache.latest,
-      ready: latestCache.ready,
-      building: latestCache.building ?? false,
-      source: latestCache.source,
-      notes: latestCache.notes,
+      latest: cached.latest,
+      ready: cached.ready,
+      building: cached.building,
+      source: cached.source,
+      notes: cached.notes,
+      channel: cached.channel,
       min_supported: MIN_SUPPORTED_VERSION,
     });
   }
+  // 预发布版信息只在 GitHub：latest.json / jsDelivr 都只有正式版。
+  // 取最新一个带 APK 资产的 prerelease；没有则回退正式链，保证该通道至少能收到正式版更新。
+  const checkPreview = async (): Promise<VersionProbe | null> => {
+    try {
+      const res = await fetch(`${GH_RELEASES}?per_page=20`, {
+        headers: ghHeaders,
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return null;
+      const list = (await res.json()) as Array<{
+        tag_name?: string; prerelease?: boolean; body?: string; assets?: Array<{ name?: string }>;
+      }>;
+      if (!Array.isArray(list)) return null;
+      let best: { v: string; notes: string } | null = null;
+      for (const d of list) {
+        if (d.prerelease !== true) continue;
+        const v = String(d.tag_name ?? '').replace(/^taozhu-v/, '');
+        if (!v || !releaseHasApk(v, d.assets ?? [])) continue;
+        if (!best || versionBelow(best.v, v)) best = { v, notes: d.body ?? '' };
+      }
+      return best ? { v: best.v, ready: true, building: false, source: 'github', notes: best.notes } : null;
+    } catch {
+      return null;
+    }
+  };
   const checkGitHub = async (): Promise<VersionProbe | null> => {
     try {
       const res = await fetch('https://api.github.com/repos/free-zuike/taozhu/releases/latest', {
@@ -387,7 +430,12 @@ authRouter.get('/latest-version', async (c) => {
       return null;
     }
   };
-  for (const check of [checkGitHub, checkAsset, checkJsDelivr]) {
+  // 预发布通道优先取 prerelease；没有可用预发布或 GitHub 不可达时，
+  // 依次回退正式 GitHub / latest.json / jsDelivr，保证至少能收到正式版更新。
+  const probes = channel === 'preview'
+    ? [checkPreview, checkGitHub, checkAsset, checkJsDelivr]
+    : [checkGitHub, checkAsset, checkJsDelivr];
+  for (const check of probes) {
     const r = await check();
     if (r) {
       // 更新日志：GitHub 成功时缓存最新 notes（24h）；备源（latest.json/jsDelivr 无日志）回退缓存，
@@ -398,9 +446,11 @@ authRouter.get('/latest-version', async (c) => {
       } else if (!notes && notesCache && now - notesCache.at < NOTES_CACHE_MS) {
         notes = notesCache.notes;
       }
-      latestCache = {
+      // 回退到正式链时如实告知调用方「实际命中的是正式版」，别把正式版冒充预发布版
+      const hitChannel: 'stable' | 'preview' = (channel === 'preview' && check === checkPreview) ? 'preview' : 'stable';
+      latestCache[channel] = {
         at: now, latest: r.v, ready: r.ready, building: r.building ?? false,
-        source: r.source, notes,
+        source: r.source, notes, channel: hitChannel,
       };
       return c.json({
         current: APP_VERSION,
@@ -409,11 +459,12 @@ authRouter.get('/latest-version', async (c) => {
         building: r.building ?? false,
         source: r.source,
         notes,
+        channel: hitChannel,
         min_supported: MIN_SUPPORTED_VERSION,
       });
     }
   }
-  return c.json({ current: APP_VERSION, latest: '', ready: false, building: false, source: 'backup', notes: '', min_supported: MIN_SUPPORTED_VERSION });
+  return c.json({ current: APP_VERSION, latest: '', ready: false, building: false, source: 'backup', notes: '', channel: 'stable', min_supported: MIN_SUPPORTED_VERSION });
 });
 
 // 统计系统是否已初始化（前端引导页判断）

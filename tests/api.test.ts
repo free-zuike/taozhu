@@ -1,10 +1,11 @@
 /**
  * 端到端 API 测试：真实 Hono 路由 + sql.js 内存库（真 SQLite），覆盖核心业务路径。
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
 import { hashPassword, randomId } from '../src/lib/password';
+import { localTodayISO, addDaysISO } from '../src/lib/biz-date';
 import { createFakeD1, fakeAssets, type FakeD1 } from './helpers/fake-d1';
 import { isBackupTime } from '../src/routes/backup';
 import { APP_VERSION } from '../src/version';
@@ -1236,7 +1237,7 @@ describe('店员权限收窄（进价打码 / 仅当天出货）', () => {
       items: Array<{ id: string; prices: Array<{ id: string }> }>;
     };
     await call(env, 'POST', '/api/v1/purchases', token, {
-      happened_at: new Date().toISOString().slice(0, 10),
+      happened_at: localTodayISO(),
       items: [{ price_id: items.items[0].prices[0].id, quantity: 10 }],
     });
     const staffD = await call(env, 'GET', '/api/v1/stocks', staffToken).then((r) => r.json()) as {
@@ -1255,8 +1256,8 @@ describe('店员权限收窄（进价打码 / 仅当天出货）', () => {
     const items = await call(env, 'GET', '/api/v1/items/summary', token).then((r) => r.json()) as {
       items: Array<{ id: string; prices: Array<{ id: string }> }>;
     };
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const today = localTodayISO();
+    const yesterday = addDaysISO(today, -1);
     await call(env, 'POST', '/api/v1/sales', token, { client_id: 'c1', happened_at: yesterday, items: [{ price_id: items.items[0].prices[0].id, quantity: 2 }] });
     await call(env, 'POST', '/api/v1/sales', token, { client_id: 'c1', happened_at: today, items: [{ price_id: items.items[0].prices[0].id, quantity: 3 }] });
     // 放开后：传入 date_from 即按区间过滤（不再强制当天），两天都返回
@@ -1289,7 +1290,7 @@ describe('单据幂等键（sync_key：离线重放/多端不重复）', () => {
   it('同一 sync_key 重复提交出货只建一张单、库存只扣一次', async () => {
     const body = {
       client_id: 'c1',
-      happened_at: new Date().toISOString().slice(0, 10),
+      happened_at: localTodayISO(),
       sync_key: 'dup-sale-001',
       items: [{ price_id: 'p1', quantity: 5 }],
     };
@@ -1306,7 +1307,7 @@ describe('单据幂等键（sync_key：离线重放/多端不重复）', () => {
   });
 
   it('进货/收款同样幂等', async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localTodayISO();
     const pb = { happened_at: today, sync_key: 'dup-pu-001', items: [{ price_id: 'p1', quantity: 3 }] };
     await call(env, 'POST', '/api/v1/purchases', token, pb);
     const p2 = await call(env, 'POST', '/api/v1/purchases', token, pb);
@@ -1444,5 +1445,37 @@ describe('备份手动端点（/backup/now、/backup/files 鉴权）', () => {
     // 已登录：若走到存储初始化（无 R2 绑定抛错）则说明鉴权已放行（500 ≠ 401/403）
     const r = await call(env, 'GET', '/api/v1/backup/files', token);
     expect([500, 200]).toContain(r.status);
+  });
+});
+
+describe('写路径默认业务日期（UTC 跨日不落到昨天）', () => {
+  it('北京时间 00:30 提交出货/进货/收款，不传 happened_at 时落库为业务日 11-01', async () => {
+    const env = (await setup()).env;
+    await env.DB.prepare("INSERT INTO clients (id, name) VALUES (?, ?)").bind('c1', '跨日店').run();
+    await env.DB.prepare('INSERT INTO items (id, name) VALUES (?, ?)').bind('i1', '白菜').run();
+    await env.DB.prepare('INSERT INTO item_prices (id, item_id, unit, purchase_price, sale_price) VALUES (?, ?, ?, ?, ?)')
+      .bind('p1', 'i1', '斤', 1, 2).run();
+    // 只 fake Date，不碰 timers，避免影响 Hono / sql.js 的异步调度
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-31T16:30:00Z')); // UTC 10-31 16:30 = 北京 11-01 00:30
+      const token = await loginAdmin(env);
+      const writes: Array<[string, unknown]> = [
+        ['/api/v1/sales', { client_id: 'c1', items: [{ price_id: 'p1', quantity: 1 }] }],
+        ['/api/v1/purchases', { items: [{ price_id: 'p1', quantity: 1 }] }],
+        ['/api/v1/payments', { client_id: 'c1', amount: 1 }],
+      ];
+      for (const [path, body] of writes) {
+        const r = await call(env, 'POST', path, token, body);
+        expect(r.status).toBe(201);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    const days = await env.DB.prepare(
+      'SELECT happened_at AS d FROM sale_items UNION ALL SELECT happened_at AS d FROM purchase_items UNION ALL SELECT happened_at AS d FROM payments',
+    ).all<{ d: string }>();
+    // 旧实现 toISOString().slice(0, 10) 会把这三笔全部写成 2026-10-31（跨月错账）
+    expect(days.results.map((x) => x.d)).toEqual(['2026-11-01', '2026-11-01', '2026-11-01']);
   });
 });

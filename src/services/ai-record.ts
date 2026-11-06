@@ -5,6 +5,7 @@ import { randomId } from '../lib/password';
 import { capabilityEndpoint, parseText } from './ai-parse';
 import { createPurchaseOrder, createSaleOrder, type PurchaseLineInput, type SaleLineInput } from './records';
 import { ApiError } from '../lib/api-error';
+import { localTodayISO } from '../lib/biz-date';
 import type { D1Database } from '@cloudflare/workers-types';
 
 // ai-parse 未导出 getAiConfig；此处从 settings 读取
@@ -104,7 +105,7 @@ export async function recordTransactionFromText(
   if (drafts.length === 0) throw new ApiError('没有识别到可记账的商品，请说得更具体些（如：白菜2斤每斤3元）', 400);
 
   const resolved = await resolveDraftItems(db, purpose, drafts, user.role);
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(inv.date) ? inv.date : new Date().toISOString().slice(0, 10);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(inv.date) ? inv.date : localTodayISO();
 
   if (purpose === 'purchase') {
     const lines: PurchaseLineInput[] = resolved.map((r) => ({

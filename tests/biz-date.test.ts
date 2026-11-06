@@ -2,7 +2,7 @@
  * 业务日期（东八区）+ 日期区间开区间上界：AI 问「某个月」时日期口径的护栏。
  */
 import { describe, expect, it } from 'vitest';
-import { localTodayISO, nextDayISO, dayRangeEnd, parseMonthRange } from '../src/lib/biz-date';
+import { localTodayISO, addDaysISO, nextDayISO, dayRangeEnd, parseMonthRange } from '../src/lib/biz-date';
 
 describe('业务日期（东八区日历日）', () => {
   it('UTC 16:00 之后算次日，跨月/跨年不落到上个月', () => {
@@ -21,6 +21,15 @@ describe('业务日期（东八区日历日）', () => {
   it('非法日期原样返回，不抛错打断 AI 回答', () => {
     expect(nextDayISO('garbage')).toBe('garbage');
     expect(nextDayISO('')).toBe('');
+  });
+
+  it('相对业务日 ±N 天：跨月/跨年；临期提醒与近 30 天窗口都按业务日算', () => {
+    expect(addDaysISO('2026-11-01', -1)).toBe('2026-10-31');
+    expect(addDaysISO('2026-10-31', 1)).toBe('2026-11-01');
+    expect(addDaysISO('2026-01-01', -1)).toBe('2025-12-31');
+    expect(addDaysISO('2026-11-06', -30)).toBe('2026-10-07');
+    expect(addDaysISO('2026-11-06', 7)).toBe('2026-11-13');
+    expect(addDaysISO('garbage', 7)).toBe('garbage');
   });
 
   it('开区间上界同时覆盖纯日期与带时分秒，并排除次日', () => {

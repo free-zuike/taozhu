@@ -2,9 +2,18 @@ name: Build All Platforms
 
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: '发布通道：stable=正式版 / preview=预发布版（不填则按分支判定）'
+        required: false
+        type: choice
+        options:
+          - stable
+          - preview
   push:
     branches:
       - main
+      - preview              # bugfix 独立分支：只产出预发布 Release，不部署生产 / 不推微信小程序
     paths:                    # 前端/后端/小程序改动均触发：测试→全平台构建→小程序→最后部署（deploy 已并入本 workflow）
       - 'frontend-flutter/**'
       - 'frontend-uni/**'
@@ -27,12 +36,24 @@ jobs:
     outputs:
       should_run: ${{ steps.chk.outputs.should_run }}
       has_cf: ${{ steps.chk.outputs.has_cf }}
+      is_preview: ${{ steps.chk.outputs.is_preview }}
     env:
       WX_APPID: ${{ secrets.WX_APPID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - id: chk
+        env:
+          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
+          # 通道判定：preview 分支 / 手动选 preview → 预发布；其余一律正式。
+          # 预发布版在 GitHub 标记为 prerelease，/releases/latest 不含它，正式用户不会被误升级；
+          # 且跳过 deploy（生产 Worker/latest.json 保持正式版）与微信小程序上传。
+          if [ "$GITHUB_REF" = "refs/heads/preview" ] || [ "$INPUT_CHANNEL" = "preview" ]; then
+            echo "is_preview=true" >> "$GITHUB_OUTPUT"
+            echo "本次为预发布通道（不部署生产 / 不上传微信小程序）"
+          else
+            echo "is_preview=false" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$GITHUB_REPOSITORY" = "free-zuike/taozhu" ] || [ -n "$WX_APPID" ] || [ -n "$CLOUDFLARE_API_TOKEN" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
@@ -632,7 +653,7 @@ jobs:
   # 依赖平台：apk/linux/windows（macOS 独立构建不阻塞——用户定稿：等有机器再单独补发）
 
   miniprogram:
-    needs: [test, apk, linux, windows]
+    needs: [check, test, apk, linux, windows]
     if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success')) }}
     runs-on: ubuntu-latest
     name: 微信小程序
@@ -717,8 +738,9 @@ jobs:
           echo "清理完成"
 
       - name: Upload to WeChat platform (miniprogram-ci)
-        # 仅在配了密钥时上传；未配则跳过（只打 zip 留底）
-        if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' }}
+        # 仅在配了密钥、且为正式通道时上传；预发布分支只打 zip 留底，
+        # 避免未经确认的 bugfix 版本被推到微信平台（用户定稿：确认没问题后再发正式版）。
+        if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' && needs.check.outputs.is_preview != 'true' }}
         run: |
           VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || echo "0.0.0")
           # 微信版本号要求 x.y.z（三段），截版本前三段
@@ -773,7 +795,7 @@ jobs:
   # ── 统一发布：全部平台（含 macOS）成功后才创建 release + 一次上传所有产物 ──
   # macOS 总是构建并等待（用户定稿：排队/慢也一直等，跳过会造成版本缺 macOS 产物）
   publish:
-    needs: [apk, linux, windows, miniprogram, macos]
+    needs: [check, apk, linux, windows, miniprogram, macos]
     if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.miniprogram.result == 'success' && needs.macos.result == 'success')) }}
     runs-on: ubuntu-latest
     name: 统一发布（release+全部资产）
@@ -794,16 +816,34 @@ jobs:
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" frontend-flutter/lib/version.dart || exit 1)
           REL="taozhu-v${VERSION}"
           ls -lh /tmp/dist
+          # 预发布与正式版共用 tag 格式 taozhu-vX.Y.Z：APK 资产名/下载 URL 只依赖版本号，
+          # 加 -preview 后缀会让 App 拼出的下载地址 404。区别只在 GitHub 的 prerelease 标记：
+          # /releases/latest 自动跳过 prerelease，正式通道用户不会被误升级；
+          # 验证通过后合入 main 时必须递增版本号（版本守卫会拦截同名 tag）再发正式版。
+          IS_PREVIEW="${{ needs.check.outputs.is_preview }}"
+          PREVIEW_FLAG=""
+          TITLE="陶朱 v${VERSION}"
+          if [ "$IS_PREVIEW" = "true" ]; then
+            PREVIEW_FLAG="--prerelease"
+            TITLE="陶朱 v${VERSION}（预发布）"
+          fi
           # 更新说明：从最近"已发布且带资产"的 tag 起累计（失败/空壳 tag 跳过，其功能 commit 并入本次说明）
           git fetch --tags --quiet || true
           LOG=$(bash .github/release-notes.sh "$VERSION" || true)
           if [ -z "$LOG" ]; then LOG="- 同步版本 ${VERSION}"; fi
-          NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          if [ "$IS_PREVIEW" = "true" ]; then
+            NOTES=$(printf '⚠️ 预发布版本：仅「更新通道=预发布」的用户可见，用于验证 bugfix，请勿用于正式记账。\n\n陶朱 v%s 待验证内容：\n%s\n\n验证通过后合入 main、递增版本号发布正式版。' "$VERSION" "$LOG")
+          else
+            NOTES=$(printf '陶朱 v%s 更新内容：\n%s\n\n本版本全部产物：Android APK / Web / Windows / Linux / macOS / iOS / 微信小程序。' "$VERSION" "$LOG")
+          fi
           # 平台 job 已全部成功 → 此时本版本无 release，直接创建
           [ -n "$(gh release view "$REL" --repo "$GITHUB_REPOSITORY" 2>/dev/null)" ] && \
             gh release delete "$REL" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
           gh release create "$REL" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
-            --title "陶朱 v${VERSION}" --notes "$NOTES"
+            $PREVIEW_FLAG --title "$TITLE" --notes "$NOTES"
+          if [ "$IS_PREVIEW" = "true" ]; then
+            echo "预发布 $REL 已创建（prerelease，不进 /releases/latest，未部署生产、未上传微信小程序）"
+          fi
           echo "release $REL 已创建，开始上传全部产物"
           for F in /tmp/dist/*; do
             [ -f "$F" ] || continue
@@ -841,7 +881,10 @@ jobs:
   # ── Web（Flutter）构建：与各平台并行，最后 Deploy 直接用其产物（避免 Web 构建串行在链尾）──
 
   deploy:
-    needs: [miniprogram, linux, publish]
+    needs: [check, miniprogram, linux, publish]
+    # 预发布分支只产出 Release 资产：不动生产 Worker、不刷新 latest.json、不上传微信小程序。
+    # 生产环境始终停留在最近一个正式版，验证通过合入 main 后再发正式版。
+    if: ${{ needs.check.outputs.is_preview != 'true' }}
     runs-on: ubuntu-latest
     name: Deploy
     env:

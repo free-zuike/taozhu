@@ -12,6 +12,7 @@
  *   缺省扫描最近 90 天。退出码 0=无差异，1=发现差异。
  */
 import { execSync } from 'node:child_process';
+import { localTodayISO, addDaysISO } from '../src/lib/biz-date';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { roundMoney, type RoundingConfig } from '../src/lib/money';
@@ -80,8 +81,8 @@ async function loadRoundingConfig(): Promise<RoundingConfig> {
   }
 }
 
-const start = process.argv[2] ?? new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
-const end = process.argv[3] ?? new Date().toISOString().slice(0, 10);
+const end = process.argv[3] ?? localTodayISO();
+const start = process.argv[2] ?? addDaysISO(end, -90);
 const money = await loadRoundingConfig();
 
 // 明细行（逐笔口径与 SUM 口径都从同一批明细算，只差舍入时机）

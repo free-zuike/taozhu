@@ -9,6 +9,7 @@ import '../api.dart';
 import '../local_db.dart';
 import '../theme.dart';
 import '../utils/download.dart';
+import '../utils/biz_date.dart';
 import 'router.dart';
 
 /// 数据备份：导出全库 JSON 存档 / 从备份文件合并恢复（同一页两个选项，类似账号设置）。
@@ -167,7 +168,7 @@ class _BackupPageState extends State<BackupPage> {
       final d = {'exported_at': DateTime.now().toIso8601String(), 'data': data};
       final bytes = Uint8List.fromList(
           utf8.encode(const JsonEncoder.withIndent('  ').convert(d)));
-      final name = 'taozhu-backup-${DateTime.now().toIso8601String().split('T').first}.json';
+      final name = 'taozhu-backup-${bizTodayISO()}.json';
       await saveBytes(bytes, name, 'application/json', '陶朱数据备份');
       if (kIsWeb) {
         toast(context, overflow

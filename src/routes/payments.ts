@@ -6,14 +6,13 @@ import { parsePage } from '../lib/paging';
 import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
 import { recordAudit } from './audit';
+import { localTodayISO } from '../lib/biz-date';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
 export const paymentsRouter = new Hono<{ Bindings: Env; Variables: V }>();
 
 paymentsRouter.use('*', authMiddleware());
-
-const nowIso = () => new Date().toISOString();
 
 // POST /payments — 登记收款（仅老板），可带 waived 平账减免（欠款 = Σ出货 − Σ(amount+waived)）
 paymentsRouter.post('/', adminOnly(), async (c) => {
@@ -36,7 +35,7 @@ paymentsRouter.post('/', adminOnly(), async (c) => {
   const client = await c.env.DB.prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first();
   if (!client) return c.json({ error: '店铺不存在' }, 404);
   const id = randomId();
-  const happenedAt = body?.happened_at?.trim() || nowIso().slice(0, 10);
+  const happenedAt = body?.happened_at?.trim() || localTodayISO();
   // 存储浮点原值（对齐参考项目 REAL：入库不取整；舍入配置只在统计/欠款/展示层换算）
   await c.env.DB.prepare(
     'INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note, created_by, sync_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',

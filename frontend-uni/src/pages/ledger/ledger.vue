@@ -188,6 +188,7 @@ import { ref, computed } from 'vue';
 import { request, getToken, getRole } from '../../api';
 import { attachIconSrc } from '../../attach-icon';
 import { fmtAmount, roundAmount, fmtPrice, fmtByUnit } from '../../utils/money';
+import { localTodayISO } from '../../utils/biz-date';
 
 const tab = ref<'sales' | 'payments'>('sales');
 // 老板才显示行级盈亏（进价=毛利敏感数据，店员隐藏；对齐 App 仅老板可见毛利）
@@ -211,7 +212,7 @@ const itemForm = ref<{
   category: string; categoryId: string; // 当前分类名/id（修改分类行显示与保存）
 }>({ show: false, isPurchase: false, saleId: '', itemId: '', goodsId: '', itemName: '', quantity: '', unit: '', salePrice: '', countQty: '', countUnit: '', date: '', note: '', category: '', categoryId: '' });
 
-const today = new Date().toISOString().slice(0, 10);
+const today = localTodayISO();
 
 // 日期选择（picker mode=date，对齐 App 行编辑滚轮，不可手输）
 function onFormDate(e: { detail: { value: string } }) {
