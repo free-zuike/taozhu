@@ -9,6 +9,7 @@ import { chunkQuery } from '../lib/query';
 import { applyChange, buildPayload, latestChange, maskPayload, maxCursor, recordChange } from '../lib/sync';
 import { versionedSnapshot } from '../lib/snapshot';
 import { computeGlobalCounts } from '../lib/global-counts';
+import { refCountByEntity } from '../lib/attachment-counts';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -388,34 +389,23 @@ syncRouter.get('/panel', async (c) => {
     if (ids.length === 0) return { counts: {}, total: 0, ids: [] };
     const counts: Record<string, number> = {};
     const CHUNK = 90;
-    for (let i = 0; i < ids.length; i += CHUNK) {
-      const part = ids.slice(i, i + CHUNK);
-      const refRows = await db.prepare(
-        `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${part.map(() => '?').join(',')}) GROUP BY entity_id`,
-      ).bind(entity, ...part).all<{ entity_id: string; cnt: number }>();
-      for (const r of refRows.results) counts[r.entity_id] = (counts[r.entity_id] ?? 0) + Number(r.cnt);
+    // 一次 GROUP BY 取全量引用计数（不再按 90 分批 IN，见 lib/attachment-counts.ts）
+    const refCounts = await refCountByEntity(db, entity);
+    for (const id of ids) {
+      const n = refCounts.get(id);
+      if (n) counts[id] = n;
     }
     // 单据级（sale）统计：计入该单全部明细行的行级引用（整单凭证实际挂行级）
     if (entity === 'sale') {
+      const lineCounts = await refCountByEntity(db, 'sale_item');
       for (let i = 0; i < ids.length; i += CHUNK) {
         const part = ids.slice(i, i + CHUNK);
         const rows = await db.prepare(
           `SELECT id, sale_id AS order_id FROM sale_items WHERE sale_id IN (${part.map(() => '?').join(',')}) AND client_id = ?`,
         ).bind(...part, clientId).all<{ id: string; order_id: string }>();
-        if (rows.results.length > 0) {
-          const lineIds = rows.results.map((r) => r.id);
-          const lineCountByLineId = new Map<string, number>();
-          for (let j = 0; j < lineIds.length; j += CHUNK) {
-            const linePart = lineIds.slice(j, j + CHUNK);
-            const lineRefs = await db.prepare(
-              `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${linePart.map(() => '?').join(',')}) GROUP BY entity_id`,
-            ).bind('sale_item', ...linePart).all<{ entity_id: string; cnt: number }>();
-            for (const r of lineRefs.results) lineCountByLineId.set(r.entity_id, (lineCountByLineId.get(r.entity_id) ?? 0) + Number(r.cnt));
-          }
-          for (const r of rows.results) {
-            const n = lineCountByLineId.get(r.id) ?? 0;
-            if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
-          }
+        for (const r of rows.results) {
+          const n = lineCounts.get(r.id) ?? 0;
+          if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
         }
       }
     }

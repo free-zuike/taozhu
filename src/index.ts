@@ -25,6 +25,7 @@ import { syncRouter } from './routes/sync';
 import { meRouter } from './routes/me';
 import { auditRouter } from './routes/audit';
 import { devicesRouter } from './routes/devices';
+import { maintenanceRouter } from './routes/maintenance';
 import { ensureSchema } from './schema';
 import { verifyToken } from './lib/jwt';
 import { isDbUnavailable, DB_UNAVAILABLE_MESSAGE } from './lib/db-availability';
@@ -116,6 +117,7 @@ app.route('/api/v1/share', shareRouter);
 app.route('/api/v1/me', meRouter);
 app.route('/api/v1/audit', auditRouter);
 app.route('/api/v1/devices', devicesRouter);
+app.route('/api/v1/maintenance', maintenanceRouter);
 app.route('/api/v1/print', printRouter);
 app.route('/api/v1/stmt-templates', stmtTemplatesRouter);
 

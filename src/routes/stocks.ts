@@ -33,12 +33,49 @@ type StockAggRow = { item_id: string; unit: string; quantity: number };
 
 /**
  * 库存仍严格「由流水实时计算、不落库」（既定口径），这里只缓存一次计算的结果：
- * 四表 UNION ALL 全量聚合是 rows_read 大头，缓存后两次写之间打开库存页只读游标+快照 2 行。
- * 版本号取 sync_changes 游标，进货/出货/报损/盘点写入都会 bump → 结果立即精确刷新，不会出现库存滞后。
+ * 四表 UNION ALL 全量聚合是 rows_read 大头，缓存后命中时只读游标+快照 2 行。
+ *
+ * 失效口径（v0.17.498）：旧版用「全局游标」，任何写（改客户/设置/主题/附件/登录设备…）都会
+ * 打掉快照；而 /stocks 是每次同步完成后都拉一次（多设备 × 多页面），营业高峰几乎每次都重算
+ * 四表全表扫（当日 32 万行的来源）。改为「精确失效」：游标前进时只查这段增量变更里有没有
+ * 影响库存流水表的写，没有就复用旧数据。反向白名单=未知/新增 entity_type 一律保守重算，
+ * 绝不返回陈旧库存；TTL 放宽到 5 分钟只作绕过变更流通道的兜底（备份恢复已主动清空快照）。
  */
+// 明确「不影响库存聚合」的写：库存只由 purchase_items/sale_items/loss_records/stock_adjustments
+// 四表算出，其余实体（客户/商品/分类/收款/设置/附件/设备…）写入无需重算。
+// 用反向白名单而非正向列表：漏列新类型只会多重算一次，不会漏算导致库存显示旧值。
+const STOCK_UNRELATED_TYPES = [
+  'client', 'category', 'item', 'price_group', 'payment', 'payment_account',
+  'device', 'user', 'settings', 'setting', 'theme', 'ai_config',
+  'attachment', 'share_link', 'stmt_template',
+];
+const STOCK_UNRELATED_PH = STOCK_UNRELATED_TYPES.map(() => '?').join(',');
+
+/** 游标从 prev 前进到 next 期间，是否存在影响库存的写（走 sync_changes 主键范围 + LIMIT 1） */
+async function stockAffectedSince(db: D1Database, prev: number, next: number): Promise<boolean> {
+  if (next <= prev) return true; // 游标回退/重置 → 保守重算
+  const row = await db.prepare(
+    `SELECT 1 AS hit FROM sync_changes WHERE id > ? AND id <= ?
+       AND entity_type NOT IN (${STOCK_UNRELATED_PH}) LIMIT 1`,
+  ).bind(prev, next, ...STOCK_UNRELATED_TYPES).first<{ hit: number }>();
+  return !!row;
+}
+
+/** 库存相关快照共用：精确失效 + 5 分钟兜底 TTL */
+function stockSnapshotOpts(db: D1Database, fingerprint = '') {
+  return {
+    fingerprint,
+    opts: {
+      ttlMs: 5 * 60_000,
+      affectedSince: (prev: number, next: number) => stockAffectedSince(db, prev, next),
+    },
+  };
+}
+
 async function stockAgg(db: D1Database): Promise<{ results: StockAggRow[] }> {
+  const s = stockSnapshotOpts(db);
   const { data } = await versionedSnapshot(db, 'stock_agg', async () =>
-    (await db.prepare(STOCK_AGG_SQL).all<StockAggRow>()).results);
+    (await db.prepare(STOCK_AGG_SQL).all<StockAggRow>()).results, s.fingerprint, s.opts);
   return { results: data };
 }
 
@@ -88,26 +125,21 @@ stocksRouter.get('/', async (c) => {
     .sort((a, b) => a.item_name.localeCompare(b.item_name) || a.unit.localeCompare(b.unit));
   // 建议预警阈值 = 近 30 天平均每笔出货量 × 40%（无出货记录则 0）。
   // 前端仅"阈值未手动设置（min_stock=0）且库存 ≥1"时自动填充，不覆盖用户手设值。
-  const keys = merged.map((r) => `${r.item_id}\u0000${r.unit}`);
-  let suggest = new Map<string, number>();
-  if (keys.length > 0) {
-    const ph = new Set(keys);
-    const sid = [...ph].map((k) => k.split('\u0000')[0]);
-    const sunit = [...ph].map((k) => k.split('\u0000')[1]);
-    // 按 商品+单位 近 30 天出货行均值（避免跨单位混算；商品行自带日期，不再 JOIN 单据头）
-    const avgRows = await chunkQuery(sid, (chunk) =>
-      c.env.DB.prepare(
-        `SELECT si.item_id, si.unit, AVG(si.quantity) AS avg_qty
-         FROM sale_items si
-         WHERE si.happened_at >= date('now','-30 day')
-           AND si.item_id IN (${chunk.map(() => '?').join(',')})
-         GROUP BY si.item_id, si.unit`,
-      ).bind(...chunk).all<{ item_id: string; unit: string; avg_qty: number }>().then((r) => r.results));
-    suggest = new Map(avgRows.map((r) => [
-      `${r.item_id}\u0000${r.unit}`,
-      Math.round((Number(r.avg_qty) || 0) * 0.4 * 100) / 100,
-    ]));
-  }
+  // 这是**建议值**而非账面数字：允许日级陈旧。按 UTC 日期做 fingerprint + 一天 TTL，
+  // 写操作不打掉它（affectedSince 恒 false），一天只跑一次全量聚合；旧实现每次打开库存页
+  // 都 chunkQuery 分批扫 sale_items（当日 10.9 万行来源）。全量聚合不带 item_id IN 过滤，
+  // 与 q / below 过滤无关，缓存不会因搜索词碎片化。
+  const suggestDay = new Date().toISOString().slice(0, 10);
+  const { data: avgRows } = await versionedSnapshot(c.env.DB, 'stock_suggest', async () =>
+    (await c.env.DB.prepare(
+      `SELECT item_id, unit, AVG(quantity) AS avg_qty FROM sale_items
+       WHERE happened_at >= date('now','-30 day') GROUP BY item_id, unit`,
+    ).all<{ item_id: string; unit: string; avg_qty: number }>()).results,
+    suggestDay, { ttlMs: 24 * 60 * 60_000, affectedSince: async () => false });
+  const suggest = new Map(avgRows.map((r) => [
+    `${r.item_id}\u0000${r.unit}`,
+    Math.round((Number(r.avg_qty) || 0) * 0.4 * 100) / 100,
+  ]));
   const rows = merged
     .map((r) => {
       const cfg = stockCfg.get(`${r.item_id}\u0000${r.unit}`);
@@ -446,6 +478,11 @@ stocksRouter.post('/adjust', adminOnly(), async (c) => {
   let surplusCount = 0; // 盘盈行数
   let shortageCount = 0; // 盘亏行数
   let surplusQty = 0, shortageQty = 0, surplusAmount = 0, shortageAmount = 0;
+  // 账面数量：一次缓存聚合拿全部「商品+单位」的账面，循环内查 Map。
+  // 旧实现逐行执行四表 UNION ALL 全表扫（盘点 N 行 = N 次全表扫，rows_read 大头）；
+  // 且 batch 在循环结束后才统一提交，每行读到的本就是同一个初始账面，缓存结果语义等价。
+  const bookAgg = await stockAgg(c.env.DB);
+  const bookMap = new Map(bookAgg.results.map((r) => [`${r.item_id}\u0000${r.unit}`, Number(r.quantity) || 0]));
   for (const r of rows) {
     const itemId = (r.item_id ?? '').trim();
     const unit = (r.unit ?? '').trim();
@@ -453,19 +490,8 @@ stocksRouter.post('/adjust', adminOnly(), async (c) => {
     if (!Number.isFinite(actual) || actual < 0) {
       return c.json({ error: `「${itemId}」实际数量不合法（须为非负数字）` }, 400);
     }
-    // 账面数量（含此前已提交的盘点调整）
-    const bookRow = await c.env.DB.prepare(
-      `SELECT SUM(qty) AS q FROM (
-         SELECT item_id, unit, COALESCE(quantity, 0) AS qty FROM purchase_items
-         UNION ALL
-         SELECT item_id, unit, -COALESCE(quantity, 0) AS qty FROM sale_items
-         UNION ALL
-         SELECT item_id, unit, -COALESCE(qty, 0) AS qty FROM loss_records
-         UNION ALL
-         SELECT item_id, unit, COALESCE(qty, 0) AS qty FROM stock_adjustments
-       ) WHERE item_id = ? AND unit = ?`,
-    ).bind(itemId, unit).first<{ q: number | null }>();
-    const book = Math.round((Number(bookRow?.q) || 0) * 100) / 100;
+    // 账面数量（含此前已提交的盘点调整）：查一次性聚合出的 Map，不再逐行全表扫
+    const book = Math.round((bookMap.get(`${itemId}\u0000${unit}`) ?? 0) * 100) / 100;
     const diff = Math.round((actual - book) * 100) / 100;
     if (diff === 0) continue; // 账面=实际，无需调整
     const adjId = randomId();

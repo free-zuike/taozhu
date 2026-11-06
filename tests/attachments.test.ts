@@ -1,5 +1,5 @@
 /** 附件路由测试：R2 用内存 mock（put/get/list/delete），验证上传/列表/代理读取/删除与参数校验 */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
 import { createStorage } from '../src/services/storage';
@@ -512,6 +512,55 @@ describe('交易附件（R2）', () => {
     expect(ghostStill).toBeNull();
     const inUseStill = await env.BUCKET.get(inUseKey);
     expect(inUseStill).not.toBeNull();
+  });
+
+  it('附件计数：不再按 90 分批 IN 扫 attachment_refs（单次 GROUP BY，rows_read 护栏）', async () => {
+    // 250 个 id：旧实现按 90 分批会产生 3 条实体级 + 行级分批 SQL
+    const ids = Array.from({ length: 250 }, (_, i) => `s-${i}`);
+    const db = env.DB as FakeD1;
+    const sqls: string[] = [];
+    const orig = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return orig(sql);
+    }) as typeof db.prepare);
+    try {
+      const res = await call(env, 'POST', '/api/v1/attachments/counts', token, { entity: 'sale', ids });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { total: number }).total).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    const refQueries = sqls.filter((s) => /FROM attachment_refs/i.test(s));
+    expect(refQueries).toHaveLength(2); // 单据级 1 条 + 行级 1 条，与 ids 数量无关
+    expect(refQueries.some((s) => /entity_id\s+IN\s*\(/i.test(s))).toBe(false);
+    expect(refQueries.every((s) => /GROUP BY entity_id/i.test(s))).toBe(true);
+  });
+
+  it('孤儿扫描：一次性兜底标记落库后不再全表扫 5 张业务表（rows_read 护栏）', async () => {
+    const db = env.DB as FakeD1;
+    await call(env, 'GET', '/api/v1/attachments/in-use', token); // 落 attachment_legacy_scan_done
+    const marker = await db.prepare(
+      "SELECT value FROM schema_meta WHERE key = 'attachment_legacy_scan_done'",
+    ).first<{ value: string }>();
+    expect(marker?.value).toBe('1');
+
+    const sqls: string[] = [];
+    const orig = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return orig(sql);
+    }) as typeof db.prepare);
+    try {
+      expect((await call(env, 'GET', '/api/v1/attachments/orphans', token)).status).toBe(200);
+      expect((await call(env, 'DELETE', '/api/v1/attachments/orphans', token, { keys: ['sale/none/x.jpg'] })).status).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(sqls.some((s) => /SELECT DISTINCT sale_id AS id FROM sale_items/i.test(s))).toBe(false);
+    expect(sqls.some((s) => /SELECT id FROM sale_items/i.test(s))).toBe(false);
+    expect(sqls.some((s) => /FROM purchase_items/i.test(s) && !/WHERE/i.test(s))).toBe(false);
+    expect(sqls.some((s) => /SELECT file_key FROM attachment_refs/i.test(s))).toBe(true); // 引用表权威仍在
   });
 });
 

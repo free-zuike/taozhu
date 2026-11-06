@@ -5,7 +5,7 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesSideRounded, salesAggByConfig, type RoundingConfig } from '../lib/money';
-import { versionedSnapshot } from '../lib/snapshot';
+import { versionedSnapshot, unaffectedTypes } from '../lib/snapshot';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -17,6 +17,14 @@ statsRouter.use('*', authMiddleware());
 // 历史 v0.16.21 曾全挡 staff → 403，导致小程序店员「统计页没有权限查看」。
 
 const nowIso = () => new Date().toISOString();
+
+/** overview 依赖 sale_items / payments / clients / items 计数；下列写入都不影响。
+ *  item 不能列入（item_count 会变）；未知/新增 entity_type 一律保守重算。 */
+const OVERVIEW_UNRELATED_TYPES = [
+  'category', 'price_group', 'payment_account', 'device', 'user',
+  'settings', 'setting', 'theme', 'ai_config', 'attachment',
+  'share_link', 'stmt_template', 'loss_record', 'stock_adjustment',
+];
 
 type OverviewDerived = {
   all_sales: number;
@@ -113,7 +121,10 @@ statsRouter.get('/overview', async (c) => {
       .all<{ amount: number; waived: number }>(),
     db.prepare(`SELECT amount FROM purchase_items pi WHERE pi.happened_at = ?`).bind(date)
       .all<{ amount: number }>(),
-    versionedSnapshot(db, 'overview', () => computeOverviewDerived(db, money), `${money.carry}|${money.digits}`),
+    versionedSnapshot(db, 'overview', () => computeOverviewDerived(db, money), `${money.carry}|${money.digits}`, {
+      ttlMs: 5 * 60_000,
+      affectedSince: unaffectedTypes(db, OVERVIEW_UNRELATED_TYPES),
+    }),
   ]);
   const sales_total = todaySales.results.reduce((s, x) => s + r(x.amount), 0);
   const gross_profit = todaySales.results.reduce((s, x) => s + r(x.gross), 0);

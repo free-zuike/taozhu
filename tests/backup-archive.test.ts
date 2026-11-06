@@ -1,9 +1,9 @@
 /** 云备份 ZIP 归档包测试：buildBackupArchive（db.json + attachments/ 附件原始文件）与
  *  restoreBackupArchive（解包 → db.json 合并导入 + 附件写回存储端）；formatBackupName 兼容 .zip。 */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ensureSchema, resetSchemaState } from '../src/schema';
 import { createFakeD1, fakeAssets, type FakeD1 } from './helpers/fake-d1';
-import { buildBackupArchive, restoreBackupArchive, formatBackupName, BACKUP_PREFIX } from '../src/services/backup-core';
+import { buildBackupArchive, restoreBackupArchive, formatBackupName, BACKUP_PREFIX, exportTablePages } from '../src/services/backup-core';
 
 /** 内存 R2Bucket mock（对齐 attachments.test.ts） */
 class FakeBucket {
@@ -163,5 +163,37 @@ describe('云备份 ZIP 归档包（附件以原始文件入包）', () => {
     // backup_runs 不计入业务表（不随备份导出）
     const tables = await (await import('../src/services/backup-core')).listBusinessTables(db);
     expect(tables).not.toContain('backup_runs');
+  });
+
+  it('exportTablePages：>1000 行走 rowid keyset 分页，不重不漏且剥离游标列', async () => {
+    const TOTAL = 1234;
+    await db.prepare('DELETE FROM clients').run();
+    const stmts = [];
+    for (let i = 0; i < TOTAL; i++) {
+      stmts.push(db.prepare('INSERT INTO clients (id, name) VALUES (?, ?)').bind(`c-${i}`, `店${i}`));
+    }
+    for (let i = 0; i < stmts.length; i += 200) await db.batch(stmts.slice(i, i + 200));
+
+    const sqls: string[] = [];
+    const orig = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return orig(sql);
+    }) as typeof db.prepare);
+    let rows: Array<Record<string, unknown>>;
+    try {
+      rows = await exportTablePages(db as never, 'clients') as Array<Record<string, unknown>>;
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(rows).toHaveLength(TOTAL);
+    expect(Object.keys(rows[0])).not.toContain('__tz_rid'); // db.json 行结构与旧版一致
+    expect(rows[0]).toMatchObject({ id: 'c-0', name: '店0' });
+    expect(rows.at(-1)).toMatchObject({ id: `c-${TOTAL - 1}` });
+    expect(new Set(rows.map((r) => r.id)).size).toBe(TOTAL);
+    const pageSqls = sqls.filter((s) => /FROM clients WHERE rowid > \?/i.test(s));
+    expect(pageSqls.length).toBeGreaterThan(1); // 确实跨了多页
+    expect(pageSqls.some((s) => /OFFSET/i.test(s))).toBe(false); // 不再用 O(n²) 的 OFFSET 分页
   });
 });

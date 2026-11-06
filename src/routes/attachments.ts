@@ -9,10 +9,62 @@ import { attachmentContentKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from 
 import { recordChange } from '../lib/sync';
 import { versionedSnapshot } from '../lib/snapshot';
 import { computeGlobalCounts } from '../lib/global-counts';
+import { refCountByEntity } from '../lib/attachment-counts';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
 export const attachmentsRouter = new Hono<{ Bindings: Env; Variables: V }>();
+
+/** 历史遗留（v0.17.84 前）在用的实体 id 集合。5 条无 WHERE 全表扫曾是 /in-use 兜底、
+ *  /orphans、DELETE /orphans 每次请求的固定开销（约 20 万行/次，生产 #2 消耗源）。 */
+async function queryInUseEntityIds(db: D1Database): Promise<Map<string, Set<string>>> {
+  const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
+    // 去单据化：无 sales/purchases 头表，单据 id 由商品行去重聚合
+    db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items').all<{ id: string }>(),
+    db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
+    db.prepare('SELECT DISTINCT purchase_id AS id FROM purchase_items').all<{ id: string }>(),
+    db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
+    db.prepare('SELECT id FROM payments').all<{ id: string }>(),
+  ]);
+  const m = new Map<string, Set<string>>();
+  const add = (entity: string, id: string) => {
+    if (!id) return;
+    let s = m.get(entity);
+    if (!s) { s = new Set(); m.set(entity, s); }
+    s.add(id);
+  };
+  sales.results.forEach((r) => add('sale', r.id));
+  saleItems.results.forEach((r) => add('sale_item', r.id));
+  purchases.results.forEach((r) => add('purchase', r.id));
+  purchaseItems.results.forEach((r) => add('purchase_item', r.id));
+  payments.results.forEach((r) => add('payment', r.id));
+  return m;
+}
+
+/** 孤儿判定依据。/in-use 首次补写引用表并落 attachment_legacy_scan_done 标记后，
+ *  历史遗留 key 都已有引用行，legacyIds 返回 null → 两个 orphans 路由 0 次全表扫。 */
+async function orphanGuard(db: D1Database): Promise<{
+  refKeys: Set<string>;
+  legacyIds: Map<string, Set<string>> | null;
+}> {
+  const [refRows, legacyDone] = await Promise.all([
+    db.prepare('SELECT file_key FROM attachment_refs').all<{ file_key: string }>(),
+    db.prepare("SELECT value FROM schema_meta WHERE key = 'attachment_legacy_scan_done'").first<{ value: string }>(),
+  ]);
+  return {
+    refKeys: new Set(refRows.results.map((r) => r.file_key)),
+    legacyIds: legacyDone ? null : await queryInUseEntityIds(db),
+  };
+}
+
+type OrphanGuard = Awaited<ReturnType<typeof orphanGuard>>;
+
+/** 引用表权威；仅兜底期（标记未落）才按历史格式 key 的实体 id 判定在用。 */
+function isInUseAttachment(key: string, entity: string, id: string, guard: OrphanGuard): boolean {
+  if (guard.refKeys.has(key)) return true;
+  if (entity && guard.legacyIds) return (guard.legacyIds.get(entity) ?? new Set()).has(id);
+  return false;
+}
 // 非读取路由（上传/删除/列表/统计）严格鉴权；读取路由在下方单独处理（支持 query token，小程序 image 组件无法带请求头）
 attachmentsRouter.use('*', async (c, next) => {
   if (c.req.method === 'GET' && c.req.path.includes('/attachments/')) {
@@ -155,44 +207,30 @@ attachmentsRouter.post('/counts', async (c) => {
     ids = (body?.ids ?? []).filter((x) => x.trim().length > 0).slice(0, 500);
   }
   if (ids.length === 0) return c.json({ counts: {}, total: 0, ids: [] });
-  // 引用表计数（对齐参考实现口径：每个商品/单据挂载算一个附件=一条引用记录；同图多实体各算 1）
-  // D1 绑定参数上限 100：ids 多时分批 IN 查询合并，避免超限 500
+  // 引用表计数：一次 GROUP BY 取全量后 JS 过滤，不再按 90 分批 IN（见 lib/attachment-counts.ts）。
+  // 旧形态在索引缺失时每批都全表扫，单日 39 万 rows_read（#1 消耗源）。
   const counts: Record<string, number> = {};
   const CHUNK = 90;
-  for (let i = 0; i < ids.length; i += CHUNK) {
-    const part = ids.slice(i, i + CHUNK);
-    const refRows = await c.env.DB.prepare(
-      `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${part.map(() => '?').join(',')}) GROUP BY entity_id`,
-    ).bind(entity, ...part).all<{ entity_id: string; cnt: number }>();
-    for (const r of refRows.results) counts[r.entity_id] = (counts[r.entity_id] ?? 0) + Number(r.cnt);
+  const refCounts = await refCountByEntity(c.env.DB, entity);
+  for (const id of ids) {
+    const n = refCounts.get(id);
+    if (n) counts[id] = n;
   }
   // 单据级（sale/purchase）统计：计入该单全部明细行的行级引用——
   // 整单凭证入口上传的图实际批量挂各明细行（行级引用），单据图标/面板口径需含行级。
   if (entity === 'sale' || entity === 'purchase') {
     const lineEntity = entity === 'sale' ? 'sale_item' : 'purchase_item';
     const orderCol = `${entity}_id`;
+    // 行级引用同样一次取全量，提到分批循环外，避免 N 批 × M 批的 SQL 放大
+    const lineCounts = await refCountByEntity(c.env.DB, lineEntity);
     for (let i = 0; i < ids.length; i += CHUNK) {
       const part = ids.slice(i, i + CHUNK);
       const rows = await c.env.DB.prepare(
         `SELECT id, ${orderCol} AS order_id FROM ${lineEntity}s WHERE ${orderCol} IN (${part.map(() => '?').join(',')})${clientId ? ' AND client_id = ?' : ''}`,
       ).bind(...part, ...(clientId ? [clientId] : [])).all<{ id: string; order_id: string }>();
-      if (rows.results.length > 0) {
-        const lineIds = rows.results.map((r) => r.id);
-        // 行数也可能超 D1 参数上限（一批 90 单据 × 每单多行）：行级引用查询同样分批合并
-        const lineCountByLineId = new Map<string, number>();
-        for (let j = 0; j < lineIds.length; j += CHUNK) {
-          const linePart = lineIds.slice(j, j + CHUNK);
-          const lineRefs = await c.env.DB.prepare(
-            `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = ? AND entity_id IN (${linePart.map(() => '?').join(',')}) GROUP BY entity_id`,
-          ).bind(lineEntity, ...linePart).all<{ entity_id: string; cnt: number }>();
-          for (const r of lineRefs.results) {
-            lineCountByLineId.set(r.entity_id, (lineCountByLineId.get(r.entity_id) ?? 0) + Number(r.cnt));
-          }
-        }
-        for (const r of rows.results) {
-          const n = lineCountByLineId.get(r.id) ?? 0;
-          if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
-        }
+      for (const r of rows.results) {
+        const n = lineCounts.get(r.id) ?? 0;
+        if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
       }
     }
   }
@@ -265,26 +303,7 @@ attachmentsRouter.get('/in-use', async (c) => {
   }
   // ② 历史兜底校验+补写（延迟）：仅当 R2 扫描发现遗留 key 才全表扫描实体 id 校验（现代库无遗留→整段跳过，省 D1 rows_read）
   if (!legacyDone && legacy.length > 0) {
-    const inUse = new Map<string, Set<string>>();
-    const add = (entity: string, id: string) => {
-      if (!id) return;
-      let s = inUse.get(entity);
-      if (!s) { s = new Set(); inUse.set(entity, s); }
-      s.add(id);
-    };
-    const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
-      // 去单据化：无 sales/purchases 头表，单据 id 由商品行去重聚合
-      db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items').all<{ id: string }>(),
-      db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
-      db.prepare('SELECT DISTINCT purchase_id AS id FROM purchase_items').all<{ id: string }>(),
-      db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
-      db.prepare('SELECT id FROM payments').all<{ id: string }>(),
-    ]);
-    sales.results.forEach((r) => add('sale', r.id));
-    saleItems.results.forEach((r) => add('sale_item', r.id));
-    purchases.results.forEach((r) => add('purchase', r.id));
-    purchaseItems.results.forEach((r) => add('purchase_item', r.id));
-    payments.results.forEach((r) => add('payment', r.id));
+    const inUse = await queryInUseEntityIds(db);
     for (const lk of legacy) {
       if ((inUse.get(lk.entity) ?? new Set()).has(lk.id)) {
         // 在用但引用表无行（v0.17.84 之前存量的旧格式 key）：补写引用表（id 幂等），
@@ -361,30 +380,8 @@ attachmentsRouter.get('/in-use', async (c) => {
 attachmentsRouter.get('/orphans', async (c) => {
   const store = createStorage(c.env);
   const db = c.env.DB;
-  // D1 在用附件单元 id 集合（entity → id set）
-  const inUse = new Map<string, Set<string>>();
-  const add = (entity: string, id: string) => {
-    if (!id) return;
-    let s = inUse.get(entity);
-    if (!s) { s = new Set(); inUse.set(entity, s); }
-    s.add(id);
-  };
-  const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
-    // 去单据化：无 sales/purchases 头表，单据 id 由商品行去重聚合
-    db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
-    db.prepare('SELECT DISTINCT purchase_id AS id FROM purchase_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM payments').all<{ id: string }>(),
-  ]);
-  sales.results.forEach((r) => add('sale', r.id));
-  saleItems.results.forEach((r) => add('sale_item', r.id));
-  purchases.results.forEach((r) => add('purchase', r.id));
-  purchaseItems.results.forEach((r) => add('purchase_item', r.id));
-  payments.results.forEach((r) => add('payment', r.id));
-  // 引用表 file_key 集合：新格式内容 key（md5-only，解析不出实体）凭引用表判定在用/孤儿
-  const refRowsAll = await db.prepare('SELECT file_key FROM attachment_refs').all<{ file_key: string }>();
-  const refKeys = new Set(refRowsAll.results.map((r) => r.file_key));
+  // 引用表权威；仅一次性兜底标记未落时才额外扫 5 张业务表
+  const guard = await orphanGuard(db);
   const orphans: Array<{ key: string; entity: string; id: string; size: number }> = [];
   // 附件前缀同 in-use：限定实体前缀扫描，避免空前缀全 bucket（含备份/头像）拖慢列表
   const scanPrefixes = ['taozhu/images/attachments/', 'taozhu/attachments/', 'sale/', 'sale_item/', 'purchase/', 'purchase_item/', 'payment/'];
@@ -396,12 +393,12 @@ attachmentsRouter.get('/orphans', async (c) => {
         const parsed = parseAttachmentKey(o.key);
         if (!parsed) {
           // 新格式内容 key（md5-only）：引用表有=在用（同图共享），无=孤儿
-          if (!refKeys.has(o.key)) {
+          if (!isInUseAttachment(o.key, '', '', guard)) {
             orphans.push({ key: o.key, entity: '', id: '', size: o.size });
           }
           continue;
         }
-        if (!(inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) {
+        if (!isInUseAttachment(o.key, parsed.entity, parsed.id, guard)) {
           orphans.push({ key: o.key, entity: parsed.entity, id: parsed.id, size: o.size });
         }
       }
@@ -421,39 +418,14 @@ attachmentsRouter.delete('/orphans', adminOnly(), async (c) => {
   const body = await c.req.json().catch(() => null) as { keys?: string[] } | null;
   const keys = (body?.keys ?? []).filter((k) => typeof k === 'string' && k);
   if (keys.length === 0) return c.json({ error: '请提供要删除的附件 key 列表' }, 400);
-  // 安全校验：只允许删除孤儿（再扫一遍确认键确属孤儿，防误删在用凭证）
+  // 安全校验：只允许删除孤儿（引用表权威判定，防误删在用凭证）
   const store = createStorage(c.env);
   const db = c.env.DB;
-  const inUse = new Map<string, Set<string>>();
-  const add = (entity: string, id: string) => {
-    if (!id) return;
-    let s = inUse.get(entity);
-    if (!s) { s = new Set(); inUse.set(entity, s); }
-    s.add(id);
-  };
-  const [sales, saleItems, purchases, purchaseItems, payments] = await Promise.all([
-    // 去单据化：无 sales/purchases 头表，单据 id 由商品行去重聚合
-    db.prepare('SELECT DISTINCT sale_id AS id FROM sale_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM sale_items').all<{ id: string }>(),
-    db.prepare('SELECT DISTINCT purchase_id AS id FROM purchase_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM purchase_items').all<{ id: string }>(),
-    db.prepare('SELECT id FROM payments').all<{ id: string }>(),
-  ]);
-  sales.results.forEach((r) => add('sale', r.id));
-  saleItems.results.forEach((r) => add('sale_item', r.id));
-  purchases.results.forEach((r) => add('purchase', r.id));
-  purchaseItems.results.forEach((r) => add('purchase_item', r.id));
-  payments.results.forEach((r) => add('payment', r.id));
+  const guard = await orphanGuard(db);
   let deleted = 0;
   for (const key of keys) {
     const parsed = parseAttachmentKey(key);
-    if (parsed) {
-      if ((inUse.get(parsed.entity) ?? new Set()).has(parsed.id)) continue; // 在用防误删
-    } else {
-      // 新格式内容 key（md5-only）：引用表有=在用（同图共享）防误删；无=孤儿可删
-      const ref = await db.prepare('SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ?').bind(key).first<{ n: number }>();
-      if ((ref?.n ?? 0) > 0) continue;
-    }
+    if (isInUseAttachment(key, parsed?.entity ?? '', parsed?.id ?? '', guard)) continue; // 在用防误删
     try {
       await store.delete(key);
       // 引用行同步清理（孤儿本来就不应存在引用；防御性删除防脏引用残留）

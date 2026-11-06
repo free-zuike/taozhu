@@ -4,7 +4,7 @@ import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { buildPayload, recordChange } from '../lib/sync';
 import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesSideRounded } from '../lib/money';
-import { versionedSnapshot } from '../lib/snapshot';
+import { versionedSnapshot, unaffectedTypes } from '../lib/snapshot';
 import { recordAudit } from './audit';
 import type { AuthUser, ClientRow, Env } from '../types';
 
@@ -36,7 +36,13 @@ async function priceGroupErr(db: D1Database, groupId: string | null | undefined)
 // fingerprint：全局舍入配置只做 WS 广播、不 append 变更流，游标不变却会改变所有金额，
 // 故把 carry/digits 拼进指纹强制重算（同 stats/overview）。客户级抹零配置走 PATCH /clients
 // 的 recordChange → 游标变化自动失效。
-const SALES_TOTAL_SUB = '(SELECT client_id, SUM(amount) AS total FROM sale_items GROUP BY client_id)';
+/** /clients 只依赖 clients / sale_items / payments / categories；下列写入不影响任一字段。
+ *  反向白名单：未知或新增 entity_type 一律保守重算，避免全局游标被无关写打掉。 */
+const CLIENT_UNRELATED_TYPES = [
+  'item', 'price_group', 'payment_account', 'device', 'user',
+  'settings', 'setting', 'theme', 'ai_config', 'attachment',
+  'share_link', 'stmt_template', 'loss_record', 'stock_adjustment',
+];
 type ClientListItem = {
   id: string; name: string; contact: string; phone: string; note: string;
   start_date: string; end_date: string; month_start_day: number;
@@ -50,8 +56,11 @@ clientsRouter.get('/', async (c) => {
   const db = c.env.DB;
   const money = await getRoundingConfig(db);
   const { data } = await versionedSnapshot<ClientListItem[]>(db, 'clients', async () => {
-    const sql = `SELECT c.*, cat.name AS category_name, COALESCE(s.total, 0) AS sales_total, COALESCE(p.total, 0) AS paid_total
-        FROM clients c LEFT JOIN categories cat ON cat.id = c.category_id LEFT JOIN ${SALES_TOTAL_SUB} s ON s.client_id = c.id LEFT JOIN (SELECT client_id, SUM(amount + waived) AS total FROM payments GROUP BY client_id) p ON p.client_id = c.id WHERE c.deleted_at IS NULL ORDER BY c.name`;
+    // sales_total / paid_total 改从下方已全量拉取的逐笔明细派生，取消原 SQL 的两个聚合子查询
+    // （SALES_TOTAL_SUB 与 payments SUM 各再全表扫一遍，是 clients 子查询 11.5 万行的来源）。
+    const sql = `SELECT c.*, cat.name AS category_name FROM clients c
+        LEFT JOIN categories cat ON cat.id = c.category_id
+        WHERE c.deleted_at IS NULL ORDER BY c.name`;
     const rows = await db.prepare(sql).all();
     // 各店抹零配置（无配置=不抹零，保持历史口径；round_carry NULL=跟随全局）
     const cfgRows = await db.prepare('SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL').all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>();
@@ -66,12 +75,14 @@ clientsRouter.get('/', async (c) => {
       if (!byClient.has(x.cid)) byClient.set(x.cid, []);
       byClient.get(x.cid)!.push({ sale_id: x.sale_id, happened_at: x.happened_at, amount: Number(x.amount) || 0 });
     }
+    const salesTotalMap = new Map<string, number>();
     for (const [cid, rs] of byClient) {
       const cfg = roundCfg.get(cid);
       const sales = cfg && cfg.stage !== 'none'
         ? salesSideRounded(rs, cfg.stage, cfg.unit, cfg.carry, money)
         : rs.reduce((s, x) => s + roundMoney(x.amount, money), 0);
       debtMap.set(cid, sales);
+      salesTotalMap.set(cid, rs.reduce((s, x) => s + (Number(x.amount) || 0), 0));
     }
     for (const x of payRows2.results) {
       debtMap.set(x.cid, (debtMap.get(x.cid) ?? 0) - roundMoney((Number(x.amount) || 0) + (Number(x.waived) || 0), money));
@@ -87,8 +98,12 @@ clientsRouter.get('/', async (c) => {
       }
       if (min) firstBookMap.set(cid, min);
     }
+    const paidTotalMap = new Map<string, number>();
     const payCountMap = new Map<string, number>();
-    for (const x of payRows2.results) payCountMap.set(x.cid, (payCountMap.get(x.cid) ?? 0) + 1);
+    for (const x of payRows2.results) {
+      paidTotalMap.set(x.cid, (paidTotalMap.get(x.cid) ?? 0) + (Number(x.amount) || 0) + (Number(x.waived) || 0));
+      payCountMap.set(x.cid, (payCountMap.get(x.cid) ?? 0) + 1);
+    }
     return rows.results.map((r): ClientListItem => {
       const row = r as unknown as ClientRow & { sales_total: number; paid_total: number; category_name: string | null };
       return {
@@ -100,13 +115,16 @@ clientsRouter.get('/', async (c) => {
         first_book_date: firstBookMap.get(row.id) ?? '',
         category_id: row.category_id ?? '', category_name: row.category_name ?? '',
         price_group_id: row.price_group_id ?? '',
-        sales_total: row.sales_total, paid_total: row.paid_total,
+        sales_total: salesTotalMap.get(row.id) ?? 0, paid_total: paidTotalMap.get(row.id) ?? 0,
         sale_count: byClient.get(row.id)?.length ?? 0, payment_count: payCountMap.get(row.id) ?? 0,
         // 欠款=每笔先舍入再累加的差（与统计/账本口径一致；勿 SQL SUM 原始后一次舍入——尾数进位放大，427.8 vs 428 实证）
         debt: roundMoney(debtMap.get(row.id) ?? 0, money),
       };
     });
-  }, `${money.carry}|${money.digits}`);
+  }, `${money.carry}|${money.digits}`, {
+    ttlMs: 5 * 60_000,
+    affectedSince: unaffectedTypes(db, CLIENT_UNRELATED_TYPES),
+  });
   const kw = q.toLowerCase();
   const clients = kw ? data.filter((r) => r.name.toLowerCase().includes(kw)) : data;
   return c.json({ clients });

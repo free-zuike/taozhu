@@ -864,6 +864,20 @@ jobs:
         if: env.CLOUDFLARE_API_TOKEN != ''
         run: npx wrangler d1 execute taozhu --remote --file src/schema.sql
 
+      # 索引自检 + 补建（全部由代码完成，无需在 D1 控制台手工执行 SQL）：
+      # ① 幂等补建最关键的 attachment_refs 索引（schema.sql 已含，此处双保险）
+      # ② 把 sqlite_master 的索引查询结果打印进 CI 日志，发版后可直接核对
+      # ③ 缺任一关键索引即失败，阻止「缺索引 → 全表扫烧额度」的版本上线
+      - name: Ensure & verify critical D1 indexes
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: |
+          npx wrangler d1 execute taozhu --remote --command "CREATE INDEX IF NOT EXISTS idx_attachment_refs_entity ON attachment_refs (entity, entity_id)"
+          npx wrangler d1 execute taozhu --remote --command "CREATE INDEX IF NOT EXISTS idx_attachment_refs_key ON attachment_refs (file_key)"
+          npx wrangler d1 execute taozhu --remote --command "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='attachment_refs'" | tee /tmp/attachment-indexes.txt
+          grep -q "idx_attachment_refs_entity" /tmp/attachment-indexes.txt || { echo "::error::缺少 idx_attachment_refs_entity"; exit 1; }
+          grep -q "idx_attachment_refs_key" /tmp/attachment-indexes.txt || { echo "::error::缺少 idx_attachment_refs_key"; exit 1; }
+          echo "关键索引齐全"
+
       # 附件 R2 bucket（不存在则创建；已存在会报 10004，忽略即可——幂等）
       # 不依赖 r2 bucket list 输出格式做存在性判断，避免误判
       - name: Setup R2 bucket (idempotent)

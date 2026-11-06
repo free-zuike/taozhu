@@ -1,5 +1,5 @@
 /** 库存测试：进货自动入库、出货自动扣减、编辑/删除单据库存重算、盘点与预警 */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
 import { createFakeD1, fakeAssets, type FakeD1 } from './helpers/fake-d1';
@@ -285,5 +285,49 @@ describe('库存（stocks）', () => {
     };
     const stock = d.stocks.find((s) => s.item_id === itemId);
     expect(stock?.expiry_date).toBe('2026-11-20'); // 取最早到期批次
+  });
+
+  it('库存快照精确失效：无关写不重算四表 UNION ALL；库存写/未知类型实时重算；建议阈值按天缓存', async () => {
+    await call(env, 'POST', '/api/v1/purchases', token, { items: [{ price_id: priceId, quantity: 10 }] });
+    expect(await stockQty()).toBe(10); // 预热 stock_agg / stock_suggest 快照
+
+    const isAggScan = (s: string) => /COALESCE\(quantity, 0\) AS qty FROM purchase_items/i.test(s);
+    const capture = async () => {
+      const sqls: string[] = [];
+      const orig = env.DB.prepare.bind(env.DB);
+      const spy = vi.spyOn(env.DB, 'prepare').mockImplementation(((sql: string) => {
+        sqls.push(sql);
+        return orig(sql);
+      }) as typeof env.DB.prepare);
+      try {
+        const res = await call(env, 'GET', '/api/v1/stocks', token);
+        return { sqls, body: (await res.json()) as { stocks: Array<{ quantity: number }> } };
+      } finally {
+        spy.mockRestore();
+      }
+    };
+
+    // ① 无关写（新建客户 → entity_type='client'）：游标前进但快照复用
+    const created = await call(env, 'POST', '/api/v1/clients', token, { name: '无关客户' });
+    expect(created.status).toBe(201);
+    const unrelated = await capture();
+    expect(unrelated.sqls.some(isAggScan)).toBe(false);
+    expect(unrelated.sqls.some((s) => /AVG\(quantity\)/i.test(s))).toBe(false);
+    expect(unrelated.sqls.some((s) => /FROM sync_changes WHERE id > \? AND id <= \?/i.test(s))).toBe(true);
+    expect(unrelated.body.stocks[0]?.quantity).toBe(10);
+
+    // ② 库存相关写（进货行）：必须重算且库存实时
+    await call(env, 'POST', '/api/v1/purchases', token, { items: [{ price_id: priceId, quantity: 5 }] });
+    const related = await capture();
+    expect(related.sqls.filter(isAggScan)).toHaveLength(1);
+    expect(related.body.stocks[0]?.quantity).toBe(15);
+
+    // ③ 未知/新增 entity_type 不在反向白名单 → 保守重算
+    await env.DB.prepare(
+      "INSERT INTO sync_changes (entity_type, entity_sync_id, updated_at) VALUES ('future_entity', 'x', '2026-01-01T00:00:00.000Z')",
+    ).run();
+    const unknown = await capture();
+    expect(unknown.sqls.filter(isAggScan)).toHaveLength(1);
+    expect(unknown.body.stocks[0]?.quantity).toBe(15);
   });
 });

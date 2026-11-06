@@ -2,10 +2,10 @@
  * 版本化只读快照：验证「同版本复用 / 版本变化立即重算 / 损坏自愈 / 强制失效」，
  * 以及三个消费端点（sync/stats、sync/panel、attachments/total）在写后必须保持精确。
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
-import { versionedSnapshot, expireSnapshots } from '../src/lib/snapshot';
+import { versionedSnapshot, expireSnapshots, unaffectedTypes } from '../src/lib/snapshot';
 import { createFakeD1, fakeAssets, type FakeD1 } from './helpers/fake-d1';
 
 const JWT_SECRET = 'test-secret';
@@ -95,6 +95,78 @@ describe('版本化只读快照', () => {
     expect(rows.results.map((r) => r.key)).toEqual(['snapshot:unit']);
     const meta = await db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").first<{ value: string }>();
     expect(meta?.value).toBeTruthy();
+  });
+
+  it('affectedSince：无关写推进游标时复用旧数据，并只把快照游标推进写回', async () => {
+    let calls = 0;
+    const compute = async () => ({ n: ++calls });
+    const opts = { affectedSince: async () => false };
+    const a = await versionedSnapshot(db as never, 'unit', compute, '', opts);
+    expect(a.data.n).toBe(1);
+
+    await bumpCursor(db);
+    const b = await versionedSnapshot(db as never, 'unit', compute, '', opts);
+    expect(b.data.n).toBe(1);
+    expect(calls).toBe(1);
+    expect(b.cursor).toBeGreaterThan(a.cursor);
+
+    // 复用时写回的 envelope 必须带上新游标，否则下一次会重复判定
+    const row = await db.prepare("SELECT value FROM schema_meta WHERE key = 'snapshot:unit'").first<{ value: string }>();
+    expect(JSON.parse(row?.value ?? '{}').cursor).toBe(b.cursor);
+    const c = await versionedSnapshot(db as never, 'unit', compute, '', opts);
+    expect(c.data.n).toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it('affectedSince：判定相关或判定抛错时一律保守重算（绝不返回陈旧值）', async () => {
+    let calls = 0;
+    const compute = async () => ({ n: ++calls });
+    const related = { affectedSince: async () => true };
+    await versionedSnapshot(db as never, 'unit', compute, '', related);
+    await bumpCursor(db);
+    expect((await versionedSnapshot(db as never, 'unit', compute, '', related)).data.n).toBe(2);
+
+    const broken = { affectedSince: async () => { throw new Error('D1 瞬时失败'); } };
+    await bumpCursor(db);
+    expect((await versionedSnapshot(db as never, 'unit', compute, '', broken)).data.n).toBe(3);
+  });
+
+  it('affectedSince 复用不刷新 TTL：超过 TTL 后仍强制重算（兜底绕过变更流的写入）', async () => {
+    let calls = 0;
+    const compute = async () => ({ n: ++calls });
+    const opts = { ttlMs: 60_000, affectedSince: async () => false };
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_000_000);
+      await versionedSnapshot(db as never, 'unit', compute, '', opts);
+      nowSpy.mockReturnValue(1_030_000);
+      await bumpCursor(db);
+      const b = await versionedSnapshot(db as never, 'unit', compute, '', opts);
+      expect(b.data.n).toBe(1);
+      expect(calls).toBe(1);
+      const row = await db.prepare("SELECT value FROM schema_meta WHERE key = 'snapshot:unit'").first<{ value: string }>();
+      expect(JSON.parse(row?.value ?? '{}').ts).toBe(1_000_000);
+      nowSpy.mockReturnValue(1_070_000);
+      const c = await versionedSnapshot(db as never, 'unit', compute, '', opts);
+      expect(c.data.n).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('unaffectedTypes：白名单内的写不重算，未知 entity_type 保守重算', async () => {
+    let calls = 0;
+    const compute = async () => ({ n: ++calls });
+    const opts = { affectedSince: unaffectedTypes(db as never, ['client', 'device']) };
+    await versionedSnapshot(db as never, 'unit', compute, '', opts);
+    await db.prepare(
+      "INSERT INTO sync_changes (entity_type, entity_sync_id, updated_at) VALUES ('client', 'c1', '2026-01-01')",
+    ).run();
+    expect((await versionedSnapshot(db as never, 'unit', compute, '', opts)).data.n).toBe(1);
+    await db.prepare(
+      "INSERT INTO sync_changes (entity_type, entity_sync_id, updated_at) VALUES ('future_entity', 'x', '2026-01-01')",
+    ).run();
+    expect((await versionedSnapshot(db as never, 'unit', compute, '', opts)).data.n).toBe(2);
   });
 });
 
@@ -199,5 +271,23 @@ describe('快照消费端：写后必须精确、不得返回陈旧值', () => {
     expect(fullScans).toEqual([]);
     // 今日三项仍实时按日期过滤、走 idx_*_date 索引
     expect(sqls.some((s) => /FROM sale_items si WHERE si\.happened_at = \?/i.test(s))).toBe(true);
+  });
+
+  it('clients 派生取消两个全表聚合子查询（rows_read 护栏）', async () => {
+    const sqls: string[] = [];
+    const orig = env.DB.prepare.bind(env.DB);
+    const spy = vi.spyOn(env.DB, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return orig(sql);
+    }) as typeof env.DB.prepare);
+    try {
+      expect((await call(env, 'GET', '/api/v1/clients', token)).status).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(sqls.some((s) => /GROUP BY client_id/i.test(s))).toBe(false);
+    const saleScans = sqls.filter((s) => /FROM sale_items/i.test(s));
+    expect(saleScans).toHaveLength(1); // 只剩逐笔明细一条
+    expect(saleScans[0]).toMatch(/SELECT client_id AS cid, sale_id, happened_at, amount FROM sale_items/i);
   });
 });

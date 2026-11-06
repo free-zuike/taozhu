@@ -396,11 +396,31 @@ const DDL: string[] = [
   )`,
 ];
 
+/**
+ * 关键索引：D1 额度紧张时 ensureIndexes 可能只来得及建成功前几条（逐条容错、失败下次重试），
+ * 因此把 rows_read 影响最大的排到最前，保证「额度只够建一条」时先救最痛的查询。
+ * 这个顺序也用于 /maintenance/indexes 的自检清单。
+ */
+export const CRITICAL_INDEXES = [
+  'idx_attachment_refs_entity', // 附件计数/查重：缺失时每批 IN 变全表扫（历史 #1 消耗源）
+  'idx_attachment_refs_key',
+  'idx_sync_changes_entity',
+  'idx_sale_items_client_date',
+  'idx_sale_items_sale',
+  'idx_sale_items_item_date',
+] as const;
+
 /** 全部索引 DDL：DDL 里的历史索引 + 止血索引（逐条容错补齐，见 PERF_INDEX_DDL 注释） */
 const INDEX_DDL = [
   ...DDL.filter((s) => /^\s*CREATE\s+(UNIQUE\s+)?INDEX\b/i.test(s)),
   ...PERF_INDEX_DDL,
-];
+].sort((a, b) => indexRank(b) - indexRank(a));
+
+function indexRank(sql: string): number {
+  const m = /CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+(\w+)/i.exec(sql);
+  const i = m ? CRITICAL_INDEXES.indexOf(m[1] as typeof CRITICAL_INDEXES[number]) : -1;
+  return i < 0 ? 0 : CRITICAL_INDEXES.length - i;
+}
 
 let schemaReady = false;
 // 索引补齐独立于 schemaReady：即使热 isolate（schemaReady 已真）也持续重试直到所有索引建成功，
@@ -448,7 +468,7 @@ async function ensureColumn(
  * 不 bump 版本号（避免老库重跑整条 ALTER / DROP 重建迁移链）。
  * 单条失败独立吞掉：UNIQUE 索引遇历史重复 sync_key 时不能让全体 API 500。
  */
-async function ensureIndexes(db: D1Database): Promise<boolean> {
+export async function ensureIndexes(db: D1Database): Promise<boolean> {
   let rows;
   try {
     rows = await db.prepare(
@@ -472,12 +492,62 @@ async function ensureIndexes(db: D1Database): Promise<boolean> {
     try {
       await db.prepare(sql).run();
       indexes.add(name);
+      if ((CRITICAL_INDEXES as readonly string[]).includes(name)) {
+        console.log(`[taozhu] 已补建关键索引 ${name}`);
+      }
     } catch (e) {
       console.warn(`[taozhu] skip index ${name}:`, e);
       allOk = false;
     }
   }
+  if (!allOk) console.warn('[taozhu] 索引补齐未完成（关键索引已优先），下次请求继续重试');
   return allOk;
+}
+
+export interface IndexDiagnostic {
+  critical: Array<{ name: string; present: boolean; sql: string | null }>;
+  missing: string[];
+  plans: Array<{ name: string; detail: string }>;
+  totalIndexes: number;
+}
+
+/** 关键查询是否走索引（EXPLAIN 只生成计划、不执行查询，不消耗业务行数） */
+const EXPLAIN_TARGETS = [
+  {
+    name: 'attachment_refs_entity_count',
+    sql: `SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity = 'sale_item' AND entity_id IN ('x') GROUP BY entity_id`,
+  },
+  { name: 'attachment_refs_key_lookup', sql: `SELECT 1 FROM attachment_refs WHERE file_key = 'x' LIMIT 1` },
+  { name: 'sale_items_client_date', sql: `SELECT id FROM sale_items WHERE client_id = 'x' AND happened_at = '2026-01-01'` },
+];
+
+/**
+ * 索引自检：结果由代码产出（GET /api/v1/maintenance/indexes），不需要去 D1 控制台手工跑 SQL。
+ * 一次 sqlite_master 查询 + 3 条 EXPLAIN QUERY PLAN；只读、开销极小。
+ */
+export async function inspectIndexes(db: D1Database): Promise<IndexDiagnostic> {
+  const rows = await db.prepare(
+    "SELECT name, sql FROM sqlite_master WHERE type = 'index'",
+  ).all<{ name: string; sql: string | null }>();
+  const byName = new Map(rows.results.map((r) => [r.name, r.sql]));
+  const critical = CRITICAL_INDEXES.map((name) => ({
+    name, present: byName.has(name), sql: byName.get(name) ?? null,
+  }));
+  const plans: Array<{ name: string; detail: string }> = [];
+  for (const t of EXPLAIN_TARGETS) {
+    try {
+      const p = await db.prepare(`EXPLAIN QUERY PLAN ${t.sql}`).all<{ detail: string }>();
+      plans.push({ name: t.name, detail: p.results.map((r) => r.detail).join(' | ') });
+    } catch (e) {
+      plans.push({ name: t.name, detail: `EXPLAIN 失败: ${e}` });
+    }
+  }
+  return {
+    critical,
+    missing: critical.filter((c) => !c.present).map((c) => c.name),
+    plans,
+    totalIndexes: rows.results.length,
+  };
 }
 
 /** 首次调用时建表；失败不置标志，下次重试 */

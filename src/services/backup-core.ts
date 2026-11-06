@@ -28,14 +28,25 @@ export async function listBusinessTables(db: D1Database): Promise<string[]> {
 }
 
 /// 分页拉取单表（LIMIT 1000）：一次性 SELECT * 全表在大库超 Worker 内存/CPU → 503
+/// rows_read 关键：不能用 LIMIT/OFFSET——SQLite 每页都要重新扫描并跳过前 N 行，
+/// 10 万行表分 100 页累计读约 500 万行（O(n²)），是定时备份烧穿 D1 读取额度的主因。
+/// 改用 rowid 游标（keyset）：每页只读自己的 1000 行，全表累计 O(n)，且并发写入不重不漏。
+/// 所有业务表都是普通 rowid 表（schema 无 WITHOUT ROWID）；__tz_rid 只作游标，导出前剥离，
+/// 保证 db.json 行结构与旧版逐列一致（恢复端按列名 INSERT OR IGNORE）。
 export async function exportTablePages(db: D1Database, table: string): Promise<unknown[]> {
   const rows: unknown[] = [];
-  let offset = 0;
+  let lastRowId = 0;
   for (;;) {
-    const r = await db.prepare(`SELECT * FROM ${table} LIMIT 1000 OFFSET ?`).bind(offset).all();
-    rows.push(...r.results);
-    if (r.results.length < 1000) break;
-    offset += 1000;
+    const r = await db.prepare(
+      `SELECT rowid AS __tz_rid, * FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT 1000`,
+    ).bind(lastRowId).all();
+    const page = r.results as Array<Record<string, unknown>>;
+    for (const row of page) {
+      const { __tz_rid, ...rest } = row;
+      lastRowId = Number(__tz_rid);
+      rows.push(rest);
+    }
+    if (page.length < 1000) break;
   }
   return rows;
 }
@@ -127,7 +138,8 @@ export async function importBackupData(
     }
   }
   // 恢复逐表 INSERT OR IGNORE，不经过 recordChange → 变更流游标不变，版本化快照会误判「数据没变」。
-  // 主动清空，让下一次面板/库存请求立即重算（否则要等 60s TTL 兜底）。
+  // 主动清空，让下一次面板/库存请求立即重算（否则要等各快照自己的 TTL：
+  // 默认 60s、库存 5 分钟、建议阈值 24 小时，恢复后库存必须立刻准确）。
   await expireSnapshots(db);
   return { report, total_inserted: totalInserted };
 }

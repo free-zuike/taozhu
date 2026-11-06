@@ -3,9 +3,10 @@
  * 盘盈(+) 往 FIFO 批次加批 / 盘亏(−) 从最早批次扣减，差异记 stock_adjustments 流水
  * （变更流同步 + 审计留痕；防重复提交；店员无权限 + 金额打码）。
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
+import { expireSnapshots } from '../src/lib/snapshot';
 import { createFakeD1, fakeAssets, type FakeD1 } from './helpers/fake-d1';
 
 const JWT_SECRET = 'test-secret';
@@ -245,5 +246,46 @@ describe('库存盘点（POST /stocks/adjust）', () => {
     expect(d.surplus_qty).toBe(2);
     expect(d.surplus_amount).toBe(0);
     expect(d.shortage_amount).toBe(0);
+  });
+
+  it('多行盘点只做一次四表聚合（rows_read 护栏），逐行差异仍正确', async () => {
+    const a = await mkItem(env, token, '甲');
+    const b = await mkItem(env, token, '乙');
+    const d = await mkItem(env, token, '丙');
+    for (const it of [a, b, d]) {
+      await call(env, 'POST', '/api/v1/purchases', token, { items: [{ price_id: it.price_id, quantity: 10 }] });
+    }
+    // 强制快照失效，下面统计的是「重算次数」而不是命中次数
+    await expireSnapshots(db as never);
+
+    const sqls: string[] = [];
+    const orig = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return orig(sql);
+    }) as typeof db.prepare);
+    let res!: Response;
+    try {
+      res = await call(env, 'POST', '/api/v1/stocks/adjust', token, {
+        id: 'ADJ-MULTI',
+        rows: [
+          { item_id: a.id, unit: '斤', actual_qty: 12 },
+          { item_id: b.id, unit: '斤', actual_qty: 8 },
+          { item_id: d.id, unit: '斤', actual_qty: 10 },
+        ],
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { adjusted: number; surplus: number; shortage: number };
+    expect(body.adjusted).toBe(2);
+    expect(body.surplus).toBe(2);
+    expect(body.shortage).toBe(2);
+    const aggScans = sqls.filter((s) => /COALESCE\(quantity, 0\) AS qty FROM purchase_items/i.test(s));
+    expect(aggScans).toHaveLength(1); // 3 行盘点 ≠ 3 次全表扫
+    expect(await stockQty(a.id)).toBe(12);
+    expect(await stockQty(b.id)).toBe(8);
+    expect(await stockQty(d.id)).toBe(10);
   });
 });
