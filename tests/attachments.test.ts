@@ -11,6 +11,8 @@ const BASE = 'http://localhost';
 /** 内存 R2Bucket mock（仅实现本路由用到的接口） */
 class FakeBucket {
   private store = new Map<string, { bytes: Uint8Array }>();
+  /** 记录 list 调用次数，用于验证「一次性兜底扫描」后不再列 R2 */
+  listCalls = 0;
   async put(key: string, value: BodyInit) {
     const bytes = new Uint8Array(await new Response(value).arrayBuffer());
     this.store.set(key, { bytes });
@@ -22,6 +24,7 @@ class FakeBucket {
     return new R2TestObject(o.bytes) as unknown as R2ObjectBody;
   }
   async list(opts?: { prefix?: string }) {
+    this.listCalls++;
     const prefix = opts?.prefix ?? '';
     return {
       objects: [...this.store.keys()].filter((k) => k.startsWith(prefix)).map((k) => ({
@@ -287,6 +290,27 @@ describe('交易附件（R2）', () => {
       "SELECT COUNT(*) AS n FROM attachment_refs WHERE file_key = ? AND entity = 'sale' AND entity_id = ?",
     ).bind(legacyKey, saleId).first<{ n: number }>();
     expect(row?.n ?? 0).toBe(1);
+  });
+
+  it('一次性兜底扫描：首次落标记后不再列 R2；删标记可强制重扫（省每同步 7 前缀分页）', async () => {
+    // 空库无遗留：首次同步列全 R2 前缀并落 schema_meta 标记
+    const first = await (await call(env, 'GET', '/api/v1/attachments/in-use', token)).json() as { attachments: unknown[] };
+    expect(first.attachments).toHaveLength(0);
+    const afterFirst = env.BUCKET.listCalls;
+    expect(afterFirst).toBeGreaterThan(0);
+    const meta = await (env.DB as FakeD1).prepare(
+      "SELECT value FROM schema_meta WHERE key = 'attachment_legacy_scan_done'",
+    ).first<{ value: string }>();
+    expect(meta?.value).toBe('1');
+
+    // 第二次同步：标记命中 → 不再列任何 R2 前缀，结果仍一致
+    await call(env, 'GET', '/api/v1/attachments/in-use', token);
+    expect(env.BUCKET.listCalls).toBe(afterFirst);
+
+    // 删除标记 → 强制重扫（数据恢复/迁移后的手动通道）
+    await (env.DB as FakeD1).prepare("DELETE FROM schema_meta WHERE key = 'attachment_legacy_scan_done'").run();
+    await call(env, 'GET', '/api/v1/attachments/in-use', token);
+    expect(env.BUCKET.listCalls).toBeGreaterThan(afterFirst);
   });
 
   it('in-use 不再自动清除引用（避免误删尚未同步到云端的交易附件）', async () => {

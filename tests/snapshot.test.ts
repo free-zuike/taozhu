@@ -145,6 +145,47 @@ describe('快照消费端：写后必须精确、不得返回陈旧值', () => {
     expect(after.totals.debt).toBe(1.6);
   });
 
+  it('clients 列表：命中快照不再全表读流水表；写单/改舍入配置/q 搜索都正确', async () => {
+    const readClients = async (q = '') => {
+      const path = q ? `/api/v1/clients?q=${q}` : '/api/v1/clients';
+      return (await (await call(env, 'GET', path, token)).json()) as {
+        clients: Array<{ id: string; name: string; debt: number; sales_total: number }>;
+      };
+    };
+    const created = await call(env, 'POST', '/api/v1/clients', token, { name: 'Alpha' });
+    const { id } = (await created.json()) as { id: string };
+    await call(env, 'POST', '/api/v1/clients', token, { name: 'Beta' });
+    // 预热：首次请求生成快照
+    expect((await readClients()).clients).toHaveLength(2);
+
+    // 命中快照时不再全表读 sale_items / payments / clients
+    const sqls: string[] = [];
+    const origPrepare = env.DB.prepare.bind(env.DB);
+    const spy = { prepare: (sql: string) => { sqls.push(sql); return origPrepare(sql); } } as unknown as FakeD1;
+    await call({ ...env, DB: spy }, 'GET', '/api/v1/clients', token);
+    const fullScans = sqls.filter((s) => /FROM\s+(sale_items|payments|clients)\b/i.test(s) && !/WHERE/i.test(s));
+    expect(fullScans).toEqual([]);
+
+    // 写单（游标前进）→ 快照失效，欠款/出货额实时
+    await env.DB.prepare(
+      `INSERT INTO sale_items (id, sale_id, item_id, client_id, unit, quantity, amount, happened_at)
+       VALUES ('s1', 'S1', 'i1', ?, 'jin', 1, 1.65, '2026-01-01')`,
+    ).bind(id).run();
+    await bumpCursor(env.DB);
+    const afterWrite = (await readClients()).clients.find((c) => c.id === id)!;
+    expect(afterWrite.sales_total).toBe(1.65);
+    expect(afterWrite.debt).toBe(1.65);
+
+    // 改舍入配置（只 WS 广播、游标不变）→ fingerprint 变化强制重算
+    const put = await call(env, 'PUT', '/api/v1/settings/rounding', token, { carry: 0.6, digits: 1 });
+    expect(put.status).toBe(200);
+    expect((await readClients()).clients.find((c) => c.id === id)!.debt).toBe(1.6);
+
+    // q 搜索从 SQL 过滤改为缓存后 JS 过滤，语义保持
+    const searched = await readClients('Beta');
+    expect(searched.clients.map((c) => c.name)).toEqual(['Beta']);
+  });
+
   it('overview 命中快照时不再全表读流水表（rows_read 回归护栏）', async () => {
     // 预热：首个请求完成建表迁移并生成快照，之后才开始记录 SQL
     await call(env, 'GET', '/api/v1/stats/overview', token);

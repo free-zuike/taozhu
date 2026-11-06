@@ -241,9 +241,15 @@ attachmentsRouter.get('/in-use', async (c) => {
   // 兜底扫描到在用对象后**补写引用表**（幂等 upsert）：引用表补全后 in-use 全引用表驱动，
   // 本地 putAll 与服务器 in-use 完全对齐（修"本地91/服务器95 差4"：4 个 R2 在用对象引用表没行，
   // 本地全量刷新始终少这几条）。
+  // 一次性扫描开关：历史遗留 key 集合固定（v0.17.84 前存量），首次同步列全 R2 并补写引用表后
+  // 落 schema_meta 标记，此后每次同步直接跳过整个 ②（不再列 7 个 R2 前缀/分页，也不再全表扫实体 id）。
+  // 现代库首次扫描即无遗留 → 一次之后 /in-use 只剩 ① 引用表查询，退化为单次 SELECT。
+  // 若首次补写因 D1 额度耗尽等异常失败则不落标记，下次同步自动重试，绝不半途锁死。
+  const legacyDone = await db.prepare("SELECT value FROM schema_meta WHERE key = 'attachment_legacy_scan_done'").first<{ value: string }>();
+  let backfillFailed = false;
   const legacy: Array<{ key: string; entity: string; id: string; file: string; size: number }> = [];
   const scanPrefixes = ['taozhu/images/attachments/', 'taozhu/attachments/', 'sale/', 'sale_item/', 'purchase/', 'purchase_item/', 'payment/'];
-  for (const prefix of scanPrefixes) {
+  for (const prefix of (legacyDone ? [] : scanPrefixes)) {
     let cursor: string | undefined;
     do {
       const r = await store.list(prefix, cursor);
@@ -258,7 +264,7 @@ attachmentsRouter.get('/in-use', async (c) => {
     } while (cursor);
   }
   // ② 历史兜底校验+补写（延迟）：仅当 R2 扫描发现遗留 key 才全表扫描实体 id 校验（现代库无遗留→整段跳过，省 D1 rows_read）
-  if (legacy.length > 0) {
+  if (!legacyDone && legacy.length > 0) {
     const inUse = new Map<string, Set<string>>();
     const add = (entity: string, id: string) => {
       if (!id) return;
@@ -287,11 +293,18 @@ attachmentsRouter.get('/in-use', async (c) => {
           await db.prepare(
             'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
           ).bind(`${lk.entity}:${lk.id}:${lk.key}`, lk.entity, lk.id, lk.key, lk.key.split('/').pop()?.replace('.jpg', '') ?? '').run();
-        } catch (_) {}
+        } catch (_) { backfillFailed = true; }
         seen.add(lk.key);
         out.push({ key: lk.key, entity: lk.entity, id: lk.id, file: lk.file, size: lk.size });
       }
     }
+  }
+  // 补写无异常 → 落标记，后续同步永久跳过 ②；失败（如额度耗尽）则不落，下次自动重试。
+  // 需强制重扫（数据恢复/迁移）时删除该行即可：DELETE FROM schema_meta WHERE key='attachment_legacy_scan_done'
+  if (!legacyDone && !backfillFailed) {
+    try {
+      await db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('attachment_legacy_scan_done', '1')").run();
+    } catch (_) { /* 写标记失败不阻塞 in-use，下次自动重试 */ }
   }
   // ③ 存量凭证收敛迁移（幂等，单条 SQL 无 JS 循环）：0.17.281-296 期间实现为「每商品行各挂
   // 一份行级引用」（识别原图扩散到每行），用户规格已回调=对齐参考实现「交易级单记录」——
