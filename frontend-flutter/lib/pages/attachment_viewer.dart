@@ -17,10 +17,10 @@ import 'router.dart';
 
 /// 附件全屏查看器：点图标直接全屏显示该单据的全部附件，左/右滑切换；
 /// 顶部显示"第 x/N 张"，可添加附件、删除当前；空态显示"暂无附件 + 添加"。
-/// 批量模式（lineIds 非空，单据级入口 sale/purchase 使用）：上传一张凭证图实际
-/// 是批量按单条存入每个明细行（每行各自行级引用），展示合并各行并按同内容去重；
-/// orderIds（批量模式可空）：批量场景要一并展示的**单据级引用集合**（识别记账/编辑页
-/// 凭证挂单据级一份；日期批量编辑跨多单据 → 传该日全部单据 id，行级+单据级一次查全）。
+/// 批量模式（lineIds 非空，单据级入口 sale/purchase 使用）：上传一张整单凭证图
+/// 存为**单据级一份引用**（entity=单据 sale|purchase，id=单据 id），全商品行共享可见；
+/// 展示时合并单据级+各明细行级引用并按同内容去重（对齐 0.17.353 识别图回归单据级：
+/// 避免逐行挂 sale_item 导致 N 行=N 条引用/计数虚高/删除一条复活其他）。
 Future<void> showAttachmentViewer(
   BuildContext context,
   String entity,
@@ -364,13 +364,11 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
           final re = '${r['entity'] ?? ''}';
           final rid = '${r['entity_id'] ?? ''}';
           final rf = '${r['file'] ?? ''}'.split('/').last;
-          final mine = _bulk
-              ? (re == _lineEntity && widget.lineIds.contains(rid)) ||
-                    (re == widget.entity && rid == widget.id)
-              : (re == widget.entity && rid == widget.id);
+          // 整单凭证：引用挂在单据级（widget.entity/widget.id），同一张图在该单只挂一份
+          final mine = re == widget.entity && rid == widget.id;
           return mine && (rf == '$h.jpg');
         });
-        if (dup && !_bulk) {
+        if (dup) {
           toast(context, '该图片已存在，跳过重复添加');
           return;
         }
@@ -380,15 +378,14 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
     try {
       if (kIsWeb) {
         if (_bulk) {
-          // Web 批量：一张凭证图批量存入该单每个明细行（行级），无独立单据级份
-          for (final lid in widget.lineIds.where((l) => l.isNotEmpty)) {
-            await Api.instance.uploadPhoto(
-              '/attachments?entity=$_lineEntity&id=$lid',
-              bytes,
-              'photo.jpg',
-            );
-          }
-          toast(context, '已添加附件（已关联全部商品）');
+          // Web 整单凭证：存单据级一份（entity=widget.entity, id=widget.id），与 App 一致
+          // （对齐 0.17.353 识别图回归单据级：避免逐行挂导致 N 条引用/计数虚高）
+          await Api.instance.uploadPhoto(
+            '/attachments?entity=${widget.entity}&id=${widget.id}',
+            bytes,
+            'photo.jpg',
+          );
+          toast(context, '已添加附件（本单凭证）');
         } else {
           // Web 无本地副本/同步队列：直传云端（Web 固有形态）
           await Api.instance.uploadPhoto(
@@ -407,16 +404,12 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         final af = File('${adir.path}/$h.jpg');
         if (!af.existsSync()) await af.writeAsBytes(bytes);
         if (_bulk) {
-          // 批量模式：同图一份物理文件，每行入队（服务器同内容幂等同 key + 引用表每行一行）
-          var added = 0;
-          for (final lid in widget.lineIds) {
-            await SyncService.enqueueAttachmentUpload(
-                entity: _lineEntity, id: lid, fileName: '$h.jpg');
-            added++;
-          }
-          toast(context, added > 0
-              ? '已添加附件（已关联全部商品，联网后自动上传）'
-              : '全部商品均已存在该图片，跳过重复添加');
+          // 整单凭证：存单据级一份（entity=widget.entity, id=widget.id），全商品行共享可见——
+          // 对齐 0.17.353 识别图回归单据级（此前逐行挂 sale_item 每行一条 → N 行=N 条待上传/
+          // 服务器计数虚高/删除一条复活其他）。查看器批量模式已合并单据级引用展示，每行仍可见本张凭证。
+          await SyncService.enqueueAttachmentUpload(
+            entity: widget.entity, id: widget.id, fileName: '$h.jpg');
+          toast(context, '已添加附件（本单凭证，联网后自动上传）');
         } else {
           await SyncService.enqueueAttachmentUpload(
             entity: widget.entity, id: widget.id, fileName: '$h.jpg',
@@ -425,7 +418,7 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
         }
       }
       await _load();
-      appLog('op', '附件 添加：${widget.entity}/${widget.id}${_bulk ? '（批量 ${widget.lineIds.length} 行）' : ''}', level: 'info');
+      appLog('op', '附件 添加：${widget.entity}/${widget.id}${_bulk ? '（整单凭证·单据级 1 条）' : ''}', level: 'info');
       SyncService.version.notifyListeners(); // 账本附件图标计数/列表即时联动
       if (mounted && _items.isNotEmpty) {
         _index = _items.length - 1;
