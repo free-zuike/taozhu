@@ -4,8 +4,14 @@ name: D1 Diagnose
 # 结果打进 Actions 日志，用 `gh run view --log` 即可读取，无需在 Cloudflare 面板手工查询。
 # 只读：诊断 SQL 只查 sqlite_master（约百行）与 EXPLAIN QUERY PLAN（不执行查询），
 # 不会全表扫业务表消耗当日 rows_read 额度。
+# 注：GraphQL Analytics / d1 insights 需要 API token 具备 Account Analytics Read 权限。
 on:
   workflow_dispatch:
+    inputs:
+      period:
+        description: '累计排行时间窗（1h / 1d / 7d）'
+        required: false
+        default: '1d'
 
 permissions:
   contents: read
@@ -55,48 +61,50 @@ jobs:
           curl -s -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             -H "Content-Type: application/json" --data @/tmp/d1-hourly.json \
             https://api.cloudflare.com/client/v4/graphql > /tmp/d1-hourly-out.json
+          echo "=== GraphQL 每小时原始响应 ==="
+          head -c 1600 /tmp/d1-hourly-out.json; echo
           node -e "
             const d=JSON.parse(require('fs').readFileSync('/tmp/d1-hourly-out.json','utf8'));
-            if(!d.success){console.log('GraphQL 错误:',JSON.stringify(d.errors));process.exit(0)}
+            if(!d.success){console.log('GraphQL 未成功（多为 token 缺少 Account Analytics Read）');process.exit(0)}
             const g=(((d.data||{}).viewer||{}).accounts||[{}])[0]?.d1AnalyticsAdaptiveGroups||[];
             console.log('=== D1 每小时 rowsRead ===');
             for(const x of g) console.log(x.dimensions.datetime+'  rowsRead='+x.sum.rowsRead+'  readQueries='+x.sum.readQueries+'  rowsWritten='+x.sum.rowsWritten);
-            if(!g.length) console.log('(无数据，原始响应) '+JSON.stringify(d).slice(0,800));
-          " || cat /tmp/d1-hourly-out.json
-
-      - name: D1 按 SQL 查询排行（rows_read 消耗 Top）
-        env:
-          ACCOUNT_ID: ${{ steps.ids.outputs.account_id }}
-          DB_ID: ${{ steps.ids.outputs.database_id }}
-        run: |
-          FROM=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:00:00Z)
-          TO=$(date -u +%Y-%m-%dT%H:00:00Z)
-          jq -n --arg a "$ACCOUNT_ID" --arg d "$DB_ID" --arg f "$FROM" --arg t "$TO" \
-            '{query: ("query { viewer { accounts(filter: { accountTag: \"" + $a + "\" }) { d1QueriesAdaptiveGroups(limit: 30, filter: { databaseId: \"" + $d + "\", datetime_geq: \"" + $f + "\", datetime_leq: \"" + $t + "\" }, orderBy: [rowsRead_DESC]) { dimensions { query } sum { rowsRead readQueries } } } } }")}' \
-            > /tmp/d1-queries.json
-          curl -s -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" --data @/tmp/d1-queries.json \
-            https://api.cloudflare.com/client/v4/graphql > /tmp/d1-queries-out.json
-          echo "=== 按查询排行原始响应 ==="
-          node -e "
-            const d=JSON.parse(require('fs').readFileSync('/tmp/d1-queries-out.json','utf8'));
-            if(!d.success){console.log(JSON.stringify(d.errors));process.exit(0)}
-            const g=(((d.data||{}).viewer||{}).accounts||[{}])[0]?.d1QueriesAdaptiveGroups||[];
-            for(const x of g) console.log('rowsRead='+x.sum.rowsRead+'  queries='+x.sum.readQueries+'  '+String(x.dimensions.query).replace(/\s+/g,' ').slice(0,180));
             if(!g.length) console.log('(无数据) '+JSON.stringify(d).slice(0,800));
-          " || cat /tmp/d1-queries-out.json
+          " || true
+
+      - name: D1 按 SQL 查询排行（wrangler d1 insights，官方 rows_read 排行）
+        env:
+          DB_ID: ${{ steps.ids.outputs.database_id }}
+          PERIOD: ${{ inputs.period }}
+        run: |
+          echo "=== 最近 1 小时 Top 查询（部署后止血效果） ==="
+          npx --yes wrangler@latest d1 insights "$DB_ID" --sort-by=reads --time-period=1h --limit=30 --json | tee /tmp/insights-1h.json
+          echo "=== 累计 Top 查询（$PERIOD，对照基线） ==="
+          npx --yes wrangler@latest d1 insights "$DB_ID" --sort-by=reads --time-period="$PERIOD" --limit=30 --json | tee /tmp/insights-day.json
+          echo "=== 格式化：最近 1 小时 ==="
+          node -e "
+            const fs=require('fs');let raw=fs.readFileSync('/tmp/insights-1h.json','utf8');
+            const i=raw.indexOf('['); if(i<0){console.log(raw.slice(0,900));process.exit(0)}
+            const a=JSON.parse(raw.slice(i));
+            a.forEach((x,n)=>console.log('#'+(n+1)+' rowsRead='+x.totalRowsRead+' times='+x.numberOfTimesRun+'  '+String(x.query).replace(/\s+/g,' ').slice(0,170)));
+            if(!a.length) console.log('(无数据)');
+          " || true
+          echo "=== 格式化：累计 $PERIOD ==="
+          node -e "
+            const fs=require('fs');let raw=fs.readFileSync('/tmp/insights-day.json','utf8');
+            const i=raw.indexOf('['); if(i<0){console.log(raw.slice(0,900));process.exit(0)}
+            const a=JSON.parse(raw.slice(i));
+            a.forEach((x,n)=>console.log('#'+(n+1)+' rowsRead='+x.totalRowsRead+' times='+x.numberOfTimesRun+'  '+String(x.query).replace(/\s+/g,' ').slice(0,170)));
+            if(!a.length) console.log('(无数据)');
+          " || true
 
       - name: 索引与查询计划（只读诊断，不消耗业务行数）
         run: |
           echo "=== attachment_refs 索引 ==="
           npx wrangler d1 execute taozhu --remote --command "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='attachment_refs'"
-          echo "=== 计数查询计划（应显示 USING INDEX） ==="
+          echo "=== 旧形态 IN 查询计划 ==="
           npx wrangler d1 execute taozhu --remote --command "EXPLAIN QUERY PLAN SELECT entity_id, COUNT(*) FROM attachment_refs WHERE entity='sale_item' AND entity_id IN ('a','b') GROUP BY entity_id"
           echo "=== 新形态单次 GROUP BY 计划 ==="
           npx wrangler d1 execute taozhu --remote --command "EXPLAIN QUERY PLAN SELECT entity_id, COUNT(*) AS cnt FROM attachment_refs WHERE entity='sale_item' GROUP BY entity_id"
           echo "=== 一次性标记与快照状态（只取长度，不打印内容） ==="
           npx wrangler d1 execute taozhu --remote --command "SELECT key, length(value) AS bytes FROM schema_meta WHERE key LIKE 'attachment_%' OR key LIKE 'snapshot:%'"
-
-      - name: wrangler d1 insights（若版本支持则给出官方查询排行）
-        continue-on-error: true
-        run: npx wrangler d1 insights taozhu --remote --json || npx wrangler d1 insights --help
