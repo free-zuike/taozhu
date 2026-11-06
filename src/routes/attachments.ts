@@ -95,20 +95,20 @@ attachmentsRouter.post('/', async (c) => {
     const bytes = new Uint8Array(await file.arrayBuffer());
     // 附件内容 key（同图一份物理文件）：key 仅按内容 md5 命名；同内容多实体引用 = R2 一份 + 引用表多行
     const key = attachmentContentKey(bytes);
-    await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
-    // 附件引用表（引用驱动）：记录"哪个实体引用了哪个文件"。幂等：同 entity+entity_id+key 已存在则跳过，
-    // 不同实体引用同一内容（同 md5 同 key）各自一行——多行/多单共享一份物理文件互不影响
-    // 附件增删实时同步：引用变化入变更流（对齐参考架构——附件是一等实体，上传=一条 upsert 变更，
-    // 其他端 pull 到后写本地引用+下载；不再只依赖 in-use 全量快照轮询）
     // 实体引用 id = `${entity}:${id}:${key}`（引用表主键语义）：同图多实体各自一条变更，
     // LWW/幂等按引用 id 判定不串；幂等重传（引用已存在）不重复写变更（同内容同实体无变化）
     const refId = `${entity}:${id}:${key}`;
+    // 关键：先落 D1 引用行、再传 R2 文件（原子性）。D1 额度耗尽时引用写不进→整体失败（无文件无引用，
+    // 干净回退）；绝不会产生"有 R2 文件、无引用行"的孤儿——那种孤儿正是被后续清理误删、导致附件丢失的根因。
+    // 引用已落但 R2 偶发失败→文件缺失由客户端重试补齐，同样不会残留孤儿。
     const upserted = await c.env.DB.prepare(
       'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
     ).bind(refId, entity, id, key, key.split('/').pop()?.replace('.jpg', '') ?? '').run();
-    if ((upserted.meta.changes ?? 0) > 0 || !(await c.env.DB.prepare(
+    const needChange = (upserted.meta.changes ?? 0) > 0 || !(await c.env.DB.prepare(
       'SELECT 1 FROM sync_changes WHERE entity_type = ? AND entity_sync_id = ? LIMIT 1',
-    ).bind('attachment', refId).first())) {
+    ).bind('attachment', refId).first());
+    await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
+    if (needChange) {
       const user = c.get('user');
       await recordChange(c.env.DB, {
         entity_type: 'attachment',
