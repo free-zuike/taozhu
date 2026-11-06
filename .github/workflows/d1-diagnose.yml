@@ -127,6 +127,8 @@ jobs:
           npx wrangler d1 execute taozhu --remote --command "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='attachment_refs'"
           echo "=== sale_items 索引（自证「缺 sale_id/client_id/happened_at 索引」类误判） ==="
           npx wrangler d1 execute taozhu --remote --command "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='sale_items'"
+          echo "=== happened_at 存储格式分布（>10 字符=带时分秒，会触发 <= 'YYYY-MM-DD' 漏末日） ==="
+          npx wrangler d1 execute taozhu --remote --command "SELECT 'sale_items' AS tbl, COUNT(*) AS n, SUM(CASE WHEN length(happened_at) > 10 THEN 1 ELSE 0 END) AS with_time FROM sale_items UNION ALL SELECT 'payments', COUNT(*), SUM(CASE WHEN length(happened_at) > 10 THEN 1 ELSE 0 END) FROM payments UNION ALL SELECT 'purchase_items', COUNT(*), SUM(CASE WHEN length(happened_at) > 10 THEN 1 ELSE 0 END) FROM purchase_items"
           echo "=== 按 sale_id / client_id / 日期 过滤的查询计划（EXPLAIN 不执行查询） ==="
           npx wrangler d1 execute taozhu --remote --command "EXPLAIN QUERY PLAN SELECT id, sale_id FROM sale_items WHERE sale_id IN ('a','b')"
           npx wrangler d1 execute taozhu --remote --command "EXPLAIN QUERY PLAN SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE client_id = 'a'"
