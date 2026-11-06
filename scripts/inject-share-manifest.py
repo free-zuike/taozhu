@@ -23,6 +23,13 @@ if 'android:launchMode="singleTask"' not in s:
     if 'android:launchMode=' in s:
         s = re.sub(r'android:launchMode="[^"]*"', 'android:launchMode="singleTask"', s, count=1)
     else:
-        s = s.replace('android:name=".MainActivity"',
-                      'android:name=".MainActivity"\n            android:launchMode="singleTask"')
+        # 兼容 Flutter 模板用 ${applicationId}.MainActivity 且无 launchMode 属性的情况：
+        # 直接在 MainActivity 的 activity 标签（android:name= 之后）插入 launchMode，
+        # 避免旧写法（只匹配字面 .MainActivity）在 ${applicationId}.MainActivity 时静默漏加。
+        s = re.sub(r'(android:name="(?:\$\{applicationId\}\.)?MainActivity")',
+                   r'\1\n            android:launchMode="singleTask"', s, count=1)
+# Flutter 模板默认 android:taskAffinity=""：跨应用 NEW_TASK 拉起（微信"用其他应用打开"）时
+# 会按空亲和力新建独立任务，与 singleTask 配合仍可能分裂出第二个最近任务。删掉空值改用默认包亲和，
+# 确保 launcher 启动与微信分享拉起复用同一任务（单 Activity Flutter 应用改动安全）。
+s = s.replace('android:taskAffinity=""', '')
 open(p, 'w', encoding='utf-8').write(s)
