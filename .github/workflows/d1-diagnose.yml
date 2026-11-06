@@ -125,6 +125,12 @@ jobs:
         run: |
           echo "=== attachment_refs 索引 ==="
           npx wrangler d1 execute taozhu --remote --command "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='attachment_refs'"
+          echo "=== sale_items 索引（自证「缺 sale_id/client_id/happened_at 索引」类误判） ==="
+          npx wrangler d1 execute taozhu --remote --command "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='sale_items'"
+          echo "=== 按 sale_id / client_id / 日期 过滤的查询计划（EXPLAIN 不执行查询） ==="
+          npx wrangler d1 execute taozhu --remote --command "EXPLAIN QUERY PLAN SELECT id, sale_id FROM sale_items WHERE sale_id IN ('a','b')"
+          npx wrangler d1 execute taozhu --remote --command "EXPLAIN QUERY PLAN SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE client_id = 'a'"
+          npx wrangler d1 execute taozhu --remote --command "EXPLAIN QUERY PLAN SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= '2026-11-06' AND client_id = 'a'"
           echo "=== 旧形态 IN 查询计划 ==="
           npx wrangler d1 execute taozhu --remote --command "EXPLAIN QUERY PLAN SELECT entity_id, COUNT(*) FROM attachment_refs WHERE entity='sale_item' AND entity_id IN ('a','b') GROUP BY entity_id"
           echo "=== 新形态单次 GROUP BY 计划 ==="
