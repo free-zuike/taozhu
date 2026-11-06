@@ -680,9 +680,24 @@ jobs:
           npm ci
           npm run build:mp-weixin
 
-      - name: 剔除产物中的源码副本（static 会被原样复制，.ts 小程序不加载且计入 2MB 配额）
+      - name: 精简小程序包体（H5 专用字体/源码副本不进小程序包，规避微信 2MB 上限）
         run: |
-          find frontend-uni/dist/build/mp-weixin -type f \( -name '*.ts' -o -name '*.map' -o -name '*.md' \) -print -delete
+          MP=frontend-uni/dist/build/mp-weixin
+          # uni-app 会把 src/static 原样复制：.ts 源码不会被小程序加载
+          find "$MP" -type f \( -name '*.ts' -o -name '*.map' -o -name '*.md' \) -print -delete
+          # MaterialIcons-Regular.woff2 只服务 H5 的 @font-face；小程序端字体由
+          # wx.loadFontFace(base64) 提供（App.vue），微信 WXSS 不支持本地字体路径。
+          # 删文件的同时移除 app.wxss 中的 @font-face，避免留下无效引用。
+          node -e "
+            const fs=require('fs');
+            const p='$MP/app.wxss';
+            let s=fs.readFileSync(p,'utf8');
+            const before=s.length;
+            s=s.replace(/@font-face\{[^}]*MaterialIcons-Regular\.woff2[^}]*\}/g,'');
+            fs.writeFileSync(p,s);
+            console.log('WXSS 移除 H5 字体引用 ' + (before-s.length) + ' 字节');
+          "
+          rm -f "$MP/static/fonts/MaterialIcons-Regular.woff2"
           echo "清理完成"
 
       - name: Upload to WeChat platform (miniprogram-ci)
