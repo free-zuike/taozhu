@@ -4,8 +4,9 @@
  *  故各接口不再用 SQL SUM 聚合金额，改为取明细行 JS reduce roundMoney 逐笔累加。 */
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
-import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesSideRounded, salesAggByConfig, type RoundingConfig } from '../lib/money';
+import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesSideRounded, salesAggByConfig } from '../lib/money';
 import { versionedSnapshot, unaffectedTypes } from '../lib/snapshot';
+import { loadLedgerDerived } from '../lib/ledger-derived';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -26,80 +27,8 @@ const OVERVIEW_UNRELATED_TYPES = [
   'share_link', 'stmt_template', 'loss_record', 'stock_adjustment',
 ];
 
-type OverviewDerived = {
-  all_sales: number;
-  all_paid: number;
-  debt: number;
-  client_count: number;
-  item_count: number;
-  top_debt_clients: Array<{ id: string; name: string; sales_total: number; paid_total: number; debt: number }>;
-};
-
-/**
- * 全局欠款 / 店铺欠款排行的派生摘要。舍入口径要求「逐笔舍入后累加」，不能用 SQL SUM，
- * 因此必须读全部出货/收款明细行——但计算结果只有按店聚合 + 5 条排行，体积很小。
- * 缓存这个结果后，工作台每次打开不再全表扫 sale_items / payments / clients。
- *
- * 依赖：sale_items、payments、clients（含抹零配置）、clients/items 计数、全局 money 配置。
- * 前四项写入都经 recordChange（游标变化→失效），money 配置由 fingerprint 兜底。
- */
-async function computeOverviewDerived(db: D1Database, money: RoundingConfig): Promise<OverviewDerived> {
-  const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const [salesRows, payRows, clientRows, counts] = await Promise.all([
-    db.prepare(`SELECT client_id, sale_id, happened_at, amount FROM sale_items`)
-      .all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
-    db.prepare(`SELECT client_id, amount, waived FROM payments`)
-      .all<{ client_id: string; amount: number; waived: number }>(),
-    db.prepare(`SELECT id, name, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`)
-      .all<{ id: string; name: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
-    db.prepare(
-      `SELECT
-        (SELECT COUNT(*) FROM clients WHERE deleted_at IS NULL) AS client_count,
-        (SELECT COUNT(*) FROM items WHERE deleted_at IS NULL) AS item_count`,
-    ).first<{ client_count: number; item_count: number }>(),
-  ]);
-  const all_sales = salesRows.results.reduce((s, x) => s + r(x.amount), 0);
-  const all_paid = payRows.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
-
-  // 各店按自身抹零配置算出货侧（无配置=None 逐笔舍入），收款侧逐笔舍入
-  const roundCfgMap = new Map(clientRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
-  const salesMap = new Map<string, number>();
-  const paidMap = new Map<string, number>();
-  const saleByClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
-  for (const x of salesRows.results) {
-    const arr = saleByClient.get(x.client_id) ?? [];
-    arr.push({ sale_id: x.sale_id, happened_at: x.happened_at, amount: Number(x.amount) || 0 });
-    saleByClient.set(x.client_id, arr);
-  }
-  for (const [cid, rows] of saleByClient) {
-    const cfg = roundCfgMap.get(cid) ?? { stage: 'none' as const, unit: 'yuan' as const, carry: null };
-    salesMap.set(cid, salesSideRounded(rows, cfg.stage, cfg.unit, cfg.carry, money));
-  }
-  for (const x of payRows.results) {
-    paidMap.set(x.client_id, (paidMap.get(x.client_id) ?? 0) + r((Number(x.amount) || 0) + (Number(x.waived) || 0)));
-  }
-  const topDebt = clientRows.results
-    .map((x) => ({
-      id: x.id, name: x.name,
-      sales_total: salesMap.get(x.id) ?? 0, paid_total: paidMap.get(x.id) ?? 0,
-    }))
-    .sort((a, b) => (b.sales_total - b.paid_total) - (a.sales_total - a.paid_total))
-    .slice(0, 5);
-
-  return {
-    all_sales: r(all_sales),
-    all_paid: r(all_paid),
-    // 全局欠款 = Σ各店（按自身抹零配置算出货侧） − 全部收款（口径与每店欠款一致）
-    debt: r([...salesMap.values()].reduce((s, v) => s + v, 0) - all_paid),
-    client_count: counts?.client_count ?? 0,
-    item_count: counts?.item_count ?? 0,
-    top_debt_clients: topDebt.map((x) => ({
-      id: x.id, name: x.name,
-      sales_total: r(x.sales_total), paid_total: r(x.paid_total),
-      debt: r(x.sales_total - x.paid_total),
-    })),
-  };
-}
+// 全局欠款 / 店铺欠款排行：与 /clients 共用 lib/ledger-derived 的按店聚合快照。
+// sale_items / payments 全表明细每次失效只扫一次（原先两个端点各扫一次）。
 
 // GET /stats/overview?date=YYYY-MM-DD — 工作台卡片（今日出货/毛利/收款 + 全局欠款/规模）
 statsRouter.get('/overview', async (c) => {
@@ -121,16 +50,13 @@ statsRouter.get('/overview', async (c) => {
       .all<{ amount: number; waived: number }>(),
     db.prepare(`SELECT amount FROM purchase_items pi WHERE pi.happened_at = ?`).bind(date)
       .all<{ amount: number }>(),
-    versionedSnapshot(db, 'overview', () => computeOverviewDerived(db, money), `${money.carry}|${money.digits}`, {
-      ttlMs: 5 * 60_000,
-      affectedSince: unaffectedTypes(db, OVERVIEW_UNRELATED_TYPES),
-    }),
+    loadLedgerDerived(db, money),
   ]);
   const sales_total = todaySales.results.reduce((s, x) => s + r(x.amount), 0);
   const gross_profit = todaySales.results.reduce((s, x) => s + r(x.gross), 0);
   const paid_total = todayPays.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
   const purchase_total = todayBuys.results.reduce((s, x) => s + r(x.amount), 0);
-  const g = derived.data;
+  const g = derived;
 
   return c.json({
     date,

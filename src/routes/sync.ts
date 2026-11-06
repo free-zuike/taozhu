@@ -9,7 +9,7 @@ import { chunkQuery } from '../lib/query';
 import { applyChange, buildPayload, latestChange, maskPayload, maxCursor, recordChange } from '../lib/sync';
 import { versionedSnapshot } from '../lib/snapshot';
 import { computeGlobalCounts } from '../lib/global-counts';
-import { refCountByEntity } from '../lib/attachment-counts';
+import { orderRefCountsFromLines, refCountByEntity } from '../lib/attachment-counts';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -388,25 +388,18 @@ syncRouter.get('/panel', async (c) => {
     }
     if (ids.length === 0) return { counts: {}, total: 0, ids: [] };
     const counts: Record<string, number> = {};
-    const CHUNK = 90;
     // 一次 GROUP BY 取全量引用计数（不再按 90 分批 IN，见 lib/attachment-counts.ts）
     const refCounts = await refCountByEntity(db, entity);
     for (const id of ids) {
       const n = refCounts.get(id);
       if (n) counts[id] = n;
     }
-    // 单据级（sale）统计：计入该单全部明细行的行级引用（整单凭证实际挂行级）
+    // 单据级（sale）统计：计入该单全部明细行的行级引用（整单凭证实际挂行级）。
+    // 单次 JOIN GROUP BY 按单据聚合，不再分批 IN 回表 sale_items。
     if (entity === 'sale') {
-      const lineCounts = await refCountByEntity(db, 'sale_item');
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        const part = ids.slice(i, i + CHUNK);
-        const rows = await db.prepare(
-          `SELECT id, sale_id AS order_id FROM sale_items WHERE sale_id IN (${part.map(() => '?').join(',')}) AND client_id = ?`,
-        ).bind(...part, clientId).all<{ id: string; order_id: string }>();
-        for (const r of rows.results) {
-          const n = lineCounts.get(r.id) ?? 0;
-          if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
-        }
+      const lineTotals = await orderRefCountsFromLines(db, 'sale_item', { clientId, orderIds: ids });
+      for (const [orderId, n] of lineTotals) {
+        if (n > 0) counts[orderId] = (counts[orderId] ?? 0) + n;
       }
     }
     return { counts, total: Object.values(counts).reduce((a, b) => a + b, 0), ids };

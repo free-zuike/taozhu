@@ -514,8 +514,8 @@ describe('交易附件（R2）', () => {
     expect(inUseStill).not.toBeNull();
   });
 
-  it('附件计数：不再按 90 分批 IN 扫 attachment_refs（单次 GROUP BY，rows_read 护栏）', async () => {
-    // 250 个 id：旧实现按 90 分批会产生 3 条实体级 + 行级分批 SQL
+  it('附件计数：不再按 90 分批 IN 扫 attachment_refs / 回表 sale_items（rows_read 护栏）', async () => {
+    // 250 个 id：旧实现按 90 分批会产生 3 条实体级 + 3 条行级分批回表 SQL
     const ids = Array.from({ length: 250 }, (_, i) => `s-${i}`);
     const db = env.DB as FakeD1;
     const sqls: string[] = [];
@@ -532,9 +532,64 @@ describe('交易附件（R2）', () => {
       spy.mockRestore();
     }
     const refQueries = sqls.filter((s) => /FROM attachment_refs/i.test(s));
-    expect(refQueries).toHaveLength(2); // 单据级 1 条 + 行级 1 条，与 ids 数量无关
+    expect(refQueries).toHaveLength(2); // 单据级 GROUP BY 1 条 + 行级 JOIN 聚合 1 条，与 ids 数量无关
     expect(refQueries.some((s) => /entity_id\s+IN\s*\(/i.test(s))).toBe(false);
-    expect(refQueries.every((s) => /GROUP BY entity_id/i.test(s))).toBe(true);
+    expect(refQueries.some((s) => /GROUP BY entity_id/i.test(s))).toBe(true);
+    expect(refQueries.some((s) => /JOIN sale_items/i.test(s) && /GROUP BY si\.sale_id/i.test(s))).toBe(true);
+    // 旧形态：每 90 个单据 id 一次 `WHERE sale_id IN (...)` 回表扫 sale_items
+    expect(sqls.filter((s) => /FROM sale_items/i.test(s) && /sale_id\s+IN\s*\(/i.test(s))).toHaveLength(0);
+  });
+
+  it('单据级行级附件：单次 JOIN 聚合且按店铺隔离（counts 与 sync/panel 两条路径）', async () => {
+    const db = env.DB as FakeD1;
+    // 120 个单据 × 2 明细行（超过 D1 单条 100 绑定参数上限，旧实现必分批）
+    for (let i = 0; i < 120; i++) {
+      for (let j = 0; j < 2; j++) {
+        await db.prepare(
+          `INSERT INTO sale_items (id, sale_id, item_id, client_id, unit, quantity)
+           VALUES (?, ?, ?, ?, ?, 1)`,
+        ).bind(`l-${i}-${j}`, `s-${i}`, 'it', 'shopA', '斤').run();
+      }
+    }
+    await db.prepare(
+      `INSERT INTO sale_items (id, sale_id, item_id, client_id, unit, quantity)
+       VALUES (?, ?, ?, ?, ?, 1)`,
+    ).bind('l-other', 's-other', 'it', 'shopB', '斤').run();
+    // 本店 3 条行级引用（s-0 两行、s-119 一行），他店 1 条应被隔离
+    for (const [rid, line] of [['r1', 'l-0-0'], ['r2', 'l-0-1'], ['r3', 'l-119-0'], ['r4', 'l-other']]) {
+      await db.prepare(
+        'INSERT INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
+      ).bind(rid, 'sale_item', line, `taozhu/images/attachments/${rid}.jpg`, rid).run();
+    }
+
+    const sqls: string[] = [];
+    const orig = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return orig(sql);
+    }) as typeof db.prepare);
+    let countsBody: { counts: Record<string, number>; total: number; ids: string[] };
+    let panelBody: Record<string, unknown>;
+    try {
+      const res = await call(env, 'POST', '/api/v1/attachments/counts', token, { entity: 'sale', client_id: 'shopA' });
+      expect(res.status).toBe(200);
+      countsBody = (await res.json()) as typeof countsBody;
+      const panel = await call(env, 'GET', '/api/v1/sync/panel?client_id=shopA', token);
+      expect(panel.status).toBe(200);
+      panelBody = (await panel.json()) as Record<string, unknown>;
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(countsBody.ids).toHaveLength(120);
+    expect(countsBody.counts['s-0']).toBe(2);
+    expect(countsBody.counts['s-119']).toBe(1);
+    expect(countsBody.counts['s-other']).toBeUndefined();
+    expect(countsBody.total).toBe(3);
+    expect((panelBody.client_sale_attach as { total: number }).total).toBe(3);
+    // 两个调用点都各只有 1 条 JOIN 聚合，且彻底没有 sale_id IN(...) 分批回表
+    expect(sqls.filter((s) => /FROM sale_items/i.test(s) && /sale_id\s+IN\s*\(/i.test(s))).toHaveLength(0);
+    expect(sqls.filter((s) => /JOIN sale_items/i.test(s) && /GROUP BY si\.sale_id/i.test(s))).toHaveLength(2);
   });
 
   it('孤儿扫描：一次性兜底标记落库后不再全表扫 5 张业务表（rows_read 护栏）', async () => {

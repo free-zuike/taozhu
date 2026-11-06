@@ -426,6 +426,9 @@ let schemaReady = false;
 // 索引补齐独立于 schemaReady：即使热 isolate（schemaReady 已真）也持续重试直到所有索引建成功，
 // 避免冷启动期间 D1 不可用导致 ensureIndexes 没跑成、却被 schemaReady 永久屏蔽（生产库缺索引根因）
 let indexesReady = false;
+/** 索引补齐失败后的重试退避：避免每次请求都查一遍 sqlite_master（约百行/次，
+ *  额度紧张时纯浪费），失败后 60s 内跳过，到期自动重试。 */
+let indexRetryAfter = 0;
 /** 进程内互斥：同一 Worker isolate 并发请求同时触发冷启动迁移时串行化（多 isolate 场景靠 ensureColumn 幂等兜底） */
 let schemaLock: Promise<void> = Promise.resolve();
 
@@ -930,11 +933,13 @@ export async function ensureSchema(db: D1Database): Promise<void> {
   // 热 isolate 也补索引：schemaReady 已真但 indexesReady 未达成时持续重试，直到所有索引建成功，
   // 否则冷启动期间 D1 不可用导致 ensureIndexes 没跑成会被 schemaReady 永久屏蔽
   // （生产库缺索引、每次带条件查询退化全表扫描、D1 rows_read 额度被烧穿的根因）
-  if (!indexesReady) {
+  if (!indexesReady && Date.now() >= indexRetryAfter) {
     try {
       indexesReady = await ensureIndexes(db);
+      indexRetryAfter = indexesReady ? 0 : Date.now() + 60_000;
     } catch (e) {
-      console.warn('[taozhu] 索引补齐失败，下次请求重试:', e);
+      console.warn('[taozhu] 索引补齐失败，60s 后重试:', e);
+      indexRetryAfter = Date.now() + 60_000;
     }
   }
 }
@@ -943,4 +948,5 @@ export async function ensureSchema(db: D1Database): Promise<void> {
 export function resetSchemaState(): void {
   schemaReady = false;
   indexesReady = false;
+  indexRetryAfter = 0;
 }

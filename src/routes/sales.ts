@@ -100,31 +100,40 @@ salesRouter.get('/', async (c) => {
     ).bind(...chunk).all<{ id: string; name: string }>().then((r) => r.results));
   const clientName = new Map(clientRows.map((c) => [c.id, c.name]));
 
-  const detailRows = await chunkQuery(saleIds, (chunk) =>
+  // 同一批 saleIds 原先查两次 sale_items，且各自 JOIN items / clients 逐行回表（Top 消耗源）。
+  // 合并为一次平铺查询，商品名/店铺名从两张小表一次性取回后 JS 拼装。
+  const itemRows = await c.env.DB.prepare('SELECT id, name, category FROM items')
+    .all<{ id: string; name: string | null; category: string | null }>();
+  const itemInfo = new Map(itemRows.results.map((i) => [i.id, { name: i.name ?? '', category: i.category ?? '' }]));
+  const rawRows = await chunkQuery(saleIds, (chunk) =>
     c.env.DB.prepare(
-      `SELECT si.*, i.name AS item_name, i.category AS item_category FROM sale_items si JOIN items i ON i.id = si.item_id
-     WHERE si.sale_id IN (${chunk.map(() => '?').join(',')}) ORDER BY si.sort, si.created_at`,
-    ).bind(...chunk).all().then((r) => r.results));
+      `SELECT si.* FROM sale_items si
+       WHERE si.sale_id IN (${chunk.map(() => '?').join(',')})
+       ORDER BY si.sort, si.created_at`,
+    ).bind(...chunk).all<Record<string, unknown>>().then((r) => r.results));
 
+  const detailRows: Array<Record<string, unknown>> = rawRows.map((r) => {
+    const info = itemInfo.get(String(r.item_id)) ?? { name: '', category: '' };
+    return { ...r, item_name: info.name, item_category: info.category };
+  });
   const bySale = new Map<string, unknown[]>();
   for (const d of detailRows) {
-    const saleId2 = (d as { sale_id: string }).sale_id;
+    const saleId2 = String(d.sale_id);
     const list = bySale.get(saleId2) ?? [];
     list.push(d);
     bySale.set(saleId2, list);
   }
   // 行级主记录数组（去单据化：每条商品一行，自带店铺/日期/备注/金额——客户端主读数）
-  const saleItemRows = await chunkQuery(saleIds, (chunk) =>
-    c.env.DB.prepare(
-      `SELECT si.id, si.sale_id, si.client_id, c.name AS client_name, si.item_id, i.name AS item_name,
-            i.category AS item_category, si.unit, si.quantity, si.sale_price, si.cost_price, si.amount,
-            si.happened_at, si.note, si.created_by, si.sort
-     FROM sale_items si
-     LEFT JOIN clients c ON c.id = si.client_id
-     LEFT JOIN items i ON i.id = si.item_id
-     WHERE si.sale_id IN (${chunk.map(() => '?').join(',')})
-     ORDER BY si.created_at`,
-    ).bind(...chunk).all().then((r) => r.results));
+  const saleItemRows: Array<Record<string, unknown>> = rawRows.map((r) => ({
+    id: r.id, sale_id: r.sale_id, client_id: r.client_id,
+    client_name: clientName.get(String(r.client_id)) ?? '',
+    item_id: r.item_id,
+    item_name: itemInfo.get(String(r.item_id))?.name ?? '',
+    item_category: itemInfo.get(String(r.item_id))?.category ?? '',
+    unit: r.unit, quantity: r.quantity, sale_price: r.sale_price,
+    cost_price: r.cost_price, amount: r.amount,
+    happened_at: r.happened_at, note: r.note, created_by: r.created_by, sort: r.sort,
+  }));
   // 行级数组排序：**订单(批次)优先 → 批内 sort**（用户"第一批在最上方，批内=扫描实际顺序"——
   // 同日多单按订单创建序整体排列，每单内按 sort(扫描序)。**不要按 sort 全局交错**
   // （每单 sort 都从 0 起，全局按 sort 排会 A1,B1,C1,A2,B2,C2 交错——用户 fix-sort 后全乱根因）。

@@ -3,8 +3,9 @@ import { Hono } from 'hono';
 import { randomId } from '../lib/password';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { buildPayload, recordChange } from '../lib/sync';
-import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesSideRounded } from '../lib/money';
+import { getRoundingConfig, roundMoney, normalizeRoundConfig } from '../lib/money';
 import { versionedSnapshot, unaffectedTypes } from '../lib/snapshot';
+import { loadLedgerDerived } from '../lib/ledger-derived';
 import { recordAudit } from './audit';
 import type { AuthUser, ClientRow, Env } from '../types';
 
@@ -56,69 +57,31 @@ clientsRouter.get('/', async (c) => {
   const db = c.env.DB;
   const money = await getRoundingConfig(db);
   const { data } = await versionedSnapshot<ClientListItem[]>(db, 'clients', async () => {
-    // sales_total / paid_total 改从下方已全量拉取的逐笔明细派生，取消原 SQL 的两个聚合子查询
-    // （SALES_TOTAL_SUB 与 payments SUM 各再全表扫一遍，是 clients 子查询 11.5 万行的来源）。
-    const sql = `SELECT c.*, cat.name AS category_name FROM clients c
-        LEFT JOIN categories cat ON cat.id = c.category_id
-        WHERE c.deleted_at IS NULL ORDER BY c.name`;
-    const rows = await db.prepare(sql).all();
-    // 各店抹零配置（无配置=不抹零，保持历史口径；round_carry NULL=跟随全局）
-    const cfgRows = await db.prepare('SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL').all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>();
-    const roundCfg = new Map(cfgRows.results.map((r) => [r.id, normalizeRoundConfig(r.round_stage, r.round_unit, r.round_carry)]));
-    const [debtRows, payRows2] = await Promise.all([
-      db.prepare(`SELECT client_id AS cid, sale_id, happened_at, amount FROM sale_items`).all<{ cid: string; sale_id: string; happened_at: string | null; amount: number }>(),
-      db.prepare(`SELECT client_id AS cid, amount, waived FROM payments`).all<{ cid: string; amount: number; waived: number }>(),
-    ]);
-    const debtMap = new Map<string, number>();
-    const byClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
-    for (const x of debtRows.results) {
-      if (!byClient.has(x.cid)) byClient.set(x.cid, []);
-      byClient.get(x.cid)!.push({ sale_id: x.sale_id, happened_at: x.happened_at, amount: Number(x.amount) || 0 });
-    }
-    const salesTotalMap = new Map<string, number>();
-    for (const [cid, rs] of byClient) {
-      const cfg = roundCfg.get(cid);
-      const sales = cfg && cfg.stage !== 'none'
-        ? salesSideRounded(rs, cfg.stage, cfg.unit, cfg.carry, money)
-        : rs.reduce((s, x) => s + roundMoney(x.amount, money), 0);
-      debtMap.set(cid, sales);
-      salesTotalMap.set(cid, rs.reduce((s, x) => s + (Number(x.amount) || 0), 0));
-    }
-    for (const x of payRows2.results) {
-      debtMap.set(x.cid, (debtMap.get(x.cid) ?? 0) - roundMoney((Number(x.amount) || 0) + (Number(x.waived) || 0), money));
-    }
-    // 出货笔数 / 首开单日：直接从已全量拉取的 byClient 派生，取消原 SQL 中「每店铺 3 个相关子查询」
-    // （sale_count / first_book_date 各扫一遍 sale_items），避免 N 店铺 × 3 次重复扫描（原约 3.5 万行浪费）。
-    const firstBookMap = new Map<string, string>();
-    for (const [cid, rs] of byClient) {
-      let min = '';
-      for (const x of rs) {
-        const d = (x.happened_at ?? '').slice(0, 10);
-        if (d && (min === '' || d < min)) min = d;
-      }
-      if (min) firstBookMap.set(cid, min);
-    }
-    const paidTotalMap = new Map<string, number>();
-    const payCountMap = new Map<string, number>();
-    for (const x of payRows2.results) {
-      paidTotalMap.set(x.cid, (paidTotalMap.get(x.cid) ?? 0) + (Number(x.amount) || 0) + (Number(x.waived) || 0));
-      payCountMap.set(x.cid, (payCountMap.get(x.cid) ?? 0) + 1);
-    }
+    // 逐笔舍入/抹零的明细派生统一到 lib/ledger-derived，与 /stats/overview 共用一份快照：
+    // sale_items / payments 全表明细每次失效只扫一次，这里只读小表 clients/categories。
+    const derived = await loadLedgerDerived(db, money);
+    const statsMap = new Map(derived.client_stats.map((s) => [s.id, s]));
+    const rows = await db.prepare(
+      `SELECT c.*, cat.name AS category_name FROM clients c
+       LEFT JOIN categories cat ON cat.id = c.category_id
+       WHERE c.deleted_at IS NULL ORDER BY c.name`,
+    ).all();
     return rows.results.map((r): ClientListItem => {
-      const row = r as unknown as ClientRow & { sales_total: number; paid_total: number; category_name: string | null };
+      const row = r as unknown as ClientRow & { category_name: string | null };
+      const st = statsMap.get(row.id);
       return {
         id: row.id, name: row.name, contact: row.contact ?? '', phone: row.phone ?? '', note: row.note ?? '',
         start_date: row.start_date ?? '', end_date: row.end_date ?? '',
         month_start_day: row.month_start_day ?? 1,
         round_stage: row.round_stage ?? 'none', round_unit: row.round_unit ?? 'yuan',
         round_carry: row.round_carry ?? null,
-        first_book_date: firstBookMap.get(row.id) ?? '',
+        first_book_date: st?.first_book_date ?? '',
         category_id: row.category_id ?? '', category_name: row.category_name ?? '',
         price_group_id: row.price_group_id ?? '',
-        sales_total: salesTotalMap.get(row.id) ?? 0, paid_total: paidTotalMap.get(row.id) ?? 0,
-        sale_count: byClient.get(row.id)?.length ?? 0, payment_count: payCountMap.get(row.id) ?? 0,
-        // 欠款=每笔先舍入再累加的差（与统计/账本口径一致；勿 SQL SUM 原始后一次舍入——尾数进位放大，427.8 vs 428 实证）
-        debt: roundMoney(debtMap.get(row.id) ?? 0, money),
+        sales_total: st?.sales_total ?? 0, paid_total: st?.paid_total ?? 0,
+        sale_count: st?.sale_count ?? 0, payment_count: st?.payment_count ?? 0,
+        // 欠款=每笔先舍入再累加的差（与统计/账本口径一致；勿 SQL SUM 原始后一次舍入）
+        debt: st?.debt ?? 0,
       };
     });
   }, `${money.carry}|${money.digits}`, {

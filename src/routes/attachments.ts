@@ -9,7 +9,7 @@ import { attachmentContentKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from 
 import { recordChange } from '../lib/sync';
 import { versionedSnapshot } from '../lib/snapshot';
 import { computeGlobalCounts } from '../lib/global-counts';
-import { refCountByEntity } from '../lib/attachment-counts';
+import { orderRefCountsFromLines, refCountByEntity } from '../lib/attachment-counts';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -210,7 +210,6 @@ attachmentsRouter.post('/counts', async (c) => {
   // 引用表计数：一次 GROUP BY 取全量后 JS 过滤，不再按 90 分批 IN（见 lib/attachment-counts.ts）。
   // 旧形态在索引缺失时每批都全表扫，单日 39 万 rows_read（#1 消耗源）。
   const counts: Record<string, number> = {};
-  const CHUNK = 90;
   const refCounts = await refCountByEntity(c.env.DB, entity);
   for (const id of ids) {
     const n = refCounts.get(id);
@@ -218,20 +217,15 @@ attachmentsRouter.post('/counts', async (c) => {
   }
   // 单据级（sale/purchase）统计：计入该单全部明细行的行级引用——
   // 整单凭证入口上传的图实际批量挂各明细行（行级引用），单据图标/面板口径需含行级。
+  // 一次 JOIN GROUP BY 直接按单据聚合，不再按 90 分批 IN 回表扫 sale_items / purchase_items。
   if (entity === 'sale' || entity === 'purchase') {
-    const lineEntity = entity === 'sale' ? 'sale_item' : 'purchase_item';
-    const orderCol = `${entity}_id`;
-    // 行级引用同样一次取全量，提到分批循环外，避免 N 批 × M 批的 SQL 放大
-    const lineCounts = await refCountByEntity(c.env.DB, lineEntity);
-    for (let i = 0; i < ids.length; i += CHUNK) {
-      const part = ids.slice(i, i + CHUNK);
-      const rows = await c.env.DB.prepare(
-        `SELECT id, ${orderCol} AS order_id FROM ${lineEntity}s WHERE ${orderCol} IN (${part.map(() => '?').join(',')})${clientId ? ' AND client_id = ?' : ''}`,
-      ).bind(...part, ...(clientId ? [clientId] : [])).all<{ id: string; order_id: string }>();
-      for (const r of rows.results) {
-        const n = lineCounts.get(r.id) ?? 0;
-        if (n > 0) counts[r.order_id] = (counts[r.order_id] ?? 0) + n;
-      }
+    const lineTotals = await orderRefCountsFromLines(
+      c.env.DB,
+      entity === 'sale' ? 'sale_item' : 'purchase_item',
+      { clientId, orderIds: ids },
+    );
+    for (const [orderId, n] of lineTotals) {
+      if (n > 0) counts[orderId] = (counts[orderId] ?? 0) + n;
     }
   }
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
