@@ -218,13 +218,30 @@ class SyncService {
         final merged = List<Map<String, dynamic>>.from(refs);
         final ids = { for (final r in merged) '${r['entity']}/${r['entity_id']}/${r['file']}' };
         // 待上传但服务器未回的行保留（上传中/失败的本地登记；宁留勿丢）
+        // 本地独有引用的收敛策略（修复"本地计数 > 服务器"长期对不上）：
+        // 482 已移除自动删除、492 上传改原子，孤儿不再被误删，故不再"一刀切宁留勿丢"，
+        // 改为——有本地副本的重新入队补传（计数自然向服务器收敛）；无副本且无服务器引用=真孤儿，
+        // 已无法上传，丢弃以避免本地计数虚高。
+        final root = await getApplicationDocumentsDirectory();
+        final p = await SharedPreferences.getInstance();
         for (final r in await LocalDb.getAll('attachment_refs')) {
           final id3 = '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${'${r['file'] ?? ''}'.split('/').last}';
           if (ids.contains(id3)) continue; // 云端已回，跳过
           if (tombstones.contains(id3)) continue; // 已删除标记，不再复活
-          // 宁留勿丢：本地独有的附件引用（含昨天未完成上传单据的附件）一律保留，
-          // 不被云端快照收敛删除——否则"本地引用表被服务器覆盖 → 附件被判孤儿误删"
-          // （用户昨天那批丢附件的直接根因）。只有云端已回或被墓碑标记删除的才移除。
+          final file = '${r['file'] ?? ''}'.split('/').last;
+          final hasCopy = file.isNotEmpty && File('${root.path}/attachments/$file').existsSync();
+          if (!hasCopy) continue; // 真孤儿（无副本无法上传）：丢弃，本地计数不再虚高
+          // 有副本但不在待上传队列（队列条目丢失/被清理误删）→ 重新入队，下一轮同步补传收敛
+          if (!pendingUploads.contains(id3)) {
+            try {
+              final list = p.getStringList(kPendingUploadsKey) ?? [];
+              final entry = jsonEncode({'entity': r['entity'] ?? '', 'id': r['entity_id'] ?? '', 'fileName': file});
+              if (!list.contains(entry)) {
+                list.add(entry);
+                await p.setStringList(kPendingUploadsKey, list);
+              }
+            } catch (_) {}
+          }
           merged.add(r);
           ids.add(id3);
         }
