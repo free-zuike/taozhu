@@ -32,10 +32,7 @@ async function priceGroupErr(db: D1Database, groupId: string | null | undefined)
 const SALES_TOTAL_SUB = '(SELECT client_id, SUM(amount) AS total FROM sale_items GROUP BY client_id)';
 clientsRouter.get('/', async (c) => {
   const q = c.req.query('q')?.trim() ?? '';
-  const sql = `SELECT c.*, cat.name AS category_name, COALESCE(s.total, 0) AS sales_total, COALESCE(p.total, 0) AS paid_total,
-      (SELECT COUNT(*) FROM sale_items si2 WHERE si2.client_id = c.id) AS sale_count,
-      (SELECT COUNT(*) FROM payments p2 WHERE p2.client_id = c.id) AS payment_count,
-      (SELECT MIN(substr(si3.happened_at, 1, 10)) FROM sale_items si3 WHERE si3.client_id = c.id) AS first_book_date
+  const sql = `SELECT c.*, cat.name AS category_name, COALESCE(s.total, 0) AS sales_total, COALESCE(p.total, 0) AS paid_total
       FROM clients c LEFT JOIN categories cat ON cat.id = c.category_id LEFT JOIN ${SALES_TOTAL_SUB} s ON s.client_id = c.id LEFT JOIN (SELECT client_id, SUM(amount + waived) AS total FROM payments GROUP BY client_id) p ON p.client_id = c.id WHERE c.deleted_at IS NULL`;
   const rows = q
     ? await c.env.DB.prepare(`${sql} AND c.name LIKE ? ORDER BY c.name`).bind(`%${q}%`).all()
@@ -64,19 +61,32 @@ clientsRouter.get('/', async (c) => {
   for (const x of payRows2.results) {
     debtMap.set(x.cid, (debtMap.get(x.cid) ?? 0) - roundMoney((Number(x.amount) || 0) + (Number(x.waived) || 0), money));
   }
+  // 出货笔数 / 首开单日：直接从已全量拉取的 byClient 派生，取消原 SQL 中「每店铺 3 个相关子查询」
+  // （sale_count / first_book_date 各扫一遍 sale_items），避免 N 店铺 × 3 次重复扫描（原约 3.5 万行浪费）。
+  const firstBookMap = new Map<string, string>();
+  for (const [cid, rs] of byClient) {
+    let min = '';
+    for (const x of rs) {
+      const d = (x.happened_at ?? '').slice(0, 10);
+      if (d && (min === '' || d < min)) min = d;
+    }
+    if (min) firstBookMap.set(cid, min);
+  }
+  const payCountMap = new Map<string, number>();
+  for (const x of payRows2.results) payCountMap.set(x.cid, (payCountMap.get(x.cid) ?? 0) + 1);
   return c.json({ clients: rows.results.map((r) => {
-    const row = r as unknown as ClientRow & { sales_total: number; paid_total: number; sale_count: number; payment_count: number; category_name: string | null; first_book_date: string | null };
+    const row = r as unknown as ClientRow & { sales_total: number; paid_total: number; category_name: string | null };
     return {
       id: row.id, name: row.name, contact: row.contact ?? '', phone: row.phone ?? '', note: row.note ?? '',
       start_date: row.start_date ?? '', end_date: row.end_date ?? '',
       month_start_day: row.month_start_day ?? 1,
       round_stage: row.round_stage ?? 'none', round_unit: row.round_unit ?? 'yuan',
       round_carry: row.round_carry ?? null,
-      first_book_date: row.first_book_date ?? '',
+      first_book_date: firstBookMap.get(row.id) ?? '',
       category_id: row.category_id ?? '', category_name: row.category_name ?? '',
       price_group_id: row.price_group_id ?? '',
       sales_total: row.sales_total, paid_total: row.paid_total,
-      sale_count: row.sale_count ?? 0, payment_count: row.payment_count ?? 0,
+      sale_count: byClient.get(row.id)?.length ?? 0, payment_count: payCountMap.get(row.id) ?? 0,
       // 欠款=每笔先舍入再累加的差（与统计/账本口径一致；勿 SQL SUM 原始后一次舍入——尾数进位放大，427.8 vs 428 实证）
       debt: roundMoney(debtMap.get(row.id) ?? 0, money),
     };
