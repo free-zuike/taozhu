@@ -54,6 +54,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 全端版本号必须同步：小程序端曾把版本单独写死在 frontend-uni/src/version.ts，
+      # 只 bump manifest.json 导致页面/请求头一直停留在旧版本（v0.17.479），CI 却全绿。
+      - name: Version sync guard（全端版本号一致）
+        run: |
+          V=$(grep -oP "APP_VERSION = '\K[^']+" src/version.ts | head -1)
+          [ -n "$V" ] || { echo "::error::src/version.ts 版本号解析失败"; exit 1; }
+          check() {
+            NAME="$1"; FILE="$2"; PATTERN="$3"
+            GOT=$(grep -oP "$PATTERN" "$FILE" | head -1)
+            echo "$NAME=$GOT"
+            if [ "$GOT" != "$V" ]; then
+              echo "::error::$NAME 版本号为 '$GOT'，与服务端 '$V' 不一致（$FILE）：发版必须全端同步 bump"
+              exit 1
+            fi
+          }
+          check flutter-dart frontend-flutter/lib/version.dart "const APP_VERSION = '\K[^']+"
+          check flutter-pubspec frontend-flutter/pubspec.yaml '^version:\s*\K\S+'
+          check mp-manifest frontend-uni/src/manifest.json '"versionName"\s*:\s*"\K[^"]+'
+          check mp-code frontend-uni/src/version.ts "APP_VERSION = '\K[^']+"
+          echo "全端版本一致：v$V"
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -615,6 +636,10 @@ jobs:
     if: ${{ always() && (github.repository != 'free-zuike/taozhu' || (needs.apk.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success')) }}
     runs-on: ubuntu-latest
     name: 微信小程序
+    # job 级 env 才能用于 step 的 if 判定（step 级 env 在 if 求值时不可见）
+    env:
+      WX_APPID: ${{ secrets.WX_APPID }}
+      WX_PRIVATE_KEY: ${{ secrets.WX_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -655,25 +680,38 @@ jobs:
           npm ci
           npm run build:mp-weixin
 
+      - name: 剔除产物中的源码副本（static 会被原样复制，.ts 小程序不加载且计入 2MB 配额）
+        run: |
+          find frontend-uni/dist/build/mp-weixin -type f \( -name '*.ts' -o -name '*.map' -o -name '*.md' \) -print -delete
+          echo "清理完成"
+
       - name: Upload to WeChat platform (miniprogram-ci)
         # 仅在配了密钥时上传；未配则跳过（只打 zip 留底）
         if: ${{ env.WX_APPID != '' && env.WX_PRIVATE_KEY != '' }}
-        env:
-          WX_APPID: ${{ secrets.WX_APPID }}
-          WX_PRIVATE_KEY: ${{ secrets.WX_PRIVATE_KEY }}
         run: |
           VERSION=$(grep -oP '"versionName"\s*:\s*"\K[^"]+' frontend-uni/src/manifest.json || echo "0.0.0")
           # 微信版本号要求 x.y.z（三段），截版本前三段
           MP_VER=$(echo "$VERSION" | cut -d. -f1-3)
+          SRC_KB=$(find frontend-uni/dist/build/mp-weixin -type f -printf '%s\n' | awk '{s+=$1} END {print int(s/1024)}')
+          echo "小程序产物源码合计 ${SRC_KB} KB（微信单包上限 2048 KB），上传开启 minify"
           echo "$WX_PRIVATE_KEY" | base64 -d > /tmp/private.key
-          npx miniprogram-ci@latest upload \
+          # --enable-minify 压缩 js/wxml/wxss：旧形态不压缩时源码包约 2060KB > 2MB，
+          # 微信返回 80051 拒绝上传；且旧脚本用 `|| echo ::warning::` 把失败吞掉，
+          # CI 全绿但微信平台一直是旧版本（用户看到小程序停留在 v0.17.477 的根因）。
+          if npx miniprogram-ci@latest upload \
             --pp frontend-uni/dist/build/mp-weixin \
             --pkp /tmp/private.key \
             --appid "$WX_APPID" \
             --upload-version "$MP_VER" \
-            --upload-message "陶朱 v$VERSION 自动上传" \
-            -r 1 \
-            || echo "::warning::微信上传失败（密钥/网络/白名单），详见日志；zip 产物已留底"
+            --upload-description "陶朱 v$VERSION 自动上传" \
+            --enable-minify \
+            -r 1 ; then
+            echo "微信小程序 v${VERSION} 已上传成功"
+          else
+            rm -f /tmp/private.key
+            echo "::error::微信小程序上传失败（源码超 2MB / 密钥失效 / IP 白名单），本次发版视为失败"
+            exit 1
+          fi
           rm -f /tmp/private.key
 
       - name: Package miniprogram zip
