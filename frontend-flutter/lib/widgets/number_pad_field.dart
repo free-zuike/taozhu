@@ -117,7 +117,7 @@ class _NumberPadSheetState extends State<_NumberPadSheet> {
   Widget _key(BuildContext context, String label, {VoidCallback? onTap}) {
     return Expanded(
       child: AspectRatio(
-        aspectRatio: 1.5,
+        aspectRatio: 2.2,
         child: Padding(
           padding: const EdgeInsets.all(4),
           child: Material(
@@ -156,7 +156,7 @@ class _NumberPadSheetState extends State<_NumberPadSheet> {
       ],
     ];
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
         child: Column(
           mainAxisSize: MainAxisSize.min,
