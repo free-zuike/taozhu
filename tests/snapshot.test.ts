@@ -290,4 +290,43 @@ describe('快照消费端：写后必须精确、不得返回陈旧值', () => {
     expect(saleScans).toHaveLength(1); // 只剩逐笔明细一条
     expect(saleScans[0]).toMatch(/SELECT client_id AS cid, sale_id, happened_at, amount FROM sale_items/i);
   });
+
+  it('items/summary 不再用 json_group_array 相关子查询（rows_read 护栏）', async () => {
+    const sqls: string[] = [];
+    const orig = env.DB.prepare.bind(env.DB);
+    const spy = vi.spyOn(env.DB, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return orig(sql);
+    }) as typeof env.DB.prepare);
+    try {
+      expect((await call(env, 'GET', '/api/v1/items/summary', token)).status).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(sqls.some((s) => /json_group_array|json_object/i.test(s))).toBe(false);
+    expect(sqls.filter((s) => /FROM item_prices/i.test(s))).toHaveLength(1);
+    expect(sqls.filter((s) => /FROM item_group_prices/i.test(s))).toHaveLength(1);
+    expect(sqls.filter((s) => /FROM stocks/i.test(s))).toHaveLength(1);
+  });
+
+  it('stats/summary 与 stats/debts 命中快照后不再全表扫截止明细', async () => {
+    const url = '/api/v1/stats/summary?start=2026-09-01&end=2026-09-30';
+    expect((await call(env, 'GET', url, token)).status).toBe(200); // 预热两份快照
+    expect((await call(env, 'GET', '/api/v1/stats/debts', token)).status).toBe(200);
+
+    const sqls: string[] = [];
+    const orig = env.DB.prepare.bind(env.DB);
+    const spy = vi.spyOn(env.DB, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return orig(sql);
+    }) as typeof env.DB.prepare);
+    try {
+      expect((await call(env, 'GET', url, token)).status).toBe(200);
+      expect((await call(env, 'GET', '/api/v1/stats/debts', token)).status).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(sqls.some((s) => /FROM sale_items WHERE happened_at <= \?/i.test(s))).toBe(false);
+    expect(sqls.some((s) => /FROM payments WHERE happened_at <= \?/i.test(s))).toBe(false);
+  });
 });

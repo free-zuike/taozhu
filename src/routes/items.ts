@@ -64,25 +64,58 @@ itemsRouter.get('/', async (c) => {
 });
 
 // GET /items/summary — 记单用的简化目录（id/名称/价格组合/当前库存），全员可读、不含管理字段
+//
+// v0.17.499：旧实现把 3 个相关子查询（item_prices / stocks / item_group_prices）嵌在
+// SELECT 里，每个商品都要重复扫三张表，是记单页打开时的 #1 rows_read 消耗源（1h 38,680 行 / 40 次）。
+// 改为 4 条平铺查询（与 GET /items 同样的批量拼装模式）+ JS 组装，输出字段/顺序/权限打码保持不变。
 itemsRouter.get('/summary', async (c) => {
   const canSeeCost = c.get('user').role === 'admin';
-  const rows = await c.env.DB.prepare(
-    `SELECT i.id, i.name, i.category, i.count_unit,
-            (SELECT json_group_array(json_object('id', p.id, 'unit', p.unit, 'sale_price', p.sale_price, 'purchase_price', p.purchase_price, 'per', p.per,
-              'stock', COALESCE((SELECT CASE WHEN st.quantity < 0 THEN 0 ELSE st.quantity END FROM stocks st WHERE st.item_id = i.id AND st.unit = p.unit), 0)))
-             FROM item_prices p WHERE p.item_id = i.id AND p.active = 1) AS prices,
-            (SELECT json_group_array(json_object('id', gp.id, 'unit', gp.unit, 'group_id', gp.group_id, 'sale_price', gp.sale_price))
-             FROM item_group_prices gp WHERE gp.item_id = i.id) AS group_prices
-     FROM items i WHERE i.deleted_at IS NULL ORDER BY i.name`).all();
+  const [rows, priceRows, groupPriceRows, stockRows] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT i.id, i.name, i.category, i.count_unit FROM items i
+       WHERE i.deleted_at IS NULL ORDER BY i.name`,
+    ).all<{ id: string; name: string; category: string | null; count_unit: string | null }>(),
+    c.env.DB.prepare(
+      `SELECT p.id, p.item_id, p.unit, p.sale_price, p.purchase_price, p.per
+       FROM item_prices p WHERE p.active = 1
+         AND p.item_id IN (SELECT id FROM items WHERE deleted_at IS NULL)`,
+    ).all<{ id: string; item_id: string; unit: string; sale_price: number; purchase_price: number; per: number | null }>(),
+    c.env.DB.prepare(
+      `SELECT gp.id, gp.item_id, gp.unit, gp.group_id, gp.sale_price
+       FROM item_group_prices gp
+       WHERE gp.item_id IN (SELECT id FROM items WHERE deleted_at IS NULL)`,
+    ).all<{ id: string; item_id: string; unit: string; group_id: string; sale_price: number }>(),
+    c.env.DB.prepare('SELECT st.item_id, st.unit, st.quantity FROM stocks st')
+      .all<{ item_id: string; unit: string; quantity: number }>(),
+  ]);
+
+  const stockByKey = new Map<string, number>();
+  for (const s of stockRows.results) {
+    const q = Number(s.quantity) || 0;
+    stockByKey.set(`${s.item_id}\u0000${s.unit}`, q < 0 ? 0 : q); // 负库存按 0，与原 CASE 一致
+  }
+  const priceByItem = new Map<string, Array<Record<string, unknown>>>();
+  for (const p of priceRows.results) {
+    const list = priceByItem.get(p.item_id) ?? [];
+    list.push({
+      id: p.id, unit: p.unit, sale_price: p.sale_price, purchase_price: p.purchase_price, per: p.per,
+      stock: stockByKey.get(`${p.item_id}\u0000${p.unit}`) ?? 0,
+    });
+    priceByItem.set(p.item_id, list);
+  }
+  const groupByItem = new Map<string, Array<Record<string, unknown>>>();
+  for (const gp of groupPriceRows.results) {
+    const list = groupByItem.get(gp.item_id) ?? [];
+    list.push({ id: gp.id, unit: gp.unit, group_id: gp.group_id, sale_price: gp.sale_price });
+    groupByItem.set(gp.item_id, list);
+  }
+
   const items = rows.results.map((r) => {
-    const pr = (r as { prices: string | null }).prices;
-    const list = pr ? (JSON.parse(pr) as Record<string, unknown>[]) : [];
-    const gp = (r as { group_prices: string | null }).group_prices;
-    const glist = gp ? (JSON.parse(gp) as Record<string, unknown>[]) : [];
+    const prices = priceByItem.get(r.id) ?? [];
     return {
-      id: r.id, name: r.name, category: r.category ?? '', count_unit: (r as { count_unit: string | null }).count_unit ?? '',
-      prices: canSeeCost ? list : list.map((p) => ({ ...p, purchase_price: 0 })),
-      group_prices: glist,
+      id: r.id, name: r.name, category: r.category ?? '', count_unit: r.count_unit ?? '',
+      prices: canSeeCost ? prices : prices.map((p) => ({ ...p, purchase_price: 0 })),
+      group_prices: groupByItem.get(r.id) ?? [],
     };
   });
   return c.json({ items });

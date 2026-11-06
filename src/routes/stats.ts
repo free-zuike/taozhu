@@ -396,34 +396,46 @@ statsRouter.get('/summary', async (c) => {
   // 尾数会被"吞"（三间 10月 133.3+67.8+146.2+80.5=427.8，SUM=428.0→428，上层再统计继续进位放大）
   // 抹零店（round_stage≠none）：出货侧按该店配置分组向下取整（单店=该店配置；全店=各店各自配置），
   // 收款侧仍逐笔舍入（实收无抹零）。
-  const debtParams: unknown[] = clientId ? [end, clientId] : [end];
-  const [debtSaleRows, debtPayRows, roundRows] = kind === 'purchase'
-    ? [{ results: [] as Array<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }> }, { results: [] as Array<{ amount: number; waived: number }> }, { results: [] as Array<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }> }]
-    : await Promise.all([
-        db.prepare(
-          `SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
-        ).bind(...debtParams).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
-        db.prepare(
-          `SELECT amount, waived FROM payments WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
-        ).bind(...debtParams).all<{ amount: number; waived: number }>(),
-        db.prepare(
-          clientId
-            ? `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE id = ?`
-            : `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`,
-        ).bind(...(clientId ? [clientId] : [])).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
-      ]);
-  const allPaid = debtPayRows.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
-  let allSales: number;
-  if (kind === 'purchase') {
-    allSales = 0;
-  } else if (clientId) {
-    const cfg = normalizeRoundConfig(roundRows.results[0]?.round_stage, roundRows.results[0]?.round_unit, roundRows.results[0]?.round_carry);
-    allSales = salesSideRounded(debtSaleRows.results, cfg.stage, cfg.unit, cfg.carry, money);
-  } else {
-    // 全店：按各店抹零配置分别算出货侧再累加（None 店=逐笔舍入，行为不变）
-    const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
-    allSales = salesAggByConfig(debtSaleRows.results, cfgMap, money);
-  }
+  // v0.17.499：上面三条全表明细扫描（截止 end 的出货/收款 + 抹零配置）是 /stats/summary 的
+  // rows_read 大头（1h 21,504 行 / 14 次）。结果只有两个数字，缓存起来。
+  // 指纹含 end/client_id/kind 与舍入配置；start 只影响区间统计、不参与欠款，故不进指纹以免缓存碎片化。
+  const debtFp = `${end}|${clientId ?? ''}|${kind}|${money.carry}|${money.digits}`;
+  const { data: debtDerived } = await versionedSnapshot(
+    db, 'stats_summary_debt',
+    async () => {
+      const debtParams: unknown[] = clientId ? [end, clientId] : [end];
+      const [debtSaleRows, debtPayRows, roundRows] = kind === 'purchase'
+        ? [{ results: [] as Array<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }> }, { results: [] as Array<{ amount: number; waived: number }> }, { results: [] as Array<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }> }]
+        : await Promise.all([
+            db.prepare(
+              `SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
+            ).bind(...debtParams).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
+            db.prepare(
+              `SELECT amount, waived FROM payments WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
+            ).bind(...debtParams).all<{ amount: number; waived: number }>(),
+            db.prepare(
+              clientId
+                ? `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE id = ?`
+                : `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`,
+            ).bind(...(clientId ? [clientId] : [])).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
+          ]);
+      const allPaid = debtPayRows.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
+      let allSales: number;
+      if (kind === 'purchase') {
+        allSales = 0;
+      } else if (clientId) {
+        const cfg = normalizeRoundConfig(roundRows.results[0]?.round_stage, roundRows.results[0]?.round_unit, roundRows.results[0]?.round_carry);
+        allSales = salesSideRounded(debtSaleRows.results, cfg.stage, cfg.unit, cfg.carry, money);
+      } else {
+        // 全店：按各店抹零配置分别算出货侧再累加（None 店=逐笔舍入，行为不变）
+        const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
+        allSales = salesAggByConfig(debtSaleRows.results, cfgMap, money);
+      }
+      return { allSales, allPaid };
+    },
+    debtFp,
+    { ttlMs: 5 * 60_000, affectedSince: unaffectedTypes(db, OVERVIEW_UNRELATED_TYPES) },
+  );
 
   return c.json({
     start, end, kind,
@@ -431,7 +443,7 @@ statsRouter.get('/summary', async (c) => {
     sales_total: r(sales_total), gross_profit: canSeeProfit ? r(gross_profit) : 0,
     sales_count: saleRows.results.length,
     paid_total: r(paid_total), purchase_total: r(purchase_total),
-    debt: kind === 'purchase' ? 0 : r(allSales - allPaid),
+    debt: kind === 'purchase' ? 0 : r(debtDerived.allSales - debtDerived.allPaid),
   });
 });
 
@@ -442,53 +454,62 @@ statsRouter.get('/debts', async (c) => {
   const db = c.env.DB;
   const money = await getRoundingConfig(c.env.DB);
   const today = new Date().toISOString().slice(0, 10);
-  const [saleRows, payRows, clientRows, roundRows] = await Promise.all([
-    db.prepare(
-      'SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= ?',
-    ).bind(today).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
-    db.prepare(
-      'SELECT client_id, amount, waived FROM payments WHERE happened_at <= ?',
-    ).bind(today).all<{ client_id: string; amount: number; waived: number }>(),
-    db.prepare('SELECT id, name FROM clients WHERE deleted_at IS NULL').all<{ id: string; name: string }>(),
-    db.prepare('SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL').all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
-  ]);
-  const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
-  // 按店出货金额（按各店抹零配置分组向下取整，口径与 /summary 欠款一致）+ 最近出货日/金额/笔数
-  const saleByClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
-  const lastDate = new Map<string, string>();
-  let lastAmt = new Map<string, number>();
-  for (const s of saleRows.results) {
-    const id = s.client_id;
-    if (!id) continue;
-    saleByClient.set(id, [...(saleByClient.get(id) ?? []), { sale_id: s.sale_id, happened_at: s.happened_at, amount: Number(s.amount) || 0 }]);
-    const d = (s.happened_at ?? '').slice(0, 10);
-    if (d && d > (lastDate.get(id) ?? '')) {
-      lastDate.set(id, d);
-      lastAmt = new Map(lastAmt).set(id, Number(s.amount) || 0);
-    }
-  }
-  const payByClient = new Map<string, number>();
-  for (const p of payRows.results) {
-    const id = p.client_id;
-    if (!id) continue;
-    payByClient.set(id, (payByClient.get(id) ?? 0) + roundMoney((Number(p.amount) || 0) + (Number(p.waived) || 0), money));
-  }
-  const debts = [...saleByClient.keys()]
-    .map((id) => {
-      const cfg = cfgMap.get(id) ?? normalizeRoundConfig(null, null, null);
-      const sales = salesSideRounded(saleByClient.get(id) ?? [], cfg.stage, cfg.unit, cfg.carry, money);
-      return {
-        client_id: id,
-        client_name: clientRows.results.find((x) => x.id === id)?.name ?? '',
-        debt: Math.round((sales - (payByClient.get(id) ?? 0)) * 100) / 100,
-        sale_count: (saleByClient.get(id) ?? []).length,
-        last_sale_date: lastDate.get(id) ?? '',
-        last_sale_amount: Math.round((lastAmt.get(id) ?? 0) * 100) / 100,
-      };
-    })
-    .filter((x) => x.client_name !== '')
-    .sort((a, b) => b.debt - a.debt);
-  return c.json({ debts, today });
+  // v0.17.499：与 /summary 同源的截止明细全表扫，缓存按店聚合后的小结果（today 进指纹，跨天自动重算）
+  const { data } = await versionedSnapshot(
+    db, 'stats_debts',
+    async () => {
+      const [saleRows, payRows, clientRows, roundRows] = await Promise.all([
+        db.prepare(
+          'SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= ?',
+        ).bind(today).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
+        db.prepare(
+          'SELECT client_id, amount, waived FROM payments WHERE happened_at <= ?',
+        ).bind(today).all<{ client_id: string; amount: number; waived: number }>(),
+        db.prepare('SELECT id, name FROM clients WHERE deleted_at IS NULL').all<{ id: string; name: string }>(),
+        db.prepare('SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL').all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
+      ]);
+      const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
+      // 按店出货金额（按各店抹零配置分组向下取整，口径与 /summary 欠款一致）+ 最近出货日/金额/笔数
+      const saleByClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();
+      const lastDate = new Map<string, string>();
+      let lastAmt = new Map<string, number>();
+      for (const s of saleRows.results) {
+        const id = s.client_id;
+        if (!id) continue;
+        saleByClient.set(id, [...(saleByClient.get(id) ?? []), { sale_id: s.sale_id, happened_at: s.happened_at, amount: Number(s.amount) || 0 }]);
+        const d = (s.happened_at ?? '').slice(0, 10);
+        if (d && d > (lastDate.get(id) ?? '')) {
+          lastDate.set(id, d);
+          lastAmt = new Map(lastAmt).set(id, Number(s.amount) || 0);
+        }
+      }
+      const payByClient = new Map<string, number>();
+      for (const p of payRows.results) {
+        const id = p.client_id;
+        if (!id) continue;
+        payByClient.set(id, (payByClient.get(id) ?? 0) + roundMoney((Number(p.amount) || 0) + (Number(p.waived) || 0), money));
+      }
+      const debts = [...saleByClient.keys()]
+        .map((id) => {
+          const cfg = cfgMap.get(id) ?? normalizeRoundConfig(null, null, null);
+          const sales = salesSideRounded(saleByClient.get(id) ?? [], cfg.stage, cfg.unit, cfg.carry, money);
+          return {
+            client_id: id,
+            client_name: clientRows.results.find((x) => x.id === id)?.name ?? '',
+            debt: Math.round((sales - (payByClient.get(id) ?? 0)) * 100) / 100,
+            sale_count: (saleByClient.get(id) ?? []).length,
+            last_sale_date: lastDate.get(id) ?? '',
+            last_sale_amount: Math.round((lastAmt.get(id) ?? 0) * 100) / 100,
+          };
+        })
+        .filter((x) => x.client_name !== '')
+        .sort((a, b) => b.debt - a.debt);
+      return { debts };
+    },
+    `${today}|${money.carry}|${money.digits}`,
+    { ttlMs: 5 * 60_000, affectedSince: unaffectedTypes(db, OVERVIEW_UNRELATED_TYPES) },
+  );
+  return c.json({ debts: data.debts, today });
 });
 
 statsRouter.get('/daily', async (c) => {
