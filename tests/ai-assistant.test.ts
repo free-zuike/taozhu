@@ -252,6 +252,42 @@ describe('动态查询与知识库（0.17.475）', () => {
     expect(items).toContain('¥10');
   });
 
+  it('runBusinessQuery 指定店铺时各视角只返回该店（修：clients/debts/monthly/daily/items 不再忽略 client_id）', async () => {
+    const it = await mkItem('萝卜', 4, 2);
+    await call(env, 'POST', '/api/v1/clients', token, { name: '甲店' });
+    await call(env, 'POST', '/api/v1/clients', token, { name: '乙店' });
+    const cls = ((await call(env, 'GET', '/api/v1/clients', token).then((r) => r.json())) as { clients: Array<{ name: string; id: string }> }).clients;
+    const a = cls.find((c) => c.name === '甲店')!;
+    const b = cls.find((c) => c.name === '乙店')!;
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: a.id, happened_at: '2026-10-05', items: [{ price_id: it.prices[0].id, quantity: 3 }] }); // ¥12
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: b.id, happened_at: '2026-10-06', items: [{ price_id: it.prices[0].id, quantity: 5 }] }); // ¥20
+
+    const base = { intent: 'query' as const, start: '2026-10-01', end: '2026-10-31', client: '甲店', kind: 'sale' as const, year: null, topics: [] };
+
+    const byClient = await runBusinessQuery(db as never, 'admin', { ...base, view: 'clients' });
+    expect(byClient).toContain('甲店');
+    expect(byClient).not.toContain('乙店');
+    expect(byClient).toContain('¥12');
+
+    const monthly = await runBusinessQuery(db as never, 'admin', { ...base, view: 'monthly', year: 2026 });
+    expect(monthly).toContain('10月 ¥12');
+    expect(monthly).not.toContain('乙店');
+
+    const daily = await runBusinessQuery(db as never, 'admin', { ...base, view: 'daily' });
+    expect(daily).toContain('2026-10-05');
+    expect(daily).toContain('¥12');
+    expect(daily).not.toContain('2026-10-06'); // 乙店那天不应混入
+
+    const debts = await runBusinessQuery(db as never, 'admin', { ...base, view: 'debts', start: null, end: null });
+    expect(debts).toContain('甲店');
+    expect(debts).not.toContain('乙店');
+
+    const items = await runBusinessQuery(db as never, 'admin', { ...base, view: 'items' });
+    expect(items).toContain('萝卜');
+    expect(items).toContain('¥12');
+    expect(items).not.toContain('¥20'); // 乙店的出货不应混入
+  });
+
   it('runBusinessQuery monthly/daily/years 基本形状', async () => {
     const it = await mkItem('茄子', 4, 2);
     await call(env, 'POST', '/api/v1/clients', token, { name: 'C店' });
