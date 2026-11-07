@@ -9,6 +9,7 @@ import {
   roundMoney, normalizeRoundConfig, salesSideRounded, type RoundingConfig,
 } from './money';
 import { versionedSnapshot, unaffectedTypes } from './snapshot';
+import { loadDerivedCore } from './derived-core';
 
 /** 只列「同时不影响 overview 与 /clients」的写入。
  *  item 会影响 overview 的 item_count、category 会影响 /clients 的 category_name，都不列入；
@@ -40,21 +41,19 @@ export interface LedgerDerived {
 }
 
 export async function loadLedgerDerived(db: D1Database, money: RoundingConfig): Promise<LedgerDerived> {
-  const { data } = await versionedSnapshot<LedgerDerived>(
-    db, 'ledger_derived', () => compute(db, money),
+  return versionedSnapshot<LedgerDerived>(
+    db, 'ledger_derived', async () => {
+      const core = await loadDerivedCore(db);
+      return compute(db, money, core);
+    },
     `${money.carry}|${money.digits}`,
     { ttlMs: 5 * 60_000, affectedSince: unaffectedTypes(db, LEDGER_UNRELATED_TYPES) },
-  );
-  return data;
+  ).then((x) => x.data);
 }
 
-async function compute(db: D1Database, money: RoundingConfig): Promise<LedgerDerived> {
+async function compute(db: D1Database, money: RoundingConfig, core: Awaited<ReturnType<typeof loadDerivedCore>>): Promise<LedgerDerived> {
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const [salesRows, payRows, clientRows, counts] = await Promise.all([
-    db.prepare(`SELECT client_id, sale_id, happened_at, amount FROM sale_items`)
-      .all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
-    db.prepare(`SELECT client_id, amount, waived FROM payments`)
-      .all<{ client_id: string; amount: number; waived: number }>(),
+  const [clientRows, counts] = await Promise.all([
     db.prepare(`SELECT id, name, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`)
       .all<{ id: string; name: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
     db.prepare(
@@ -63,6 +62,8 @@ async function compute(db: D1Database, money: RoundingConfig): Promise<LedgerDer
         (SELECT COUNT(*) FROM items WHERE deleted_at IS NULL) AS item_count`,
     ).first<{ client_count: number; item_count: number }>(),
   ]);
+  const salesRows = { results: core.saleItems };
+  const payRows = { results: core.payments };
 
   const roundCfgMap = new Map(clientRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
   const byClient = new Map<string, Array<{ sale_id: string; happened_at: string | null; amount: number }>>();

@@ -259,6 +259,7 @@ describe('记单与欠款联动（核心业务）', () => {
     const saleB = `s${Date.now() + 1}00000002`;
     await mk(saleA, 1, 0); await mk(saleA, 2, 2);
     await mk(saleB, 3, 1); await mk(saleB, 4, 3);
+    await env.DB.prepare("DELETE FROM schema_meta WHERE key LIKE 'snapshot:%'").run(); // 直接 INSERT 绕过变更流，强制快照重算
     const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
       sale_items: Array<{ quantity: number; sort: number }>;
     };
@@ -285,6 +286,7 @@ describe('记单与欠款联动（核心业务）', () => {
     const saleA = 's179160212943448152247';
     await mk(saleB, 1);
     await mk(saleA, 2);
+    await env.DB.prepare("DELETE FROM schema_meta WHERE key LIKE 'snapshot:%'").run(); // 直接 INSERT 绕过变更流，强制快照重算
     const list = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as {
       sale_items: Array<{ quantity: number }>;
     };

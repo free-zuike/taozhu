@@ -7,11 +7,27 @@ import { authMiddleware } from '../middleware/auth';
 import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesSideRounded, salesAggByConfig } from '../lib/money';
 import { versionedSnapshot, unaffectedTypes } from '../lib/snapshot';
 import { loadLedgerDerived } from '../lib/ledger-derived';
+import { loadDerivedCore, type CoreSaleItem } from '../lib/derived-core';
 import { localTodayISO } from '../lib/biz-date';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
 export const statsRouter = new Hono<{ Bindings: Env; Variables: V }>();
+
+/** 日期区间过滤（含端点），与 SQL `happened_at >= start AND happened_at <= end` 语义一致；
+ *  NULL/空串视为无日期、不参与统计（真实流水记录均有日期）。 */
+function inRange(h: string | null | undefined, start?: string, end?: string): boolean {
+  const s = h ?? '';
+  if (!s) return false;
+  if (start && s < start) return false;
+  if (end && s > end) return false;
+  return true;
+}
+/** 截止日过滤（无起点）：等同 SQL `happened_at <= end`。 */
+function leDate(h: string | null | undefined, end: string): boolean {
+  const s = h ?? '';
+  return s !== '' && s <= end;
+}
 
 statsRouter.use('*', authMiddleware());
 // 店员可见统计但隐藏毛利：各接口已按 can_see_profit（admin 才 true）把 gross_profit 归零，
@@ -79,17 +95,20 @@ statsRouter.get('/clients', async (c) => {
   const start = c.req.query('start')?.trim();
   const end = c.req.query('end')?.trim();
   const hasRange = !!(start && end);
-  const cond = hasRange ? 'AND happened_at >= ? AND happened_at <= ?' : '';
-  const params: unknown[] = hasRange ? [start, end] : [];
-  const [saleRows, payRows, clientRows, cfgRows] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT si.client_id AS cid, si.sale_id AS sale_id, si.happened_at AS happened_at, si.amount AS amount,
-        (si.sale_price - si.cost_price) * si.quantity AS gross
-       FROM sale_items si WHERE 1=1 ${cond}`,
-    ).bind(...params).all<{ cid: string; sale_id: string; happened_at: string | null; amount: number; gross: number }>(),
-    c.env.DB.prepare(
-      `SELECT client_id AS cid, amount, waived FROM payments WHERE 1=1 ${cond}`,
-    ).bind(...params).all<{ cid: string; amount: number; waived: number }>(),
+  const core = await loadDerivedCore(c.env.DB);
+  const sStart = hasRange ? start : undefined;
+  const sEnd = hasRange ? end : undefined;
+  const saleRows = {
+    results: core.saleItems
+      .filter((x) => inRange(x.happened_at, sStart, sEnd))
+      .map((x) => ({ cid: x.client_id, sale_id: x.sale_id, happened_at: x.happened_at, amount: x.amount, gross: (x.sale_price - x.cost_price) * x.quantity })),
+  };
+  const payRows = {
+    results: core.payments
+      .filter((x) => inRange(x.happened_at, sStart, sEnd))
+      .map((x) => ({ cid: x.client_id, amount: x.amount, waived: x.waived })),
+  };
+  const [clientRows, cfgRows] = await Promise.all([
     c.env.DB.prepare(`SELECT id, name FROM clients WHERE deleted_at IS NULL`).all<{ id: string; name: string }>(),
     c.env.DB.prepare(`SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
   ]);
@@ -138,22 +157,30 @@ statsRouter.get('/monthly', async (c) => {
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const [saleRows, payRows] = await Promise.all([
-    c.env.DB.prepare(
-      kind === 'purchase'
-        ? `SELECT substr(pi.happened_at, 1, 7) AS month, pi.amount AS amount, 0 AS gross
-           FROM purchase_items pi WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
-        : `SELECT substr(si.happened_at, 1, 7) AS month, si.amount AS amount,
-            (si.sale_price - si.cost_price) * si.quantity AS gross
-           FROM sale_items si WHERE si.happened_at >= ? AND si.happened_at <= ?`,
-    ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; amount: number; gross: number }>(),
-    kind === 'purchase'
-      ? Promise.resolve({ results: [] as Array<{ month: string; amount: number; waived: number }> })
-      : c.env.DB.prepare(
-          `SELECT substr(happened_at, 1, 7) AS month, amount, waived
-           FROM payments WHERE happened_at >= ? AND happened_at <= ?`,
-        ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; amount: number; waived: number }>(),
-  ]);
+  const core = await loadDerivedCore(c.env.DB);
+  const yStart = `${year}-01-01`;
+  const yEnd = `${year}-12-31`;
+  let saleRows: { results: Array<{ month: string; amount: number; gross: number }> };
+  let payRows: { results: Array<{ month: string; amount: number; waived: number }> };
+  if (kind === 'purchase') {
+    saleRows = {
+      results: core.purchaseItems
+        .filter((x) => inRange(x.happened_at, yStart, yEnd))
+        .map((x) => ({ month: (x.happened_at ?? '').slice(0, 7), amount: x.amount, gross: 0 })),
+    };
+    payRows = { results: [] };
+  } else {
+    saleRows = {
+      results: core.saleItems
+        .filter((x) => inRange(x.happened_at, yStart, yEnd))
+        .map((x) => ({ month: (x.happened_at ?? '').slice(0, 7), amount: x.amount, gross: (x.sale_price - x.cost_price) * x.quantity })),
+    };
+    payRows = {
+      results: core.payments
+        .filter((x) => inRange(x.happened_at, yStart, yEnd))
+        .map((x) => ({ month: (x.happened_at ?? '').slice(0, 7), amount: x.amount, waived: x.waived })),
+    };
+  }
   const salesMap = new Map<string, number>();
   const grossMap = new Map<string, number>();
   const paidMap = new Map<string, number>();
@@ -181,16 +208,19 @@ statsRouter.get('/monthly-flow', async (c) => {
   const year = c.req.query('year')?.trim() || String(new Date().getUTCFullYear());
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const [saleRows, buyRows] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT substr(si.happened_at, 1, 7) AS month, si.amount AS amount
-       FROM sale_items si WHERE si.happened_at >= ? AND si.happened_at <= ?`,
-    ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; amount: number }>(),
-    c.env.DB.prepare(
-      `SELECT substr(pi.happened_at, 1, 7) AS month, pi.amount AS amount
-       FROM purchase_items pi WHERE pi.happened_at >= ? AND pi.happened_at <= ?`,
-    ).bind(`${year}-01-01`, `${year}-12-31`).all<{ month: string; amount: number }>(),
-  ]);
+  const core = await loadDerivedCore(c.env.DB);
+  const yStart = `${year}-01-01`;
+  const yEnd = `${year}-12-31`;
+  const saleRows = {
+    results: core.saleItems
+      .filter((x) => inRange(x.happened_at, yStart, yEnd))
+      .map((x) => ({ month: (x.happened_at ?? '').slice(0, 7), amount: x.amount })),
+  };
+  const buyRows = {
+    results: core.purchaseItems
+      .filter((x) => inRange(x.happened_at, yStart, yEnd))
+      .map((x) => ({ month: (x.happened_at ?? '').slice(0, 7), amount: x.amount })),
+  };
   const salesMap = new Map<string, number>();
   const buyMap = new Map<string, number>();
   for (const x of saleRows.results) salesMap.set(x.month, (salesMap.get(x.month) ?? 0) + r(x.amount));
@@ -218,21 +248,19 @@ statsRouter.get('/categories', async (c) => {
   if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
   const clientId = c.req.query('client_id')?.trim();
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
-  const params: unknown[] = [start, end];
-  if (clientId && kind === 'sale') params.push(clientId);
-  const rows = await c.env.DB.prepare(
-    kind === 'purchase'
-      ? `SELECT COALESCE(cat.name, '未分类') AS category, pi.quantity AS quantity, pi.amount AS amount
-         FROM purchase_items pi
-         JOIN items i ON i.id = pi.item_id
-         LEFT JOIN categories cat ON cat.id = i.category_id
-         WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
-      : `SELECT COALESCE(cat.name, '未分类') AS category, si.quantity AS quantity, si.amount AS amount
-         FROM sale_items si
-         JOIN items i ON i.id = si.item_id
-         LEFT JOIN categories cat ON cat.id = i.category_id
-         WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`,
-  ).bind(...params).all<{ category: string; quantity: number; amount: number }>();
+  const core = await loadDerivedCore(c.env.DB);
+  const [itemRows, catRows] = await Promise.all([
+    c.env.DB.prepare('SELECT id, category_id FROM items WHERE deleted_at IS NULL').all<{ id: string; category_id: string | null }>(),
+    c.env.DB.prepare('SELECT id, name FROM categories').all<{ id: string; name: string }>(),
+  ]);
+  const catName = new Map(catRows.results.map((c2) => [c2.id, c2.name]));
+  const itemCat = new Map(itemRows.results.map((i) => [i.id, i.category_id ? (catName.get(i.category_id) ?? '未分类') : '未分类']));
+  const rows = {
+    results: (kind === 'purchase'
+      ? core.purchaseItems.filter((x) => inRange(x.happened_at, start, end))
+      : core.saleItems.filter((x) => inRange(x.happened_at, start, end) && (!clientId || x.client_id === clientId))
+    ).map((x) => ({ category: itemCat.get(x.item_id) ?? '未分类', quantity: x.quantity, amount: x.amount })),
+  };
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
   const map = new Map<string, { quantity: number; amount: number }>();
@@ -253,22 +281,18 @@ statsRouter.get('/categories', async (c) => {
 
 // GET /stats/years — 有数据的年份列表（出货/进货/收款并集，升序）+ 最早记账日期（记账天数用）
 statsRouter.get('/years', async (c) => {
-  const rows = await c.env.DB.prepare(
-    `SELECT DISTINCT substr(happened_at, 1, 4) AS y FROM sale_items
-     UNION SELECT DISTINCT substr(happened_at, 1, 4) FROM purchase_items
-     UNION SELECT DISTINCT substr(happened_at, 1, 4) FROM payments
-     ORDER BY y`,
-  ).all<{ y: string }>();
-  const first = await c.env.DB.prepare(
-    `SELECT MIN(d) AS d FROM (
-       SELECT MIN(happened_at) AS d FROM sale_items WHERE happened_at IS NOT NULL AND happened_at != ''
-       UNION ALL SELECT MIN(happened_at) FROM purchase_items WHERE happened_at IS NOT NULL AND happened_at != ''
-       UNION ALL SELECT MIN(happened_at) FROM payments WHERE happened_at IS NOT NULL AND happened_at != ''
-     )`,
-  ).first<{ d: string }>();
+  const core = await loadDerivedCore(c.env.DB);
+  const yearSet = new Set<string>();
+  let first = '';
+  for (const x of [...core.saleItems, ...core.purchaseItems, ...core.payments]) {
+    const h = x.happened_at ?? '';
+    if (!h) continue;
+    yearSet.add(h.slice(0, 4));
+    if (!first || h < first) first = h;
+  }
   return c.json({
-    years: rows.results.map((r) => Number(r.y)).filter((n) => Number.isInteger(n) && n >= 2000),
-    first_date: first?.d ?? '',
+    years: [...yearSet].map((y) => Number(y)).filter((n) => Number.isInteger(n) && n >= 2000).sort((a, b) => a - b),
+    first_date: first,
   });
 });
 
@@ -285,90 +309,51 @@ statsRouter.get('/summary', async (c) => {
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
 
   // 出货（或进货）区间汇总：kind=purchase 走 purchase_items（无店铺维度、无毛利）。
-  // 金额按"每笔舍入后累加"（与单笔显示/账本页对账一致）：原始浮点 SUM 后舍入在
-  // digits=0/1 时（1.6+1.6=3.2→¥3）会与每笔显示（¥2+¥2）对不上。
-  const salesParams: unknown[] = [start, end];
-  const salesSql = kind === 'purchase'
-    ? `SELECT pi.amount AS amount, 0 AS sale_price, 0 AS cost_price, 0 AS quantity
-       FROM purchase_items pi WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
-    : `SELECT si.amount AS amount, si.sale_price AS sale_price, si.cost_price AS cost_price, si.quantity AS quantity
-       FROM sale_items si
-       WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`;
-  if (clientId && kind === 'sale') salesParams.push(clientId);
-  const saleRows = await db.prepare(salesSql).bind(...salesParams).all<{
-    amount: number; sale_price: number; cost_price: number; quantity: number;
-  }>();
-  const sales_total = saleRows.results.reduce((s, x) => s + roundMoney(Number(x.amount) || 0, money), 0);
+  // 明细来自 derived_core 快照（一次全扫、按出货/收款/进货写入失效），这里只做 JS 过滤+聚合，
+  // 不再每次请求全扫三张流水表（原 1h 21,504 行 / 14 次 的 rows_read 大头）。
+  const core = await loadDerivedCore(db);
+  const saleItemsInRange = core.saleItems.filter((x) => inRange(x.happened_at, start, end) && (!clientId || x.client_id === clientId));
+  const payInRange = core.payments.filter((x) => inRange(x.happened_at, start, end) && (!clientId || x.client_id === clientId));
+  const buyInRange = core.purchaseItems.filter((x) => inRange(x.happened_at, start, end));
+  // kind=purchase 时「出货额/单数」实为进货口径（无店铺维度、无毛利、无欠款），与原口径一致
+  const sales_total = kind === 'purchase'
+    ? buyInRange.reduce((s, x) => s + roundMoney(Number(x.amount) || 0, money), 0)
+    : saleItemsInRange.reduce((s, x) => s + roundMoney(Number(x.amount) || 0, money), 0);
   const gross_profit = kind === 'purchase'
     ? 0
-    : saleRows.results.reduce((s, x) => s + roundMoney((Number(x.sale_price) - Number(x.cost_price)) * Number(x.quantity), money), 0);
-
-  const paidParams: unknown[] = [start, end];
-  const paidSql = `SELECT amount, waived
-     FROM payments WHERE happened_at >= ? AND happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`;
-  if (clientId) paidParams.push(clientId);
-  const paidRows = await db.prepare(paidSql).bind(...paidParams).all<{ amount: number; waived: number }>();
-  const paid_total = paidRows.results.reduce((s, x) => s + roundMoney((Number(x.amount) || 0) + (Number(x.waived) || 0), money), 0);
-
-  const buyParams: unknown[] = [start, end];
-  const buySql = `SELECT amount
-     FROM purchase_items pi WHERE pi.happened_at >= ? AND pi.happened_at <= ?`;
-  const buyRows = await db.prepare(buySql).bind(...buyParams).all<{ amount: number }>();
-  const purchase_total = buyRows.results.reduce((s, x) => s + roundMoney(Number(x.amount) || 0, money), 0);
+    : saleItemsInRange.reduce((s, x) => s + roundMoney((Number(x.sale_price) - Number(x.cost_price)) * Number(x.quantity), money), 0);
+  const paid_total = payInRange.reduce((s, x) => s + roundMoney((Number(x.amount) || 0) + (Number(x.waived) || 0), money), 0);
+  const purchase_total = buyInRange.reduce((s, x) => s + roundMoney(Number(x.amount) || 0, money), 0);
 
   // 截止 end 的总欠款（区间前累计也计入：全部出货 − 全部收款，时间 ≤ end）；进货视图无欠款
-  // 口径=每笔先舍入再累加（与区间统计/账本一致）：勿 SQL SUM 原始值后一次舍入——
-  // 尾数会被"吞"（三间 10月 133.3+67.8+146.2+80.5=427.8，SUM=428.0→428，上层再统计继续进位放大）
-  // 抹零店（round_stage≠none）：出货侧按该店配置分组向下取整（单店=该店配置；全店=各店各自配置），
-  // 收款侧仍逐笔舍入（实收无抹零）。
-  // v0.17.499：上面三条全表明细扫描（截止 end 的出货/收款 + 抹零配置）是 /stats/summary 的
-  // rows_read 大头（1h 21,504 行 / 14 次）。结果只有两个数字，缓存起来。
-  // 指纹含 end/client_id/kind 与舍入配置；start 只影响区间统计、不参与欠款，故不进指纹以免缓存碎片化。
-  const debtFp = `${end}|${clientId ?? ''}|${kind}|${money.carry}|${money.digits}`;
-  const { data: debtDerived } = await versionedSnapshot(
-    db, 'stats_summary_debt',
-    async () => {
-      const debtParams: unknown[] = clientId ? [end, clientId] : [end];
-      const [debtSaleRows, debtPayRows, roundRows] = kind === 'purchase'
-        ? [{ results: [] as Array<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }> }, { results: [] as Array<{ amount: number; waived: number }> }, { results: [] as Array<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }> }]
-        : await Promise.all([
-            db.prepare(
-              `SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
-            ).bind(...debtParams).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
-            db.prepare(
-              `SELECT amount, waived FROM payments WHERE happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`,
-            ).bind(...debtParams).all<{ amount: number; waived: number }>(),
-            db.prepare(
-              clientId
-                ? `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE id = ?`
-                : `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`,
-            ).bind(...(clientId ? [clientId] : [])).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
-          ]);
-      const allPaid = debtPayRows.results.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
-      let allSales: number;
-      if (kind === 'purchase') {
-        allSales = 0;
-      } else if (clientId) {
-        const cfg = normalizeRoundConfig(roundRows.results[0]?.round_stage, roundRows.results[0]?.round_unit, roundRows.results[0]?.round_carry);
-        allSales = salesSideRounded(debtSaleRows.results, cfg.stage, cfg.unit, cfg.carry, money);
-      } else {
-        // 全店：按各店抹零配置分别算出货侧再累加（None 店=逐笔舍入，行为不变）
-        const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
-        allSales = salesAggByConfig(debtSaleRows.results, cfgMap, money);
-      }
-      return { allSales, allPaid };
-    },
-    debtFp,
-    { ttlMs: 5 * 60_000, affectedSince: unaffectedTypes(db, OVERVIEW_UNRELATED_TYPES) },
-  );
+  // 口径=每笔先舍入再累加（与区间统计/账本一致）：抹零店按该店配置分组，收款侧逐笔舍入。
+  // 同样来自 derived_core 快照，不再单独全扫（原 stats_summary_debt 缓存的 rows_read 大头已并入 core）。
+  let debt = 0;
+  if (kind !== 'purchase') {
+    const debtSaleRows = core.saleItems.filter((x) => leDate(x.happened_at, end) && (!clientId || x.client_id === clientId));
+    const debtPayRows = core.payments.filter((x) => leDate(x.happened_at, end) && (!clientId || x.client_id === clientId));
+    const allPaid = debtPayRows.reduce((s, x) => s + r((Number(x.amount) || 0) + (Number(x.waived) || 0)), 0);
+    let allSales: number;
+    if (clientId) {
+      const cfgRow = await db.prepare(`SELECT round_stage, round_unit, round_carry FROM clients WHERE id = ?`).bind(clientId).first<{ round_stage: string | null; round_unit: string | null; round_carry: number | null }>();
+      const cfg = normalizeRoundConfig(cfgRow?.round_stage, cfgRow?.round_unit, cfgRow?.round_carry);
+      allSales = salesSideRounded(debtSaleRows, cfg.stage, cfg.unit, cfg.carry, money);
+    } else {
+      // 全店：按各店抹零配置分别算出货侧再累加（None 店=逐笔舍入，行为不变）
+      const roundRows = await db.prepare(`SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL`).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>();
+      const cfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
+      allSales = salesAggByConfig(debtSaleRows, cfgMap, money);
+    }
+    debt = r(allSales - allPaid);
+  }
 
   return c.json({
     start, end, kind,
     can_see_profit: canSeeProfit,
     sales_total: r(sales_total), gross_profit: canSeeProfit ? r(gross_profit) : 0,
-    sales_count: saleRows.results.length,
+    sales_count: kind === 'purchase' ? buyInRange.length : saleItemsInRange.length,
     paid_total: r(paid_total), purchase_total: r(purchase_total),
-    debt: kind === 'purchase' ? 0 : r(debtDerived.allSales - debtDerived.allPaid),
+    debt,
   });
 });
 
@@ -383,13 +368,18 @@ statsRouter.get('/debts', async (c) => {
   const { data } = await versionedSnapshot(
     db, 'stats_debts',
     async () => {
-      const [saleRows, payRows, clientRows, roundRows] = await Promise.all([
-        db.prepare(
-          'SELECT client_id, sale_id, happened_at, amount FROM sale_items WHERE happened_at <= ?',
-        ).bind(today).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
-        db.prepare(
-          'SELECT client_id, amount, waived FROM payments WHERE happened_at <= ?',
-        ).bind(today).all<{ client_id: string; amount: number; waived: number }>(),
+      const core = await loadDerivedCore(db);
+      const saleRows = {
+        results: core.saleItems
+          .filter((x) => leDate(x.happened_at, today))
+          .map((x) => ({ client_id: x.client_id, sale_id: x.sale_id, happened_at: x.happened_at, amount: x.amount })),
+      };
+      const payRows = {
+        results: core.payments
+          .filter((x) => leDate(x.happened_at, today))
+          .map((x) => ({ client_id: x.client_id, amount: x.amount, waived: x.waived })),
+      };
+      const [clientRows, roundRows] = await Promise.all([
         db.prepare('SELECT id, name FROM clients WHERE deleted_at IS NULL').all<{ id: string; name: string }>(),
         db.prepare('SELECT id, round_stage, round_unit, round_carry FROM clients WHERE deleted_at IS NULL').all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
       ]);
@@ -448,29 +438,33 @@ statsRouter.get('/daily', async (c) => {
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
 
-  const sParams: unknown[] = [start, end];
-  const sSql = kind === 'purchase'
-    ? `SELECT substr(pi.happened_at, 1, 10) AS day, pi.amount AS amount, 0 AS gross, '' AS cid
-       FROM purchase_items pi
-       WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
-    : `SELECT substr(si.happened_at, 1, 10) AS day, si.amount AS amount,
-        (si.sale_price - si.cost_price) * si.quantity AS gross, si.client_id AS cid
-       FROM sale_items si
-       WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`;
-  if (clientId && kind === 'sale') sParams.push(clientId);
-  const saleRows = await db.prepare(sSql).bind(...sParams).all<{ day: string; amount: number; gross: number; cid: string }>();
-
-  const pParams: unknown[] = [start, end];
-  const pSql = `SELECT substr(happened_at, 1, 10) AS day, amount, waived
-     FROM payments WHERE happened_at >= ? AND happened_at <= ?${clientId ? ' AND client_id = ?' : ''}`;
-  if (clientId) pParams.push(clientId);
-  const paidRows = await db.prepare(pSql).bind(...pParams).all<{ day: string; amount: number; waived: number }>();
-
-  const bParams: unknown[] = [start, end];
-  const bSql = `SELECT substr(pi.happened_at, 1, 10) AS day, pi.amount AS amount
-     FROM purchase_items pi
-     WHERE pi.happened_at >= ? AND pi.happened_at <= ?`;
-  const buyRows = await db.prepare(bSql).bind(...bParams).all<{ day: string; amount: number }>();
+  const core = await loadDerivedCore(db);
+  let saleRows: { results: Array<{ day: string; amount: number; gross: number; cid: string }> };
+  let paidRows: { results: Array<{ day: string; amount: number; waived: number }> };
+  if (kind === 'purchase') {
+    saleRows = {
+      results: core.purchaseItems
+        .filter((x) => inRange(x.happened_at, start, end))
+        .map((x) => ({ day: (x.happened_at ?? '').slice(0, 10), amount: x.amount, gross: 0, cid: '' })),
+    };
+    paidRows = { results: [] };
+  } else {
+    saleRows = {
+      results: core.saleItems
+        .filter((x) => inRange(x.happened_at, start, end) && (!clientId || x.client_id === clientId))
+        .map((x) => ({ day: (x.happened_at ?? '').slice(0, 10), amount: x.amount, gross: (x.sale_price - x.cost_price) * x.quantity, cid: x.client_id })),
+    };
+    paidRows = {
+      results: core.payments
+        .filter((x) => inRange(x.happened_at, start, end) && (!clientId || x.client_id === clientId))
+        .map((x) => ({ day: (x.happened_at ?? '').slice(0, 10), amount: x.amount, waived: x.waived })),
+    };
+  }
+  const buyRows = {
+    results: core.purchaseItems
+      .filter((x) => inRange(x.happened_at, start, end))
+      .map((x) => ({ day: (x.happened_at ?? '').slice(0, 10), amount: x.amount })),
+  };
 
   const salesMap = new Map<string, number>();
   const grossMap = new Map<string, number>();
@@ -526,20 +520,21 @@ statsRouter.get('/items', async (c) => {
   if (!start || !end) return c.json({ error: 'start/end 必填（YYYY-MM-DD）' }, 400);
   const clientId = c.req.query('client_id')?.trim();
   const kind = c.req.query('kind') === 'purchase' ? 'purchase' : 'sale';
-  const params: unknown[] = [start, end];
-  if (clientId && kind === 'sale') params.push(clientId);
-  const rows = await c.env.DB.prepare(
-    kind === 'purchase'
-      ? `SELECT i.name, pi.unit, pi.quantity AS quantity, pi.amount AS amount, 0 AS gross
-         FROM purchase_items pi
-         JOIN items i ON i.id = pi.item_id
-         WHERE pi.happened_at >= ? AND pi.happened_at <= ?`
-      : `SELECT i.name, si.unit, si.quantity AS quantity, si.amount AS amount,
-         (si.sale_price - si.cost_price) * si.quantity AS gross
-         FROM sale_items si
-         JOIN items i ON i.id = si.item_id
-         WHERE si.happened_at >= ? AND si.happened_at <= ?${clientId ? ' AND si.client_id = ?' : ''}`,
-  ).bind(...params).all<{ name: string; unit: string; quantity: number; amount: number; gross: number }>();
+  const core = await loadDerivedCore(c.env.DB);
+  const itemRows = await c.env.DB.prepare('SELECT id, name FROM items WHERE deleted_at IS NULL').all<{ id: string; name: string }>();
+  const itemName = new Map(itemRows.results.map((i) => [i.id, i.name]));
+  const rows = {
+    results: (kind === 'purchase'
+      ? core.purchaseItems.filter((x) => inRange(x.happened_at, start, end))
+      : core.saleItems.filter((x) => inRange(x.happened_at, start, end) && (!clientId || x.client_id === clientId))
+    ).map((x) => ({
+      name: itemName.get(x.item_id) ?? '未知商品',
+      unit: x.unit ?? '',
+      quantity: x.quantity,
+      amount: x.amount,
+      gross: kind === 'purchase' ? 0 : ((x as CoreSaleItem).sale_price - (x as CoreSaleItem).cost_price) * (x as CoreSaleItem).quantity,
+    })),
+  };
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
   const map = new Map<string, { name: string; unit: string; quantity: number; amount: number; gross: number }>();
@@ -576,37 +571,35 @@ statsRouter.get('/category-statement', async (c) => {
   if (!cat) return c.json({ error: '店铺分类不存在' }, 404);
   const money = await getRoundingConfig(c.env.DB);
   const r = (n: unknown) => roundMoney(Number(n || 0), money);
-  const [saleRows, payRows, debtRows, debtPayRows, clientRows, roundRows] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT client_id, sale_id, happened_at, amount FROM sale_items
-       WHERE client_id IN (SELECT id FROM clients WHERE category_id = ?)
-         AND happened_at >= ? AND happened_at <= ?`,
-    ).bind(categoryId, start, end).all<{ client_id: string; sale_id: string; happened_at: string | null; amount: number }>(),
-    c.env.DB.prepare(
-      `SELECT client_id, amount, waived FROM payments
-       WHERE client_id IN (SELECT id FROM clients WHERE category_id = ?)
-         AND happened_at >= ? AND happened_at <= ?`,
-    ).bind(categoryId, start, end).all<{ client_id: string; amount: number; waived: number }>(),
-    // 期末欠款：每笔先舍入再累加（口径与 /stats/summary 一致，勿 SQL SUM 原始后一次舍入——尾数进位放大）
-    c.env.DB.prepare(
-      `SELECT si.client_id AS cid, si.sale_id AS sale_id, si.happened_at AS happened_at, si.amount AS amount
-       FROM sale_items si
-       WHERE si.client_id IN (SELECT id FROM clients WHERE category_id = ? AND deleted_at IS NULL)
-         AND si.happened_at <= ?`,
-    ).bind(categoryId, end).all<{ cid: string; sale_id: string; happened_at: string | null; amount: number }>(),
-    c.env.DB.prepare(
-      `SELECT p.client_id AS cid, p.amount AS amount, p.waived AS waived
-       FROM payments p
-       WHERE p.client_id IN (SELECT id FROM clients WHERE category_id = ? AND deleted_at IS NULL)
-         AND p.happened_at <= ?`,
-    ).bind(categoryId, end).all<{ cid: string; amount: number; waived: number }>(),
-    c.env.DB.prepare(
-      `SELECT id, name FROM clients WHERE category_id = ? AND deleted_at IS NULL ORDER BY name`,
-    ).bind(categoryId).all<{ id: string; name: string }>(),
-    c.env.DB.prepare(
-      `SELECT id, round_stage, round_unit, round_carry FROM clients WHERE category_id = ? AND deleted_at IS NULL`,
-    ).bind(categoryId).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
+  const [catCli, clientRows, roundRows] = await Promise.all([
+    c.env.DB.prepare('SELECT id FROM clients WHERE category_id = ? AND deleted_at IS NULL').bind(categoryId).all<{ id: string }>(),
+    c.env.DB.prepare('SELECT id, name FROM clients WHERE category_id = ? AND deleted_at IS NULL ORDER BY name').bind(categoryId).all<{ id: string; name: string }>(),
+    c.env.DB.prepare('SELECT id, round_stage, round_unit, round_carry FROM clients WHERE category_id = ? AND deleted_at IS NULL').bind(categoryId).all<{ id: string; round_stage: string | null; round_unit: string | null; round_carry: number | null }>(),
   ]);
+  const clientSet = new Set(catCli.results.map((x) => x.id));
+  // 明细来自 derived_core 快照（一次全扫），按本分类的店铺集合 + 日期 JS 过滤，不再每次请求四段全扫
+  const core = await loadDerivedCore(c.env.DB);
+  const saleRows = {
+    results: core.saleItems
+      .filter((x) => clientSet.has(x.client_id) && inRange(x.happened_at, start, end))
+      .map((x) => ({ client_id: x.client_id, sale_id: x.sale_id, happened_at: x.happened_at, amount: x.amount })),
+  };
+  const payRows = {
+    results: core.payments
+      .filter((x) => clientSet.has(x.client_id) && inRange(x.happened_at, start, end))
+      .map((x) => ({ client_id: x.client_id, amount: x.amount, waived: x.waived })),
+  };
+  // 期末欠款：每笔先舍入再累加（口径与 /stats/summary 一致，勿 SQL SUM 原始后一次舍入——尾数进位放大）
+  const debtRows = {
+    results: core.saleItems
+      .filter((x) => clientSet.has(x.client_id) && leDate(x.happened_at, end))
+      .map((x) => ({ cid: x.client_id, sale_id: x.sale_id, happened_at: x.happened_at, amount: x.amount })),
+  };
+  const debtPayRows = {
+    results: core.payments
+      .filter((x) => clientSet.has(x.client_id) && leDate(x.happened_at, end))
+      .map((x) => ({ cid: x.client_id, amount: x.amount, waived: x.waived })),
+  };
   const roundCfgMap = new Map(roundRows.results.map((x) => [x.id, normalizeRoundConfig(x.round_stage, x.round_unit, x.round_carry)]));
   // 区间出货/期末欠款出货侧均按各店自身抹零配置分组（None 店=逐笔舍入，历史口径不变）
   const salesMap = new Map<string, number>();

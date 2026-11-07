@@ -9,6 +9,7 @@ import { deleteEntityAttachments } from '../lib/image-key';
 import { getRoundingConfig, roundMoney } from '../lib/money';
 import { chunkQuery } from '../lib/query';
 import { versionedSnapshot } from '../lib/snapshot';
+import { loadDerivedCore, type CoreSaleItem } from '../lib/derived-core';
 import { consumeFifoStatements, releaseSaleUsesStatements } from '../lib/fifo';
 import { recordAudit } from './audit';
 import { createSaleOrder } from '../services/records';
@@ -83,51 +84,62 @@ salesRouter.get('/', async (c) => {
   const dateTo = c.req.query('date_to')?.trim();
   const { limit, offset } = parsePage(c.req.query('limit'), c.req.query('offset'));
 
-  let where = ' WHERE 1=1';
-  const params: string[] = [];
-  // 店员出货范围：与老板一致走日期/店铺过滤（此前锁定当天——但统计页已暴露全量历史，权限不一致；
-  // 毛利仍由 cost_price 打码保护，见下方响应映射）
-  if (clientId) { where += ' AND si.client_id = ?'; params.push(clientId); }
-  if (dateFrom) { where += ' AND si.happened_at >= ?'; params.push(dateFrom); }
-  if (dateTo) { where += ' AND si.happened_at <= ?'; params.push(dateTo); }
   const money = await getRoundingConfig(c.env.DB);
 
-  // 去单据化：head 表已物理删除，列表从商品行聚合组装（每单一行：店铺/日期/总额由行派生）
-  const aggWhere = where.replace(/si\.happened_at/g, 'happened_at').replace(/si\.client_id/g, 'client_id');
+  // 去单据化：head 表已物理删除，列表从商品行聚合组装（每单一行：店铺/日期/总额由行派生）。
   // 整份聚合结果按「过滤条件 + 舍入配置」维度缓存（versionedSnapshot）：前端反复翻页、重开页面、
-  // 切筛选只命中快照（只读 2 行），不再每次请求都全表扫 COUNT + GROUP BY + 明细 IN。
-  // 仅在出货单写入时重算（saleAffectedSince），无关写（改客户/商品/收款…）复用旧数据。
+  // 切筛选只命中快照（只读 2 行）。底层明细来自 derived_core 快照（一次全扫、按出货/收款/进货
+  // 写入失效），这里只做 JS 过滤 + 分组，不再每次请求全表扫 COUNT + GROUP BY + 明细 IN。
   const fp = `v1|${clientId ?? ''}|${dateFrom ?? ''}|${dateTo ?? ''}|${money.carry}|${money.digits}`;
   const { data: full } = await versionedSnapshot<{ sales: SaleListSale[]; sale_items: Record<string, unknown>[] }>(
     c.env.DB, 'sales_list', async () => {
-      const listRows = await c.env.DB.prepare(
-        `SELECT si.sale_id AS id, MAX(si.client_id) AS client_id,
-                MAX(COALESCE(si.happened_at, '')) AS happened_at, SUM(si.amount) AS total,
-                MIN(NULLIF(si.note, '')) AS note
-         FROM sale_items si ${aggWhere}
-         GROUP BY si.sale_id
-         ORDER BY happened_at DESC, id DESC`,
-      ).bind(...params).all<{ id: string; client_id: string; happened_at: string; total: number; note: string }>();
-      const allIds = listRows.results.map((r) => r.id);
-      const clientIds = [...new Set(listRows.results.map((r) => r.client_id))];
-      const [clientRows, itemRows, rawRows] = await Promise.all([
+      const core = await loadDerivedCore(c.env.DB);
+      // 从 core 明细按筛选条件过滤（等同于原 SQL 的 WHERE client_id/date 全扫，现读 1 行快照后 JS 过滤）
+      const filtered = core.saleItems.filter((x) => {
+        if (clientId && x.client_id !== clientId) return false;
+        const h = x.happened_at ?? '';
+        if (dateFrom && h < dateFrom) return false;
+        if (dateTo && h > dateTo) return false;
+        return true;
+      });
+      // 按 sale_id 聚合（与原 GROUP BY + MAX/MIN/SUM 一致）
+      const bySaleMap = new Map<string, CoreSaleItem[]>();
+      for (const x of filtered) {
+        const arr = bySaleMap.get(x.sale_id) ?? [];
+        arr.push(x);
+        bySaleMap.set(x.sale_id, arr);
+      }
+      const listRows = [...bySaleMap.entries()].map(([id, rows]) => {
+        let happened_at = '';
+        let total = 0;
+        let note = '';
+        for (const x of rows) {
+          const h = x.happened_at ?? '';
+          if (h && h > happened_at) happened_at = h;
+          total += Number(x.amount) || 0;
+          const n = x.note ?? '';
+          if (n && (note === '' || n < note)) note = n; // MIN(NULLIF(note,''))
+        }
+        return { id, client_id: rows[0].client_id, happened_at, total, note };
+      }).sort((a, b) => {
+        if (a.happened_at !== b.happened_at) return a.happened_at < b.happened_at ? 1 : -1; // DESC
+        return a.id < b.id ? 1 : a.id > b.id ? -1 : 0; // id DESC
+      });
+      const clientIds = [...new Set(filtered.map((r) => r.client_id))];
+      const [clientRows, itemRows] = await Promise.all([
         clientIds.length
           ? chunkQuery(clientIds, (chunk) =>
               c.env.DB.prepare(`SELECT id, name FROM clients WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all<{ id: string; name: string }>().then((r) => r.results))
           : Promise.resolve([] as Array<{ id: string; name: string }>),
         c.env.DB.prepare('SELECT id, name, category FROM items').all<{ id: string; name: string | null; category: string | null }>(),
-        allIds.length
-          ? chunkQuery(allIds, (chunk) =>
-              c.env.DB.prepare(`SELECT si.* FROM sale_items si WHERE si.sale_id IN (${chunk.map(() => '?').join(',')}) ORDER BY si.sort, si.created_at`).bind(...chunk).all<Record<string, unknown>>().then((r) => r.results))
-          : Promise.resolve([] as Record<string, unknown>[]),
       ]);
       const clientName = new Map(clientRows.map((x) => [x.id, x.name]));
       const itemInfo = new Map(itemRows.results.map((i) => [i.id, { name: i.name ?? '', category: i.category ?? '' }]));
       const bySale = new Map<string, Record<string, unknown>[]>();
       const flat: Record<string, unknown>[] = [];
-      for (const r of rawRows) {
-        const info = itemInfo.get(String(r.item_id)) ?? { name: '', category: '' };
-        const row = { ...r, item_name: info.name, item_category: info.category };
+      for (const r of filtered) {
+        const info = itemInfo.get(r.item_id) ?? { name: '', category: '' };
+        const row = { ...r, item_name: info.name, item_category: info.category } as Record<string, unknown>;
         const sid = String(r.sale_id);
         bySale.set(sid, [...(bySale.get(sid) ?? []), row]);
         flat.push(row);
@@ -154,7 +166,7 @@ salesRouter.get('/', async (c) => {
         return ia < ib ? -1 : ia > ib ? 1 : 0;
       });
       return {
-        sales: listRows.results.map((row) => ({
+        sales: listRows.map((row) => ({
           id: row.id, client_id: row.client_id, client_name: clientName.get(row.client_id) ?? '',
           happened_at: row.happened_at, note: row.note ?? '', total: roundMoney(Number(row.total) || 0, money),
           items: bySale.get(row.id) ?? [],

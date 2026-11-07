@@ -286,9 +286,14 @@ describe('快照消费端：写后必须精确、不得返回陈旧值', () => {
       spy.mockRestore();
     }
     expect(sqls.some((s) => /GROUP BY client_id/i.test(s))).toBe(false);
+    // clients 派生现复用 derived_core 一次取回流水明细（sale_items + payments 各一条全扫），
+    // 不再有旧版的逐笔聚合子查询；数据由各端点用 JS 过滤聚合
     const saleScans = sqls.filter((s) => /FROM sale_items/i.test(s));
-    expect(saleScans).toHaveLength(1); // 只剩逐笔明细一条
-    expect(saleScans[0]).toMatch(/SELECT client_id, sale_id, happened_at, amount FROM sale_items/i);
+    expect(saleScans).toHaveLength(1);
+    expect(saleScans[0]).toMatch(
+      /SELECT id, sale_id, client_id, item_id, unit, quantity, sale_price, cost_price, amount, happened_at, note, created_by, sort, created_at[\s]*FROM sale_items/i,
+    );
+    expect(sqls.filter((s) => /FROM payments/i.test(s))).toHaveLength(1);
   });
 
   it('clients 与 overview 共用账本派生：预热一次后另一端不再全表扫流水表', async () => {
