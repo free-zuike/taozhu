@@ -52,8 +52,16 @@ export class SyncHub {
     server.accept();
     server.addEventListener('close', () => this.sockets.delete(server));
     server.addEventListener('error', () => this.sockets.delete(server));
-    server.addEventListener('message', () => {
-      // 客户端消息（心跳等）忽略；同步由服务端通知驱动
+    server.addEventListener('message', (event) => {
+      // 客户端每 25s 发纯文本 'ping' 保活（Cloudflare 会断开长时间无帧流量的 WS）。
+      // 回一帧 'pong' 形成双向流量即可，不广播、不写变更流、不唤醒其它客户端；
+      // 客户端显式忽略 ping/pong，绝不触发页面刷新。
+      // 这里用「被动响应」而非 setInterval：常驻定时器会阻止 Durable Object 休眠、
+      // 产生额外的 DO 计费，且实例被驱逐后定时器就失效。
+      if (event.data === 'ping') {
+        try { server.send('pong'); } catch { this.sockets.delete(server); }
+      }
+      // 其它客户端消息忽略；同步始终由服务端通知驱动
     });
     return new Response(null, { status: 101, webSocket: client });
   }

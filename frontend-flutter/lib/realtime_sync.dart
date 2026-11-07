@@ -15,6 +15,13 @@ import 'utils/money.dart';
 /// - {type:'ai_config'}：AI 配置（服务商/能力绑定）变更 → 通知 AI 设置页重新拉取
 /// 连接建立（首连/断线重连）后自动触发一次完整同步，冲刷离线期间累积的本地变更。
 /// 断线自动重连（指数退避 1/3/8/20/60s）。
+///
+/// 心跳保活（v0.17.513）：Cloudflare 会断开长时间无帧流量的 WebSocket。此前客户端
+/// 与服务端都没有心跳 → 网页/小程序在浏览器里「挂着不动」也会周期性断连 → 重连 →
+/// 每次重连通知所有已构建页面整页重拉（统计页一次 6~7 个 /stats 接口）→ 持续消耗
+/// D1 读取额度。改为客户端每 25s 发一帧 keepalive（服务端 SyncHub 忽略消息，不回包、
+/// 不广播），连接持续活跃，空闲不再触发重连风暴。心跳放在客户端而非 DO 的 setInterval，
+/// 是因为 DO 里的常驻定时器会阻止实例休眠、产生额外的 Durable Object 计费。
 class RealtimeSync {
   RealtimeSync._();
   static final RealtimeSync instance = RealtimeSync._();
@@ -22,14 +29,21 @@ class RealtimeSync {
   WebSocketChannel? _channel;
   Timer? _retry;
   Timer? _autoSync;
+  Timer? _heartbeat;
+  Timer? _settle;
   int _failCount = 0;
   bool _closed = true;
+  bool _everConnected = false;
   DateTime _lastTrigger = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastAutoSync = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastReconnect = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// 登录后调用：开始连接（登录页 → BottomShell 时）
   Future<void> start() async {
     _closed = false;
     _failCount = 0;
+    _everConnected = false;
+    _lastAutoSync = DateTime.fromMillisecondsSinceEpoch(0);
     // App 本地主题变更 → 触发同步推送（SyncService._scheduleThemeSync 内部注册，
     // 与金额舍入等设置类一致：本地写 + dirty 随同步上传，不直连 PUT）
     ThemeConfig.instance.onThemeLocalChanged ??= SyncService.scheduleThemeSync;
@@ -41,13 +55,18 @@ class RealtimeSync {
     _closed = true;
     _retry?.cancel();
     _autoSync?.cancel();
+    _heartbeat?.cancel();
+    _settle?.cancel();
     _channel?.sink.close();
     _channel = null;
+    _everConnected = false;
   }
 
   Future<void> _connect() async {
     if (_closed) return;
     _retry?.cancel();
+    _heartbeat?.cancel();
+    _settle?.cancel();
     try {
       final base = await Api.instance.getBase();
       final token = await Api.instance.getTokenValue() ?? '';
@@ -56,23 +75,47 @@ class RealtimeSync {
       final uri = '$wsBase/api/v1/sync/ws?token=$token';
       final channel = WebSocketChannel.connect(Uri.parse(uri));
       _channel = channel;
-      _failCount = 0;
       channel.stream.listen(
         (msg) => _onMessage('$msg'),
         onDone: _scheduleReconnect,
         onError: (_) => _scheduleReconnect(),
       );
-      // 连接建立（首连/重连）：防抖触发一次完整同步——离线期间累积的本地变更在此冲刷，
-      // 服务端错过的推送也由这次同步补齐（对齐参考架构 ws_connected → autoSync 语义）
-      _scheduleAutoSync();
+      // 心跳保活：25s 一帧，避免 Cloudflare 空闲断连（详见类注释）。
+      // 只在当前连接仍是最新的那条时发送，断线后旧定时器立即被取消。
+      _heartbeat = Timer.periodic(const Duration(seconds: 25), (_) {
+        if (_closed || _channel != channel) return;
+        try {
+          channel.sink.add('ping');
+        } catch (_) {
+          // 连接假活（onDone 未触发）：主动断开重连，避免连接一直挂着却不收广播
+          _scheduleReconnect();
+        }
+      });
+      // 退避计数只在「连接稳定存活 3s」后清零。原实现在 _connect 开头无条件清零，
+      // 导致连续失败时 _failCount 永远从 0 开始 → 退避恒为 1s → 每秒重连的死循环；
+      // 配合「每次重连整页重拉」就是开着网页持续烧额度的根因之一。
+      _settle = Timer(const Duration(seconds: 3), () {
+        if (!_closed && _channel == channel) _failCount = 0;
+      });
+      // 首连不重拉：页面 onShow 已经加载过数据；只有断线后的重连才需要补齐
+      // 离线期间的变更（服务端广播在断线期间收不到）。
+      if (_everConnected) {
+        _scheduleAutoSync();
+      } else {
+        _everConnected = true;
+      }
     } catch (_) {
       _scheduleReconnect();
     }
   }
 
-  /// 2 秒防抖的自动同步：连续上线信号（重连/切网）只触发一次
+  /// 2 秒防抖的自动同步：连续上线信号（重连/切网）只触发一次；
+  /// 再加 10s 节流，避免网络抖动造成的高频重连反复整页重拉。
   void _scheduleAutoSync() {
     if (_closed) return;
+    final now = DateTime.now();
+    if (now.difference(_lastAutoSync) < const Duration(seconds: 10)) return;
+    _lastAutoSync = now;
     _autoSync?.cancel();
     _autoSync = Timer(const Duration(seconds: 2), () {
       if (_closed) return;
@@ -89,6 +132,8 @@ class RealtimeSync {
       final d = jsonDecode(msg);
       if (d is! Map) return;
       final type = '${d['type'] ?? 'sync'}';
+      // 心跳回包：仅保活，绝不触发页面刷新（否则心跳本身就变成刷新风暴）
+      if (type == 'ping' || type == 'pong') return;
       if (type == 'profile_change') {
         _triggerProfile();
       } else if (type == 'ai_config') {
@@ -147,7 +192,11 @@ class RealtimeSync {
 
   void _scheduleReconnect() {
     if (_closed) return;
-    _channel?.sink.close();
+    _heartbeat?.cancel();
+    _settle?.cancel();
+    try {
+      _channel?.sink.close();
+    } catch (_) {}
     _channel = null;
     _failCount++;
     final delay = [1, 3, 8, 20, 60][min(_failCount, 5) - 1];
@@ -155,11 +204,17 @@ class RealtimeSync {
   }
 
   /// 回前台立即重连（不等退避）：断线期间服务端变更需尽快拉回——否则退避在 8/20/60s 大间隔时
-  /// 跨端刷新要等很多秒（用户"备注修改跨端很多秒才刷新"）
+  /// 跨端刷新要等很多秒（用户"备注修改跨端很多秒才刷新"）。
+  /// 加 10s 节流：浏览器切标签/窗口聚焦会连续触发 resumed，无需每次都拆掉健康连接重连。
   void reconnectNow() {
     if (_closed) return;
+    final now = DateTime.now();
+    if (now.difference(_lastReconnect) < const Duration(seconds: 10)) return;
+    _lastReconnect = now;
     _retry?.cancel();
     _failCount = 0;
+    _heartbeat?.cancel();
+    _settle?.cancel();
     try {
       _channel?.sink.close();
     } catch (_) {}
