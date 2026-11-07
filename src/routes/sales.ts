@@ -8,6 +8,7 @@ import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
 import { getRoundingConfig, roundMoney } from '../lib/money';
 import { chunkQuery } from '../lib/query';
+import { versionedSnapshot } from '../lib/snapshot';
 import { consumeFifoStatements, releaseSaleUsesStatements } from '../lib/fifo';
 import { recordAudit } from './audit';
 import { createSaleOrder } from '../services/records';
@@ -15,6 +16,23 @@ import { ApiError } from '../lib/api-error';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
+
+type SaleListSale = {
+  id: string; client_id: string; client_name: string; happened_at: string;
+  note: string; total: number; items: Record<string, unknown>[];
+};
+
+/** /sales 列表缓存精确失效：游标前进期间存在出货单写入才重算（客户/商品/收款等改动不影响单量）。 */
+function saleAffected(db: D1Database): (prev: number, next: number) => Promise<boolean> {
+  return async (prev: number, next: number): Promise<boolean> => {
+    if (next <= prev) return true; // 游标回退/重置 → 保守重算
+    const row = await db.prepare(
+      `SELECT 1 AS hit FROM sync_changes WHERE id > ? AND id <= ? AND entity_type = 'sale' LIMIT 1`,
+    ).bind(prev, next).first<{ hit: number }>();
+    return !!row;
+  };
+}
+
 export const salesRouter = new Hono<{ Bindings: Env; Variables: V }>();
 
 salesRouter.use('*', authMiddleware());
@@ -76,107 +94,99 @@ salesRouter.get('/', async (c) => {
 
   // 去单据化：head 表已物理删除，列表从商品行聚合组装（每单一行：店铺/日期/总额由行派生）
   const aggWhere = where.replace(/si\.happened_at/g, 'happened_at').replace(/si\.client_id/g, 'client_id');
-  const countRow = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS cnt FROM (SELECT sale_id FROM sale_items si ${aggWhere} GROUP BY sale_id)`,
-  ).bind(...params).first<{ cnt: number }>();
+  // 整份聚合结果按「过滤条件 + 舍入配置」维度缓存（versionedSnapshot）：前端反复翻页、重开页面、
+  // 切筛选只命中快照（只读 2 行），不再每次请求都全表扫 COUNT + GROUP BY + 明细 IN。
+  // 仅在出货单写入时重算（saleAffectedSince），无关写（改客户/商品/收款…）复用旧数据。
+  const fp = `v1|${clientId ?? ''}|${dateFrom ?? ''}|${dateTo ?? ''}|${money.carry}|${money.digits}`;
+  const { data: full } = await versionedSnapshot<{ sales: SaleListSale[]; sale_items: Record<string, unknown>[] }>(
+    c.env.DB, 'sales_list', async () => {
+      const listRows = await c.env.DB.prepare(
+        `SELECT si.sale_id AS id, MAX(si.client_id) AS client_id,
+                MAX(COALESCE(si.happened_at, '')) AS happened_at, SUM(si.amount) AS total,
+                MIN(NULLIF(si.note, '')) AS note
+         FROM sale_items si ${aggWhere}
+         GROUP BY si.sale_id
+         ORDER BY happened_at DESC, id DESC`,
+      ).bind(...params).all<{ id: string; client_id: string; happened_at: string; total: number; note: string }>();
+      const allIds = listRows.results.map((r) => r.id);
+      const clientIds = [...new Set(listRows.results.map((r) => r.client_id))];
+      const [clientRows, itemRows, rawRows] = await Promise.all([
+        clientIds.length
+          ? chunkQuery(clientIds, (chunk) =>
+              c.env.DB.prepare(`SELECT id, name FROM clients WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all<{ id: string; name: string }>().then((r) => r.results))
+          : Promise.resolve([] as Array<{ id: string; name: string }>),
+        c.env.DB.prepare('SELECT id, name, category FROM items').all<{ id: string; name: string | null; category: string | null }>(),
+        allIds.length
+          ? chunkQuery(allIds, (chunk) =>
+              c.env.DB.prepare(`SELECT si.* FROM sale_items si WHERE si.sale_id IN (${chunk.map(() => '?').join(',')}) ORDER BY si.sort, si.created_at`).bind(...chunk).all<Record<string, unknown>>().then((r) => r.results))
+          : Promise.resolve([] as Record<string, unknown>[]),
+      ]);
+      const clientName = new Map(clientRows.map((x) => [x.id, x.name]));
+      const itemInfo = new Map(itemRows.results.map((i) => [i.id, { name: i.name ?? '', category: i.category ?? '' }]));
+      const bySale = new Map<string, Record<string, unknown>[]>();
+      const flat: Record<string, unknown>[] = [];
+      for (const r of rawRows) {
+        const info = itemInfo.get(String(r.item_id)) ?? { name: '', category: '' };
+        const row = { ...r, item_name: info.name, item_category: info.category };
+        const sid = String(r.sale_id);
+        bySale.set(sid, [...(bySale.get(sid) ?? []), row]);
+        flat.push(row);
+      }
+      // 行级主记录排序：**订单(批次)优先 → 批内 sort**（与原逻辑一致，不按 sort 全局交错）
+      const rowIdNum = (id: string | null | undefined): string => {
+        const m = /^(s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
+        if (!m) return String(id ?? '');
+        const prefix = m[1] || '';
+        const digits = m[2];
+        const tsLen = prefix.includes('i') ? 16 : 13;
+        const core = digits.length >= tsLen ? digits.slice(0, tsLen) : digits;
+        return core.padStart(24, '0');
+      };
+      flat.sort((a, b) => {
+        const oa = rowIdNum((a as { sale_id?: string }).sale_id);
+        const ob = rowIdNum((b as { sale_id?: string }).sale_id);
+        if (oa !== ob) return oa < ob ? -1 : 1;
+        const sa = Number((a as { sort?: number }).sort ?? 0);
+        const sb = Number((b as { sort?: number }).sort ?? 0);
+        if (sa !== sb) return sa - sb;
+        const ia = rowIdNum((a as { id?: string }).id);
+        const ib = rowIdNum((b as { id?: string }).id);
+        return ia < ib ? -1 : ia > ib ? 1 : 0;
+      });
+      return {
+        sales: listRows.results.map((row) => ({
+          id: row.id, client_id: row.client_id, client_name: clientName.get(row.client_id) ?? '',
+          happened_at: row.happened_at, note: row.note ?? '', total: roundMoney(Number(row.total) || 0, money),
+          items: bySale.get(row.id) ?? [],
+        })),
+        sale_items: flat.map((x) => {
+          const r = x as Record<string, unknown>;
+          return {
+            id: r.id, sale_id: r.sale_id, client_id: r.client_id,
+            client_name: clientName.get(String(r.client_id)) ?? '',
+            item_id: r.item_id,
+            item_name: itemInfo.get(String(r.item_id))?.name ?? '',
+            item_category: itemInfo.get(String(r.item_id))?.category ?? '',
+            unit: r.unit, quantity: r.quantity, sale_price: r.sale_price,
+            cost_price: r.cost_price, amount: r.amount,
+            happened_at: r.happened_at, note: r.note, created_by: r.created_by, sort: r.sort,
+          };
+        }),
+      };
+    }, fp, { ttlMs: 60_000, affectedSince: saleAffected(c.env.DB) });
 
-  const aggRows = await c.env.DB.prepare(
-    `SELECT si.sale_id AS id,
-            MAX(si.client_id) AS client_id,
-            MAX(COALESCE(si.happened_at, '')) AS happened_at,
-            SUM(si.amount) AS total,
-            MIN(NULLIF(si.note, '')) AS note
-     FROM sale_items si ${aggWhere}
-     GROUP BY si.sale_id
-     ORDER BY happened_at DESC, id DESC LIMIT ? OFFSET ?`,
-  ).bind(...params, limit, offset).all<{ id: string; client_id: string; happened_at: string; total: number; note: string }>();
-  if (aggRows.results.length === 0) return c.json({ sales: [], total: 0, sale_items: [] });
-
-  const saleIds = aggRows.results.map((r) => r.id);
-  const clientIds = [...new Set(aggRows.results.map((r) => r.client_id))];
-  const clientRows = await chunkQuery(clientIds, (chunk) =>
-    c.env.DB.prepare(
-      `SELECT id, name FROM clients WHERE id IN (${chunk.map(() => '?').join(',')})`,
-    ).bind(...chunk).all<{ id: string; name: string }>().then((r) => r.results));
-  const clientName = new Map(clientRows.map((c) => [c.id, c.name]));
-
-  // 同一批 saleIds 原先查两次 sale_items，且各自 JOIN items / clients 逐行回表（Top 消耗源）。
-  // 合并为一次平铺查询，商品名/店铺名从两张小表一次性取回后 JS 拼装。
-  const itemRows = await c.env.DB.prepare('SELECT id, name, category FROM items')
-    .all<{ id: string; name: string | null; category: string | null }>();
-  const itemInfo = new Map(itemRows.results.map((i) => [i.id, { name: i.name ?? '', category: i.category ?? '' }]));
-  const rawRows = await chunkQuery(saleIds, (chunk) =>
-    c.env.DB.prepare(
-      `SELECT si.* FROM sale_items si
-       WHERE si.sale_id IN (${chunk.map(() => '?').join(',')})
-       ORDER BY si.sort, si.created_at`,
-    ).bind(...chunk).all<Record<string, unknown>>().then((r) => r.results));
-
-  const detailRows: Array<Record<string, unknown>> = rawRows.map((r) => {
-    const info = itemInfo.get(String(r.item_id)) ?? { name: '', category: '' };
-    return { ...r, item_name: info.name, item_category: info.category };
-  });
-  const bySale = new Map<string, unknown[]>();
-  for (const d of detailRows) {
-    const saleId2 = String(d.sale_id);
-    const list = bySale.get(saleId2) ?? [];
-    list.push(d);
-    bySale.set(saleId2, list);
-  }
-  // 行级主记录数组（去单据化：每条商品一行，自带店铺/日期/备注/金额——客户端主读数）
-  const saleItemRows: Array<Record<string, unknown>> = rawRows.map((r) => ({
-    id: r.id, sale_id: r.sale_id, client_id: r.client_id,
-    client_name: clientName.get(String(r.client_id)) ?? '',
-    item_id: r.item_id,
-    item_name: itemInfo.get(String(r.item_id))?.name ?? '',
-    item_category: itemInfo.get(String(r.item_id))?.category ?? '',
-    unit: r.unit, quantity: r.quantity, sale_price: r.sale_price,
-    cost_price: r.cost_price, amount: r.amount,
-    happened_at: r.happened_at, note: r.note, created_by: r.created_by, sort: r.sort,
+  const total = full.sales.length;
+  const pageSales = full.sales.slice(offset, offset + limit);
+  const pageIds = new Set(pageSales.map((s) => s.id));
+  const salesOut = pageSales.map((s) => ({
+    ...s,
+    items: (s.items ?? []).map((it) => (user.role === 'staff' ? { ...it, cost_price: 0 } : it)),
   }));
-  // 行级数组排序：**订单(批次)优先 → 批内 sort**（用户"第一批在最上方，批内=扫描实际顺序"——
-  // 同日多单按订单创建序整体排列，每单内按 sort(扫描序)。**不要按 sort 全局交错**
-  // （每单 sort 都从 0 起，全局按 sort 排会 A1,B1,C1,A2,B2,C2 交错——用户 fix-sort 后全乱根因）。
-  // sort 缺失/重复时行 id 数字段兜底。
-  // 数字段 = 时间戳 + 随机尾（位数不定 1-10，参与比较会主导字典序=批次乱序根因）→ 只取时间戳段：
-  // s/p 前缀=毫秒 13 位、si/pi 前缀=微秒 16 位；补零后字典序=时间序
-  const rowIdNum = (id: string | null | undefined): string => {
-    const m = /^(s|p|si|pi|sl|pl)?(\d+)/.exec(String(id ?? '').trim());
-    if (!m) return String(id ?? '');
-    const prefix = m[1] || '';
-    const digits = m[2];
-    const tsLen = prefix.includes('i') ? 16 : 13;
-    const core = digits.length >= tsLen ? digits.slice(0, tsLen) : digits;
-    return core.padStart(24, '0');
-  };
-  saleItemRows.sort((a, b) => {
-    const oa = rowIdNum((a as { sale_id?: string }).sale_id);
-    const ob = rowIdNum((b as { sale_id?: string }).sale_id);
-    if (oa !== ob) return oa < ob ? -1 : 1;
-    const sa = Number((a as { sort?: number }).sort ?? 0);
-    const sb = Number((b as { sort?: number }).sort ?? 0);
-    if (sa !== sb) return sa - sb;
-    const ia = rowIdNum((a as { id?: string }).id);
-    const ib = rowIdNum((b as { id?: string }).id);
-    return ia < ib ? -1 : ia > ib ? 1 : 0;
-  });
-  return c.json({
-    total: countRow?.cnt ?? 0,
-    sales: aggRows.results.map((row) => ({
-      id: row.id, client_id: row.client_id, client_name: clientName.get(row.client_id) ?? '',
-      happened_at: row.happened_at, note: row.note ?? '', total: roundMoney(Number(row.total) || 0, money),
-      // 嵌套兼容数组：店员打码成本价（与行级 sale_items 一致，防止绕过行级主结构看毛利）
-      items: (bySale.get(row.id) ?? []).map((it) => {
-        const r = it as Record<string, unknown>;
-        return user.role === 'staff' ? { ...r, cost_price: 0 } : r;
-      }),
-    })),
-    // 去单据化主结构：行级商品记录（新客户端优先读，整单 sales 字段兼容保留）
-    sale_items: saleItemRows.map((x) => {
-      const r = x as Record<string, unknown>;
-      return user.role === 'staff' ? { ...r, cost_price: 0 } : r;
-    }),
-  });
+  // 去单据化主结构：行级商品记录（新客户端优先读，整单 sales 字段兼容保留）
+  const saleItemsOut = full.sale_items
+    .filter((x) => pageIds.has(String((x as { sale_id?: string }).sale_id)))
+    .map((x) => (user.role === 'staff' ? { ...x, cost_price: 0 } : x));
+  return c.json({ total, sales: salesOut, sale_items: saleItemsOut });
 });
 
 // GET /sales/last-price?client_id=&item_id= — 该店铺最近一笔该商品的单位/售价（选商品默认带出：

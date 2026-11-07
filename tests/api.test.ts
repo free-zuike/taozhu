@@ -513,6 +513,22 @@ describe('出货明细行级操作（改期 / 单行删除，交易页流水行�
     expect((await call(env, 'PATCH', `/api/v1/sales/items/${first.id}`, token, { happened_at: '09-08' })).status).toBe(400);
     expect((await call(env, 'PATCH', '/api/v1/sales/items/nope', token, { quantity: 1 })).status).toBe(404);
   });
+  it('出货单列表：分页 limit/offset 与 total 正确；重复同筛选命中缓存 total 稳定', async () => {
+    // 造 3 张开不同日期的单（保证排序确定性）
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, happened_at: '2026-09-01', items: [{ price_id: priceId, quantity: 1 }] });
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, happened_at: '2026-09-02', items: [{ price_id: priceId, quantity: 1 }] });
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: clientId, happened_at: '2026-09-03', items: [{ price_id: priceId, quantity: 1 }] });
+    const p1 = (await (await call(env, 'GET', '/api/v1/sales?limit=2', token)).json()) as { total: number; sales: unknown[] };
+    expect(p1.total).toBe(3);
+    expect(p1.sales).toHaveLength(2);
+    const p2 = (await (await call(env, 'GET', '/api/v1/sales?limit=2&offset=2', token)).json()) as { total: number; sales: unknown[] };
+    expect(p2.total).toBe(3);
+    expect(p2.sales).toHaveLength(1);
+    // 重复同筛选（无新写入）：total 稳定，列表按缓存切分，不再全表扫 COUNT
+    const again = (await (await call(env, 'GET', '/api/v1/sales', token)).json()) as { total: number; sales: unknown[] };
+    expect(again.total).toBe(3);
+    expect(again.sales).toHaveLength(3);
+  });
 });
 
 describe('进货明细行级操作（改期 / 单行删除 / 单行编辑，进货记录页流水行用）', () => {
