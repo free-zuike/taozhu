@@ -7,7 +7,7 @@ import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
 import { attachmentContentKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from '../lib/image-key';
 import { recordChange } from '../lib/sync';
-import { versionedSnapshot } from '../lib/snapshot';
+import { versionedSnapshot, unaffectedTypes } from '../lib/snapshot';
 import { computeGlobalCounts } from '../lib/global-counts';
 import { orderRefCountsFromLines, refCountByEntity } from '../lib/attachment-counts';
 import type { AuthUser, Env } from '../types';
@@ -291,17 +291,23 @@ attachmentsRouter.get('/total', async (c) => {
 // 返回规范化三元组 {key, entity, id, file} —— 前端同步下载/清理页在用判定直接用三元组，
 // 不再各自用正则解析 key（此前前后端正则不一致：历史根级前缀 sale/s1/a.jpg 前端匹配失败，
 // 导致在用附件被清理页误列为孤儿、同步也不下载）。
-attachmentsRouter.get('/in-use', async (c) => {
-  const store = createStorage(c.env);
-  const db = c.env.DB;
+/** 非附件类同步实体：这些实体的变更不影響 attachment_refs，/in-use 快照可安全复用。
+ *  任何未列出的类型（含 'attachment' 本身）一律视为"相关"→ 保守重算。 */
+const NON_ATTACHMENT_TYPES = [
+  'client', 'item', 'category', 'payment_account', 'price_group',
+  'sale', 'purchase', 'payment', 'sale_item', 'purchase_item',
+  'loss_record', 'stock_adjustment',
+];
+
+/** 计算云端"在用"附件全集（引用表权威 ① + 历史兜底 ② + 存量收敛迁移 ③）。
+ *  抽离为纯函数供版本化快照缓存：仅当 attachment 类变更（上传/删除）才重算；
+ *  无关写（交易/商品/客户…）复用快照，避免每次同步全表扫 attachment_refs 烧 D1 额度。 */
+async function computeInUse(env: Env): Promise<Array<{ key: string; entity: string; id: string; file: string; size: number }>> {
+  const store = createStorage(env);
+  const db = env.DB;
   const out: Array<{ key: string; entity: string; id: string; file: string; size: number }> = [];
   const seen = new Set<string>();
   // ① 引用表（权威）：entity/id/file 直接从表取，不做任何正则
-  // 引用表即权威在用：遍历 attachment_refs 全部返回给前端下载补齐。
-  // 注意：不再基于"inUse 快照缺失"就删除引用并广播 delete 变更——交易尚未同步到云端
-  // （如 D1 额度耗尽期间）时实体本就在云端缺，会被误判为"已删除"，导致跨设备附件被删
-  // （用户"附件持续数天完全丢失"根因，v0.17.482 修复）。真正孤儿由 /attachments/orphans
-  // （手动触发且有在用防误删）处理，不在此自动广播删除。
   const refRows = await db.prepare('SELECT file_key, entity, entity_id FROM attachment_refs').all<{
     file_key: string; entity: string; entity_id: string;
   }>();
@@ -312,15 +318,6 @@ attachmentsRouter.get('/in-use', async (c) => {
     out.push({ key: r.file_key, entity: r.entity, id: r.entity_id, file, size: 0 });
   }
   // ② 历史兜底：R2 所有附件 key 对照 D1 在用单据 id，未写入引用表的视为在用（仅一次性补列，不写表）
-  // 附件前缀：现行规范 + 历史规范 + 根级历史（sale/s1/a.jpg）。不用空前缀扫全 bucket——
-  // 全桶含备份/头像等大量对象，list 分页慢→前端 in-use 拉取超时→本地孤儿扫不出（性能根因）。
-  // 兜底扫描到在用对象后**补写引用表**（幂等 upsert）：引用表补全后 in-use 全引用表驱动，
-  // 本地 putAll 与服务器 in-use 完全对齐（修"本地91/服务器95 差4"：4 个 R2 在用对象引用表没行，
-  // 本地全量刷新始终少这几条）。
-  // 一次性扫描开关：历史遗留 key 集合固定（v0.17.84 前存量），首次同步列全 R2 并补写引用表后
-  // 落 schema_meta 标记，此后每次同步直接跳过整个 ②（不再列 7 个 R2 前缀/分页，也不再全表扫实体 id）。
-  // 现代库首次扫描即无遗留 → 一次之后 /in-use 只剩 ① 引用表查询，退化为单次 SELECT。
-  // 若首次补写因 D1 额度耗尽等异常失败则不落标记，下次同步自动重试，绝不半途锁死。
   const legacyDone = await db.prepare("SELECT value FROM schema_meta WHERE key = 'attachment_legacy_scan_done'").first<{ value: string }>();
   let backfillFailed = false;
   const legacy: Array<{ key: string; entity: string; id: string; file: string; size: number }> = [];
@@ -333,19 +330,15 @@ attachmentsRouter.get('/in-use', async (c) => {
         if (seen.has(o.key)) continue; // 引用表已列
         const parsed = parseAttachmentKey(o.key);
         if (!parsed) continue;
-        // 先收集疑似遗留 key，待下方确有遗留才全表扫描实体 id 校验（现代库无遗留→跳过全表扫，省 D1 rows_read）
         legacy.push({ key: o.key, entity: parsed.entity, id: parsed.id, file: o.key.split('/').pop() ?? '', size: o.size });
       }
       cursor = r.truncated ? r.cursor : undefined;
     } while (cursor);
   }
-  // ② 历史兜底校验+补写（延迟）：仅当 R2 扫描发现遗留 key 才全表扫描实体 id 校验（现代库无遗留→整段跳过，省 D1 rows_read）
   if (!legacyDone && legacy.length > 0) {
     const inUse = await queryInUseEntityIds(db);
     for (const lk of legacy) {
       if ((inUse.get(lk.entity) ?? new Set()).has(lk.id)) {
-        // 在用但引用表无行（v0.17.84 之前存量的旧格式 key）：补写引用表（id 幂等），
-        // 此后该对象走 ① 引用表权威路径（同 key 多实体共享时各实体各一行，补行不误删）
         try {
           await db.prepare(
             'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
@@ -356,24 +349,16 @@ attachmentsRouter.get('/in-use', async (c) => {
       }
     }
   }
-  // 补写无异常 → 落标记，后续同步永久跳过 ②；失败（如额度耗尽）则不落，下次自动重试。
-  // 需强制重扫（数据恢复/迁移）时删除该行即可：DELETE FROM schema_meta WHERE key='attachment_legacy_scan_done'
   if (!legacyDone && !backfillFailed) {
     try {
       await db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('attachment_legacy_scan_done', '1')").run();
     } catch (_) { /* 写标记失败不阻塞 in-use，下次自动重试 */ }
   }
-  // ③ 存量凭证收敛迁移（幂等，单条 SQL 无 JS 循环）：0.17.281-296 期间实现为「每商品行各挂
-  // 一份行级引用」（识别原图扩散到每行），用户规格已回调=对齐参考实现「交易级单记录」——
-  // 同一批识别图=整单凭证，**只记录一份（单据级 sale/purchase）**，全商品行共享可见；
-  // 逐行扩散导致：9 行=9 条待上传/服务器计数虚高/删除一条复活其他/并发上传 500。
-  // 收敛规则=同单同 file_key 的行级引用（扩散产物）合并为单据级一条并删行级；
-  // 单行独立 key 的行级引用（真实单行凭证）保留不动。
+  // ③ 存量凭证收敛迁移（幂等，单条 SQL 无 JS 循环）
   const consolidateLineRefs = async (orderType: 'sale' | 'purchase') => {
     const lineType = orderType === 'sale' ? 'sale_item' : 'purchase_item';
     const orderCol = `${orderType}_id`;
     const lineTable = `${lineType}s`;
-    // ① 扩散产物（同单同 key 行级引用 ≥2）→ 补单据级引用（INSERT OR IGNORE 幂等，已有则跳过）
     await db.prepare(
       `INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5)
        SELECT '${orderType}:' || g.${orderCol} || ':' || g.file_key, '${orderType}', g.${orderCol}, g.file_key, g.file_key
@@ -385,7 +370,6 @@ attachmentsRouter.get('/in-use', async (c) => {
          HAVING COUNT(*) > 1
        ) g`,
     ).bind(lineType).run();
-    // ② 凡该单已有单据级同 key 引用的行级引用 → 删除（合并完成；真实单行凭证=单据级无同 key，保留）
     await db.prepare(
       `DELETE FROM attachment_refs
        WHERE entity = ? AND file_key IN (
@@ -397,7 +381,6 @@ attachmentsRouter.get('/in-use', async (c) => {
        )`,
     ).bind(lineType, lineType, orderType).run();
   };
-  // 一次性收敛迁移：schema_meta 标记锁，跑过即不再每同步执行（避免每次同步 JOIN 扫描行表烧 D1 额度）
   {
     const consolidated = await db.prepare("SELECT value FROM schema_meta WHERE key = 'attachment_line_consolidated'").first<{ value: string }>();
     if (!consolidated) {
@@ -406,10 +389,26 @@ attachmentsRouter.get('/in-use', async (c) => {
       await db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('attachment_line_consolidated', '1')").run();
     }
   }
-  return c.json({
-    attachments: out,
-    total: out.length,
-  });
+  return out;
+}
+
+attachmentsRouter.get('/in-use', async (c) => {
+  const db = c.env.DB;
+  // 历史遗留补写/存量收敛迁移未跑完时不做缓存（需每次实算以保证重试）；
+  // 现代库（两标记已落）才走版本化快照：仅 attachment 类变更使其失效，无关写复用。
+  const mig = await db.prepare(
+    "SELECT COUNT(*) AS n FROM schema_meta WHERE key IN ('attachment_legacy_scan_done','attachment_line_consolidated')",
+  ).first<{ n: number }>();
+  let attachments: Array<{ key: string; entity: string; id: string; file: string; size: number }>;
+  if ((mig?.n ?? 0) >= 2) {
+    const r = await versionedSnapshot(db, 'attachment_inuse', () => computeInUse(c.env), '', {
+      affectedSince: unaffectedTypes(db, NON_ATTACHMENT_TYPES),
+    });
+    attachments = r.data;
+  } else {
+    attachments = await computeInUse(c.env);
+  }
+  return c.json({ attachments, total: attachments.length });
 });
 
 // GET /attachments/orphans — 扫描云端孤儿附件（参考原版实现 B1/B3）：

@@ -656,10 +656,8 @@ export async function applyChange(
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1));
           bt.push(db.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
           await db.batch(bt);
-          await db.prepare(
-            "DELETE FROM attachment_refs WHERE entity = 'sale' AND entity_id = ?",
-          ).bind(id).run();
-          // 单据级前缀 R2 文件（历史/兼容路径）
+          // 单据级附件：由 deleteEntityAttachments 级联删引用并补发 attachment 删除变更
+          // （不再直接 DELETE——直接删不进变更流，/in-use 版本化快照会失效不了、留孤儿）
           try { await deleteEntityAttachments(env, 'sale', id); } catch (_) {}
         } else {
           await applySaleUpsert(db, id, p);
@@ -687,10 +685,7 @@ export async function applyChange(
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1));
           bt.push(db.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
           await db.batch(bt);
-          await db.prepare(
-            "DELETE FROM attachment_refs WHERE entity = 'purchase' AND entity_id = ?",
-          ).bind(id).run();
-          // 单据级前缀 R2 文件（历史/兼容路径）
+          // 单据级附件：由 deleteEntityAttachments 级联删引用并补发 attachment 删除变更
           try { await deleteEntityAttachments(env, 'purchase', id); } catch (_) {}
         } else {
           await applyPurchaseUpsert(db, id, p);
@@ -702,9 +697,8 @@ export async function applyChange(
       case 'payment':
         if (action === 'delete') {
           await db.prepare('DELETE FROM payments WHERE id = ?').bind(id).run();
-          await db.prepare(
-            "DELETE FROM attachment_refs WHERE entity = 'payment' AND entity_id = ?",
-          ).bind(id).run();
+          // 附件：由 deleteEntityAttachments 级联删引用并补发 attachment 删除变更
+          try { await deleteEntityAttachments(env, 'payment', id); } catch (_) {}
         } else {
           await db.prepare(
             `INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note) VALUES (?, ?, ?, ?, ?, ?, ?)

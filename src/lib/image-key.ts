@@ -4,6 +4,7 @@
 import { md5 } from './md5';
 import { createStorage, type AttachmentStorage } from '../services/storage';
 import type { Env } from '../types';
+import { recordChange } from './sync';
 
 export function imageKey(type: string, segments: string[], bytes: Uint8Array): string {
   const h = md5(bytes);
@@ -53,6 +54,18 @@ export async function deleteEntityAttachments(env: Env, entity: string, id: stri
     await env.DB.prepare('DELETE FROM attachment_refs WHERE entity = ? AND entity_id = ?').bind(entity, id).run();
     const store: AttachmentStorage = createStorage(env);
     for (const r of refs.results) {
+      // 引用删除入变更流（对齐 syncAttachRefsAfterUpsert 删除侧与 DELETE /attachments）：
+      // 附件删除=delete 变更，其他端 pull 到后删本地引用+副本；否则删除不进变更流→
+      // /in-use 版本化快照失效不了→已删引用残留在快照→客户端不清本地副本（孤儿）。
+      try {
+        await recordChange(env.DB, {
+          entity_type: 'attachment',
+          entity_sync_id: r.file_key,
+          action: 'delete',
+          payload: { file_key: r.file_key, file: r.file_key.split('/').pop() ?? '', entity, id },
+          updated_at: new Date().toISO8601String(),
+        });
+      } catch (_) {}
       const others = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM attachment_refs WHERE file_key = ?')
         .bind(r.file_key).first<{ cnt: number }>();
       if ((others?.cnt ?? 0) > 0) continue; // 仍有其他实体引用 → 保留文件（共享）
