@@ -140,6 +140,48 @@ export async function recordTransactionFromText(
   };
 }
 
+/**
+ * AI 对账补录：登记一笔收款（写 payments + 变更流 + 快照失效 + 审计）。
+ * 金额与日期必须由用户明确给出，绝不从对账差额反推；备注统一标注「待核对」便于追溯。
+ * 与 /payments 路由口径一致（欠款 = Σ出货 − Σ(amount + waived)，waived 恒为 0）。
+ */
+export async function createAiPayment(
+  db: D1Database,
+  user: { id: string; username: string; role: string },
+  input: { client: string; amount: number; date: string | null; note: string | null },
+): Promise<{ id: string; client: string; amount: number; date: string; note: string }> {
+  const name = (input.client ?? '').trim();
+  const amount = Number(input.amount);
+  if (!name) throw new ApiError('补录收款需要店铺名', 400);
+  if (!Number.isFinite(amount) || amount <= 0) throw new ApiError('收款金额必须大于 0', 400);
+  const client = await db.prepare(
+    "SELECT id, name FROM clients WHERE deleted_at IS NULL AND (name = ? OR name LIKE ? OR ? LIKE '%' || name || '%') LIMIT 1",
+  ).bind(name, `%${name}%`, name).first<{ id: string; name: string }>();
+  if (!client) throw new ApiError(`店铺「${name}」不存在，请先在「店铺管理」添加`, 400);
+  const date = input.date && /^\d{4}-\d{2}-\d{2}$/.test(input.date) ? input.date : localTodayISO();
+  const note = `AI 对账补录（待核对）${input.note ? `：${input.note}` : ''}`.slice(0, 200);
+  const id = randomId();
+  await db.prepare(
+    'INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note, created_by) VALUES (?, ?, ?, ?, 0, ?, ?, ?)',
+  ).bind(id, client.id, date, amount, '', note, user.id).run();
+  // 动态 import 避免与 records → sync → routes 的静态依赖成环
+  const [{ buildPayload, recordChange }, { expireSnapshots }, { recordAudit }] = await Promise.all([
+    import('../lib/sync'), import('../lib/snapshot'), import('../routes/audit'),
+  ]);
+  await recordChange(db, {
+    entity_type: 'payment', entity_sync_id: id,
+    payload: await buildPayload(db, 'payment', id), updated_by_username: user.username,
+  });
+  // 新快照用「游标 + affectedSince」精确失效；这里显式全失效，兜住任何白名单遗漏，
+  // 保证欠款/计数在补录后立刻准确（低频写，一次重算可接受）。
+  await expireSnapshots(db);
+  await recordAudit(db, {
+    username: user.username, action: 'create', entity_type: 'payment', entity_id: id,
+    detail: `AI 对账补录收款：${client.name} ${date} ¥${amount}`,
+  });
+  return { id, client: client.name, amount, date, note };
+}
+
 /** 授权弹窗预览文本（存 pending 时生成） */
 export function recordPreview(purpose: 'purchase' | 'sale', text: string, linesCount: number, total: number): string {
   const kind = purpose === 'purchase' ? '进货' : '出货';

@@ -47,6 +47,13 @@ export const AI_TOOLS: AiToolDef[] = [
     defaultPolicy: 'ask',
   },
   {
+    name: 'create_payment',
+    label: '补录收款',
+    description: '对账后按用户明确给出的店铺与金额补录一笔收款（会修改账本与欠款，需确认）',
+    permission: 'write',
+    defaultPolicy: 'ask',
+  },
+  {
     name: 'save_memory',
     label: '记住事项',
     description: '把用户让记住的事项写入助手记忆（会修改记忆）',

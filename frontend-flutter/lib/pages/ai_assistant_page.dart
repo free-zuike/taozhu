@@ -41,6 +41,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
     '哪些货快卖完了？',
     '有什么快过期？',
     '怎么记一笔账？',
+    '店铺对不上账，帮我找可疑单据？',
   ];
 
   @override
@@ -97,7 +98,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
   }
 
   static String _welcome() =>
-      '你好，我是 AI 助手。可以问我经营数据，比如：今天卖了多少？哪个店欠款多？哪些货该补了？也可以说「记住：…」让我帮你记下重要事项，或问功能怎么用。';
+      '你好，我是 AI 助手。可以问我经营数据，比如：今天卖了多少？哪个店欠款多？哪些货该补了？对不上账可以说「某店对不上账，差 380，帮我找找可能漏了哪笔」；确认后也能说「给某店补录一笔 380 元收款」（会先让你确认再入账）。也可以说「记住：…」或问功能怎么用。';
 
   Future<void> _saveHistory() async {
     try {

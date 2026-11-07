@@ -90,7 +90,7 @@ const messages = ref<Msg[]>([]);
 const input = ref('');
 const thinking = ref(false);
 const bottomAnchor = ref('');
-const quickQs = ['今天卖了多少？', '本月毛利多少？', '哪个店欠款最多？', '哪些货快卖完了？', '有什么快过期？', '怎么记一笔账？'];
+const quickQs = ['今天卖了多少？', '本月毛利多少？', '哪个店欠款最多？', '哪些货快卖完了？', '有什么快过期？', '怎么记一笔账？', '店铺对不上账，帮我找可疑单据？'];
 const showMemories = ref(false);
 const memories = ref<Array<{ id: string; content: string; created_at: string }>>([]);
 // 打字机：最新一条助手回复逐字显示
@@ -98,7 +98,7 @@ const typingIdx = ref(-1);
 const typingAt = ref(0);
 let typingTimer: ReturnType<typeof setInterval> | null = null;
 
-const WELCOME = '你好，我是 AI 助手。可以问我经营数据，比如：今天卖了多少？哪个店欠款多？哪些货该补了？也可以说「记住：…」让我帮你记下重要事项，或问功能怎么用。';
+const WELCOME = '你好，我是 AI 助手。可以问我经营数据，比如：今天卖了多少？哪个店欠款多？哪些货该补了？对不上账可以说「某店对不上账，差 380，帮我找找可能漏了哪笔」；确认后也能说「给某店补录一笔 380 元收款」（会先让你确认再入账）。也可以说「记住：…」或问功能怎么用。';
 
 function loadHistory() {
   try {

@@ -12,7 +12,7 @@ import {
   toolDef, gateFor, startAiRun, finishAiRun, recordToolCall, createPendingAction,
 } from './ai-tools';
 import { ApiError } from '../lib/api-error';
-import { recordTransactionFromText } from './ai-record';
+import { recordTransactionFromText, createAiPayment } from './ai-record';
 import { localTodayISO, dayRangeEnd, parseMonthRange } from '../lib/biz-date';
 import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesAggByConfig } from '../lib/money';
 import type { D1Database } from '@cloudflare/workers-types';
@@ -198,11 +198,12 @@ export async function chatWithAssistant(
     '--- 数据快照 / 查询结果 ---',
     context,
     '--- 回答规则 ---',
-    '1. 只依据上面的数据作答；没有的，老实说"暂无这项数据"，绝不编造数字。金额、笔数、日期区间必须原样引用，禁止自行求和、跨月推算、四舍五入或改用别的区间。',
+    '1. 只依据上面的数据作答；没有的，老实说"暂无这项数据"，绝不编造数字。金额、笔数、日期区间必须原样引用，禁止自行求和、跨月推算、四舍五入或改用别的区间。例外：上下文含「对账线索」时，可基于其中列出的真实单据给出候选解释，但必须逐条引用其中的日期/单号/金额，明确标注「待核对」，绝不新增任何单据或数字。',
     '2. 被问到"卖了多少/赚了多少/谁欠款/该补什么货/有什么临期"等经营问题时，直接给数字和清单，简洁、口语化。',
-    '3. 如果用户想记一笔账/录单（如"帮我记一笔：老王拿了2箱苹果"），委婉引导：请到「记单」页用 AI 识别记账（拍照/语音/文字），本助手专注问数与提醒，不能直接落单。',
+    '3. 如果用户想记一笔带商品行的进货/出货单，引导到「记单」页用 AI 识别（拍照/语音/文字）；若只是补录一笔收款，用户可直接说「给某店补录一笔 X 元收款（某日）」，助手会生成待确认单据，用户确认后才入账。绝不替用户臆造金额或按差额自动平账。',
     '4. 被问"怎么用/功能在哪"等使用问题时，用一两句话说明（记单在底部「记单」页、统计在「统计」页、库存盘点在「库存」页右上角、对账单在「对账单」、备份在「我的→备份」）。',
-    '5. 回复用中文，尽量简短（一般 2-5 行）。',
+    '5. 回复用中文，尽量简短（一般 2-5 行；对账类可略长，要列清候选单据）。',
+    '6. 被问「对不上账/可能漏了哪笔/差在哪」时，基于「对账明细 + 对账线索」列出最值得核对的几笔（金额接近差额、同金额重复、边界日、抹零零头），说清这是候选而非结论；用户给了差额时优先比对。数据不足就直说需要哪个店铺和哪段区间。',
   ].join('\n');
   const resp = await _postChatAdaptive(chatUrl, {
     'Content-Type': 'application/json',
@@ -274,6 +275,18 @@ interface Intent {
   forget: string | null;
   /** 用户要记一笔账（一句话落单；文本=用户原话，purpose 默认进货，出货须含店名/卖/送等） */
   record: { purpose: 'purchase' | 'sale'; text: string } | null;
+  /** 用户口述的对账差额（如"差 380 元"），用于在真实单据里筛金额接近的候选 */
+  diff: number | null;
+  /** 用户明确要求补录/推送一笔收款；金额必须用户自己给出，绝不从差额推测 */
+  payment: { client: string; amount: number; date: string | null; note: string | null } | null;
+}
+
+/** 从用户原话兜底抽取对账差额（"差了380""差 380 元""对不上 1,200"）；抽不到返回 null */
+function extractDiff(text: string): number | null {
+  const m = text.match(/(?:差|少了|多了|对不上|差额)[^\d]{0,8}([\d,]+(?:\.\d+)?)/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, ''));
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /** 意图提取（JSON 模式；宽松解析，失败返回 null 走兜底） */
@@ -283,18 +296,20 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
   const baseUrl = ep.baseUrl.replace(/\/+$/, '');
   const chatUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
   const system = [
-    '你是数据查询意图识别器。用户输入可能分四类：',
+    '你是数据查询意图识别器。用户输入可能分六类：',
     '(a) 经营数据（金额/销售/欠款/进货/库存相关）→ intent="query"，并填 view 与参数；',
     '(b) 功能用法（怎么用/功能在哪/说明）→ intent="kb"，topics 填相关主题词；',
     '(c) 要记一笔账（如"记一笔：白菜2斤3元一斤""给老王送2箱苹果"）→ intent="record"，record 填 {purpose:"sale"|"purchase", text:用户原话}——出货（卖/送/给XX）填 sale，进货填 purchase（默认 purchase）；',
-    '(d) 其他（问候/闲聊）→ intent="chat"。',
+    '(d) 对账差异（"某店对不上账""差了380""推断可能漏了哪笔""帮我找找差异"）→ intent="query"、view="client_ledger"、client=店铺名；用户说出差额填 diff（正数），没说填 null；',
+    '(e) 明确要补录/推送一笔收款（如"给老王补录一笔 380 元收款"）→ intent="chat"，payment 填 {client,amount,date,note}；金额必须是用户自己说出的数字，绝不推测；',
+    '(f) 其他（问候/闲聊）→ intent="chat"。',
     `今天日期 ${localTodayISO()}（业务时区 UTC+8；按此日历日换算"上个月/本月/今年"等相对时间）。${ctxText.split('\n')[0] ?? ''}`,
-    'view 可选："summary"(任意区间汇总，可指定店铺)/"clients"(区间各店对比出货与欠款)/"debts"(当前累计欠款，无视时间段)/"items"(区间商品销量排行)/"monthly"(某年按月)/"daily"(区间按日)/"years"(有哪些年份数据)。',
+    'view 可选："summary"(任意区间汇总，可指定店铺)/"client_ledger"(单店对账明细+差异线索，需 client)/"clients"(区间各店对比出货与欠款)/"debts"(当前累计欠款，无视时间段)/"items"(区间商品销量排行)/"monthly"(某年按月)/"daily"(区间按日)/"years"(有哪些年份数据)。',
     '⚠️ 点名「某店铺」且问「某时间段（上个月/某月/今年/某天）的交易额/卖了多少/营业额/收了多少」→ 必须用 view="summary" 并填 client 与 start/end。clients/debts 会忽略店铺或返回跨所有月份的累计结余，绝不能用来回答单店单月金额。clients 仅用于"各店对比/哪家卖得多"；debts 仅用于"谁欠钱/累计欠款"（无具体月）。',
     'start/end 必须是 YYYY-MM-DD（含首日与末日整天）；说"上个月/某月"时 start=该月 1 日、end=该月最后一天（按真实天数，如 10 月 31 日、2 月 28/29 日），不要写成 30 日；clients 的 client 填店铺名称（没有则为 null）；year 是数字年份（没有为 null）；kind 为 sale 或 purchase（进货相关填 purchase，默认 sale）。',
     '记忆指令：用户明确说"记住/记下来/别忘了 XXX" → remember=XXX；说"忘记/忘掉/删除 记忆 XXX"（或"忘记刚才记住的 XX"）→ forget=XXX；否则两者都 null。',
-    '只输出一个 JSON 对象（不要多余文字）：{"intent":"query"|"kb"|"chat"|"record","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null,"record":null}',
-    '无法归类/不确定→ intent="chat"。',
+    '只输出一个 JSON 对象（不要多余文字）：{"intent":"query"|"kb"|"chat"|"record","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null,"record":null,"diff":null,"payment":null}',
+    '无法归类/不确定→ intent="chat"；但含「对不上账/对账/漏记/推断」的请求一律归 (d)，不要归 chat。',
   ].join('\n');
   try {
     const resp = await _postChatAdaptive(chatUrl, {
@@ -315,6 +330,7 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
     if (!m) return null;
     const parsed = JSON.parse(m[0]) as Partial<Intent>;
     const rec = parsed.record as { purpose?: string; text?: string } | null;
+    const pay = parsed.payment as { client?: string; amount?: number; date?: string; note?: string } | null;
     return {
       intent: parsed.intent === 'query' || parsed.intent === 'kb' || parsed.intent === 'record' ? parsed.intent : 'chat',
       view: typeof parsed.view === 'string' ? parsed.view : null,
@@ -328,6 +344,16 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
       forget: typeof parsed.forget === 'string' ? parsed.forget.trim() || null : null,
       record: rec && typeof rec.text === 'string' && rec.text.trim()
         ? { purpose: rec.purpose === 'sale' ? 'sale' : 'purchase', text: rec.text.trim() }
+        : null,
+      diff: typeof parsed.diff === 'number' && Number.isFinite(parsed.diff) && parsed.diff > 0
+        ? parsed.diff : null,
+      payment: pay && typeof pay.client === 'string' && pay.client.trim()
+        && typeof pay.amount === 'number' && Number.isFinite(pay.amount) && pay.amount > 0
+        ? {
+          client: pay.client.trim(), amount: pay.amount,
+          date: typeof pay.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(pay.date) ? pay.date : null,
+          note: typeof pay.note === 'string' ? pay.note.trim().slice(0, 100) || null : null,
+        }
         : null,
     };
   } catch (_) {
@@ -481,6 +507,74 @@ export async function runBusinessQuery(
       lines.push(rows.results.map((r) => `${r.d} ${money(r.s)}`).join('；'));
       return lines.join('\n');
     }
+    case 'client_ledger': {
+      if (isStaff) return null; // 对账明细含累计欠款，老板专属（与 debts 一致）
+      if (!clientId) {
+        const names = await db.prepare(
+          'SELECT name FROM clients WHERE deleted_at IS NULL ORDER BY name LIMIT 20',
+        ).all<{ name: string }>();
+        return `请说明要对哪个店铺的账。当前店铺：${names.results.map((r) => r.name).join('、') || '（暂无）'}。`;
+      }
+      const start = q.start || '2000-01-01';
+      const end = q.end || today;
+      const endEx = dayRangeEnd(end);
+      const [saleRows, payRows, cumSale, cumPay, clientRow] = await Promise.all([
+        db.prepare(
+          `SELECT sale_id, substr(MAX(happened_at),1,10) AS d, ROUND(SUM(amount),2) AS a, COUNT(*) AS n
+           FROM sale_items WHERE client_id = ? AND happened_at >= ? AND happened_at < ?
+           GROUP BY sale_id ORDER BY d DESC, sale_id DESC LIMIT 30`,
+        ).bind(clientId, start, endEx).all<{ sale_id: string; d: string; a: number; n: number }>(),
+        db.prepare(
+          `SELECT id, substr(happened_at,1,10) AS d, amount, waived, method, note
+           FROM payments WHERE client_id = ? AND happened_at >= ? AND happened_at < ?
+           ORDER BY happened_at DESC, id DESC LIMIT 30`,
+        ).bind(clientId, start, endEx).all<{ id: string; d: string; amount: number; waived: number; method: string | null; note: string | null }>(),
+        db.prepare('SELECT COALESCE(SUM(amount),0) AS s FROM sale_items WHERE client_id = ?').bind(clientId).first<{ s: number }>(),
+        db.prepare('SELECT COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE client_id = ?').bind(clientId).first<{ s: number }>(),
+        db.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>(),
+      ]);
+      const name = clientRow?.name ?? q.client ?? '该店铺';
+      const debt = Math.round((Number(cumSale?.s ?? 0) - Number(cumPay?.s ?? 0)) * 100) / 100;
+      const sales = saleRows.results.map((r) => ({ d: r.d, a: Number(r.a), what: `出货单 ${r.sale_id}`, n: r.n }));
+      const pays = payRows.results.map((r) => ({
+        d: r.d, a: Number(r.amount) + Number(r.waived), what: `收款 ${r.id}`,
+        extra: `${r.method ?? ''}${r.note ? ` ${r.note}` : ''}${r.waived ? `（含减免 ${money(r.waived)}）` : ''}`.trim(),
+      }));
+      lines.push(`【${name} 对账明细】区间 ${start} ~ ${end}（出货单/收款各最多列 30 条，按日期倒序）`);
+      lines.push(`账面累计欠款（全部历史 出货 − 收款）：${money(debt)}。`);
+      lines.push(`出货单 ${sales.length} 张：`);
+      for (const r of sales) lines.push(`- ${r.d} ${r.what} ${r.n} 行 ${money(r.a)}`);
+      lines.push(`收款 ${pays.length} 笔：`);
+      for (const r of pays) lines.push(`- ${r.d} ${r.what} ${money(r.a)}${r.extra ? ` ${r.extra}` : ''}`);
+      // 差异线索全部由上面「真实存在的单据」确定性算出，不生成任何新数字或单据
+      const clues: string[] = [];
+      const all = [...sales, ...pays].map((x) => ({ d: x.d, a: x.a, what: x.what }));
+      const diff = q.diff ?? 0;
+      if (diff > 0) {
+        const near = all.filter((x) => Math.abs(x.a - diff) <= Math.max(0.5, diff * 0.02));
+        clues.push(near.length
+          ? `金额接近差额 ${money(diff)} 的单据：${near.map((x) => `${x.d} ${x.what} ${money(x.a)}`).join('；')} —— 核对是否重复登记或被对方漏算。`
+          : `没有找到金额接近差额 ${money(diff)} 的单笔；可能是多笔组合、数字录错或跨区间。`);
+      }
+      const byAmount = new Map<string, typeof all>();
+      for (const x of all) {
+        const k = x.a.toFixed(2);
+        byAmount.set(k, [...(byAmount.get(k) ?? []), x]);
+      }
+      const dups = [...byAmount.values()].filter((g) => g.length > 1).slice(0, 5);
+      if (dups.length) {
+        clues.push(`同金额重复出现的单据：${dups.map((g) => `${money(g[0].a)} × ${g.length} 笔（${g.map((x) => x.d).join('、')}）`).join('；')} —— 核对是否重复入账。`);
+      }
+      if (q.start) {
+        const edge = all.filter((x) => x.d === start || x.d === end).slice(0, 5);
+        if (edge.length) clues.push(`区间边界日单据：${edge.map((x) => `${x.d} ${x.what} ${money(x.a)}`).join('；')} —— 核对是否记到相邻周期。`);
+      }
+      if (Math.abs(debt % 1) > 0.005) clues.push(`账面欠款有零头 ${money(debt)}，核对抹零/进位规则与对方口径是否一致。`);
+      lines.push('--- 对账线索（基于上面真实单据算出，仅供人工核对，不代表实际漏记）---');
+      lines.push(clues.length ? clues.join('\n') : '没有发现明显可疑单据；建议核对区间、抹零规则与对方口径。');
+      lines.push('若要补录收款，用户必须明确说出「店铺 + 金额 + 日期」，确认后才入账；绝不按差额臆造金额。');
+      return lines.join('\n');
+    }
     case 'years': {
       const rows = await db.prepare(
         `SELECT DISTINCT substr(happened_at,1,4) AS y FROM sale_items
@@ -532,12 +626,13 @@ export async function assistantAnswer(
   // query 时也直接兜底为区间汇总（避免拿"今日/本月快照"去回答历史月份）。
   const monthRange = parseMonthRange(userText);
   const nonQuery = intent && (intent.intent === 'record' || intent.intent === 'kb'
-    || !!intent.record || !!intent.remember || !!intent.forget);
+    || !!intent.record || !!intent.remember || !!intent.forget || !!intent.payment);
   if (monthRange && !nonQuery) {
     if (!intent || intent.intent !== 'query') {
       intent = {
         intent: 'query', view: 'summary', start: monthRange.start, end: monthRange.end,
-        client: null, kind: 'sale', year: null, topics: [], remember: null, forget: null, record: null,
+        client: null, kind: 'sale', year: null, topics: [], remember: null, forget: null,
+        record: null, diff: null, payment: null,
       };
     } else {
       intent.start = monthRange.start;
@@ -554,6 +649,17 @@ export async function assistantAnswer(
   ) {
     intent.view = 'summary';
   }
+  // 对账/推断类请求：模型常把「猜一下可能漏了哪笔」归成 chat，导致只注入今日快照、
+  // 助手只能答"猜不出来"。这里做确定性兜底，强制改走单店对账明细查询。
+  const reconcileHit = /对不上账|对不上|对账|差额|差了|漏记|漏了|推断|猜一下|可能.*(?:交易|单|笔)/.test(userText);
+  if (reconcileHit && !intent?.payment && !intent?.record && !intent?.remember && !intent?.forget
+    && (!intent || (intent.intent !== 'query' && intent.intent !== 'kb'))) {
+    intent = {
+      intent: 'query', view: 'client_ledger', start: intent?.start ?? null, end: intent?.end ?? null,
+      client: intent?.client ?? null, kind: 'sale', year: null, topics: [], remember: null,
+      forget: null, record: null, diff: intent?.diff ?? extractDiff(userText), payment: null,
+    };
+  }
   const sources: string[] = [];
   const extras: string[] = [];
   const tools: AssistantToolResult[] = [];
@@ -565,6 +671,46 @@ export async function assistantAnswer(
     tools.push({ name, label: def?.label ?? name, result });
     void recordToolCall(db, { runId, userId, toolName: name, args: userText.slice(0, 200), result });
   };
+
+  // 补录收款（对账后「推送交易」）：金额必须用户明确给出，走与落单相同的授权门，确认后才入账
+  if (intent?.payment) {
+    const p = intent.payment;
+    const gate = await gateFor(db, userId, 'create_payment');
+    if (gate === 'ask') {
+      const preview = `补录收款：店铺「${p.client}」 ${money(p.amount)}${p.date ? ` / ${p.date}` : ' / 今天'} —— 确认后入账，欠款会同步变化`;
+      const approvalId = await createPendingAction(db, userId, 'create_payment',
+        JSON.stringify({ ...p, runId }), preview);
+      return {
+        reply: '', sources: [], tools,
+        needApproval: {
+          approval_id: approvalId,
+          tool: {
+            name: 'create_payment',
+            label: toolDef('create_payment')?.label ?? '补录收款',
+            description: toolDef('create_payment')?.description ?? '按用户给出的店铺与金额补录一笔收款',
+          },
+          preview,
+        },
+      };
+    }
+    if (gate === 'deny') {
+      extras.push('--- 写操作被拒 ---', '未授权 AI 补录收款（可在「AI 助手 → 工具权限」改为允许）。');
+      noteTool('create_payment', '拒绝：未授权');
+    } else {
+      const username = (await db.prepare('SELECT username FROM users WHERE id = ?').bind(userId).first<{ username: string }>())?.username ?? '';
+      try {
+        const o = await createAiPayment(db, { id: userId, username, role }, p);
+        noteTool('create_payment', `补录收款成功 ${o.client} ¥${o.amount} ${o.date}`);
+        extras.push('--- 补录结果（已入账） ---', `店铺 ${o.client} ${o.date} 收款 ${money(o.amount)}${o.note ? `（${o.note}）` : ''}；欠款已更新，请与对方核对。`);
+        sources.push('账本');
+      } catch (e) {
+        if (e instanceof ApiError) {
+          extras.push('--- 补录失败 ---', e.message);
+          noteTool('create_payment', `失败：${e.message}`);
+        } else throw e;
+      }
+    }
+  }
 
   // ① 写工具授权门（对齐参考 App：落单/记忆写操作默认询问，可设总是允许/拒绝）
   if (intent?.record) {
@@ -707,7 +853,20 @@ export async function execApprovedAction(
     if (runId) void recordToolCall(db, { runId, userId: user.id, toolName: name, args: args.slice(0, 200), result });
   };
 
-  if (toolName === 'record_transaction') {
+  if (toolName === 'create_payment') {
+    const p = await createAiPayment(db, user, {
+      client: String(parsed.client ?? ''),
+      amount: Number(parsed.amount) || 0,
+      date: parsed.date || null,
+      note: parsed.note || null,
+    });
+    noteTool('create_payment', `补录收款成功 ${p.client} ¥${p.amount} ${p.date}`);
+    extras.push(
+      '--- 补录结果（已入账） ---',
+      `店铺 ${p.client} ${p.date} 收款 ${money(p.amount)}${p.note ? `（${p.note}）` : ''}；欠款已更新，请与对方核对。`,
+    );
+    sources.push('账本');
+  } else if (toolName === 'record_transaction') {
     const purpose = parsed.purpose === 'sale' ? 'sale' : 'purchase';
     const o = await recordTransactionFromText(db, user, purpose, parsed.text ?? '');
     order = o;

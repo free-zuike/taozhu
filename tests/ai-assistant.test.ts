@@ -12,6 +12,7 @@ import {
   saveAiMemory, listAiMemories, forgetAiMemoryByContent, deleteAiMemory, clearAiMemories,
 } from '../src/services/ai-assistant';
 import { DEFAULT_AI_CONFIG, type AiConfig } from '../src/services/ai-parse';
+import { createAiPayment } from '../src/services/ai-record';
 import { localTodayISO, parseMonthRange } from '../src/lib/biz-date';
 
 const JWT_SECRET = 'test-secret';
@@ -304,6 +305,55 @@ describe('动态查询与知识库（0.17.475）', () => {
     expect(r).toContain('¥30'); // 累计欠款（8月20 + 9月10，无收款）
   });
 
+  it('client_ledger：单店真实流水 + 差额/重复单线索；店员无权查看', async () => {
+    const it = await mkItem('对账品', 10, 5);
+    await call(env, 'POST', '/api/v1/clients', token, { name: '对账店' });
+    const cl = ((await call(env, 'GET', '/api/v1/clients', token).then((r) => r.json())) as { clients: Array<{ id: string }> }).clients[0];
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: cl.id, happened_at: '2026-11-01', items: [{ price_id: it.prices[0].id, quantity: 2 }] });
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: cl.id, happened_at: '2026-11-02', items: [{ price_id: it.prices[0].id, quantity: 2 }] });
+    await call(env, 'POST', '/api/v1/payments', token, { client_id: cl.id, happened_at: '2026-11-03', amount: 20 });
+    const q = {
+      intent: 'query' as const, view: 'client_ledger', start: '2026-11-01', end: '2026-11-30',
+      client: '对账店', kind: 'sale' as const, year: null, topics: [], diff: 20,
+      remember: null, forget: null, record: null, payment: null,
+    };
+    const r = await runBusinessQuery(db as never, 'admin', q);
+    expect(r).toContain('对账店 对账明细');
+    expect(r).toContain('出货单 2 张');
+    expect(r).toContain('收款 1 笔');
+    expect(r).toContain('金额接近差额 ¥20');
+    expect(r).toContain('同金额重复出现的单据');
+    expect(r).toContain('仅供人工核对');
+    const staff = await runBusinessQuery(db as never, 'staff', q);
+    expect(staff).toBeNull();
+  });
+
+  it('createAiPayment：补录收款写库 + 变更流 + 快照失效，金额绝不臆造', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: '补录店' });
+    await call(env, 'GET', '/api/v1/clients', token); // 预热一份派生快照
+    const before = await db.prepare("SELECT COUNT(*) AS n FROM schema_meta WHERE key LIKE 'snapshot:%'").first<{ n: number }>();
+    expect(before!.n).toBeGreaterThan(0);
+
+    const u = await db.prepare('SELECT id, username FROM users LIMIT 1').first<{ id: string; username: string }>();
+    const user = { id: u!.id, username: u!.username, role: 'admin' }; // created_by 有外键，必须用真实用户
+    const r = await createAiPayment(db as never, user, {
+      client: '补录店', amount: 380, date: '2026-11-07', note: '对方说已付',
+    });
+    expect(r.client).toBe('补录店');
+    const row = await db.prepare('SELECT amount, happened_at, note FROM payments WHERE id = ?')
+      .bind(r.id).first<{ amount: number; happened_at: string; note: string }>();
+    expect(row!.amount).toBe(380);
+    expect(row!.happened_at).toContain('2026-11-07');
+    expect(row!.note).toContain('待核对');
+    const changes = await db.prepare("SELECT COUNT(*) AS n FROM sync_changes WHERE entity_type = 'payment'").first<{ n: number }>();
+    expect(changes!.n).toBeGreaterThan(0);
+    const after = await db.prepare("SELECT COUNT(*) AS n FROM schema_meta WHERE key LIKE 'snapshot:%'").first<{ n: number }>();
+    expect(after!.n).toBe(0); // 欠款/计数快照已失效，下次请求必重算
+
+    await expect(createAiPayment(db as never, user, { client: '不存在的店', amount: 1, date: null, note: null })).rejects.toThrow(/不存在/);
+    await expect(createAiPayment(db as never, user, { client: '补录店', amount: 0, date: null, note: null })).rejects.toThrow(/大于 0/);
+  });
+
   it('runBusinessQuery monthly/daily/years 基本形状', async () => {
     const it = await mkItem('茄子', 4, 2);
     await call(env, 'POST', '/api/v1/clients', token, { name: 'C店' });
@@ -484,6 +534,38 @@ describe('AI 记忆与对话历史（0.17.476）', () => {
       };
       expect(after.conversation_id).toBeNull();
       expect(after.messages).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('补录收款走授权门：未确认绝不入账，approve 后写入 payments', async () => {
+    await configureAi();
+    await call(env, 'POST', '/api/v1/clients', token, { name: 'AI补录店' });
+    try {
+      const msg = '给AI补录店补录一笔 380 元收款';
+      stubTwoStep(
+        '{"intent":"chat","view":null,"start":null,"end":null,"client":null,"kind":"sale","year":null,"topics":[],"remember":null,"forget":null,"record":null,"diff":null,"payment":{"client":"AI补录店","amount":380,"date":"2026-11-07","note":null}}',
+        '已补录。',
+      );
+      const post = await call(env, 'POST', '/api/v1/ai/chat', token, { messages: [{ role: 'user', content: msg }] });
+      expect(post.status).toBe(200);
+      const pend = (await post.json()) as { need_approval: boolean; approval_id: string; tool: { name: string; label: string } };
+      expect(pend.need_approval).toBe(true);
+      expect(pend.tool.name).toBe('create_payment');
+      expect(pend.tool.label).toBe('补录收款');
+      // 确认前绝不入账（不能让 AI 自己平账）
+      const before = await db.prepare('SELECT COUNT(*) AS n FROM payments').first<{ n: number }>();
+      expect(before!.n).toBe(0);
+
+      stubReply('已补录收款 ¥380，请与对方核对。');
+      const appr = await call(env, 'POST', '/api/v1/ai/chat/approve', token, {
+        approval_id: pend.approval_id, decision: 'allow', messages: [{ role: 'user', content: msg }],
+      });
+      expect(appr.status).toBe(200);
+      const after = await db.prepare('SELECT amount, note FROM payments').first<{ amount: number; note: string }>();
+      expect(after!.amount).toBe(380);
+      expect(after!.note).toContain('待核对');
     } finally {
       vi.unstubAllGlobals();
     }
