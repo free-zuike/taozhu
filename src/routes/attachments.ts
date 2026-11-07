@@ -93,6 +93,50 @@ const prefixOf = (entity: string, id: string) => `taozhu/images/attachments/${en
 const legacyPrefixesOf = (entity: string, id: string) =>
   LEGACY_IMAGE_PREFIXES.map((p) => `${p}${entity}/${id}/`);
 
+// GET /attachments/bulk?order_entity=sale&order_ids=id1,id2&line_entity=sale_item&line_ids=si1,si2
+// 批量返回某单（单据级）+ 其所有明细行的附件：一次 IN 查询替代前端整单附件视图打开时逐行 N 请求。
+// 引用表权威（同 /in-use 的 ①），不列 R2 兜底（现代库引用表已含全部在用 key）。
+attachmentsRouter.get('/bulk', async (c) => {
+  const orderEntity = c.req.query('order_entity');
+  const orderIds = (c.req.query('order_ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const lineEntity = c.req.query('line_entity');
+  const lineIds = (c.req.query('line_ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!orderEntity && !lineEntity) return c.json({ error: '至少需要 order_entity 或 line_entity' }, 400);
+  if (
+    (orderEntity && !VALID_ENTITY.includes(orderEntity)) ||
+    (lineEntity && !VALID_ENTITY.includes(lineEntity))
+  )
+    return c.json({ error: 'entity 必须为 sale/purchase/payment 或明细行级 sale_item/purchase_item' }, 400);
+  const rows: Array<{ file_key: string }> = [];
+  const queryGroup = async (entity: string, ids: string[]) => {
+    if (ids.length === 0) return;
+    // D1 单条查询上限 100 绑定参数：按 100 切片（单据行数极多时也不会超限）
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      if (chunk.length === 1) {
+        const r = await c.env.DB.prepare(
+          'SELECT file_key FROM attachment_refs WHERE entity = ? AND entity_id = ?',
+        ).bind(entity, chunk[0]).all<{ file_key: string }>();
+        rows.push(...r.results);
+      } else {
+        const ph = chunk.map(() => '?').join(',');
+        const r = await c.env.DB.prepare(
+          `SELECT file_key FROM attachment_refs WHERE entity = ? AND entity_id IN (${ph})`,
+        ).bind(entity, ...chunk).all<{ file_key: string }>();
+        rows.push(...r.results);
+      }
+    }
+  };
+  if (orderEntity) await queryGroup(orderEntity, orderIds);
+  if (lineEntity) await queryGroup(lineEntity, lineIds);
+  const byKey = new Map<string, { key: string; size: number }>();
+  for (const r of rows) byKey.set(r.file_key, { key: r.file_key, size: 0 });
+  const attachments = [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
+  return c.json({
+    attachments: attachments.map((o) => ({ key: o.key, size: o.size, uploaded: '' })),
+  });
+});
+
 // GET /attachments?entity=&id= — 列出某交易的全部附件。
 // 引用表权威（含新格式内容 key，同图共享一份）；历史前缀 R2 列兜底（旧格式 key 含实体前缀）
 attachmentsRouter.get('/', async (c) => {

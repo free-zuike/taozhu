@@ -25,6 +25,10 @@ const kPendingUploadsKey = 'taozhu_pending_uploads';
 /// 删除永胜、已删引用绝不被快照复活（比内存 pendingDel 更强：覆盖删行/删单这类
 /// 没有 attachment 删除变更的路径）；服务器确认删除（in-use 快照已无该三元组）后清除墓碑。
 const kDeletedAttachmentsStore = 'deleted_attachments';
+/// 在用附件列表客户端缓存（降 /in-use 触发频次——服务端对 attachment_refs 全表扫是 D1 读额度主耗）
+const _kInUseCacheKey = 'taozhu_inuse_cache';
+const _kInUseCacheTsKey = 'taozhu_inuse_cache_ts';
+const _kInUseCacheTtlMs = 5 * 60 * 1000;
 
 /// pull apply 失败记录 key（SharedPreferences JSON 数组，上限 50 条）：
 /// 单条 apply 失败不阻塞整页游标——记录错误跳过，后续同实体 apply 成功自动清除（对齐 SyncErrorStore）。
@@ -142,26 +146,52 @@ class SyncService {
   /// 已存在跳过；并发 4 + 指数退避重试 3 次；单张失败静默跳过（下次同步再补），不阻塞同步主流程。
   /// 同时把三元组持久化到本地 attachment_refs store（离线清理页按本地表 basename 判定孤儿，
   /// 对齐参考实现本地 transaction_attachments 范式，不依赖网络）。
+  /// 拉取「在用附件」列表（服务端 /attachments/in-use），带客户端缓存：
+  /// 5 分钟内复用，避免每次同步都触发服务端对 attachment_refs 全表扫（D1 读额度主要消耗源）。
+  /// 删除传播主路径走变更流（attachment delete 变更），本缓存只影响收敛兜底时效，安全。
+  static Future<List<Map<String, dynamic>>> _fetchInUse({bool force = false}) async {
+    final p = await SharedPreferences.getInstance();
+    if (!force) {
+      final ts = p.getInt(_kInUseCacheTsKey) ?? 0;
+      if (DateTime.now().millisecondsSinceEpoch - ts < _kInUseCacheTtlMs) {
+        final raw = p.getString(_kInUseCacheKey);
+        if (raw != null && raw.isNotEmpty) {
+          try {
+            final list =
+                (jsonDecode(raw) as List?)?.cast<Map<String, dynamic>>() ?? [];
+            if (list.isNotEmpty) return list;
+          } catch (_) {}
+        }
+      }
+    }
+    Map<String, dynamic> d = {};
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        d = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
+        break;
+      } catch (e) {
+        if (attempt < 2) {
+          await Future.delayed(Duration(seconds: 1 << attempt));
+        } else {
+          rethrow;
+        }
+      }
+    }
+    final list = ((d['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
+    try {
+      await p.setString(_kInUseCacheKey, jsonEncode(list));
+      await p.setInt(_kInUseCacheTsKey, DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {}
+    return list;
+  }
+
   static Future<void> downloadInUseAttachments() async {
     if (kIsWeb) return;
     List<Map<String, dynamic>> inUse;
     try {
-      // 在用列表拉取重试 2 次（网络抖动/服务器 R2 扫描慢偶发超时——失败静默会导致本地引用表
-      // 与物理副本停在旧值，"本地91/服务器95 差4/重置没用"的直接根因）
-      Map<String, dynamic> d = {};
-      for (var attempt = 0; attempt < 3; attempt++) {
-        try {
-          d = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
-          break;
-        } catch (e) {
-          if (attempt < 2) {
-            await Future.delayed(Duration(seconds: 1 << attempt));
-          } else {
-            rethrow;
-          }
-        }
-      }
-      inUse = ((d['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
+      // 在用列表拉取（带 5 分钟客户端缓存，避免每次同步触发服务端 attachment_refs 全表扫——D1 读额度主耗）。
+      // 删除传播主路径走变更流（attachment delete 变更），缓存仅影响收敛兜底时效，安全。
+      inUse = await _fetchInUse();
       // 本地删除墓碑（deleted_attachments）：所有删除附件/删行/删单路径写入，
       // pull 全量刷新先把命中墓碑的三元组剔除——删除永胜，绝不被旧快照复活
       // （对齐参考实现 CouchDB 墓碑语义；比内存 pendingDel 覆盖更全：删行删单元
@@ -1054,8 +1084,7 @@ class SyncService {
             .where((x) => '${x['entity_type'] ?? ''}' == 'attachment' && '${x['action'] ?? ''}' == 'delete')
             .toList();
         if (attachDeletes.isNotEmpty) {
-          final inUse = await Api.instance.get('/attachments/in-use').timeout(const Duration(seconds: 25));
-          final inUseList = ((inUse['attachments'] as List?) ?? []).cast<Map<String, dynamic>>();
+          final inUseList = await _fetchInUse(force: true);
           for (final x in attachDeletes) {
             final sid = '${x['entity_sync_id'] ?? ''}';
             // 优先用 payload 携带的 entity/id（新客户端删除带三元组），否则用服务器 in-use 匹配

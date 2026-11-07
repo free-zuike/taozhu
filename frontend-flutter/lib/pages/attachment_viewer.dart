@@ -123,16 +123,22 @@ class _AttachmentViewerState extends State<AttachmentViewer> {
       try {
         final keys = <String>[];
         if (_bulk) {
-          // 批量模式：合并单据级引用（orderIds 集合或单据 id；历史存量/识别图）+ 各行前缀
-          for (final oid
-              in widget.orderIds.isNotEmpty
-                  ? widget.orderIds.where((o) => o.isNotEmpty)
-                  : [widget.id]) {
-            keys.addAll(await _cloudKeys(widget.entity, oid));
-          }
-          for (final lid in widget.lineIds.where((l) => l.isNotEmpty)) {
-            keys.addAll(await _cloudKeys(_lineEntity, lid));
-          }
+          // 批量模式：整单+所有明细行附件一次请求（/attachments/bulk），替代逐行 N 请求
+          final orderIds = widget.orderIds.isNotEmpty
+              ? widget.orderIds.where((o) => o.isNotEmpty).toList()
+              : [widget.id];
+          final lineIds = widget.lineIds.where((l) => l.isNotEmpty).toList();
+          final q = <String, String>{
+            'order_entity': widget.entity,
+            'order_ids': orderIds.join(','),
+            'line_entity': _lineEntity,
+            'line_ids': lineIds.join(','),
+          };
+          final d = await Api.instance
+              .get('/attachments/bulk?${Uri(queryParameters: q).query}');
+          keys.addAll(((d['attachments'] as List?) ?? [])
+              .cast<Map<String, dynamic>>()
+              .map((x) => '${x['key']}'));
         } else {
           keys.addAll(await _cloudKeys(widget.entity, widget.id));
         }
