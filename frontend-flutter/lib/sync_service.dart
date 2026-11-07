@@ -505,7 +505,11 @@ class SyncService {
             'payment' => payIds.contains(i),
             _ => true, // 未知实体类型：保留
           };
-          if (exists && !tomb.contains('$e/$i/$f')) {
+          // 仅在「实体已不在本地库 且 存在删除墓碑」时视为已删除，移出待传并清本地引用行。
+          // 新建未保存的单据（本地库尚无该单/行记录）没有删除墓碑 → 保留，否则编辑中刚挂上的
+          // 附件会被误删（用户「扫描图片后附件没了」根因：新单尚无 sale_items 行，saleIds 不含该单 id）。
+          // 真正的删除都会写墓碑（cleanupLocalAttachmentsOf / 他端删除同步），且删除时已清待传队列。
+          if (exists || !tomb.contains('$e/$i/$f')) {
             kept.add(entry);
           } else {
             stale.add(entry);
