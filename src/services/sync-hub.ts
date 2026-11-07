@@ -30,9 +30,36 @@ export async function notifyClients(
   }
 }
 
-/** Durable Object：WebSocket 连接集合 + broadcast */
+/** Durable Object：WebSocket 连接集合 + broadcast + 服务端主动保活 */
 export class SyncHub {
   private sockets = new Set<WebSocket>();
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * 每 25s 给所有在线连接发一帧纯文本 'pong'，制造下行流量，避免 Cloudflare 断开空闲 WS。
+   * 客户端（含部署前旧版）对非 JSON 文本一律 jsonDecode/JSON.parse 失败后静默忽略，
+   * 不广播、不写变更流、不触发页面整页重拉——所以这一帧纯粹是保活，不会变成刷新风暴。
+   *
+   * 为什么仍要服务端主动发：已打开且未重新导航的页面里跑的是旧前端 JS，没有 25s 客户端心跳；
+   * 靠被动回 ping 救不了它。而它一旦空闲断连就会触发重连 → 整页重拉一批 /stats 接口，
+   * 这正是「页面挂着不动却持续产生请求」的链条。服务端保活是在不改客户端的前提下掐断它。
+   *
+   * 定时器只在有在线连接时存在：最后一个连接断开立即停表，DO 回归可休眠状态，
+   * 避免无人在线时仍按 duration 空转计费。
+   */
+  private ensureHeartbeat(): void {
+    if (this.heartbeat) return;
+    this.heartbeat = setInterval(() => {
+      if (this.sockets.size === 0) {
+        if (this.heartbeat) clearInterval(this.heartbeat);
+        this.heartbeat = null;
+        return;
+      }
+      for (const s of this.sockets) {
+        try { s.send('pong'); } catch { this.sockets.delete(s); }
+      }
+    }, 25_000);
+  }
 
   async fetch(request: Request): Promise<Response> {
     // 内部通知（notifyClients 调用）：向全部在线连接广播（type 透传：sync / profile_change；body 为负载 JSON）
@@ -50,14 +77,13 @@ export class SyncHub {
     const [client, server] = Object.values(pair);
     this.sockets.add(server);
     server.accept();
+    this.ensureHeartbeat();
     server.addEventListener('close', () => this.sockets.delete(server));
     server.addEventListener('error', () => this.sockets.delete(server));
     server.addEventListener('message', (event) => {
-      // 客户端每 25s 发纯文本 'ping' 保活（Cloudflare 会断开长时间无帧流量的 WS）。
-      // 回一帧 'pong' 形成双向流量即可，不广播、不写变更流、不唤醒其它客户端；
-      // 客户端显式忽略 ping/pong，绝不触发页面刷新。
-      // 这里用「被动响应」而非 setInterval：常驻定时器会阻止 Durable Object 休眠、
-      // 产生额外的 DO 计费，且实例被驱逐后定时器就失效。
+      // 新版客户端每 25s 发纯文本 'ping'，回一帧 'pong' 形成双向流量即可。
+      // 旧版客户端不发 ping，靠 ensureHeartbeat 的下行帧保活；两条路径互补，
+      // 都不广播、不写变更流，客户端也都不会因心跳触发页面刷新。
       if (event.data === 'ping') {
         try { server.send('pong'); } catch { this.sockets.delete(server); }
       }
