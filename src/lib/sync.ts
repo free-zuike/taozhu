@@ -6,9 +6,9 @@
  */
 import { stockDelta, stockDeltaFor } from './stock';
 import { randomId } from './password';
-import { notifyClients } from '../services/sync-hub';
 import { createStorage } from '../services/storage';
 import { parseAttachmentKey, deleteEntityAttachments } from './image-key';
+import { recordChange, type SyncChangeInput } from './changes';
 import { getRoundingConfig, roundMoney } from './money';
 import { consumeFifoStatements, releaseSaleUsesStatements } from './fifo';
 import { recordAudit } from '../routes/audit';
@@ -17,32 +17,8 @@ import type { Env } from '../types';
 export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'price_group', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item', 'loss_record', 'stock_adjustment'] as const;
 export type SyncEntityType = (typeof SYNC_ENTITIES)[number];
 
-export interface SyncChangeInput {
-  entity_type: string;
-  entity_sync_id: string;
-  action?: 'upsert' | 'delete';
-  payload: unknown;
-  updated_by_device_id?: string | null;
-  updated_by_username?: string | null;
-  /** 变更时间（LWW 依据）：push 场景必须用客户端带来的 updated_at，否则服务端入库时间会盖过客户端时间戳破坏决断 */
-  updated_at?: string | null;
-}
-
-/** 追加一条变更记录（返回新行的 id，即游标） */
-export async function recordChange(db: D1Database, c: SyncChangeInput): Promise<number> {
-  const updatedAt = c.updated_at && !Number.isNaN(Date.parse(c.updated_at)) ? c.updated_at : new Date().toISOString();
-  const res = await db.prepare(
-    `INSERT INTO sync_changes (entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_username)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(
-    c.entity_type, c.entity_sync_id, c.action ?? 'upsert',
-    JSON.stringify(c.payload ?? {}), updatedAt,
-    c.updated_by_device_id ?? null, c.updated_by_username ?? null,
-  ).run();
-  // 实时同步：变更已入流 → 通知所有在线客户端拉取（失败静默）
-  await notifyClients();
-  return Number(res.meta.last_row_id ?? 0);
-}
+// recordChange / SyncChangeInput 现定义于 ./changes 并由此重新导出（保持外部 import 路径不变）
+export { recordChange, type SyncChangeInput };
 
 /** 查询某实体的最新一条变更（LWW 比较与幂等判断用） */
 export async function latestChange(

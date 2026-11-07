@@ -4,7 +4,7 @@
 import { md5 } from './md5';
 import { createStorage, type AttachmentStorage } from '../services/storage';
 import type { Env } from '../types';
-import { recordChange } from './sync';
+import { recordChange } from './changes';
 
 export function imageKey(type: string, segments: string[], bytes: Uint8Array): string {
   const h = md5(bytes);
