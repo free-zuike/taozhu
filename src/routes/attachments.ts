@@ -110,9 +110,9 @@ attachmentsRouter.get('/bulk', async (c) => {
   const rows: Array<{ file_key: string }> = [];
   const queryGroup = async (entity: string, ids: string[]) => {
     if (ids.length === 0) return;
-    // D1 单条查询上限 100 绑定参数：按 100 切片（单据行数极多时也不会超限）
-    for (let i = 0; i < ids.length; i += 100) {
-      const chunk = ids.slice(i, i + 100);
+    // D1 单条查询上限 100 绑定参数：entity(1) + ids(≤99) = 100，故按 99 切片
+    for (let i = 0; i < ids.length; i += 99) {
+      const chunk = ids.slice(i, i + 99);
       if (chunk.length === 1) {
         const r = await c.env.DB.prepare(
           'SELECT file_key FROM attachment_refs WHERE entity = ? AND entity_id = ?',
