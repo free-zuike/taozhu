@@ -7,7 +7,7 @@ import { chunkQuery } from '../lib/query';
 import { consumeFifoStatements, consumeLossStatements } from '../lib/fifo';
 import { randomId } from '../lib/password';
 import { recordChange, type SyncChangeInput } from '../lib/sync';
-import { versionedSnapshot } from '../lib/snapshot';
+import { versionedSnapshot, expireSnapshots } from '../lib/snapshot';
 import { localTodayISO, addDaysISO } from '../lib/biz-date';
 import { recordAudit } from './audit';
 import type { AuthUser, Env } from '../types';
@@ -365,6 +365,9 @@ stocksRouter.post('/rebuild', adminOnly(), async (c) => {
     }
   }
   if (adjBatch.length > 0) await c.env.DB.batch(adjBatch);
+  // 重建会回写 sale_items.cost_price / stock_batches 等，绕过 sync_changes 且游标不变，
+  // 精确失效快照察觉不到 → 显式让全部快照失效，避免派生数据长期陈旧。
+  await expireSnapshots(c.env.DB);
   await recordAudit(c.env.DB, {
     username: c.get('user').username, action: 'rebuild', entity_type: 'stocks',
     detail: `全量重算库存+批次成本：${batch.length} 个商品+单位、${purchaseRows.results.length} 个进货批次（含盘点盘盈）、${saleRows.results.length} 个出货行、${lossRows.results.length} 条损耗、${adjRows.results.length} 条盘点盘亏`,

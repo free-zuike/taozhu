@@ -18,6 +18,9 @@ import { maxCursor } from './sync';
 
 const SNAPSHOT_PREFIX = 'snapshot:';
 const SNAPSHOT_TTL_MS = 60_000;
+/** steadyCursorReuse 的绝对上限：游标长期不动也至少每天重算一次，
+ *  兜住任何漏掉 expireSnapshots 的绕过写入，避免派生数据永久陈旧。 */
+const STEADY_REUSE_MAX_MS = 24 * 60 * 60_000;
 
 type Envelope<T> = { v: 1; cursor: number; ts: number; data: T; fp?: string };
 
@@ -40,6 +43,13 @@ export interface SnapshotOptions {
    *  返回 false（无相关写）时复用旧数据、只推进游标，避免无关写（改设置/客户/附件等）
    *  打掉一次昂贵的全表聚合。查询应走 sync_changes 主键范围 + LIMIT 1，读行数极小。 */
   affectedSince?: (prev: number, next: number) => Promise<boolean>;
+  /** 游标未变时忽略 TTL 直接复用（默认 false，仅「重算代价极高 + 具备精确失效」的快照可开）。
+   *  sync_changes 的 MAX(id) 是所有常规业务写的版本号：它没变 ⇒ 没有任何常规写 ⇒ 派生结果
+   *  不可能变。此时按 TTL 定时重算纯属白烧 D1 rows_read（网页常开、零写入时尤其明显）。
+   *  开启后绕过变更流的写入（备份恢复 / schema 迁移 / 批量重建等）必须显式 expireSnapshots；
+   *  另留 24h 绝对上限兜底漏配的通道（每天最多重算一次，而非每 60s 一次）。
+   *  TTL 仍然作为「游标已前进」时的兜底，语义不变。 */
+  steadyCursorReuse?: boolean;
 }
 
 export async function versionedSnapshot<T>(
@@ -60,8 +70,15 @@ export async function versionedSnapshot<T>(
       const env = JSON.parse(row.value) as Envelope<T>;
       // env.ts <= now：时钟回拨时不把「未来」快照当成有效；ts 不随「复用」刷新，
       // 保证 TTL 仍从最初计算时刻起算（绕过变更流的写入最多陈旧一个 TTL）。
-      const usable = env.v === 1 && (env.fp ?? '') === fingerprint
-        && env.ts <= now && now - env.ts < ttlMs;
+      const valid = env.v === 1 && (env.fp ?? '') === fingerprint && env.ts <= now;
+      // 游标未变 ⇒ 零常规写 ⇒ 派生结果不可能变。精确失效快照跳过定时重算，
+      // 消除「页面常开、无人操作」时每隔一个 TTL 就全表扫一次的 rows_read 大头。
+      // 仅留一个 24h 绝对上限，兜住漏配 expireSnapshots 的绕过写入。
+      if (valid && opts.steadyCursorReuse && env.cursor === cursor
+        && now - env.ts < STEADY_REUSE_MAX_MS) {
+        return { data: env.data, cursor };
+      }
+      const usable = valid && now - env.ts < ttlMs;
       if (usable) {
         if (env.cursor === cursor) return { data: env.data, cursor };
         // 游标前进了，但期间只有与本快照无关的写 → 复用旧数据，只把游标推进写回

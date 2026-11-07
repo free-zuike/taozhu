@@ -8,6 +8,7 @@ import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
 import { getRoundingConfig, roundMoney } from '../lib/money';
 import { chunkQuery } from '../lib/query';
+import { expireSnapshots } from '../lib/snapshot';
 import { recordAudit } from './audit';
 import { createPurchaseOrder } from '../services/records';
 import { ApiError } from '../lib/api-error';
@@ -410,6 +411,8 @@ purchasesRouter.post('/fix-sort', adminOnly(), async (c) => {
     for (let i = 0; i < batch.length; i += 100) {
       await c.env.DB.batch(batch.slice(i, i + 100));
     }
+    // 裸写 purchase_items.sort 不追加 sync_changes → 显式让快照失效（与 /sales/fix-sort 同口径）。
+    await expireSnapshots(c.env.DB);
   }
   await recordAudit(c.env.DB, {
     username: c.get('user').username, action: 'fix', entity_type: 'purchase_item',

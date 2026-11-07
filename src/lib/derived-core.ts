@@ -77,10 +77,14 @@ export async function loadDerivedCore(db: D1Database): Promise<DerivedCore> {
     },
     '',
     // 仅 book 写入生效：用反向白名单，未知/新增 entity_type 一律保守重算。
-    // TTL 放宽到 30min：本快照靠「游标 + affectedSince」精确失效（任何出货/收款/进货写入
-    // 立刻重算），备份恢复这类绕过变更流的通道也已显式 expireSnapshots（backup-core.ts），
-    // 故 TTL 仅作兜底。默认 60s 会让「页面挂着、零写入」每 60s 强制全表扫一次三张流水表
-    // ——网页常开时这是持续的 rows_read 大头，且 ts 不随命中刷新，空闲期无法避免。
-    { ttlMs: 30 * 60_000, affectedSince: unaffectedTypes(db, CORE_UNRELATED_TYPES) },
+    // 精确失效 + steadyCursorReuse：出货/收款/进货写入立刻重算；游标没变（页面常开、
+    // 零写入）则永不重算。TTL 只作「游标已前进」时的兜底——原先 60s/30min 的定时重算
+    // 会让空闲期仍周期性全扫三张流水表，且 ts 不随命中刷新，是网页常开时 rows_read 的大头。
+    // 绕过变更流的通道（备份恢复 / schema 迁移 / 库存重建 / 附件存量迁移）统一 expireSnapshots。
+    {
+      ttlMs: 30 * 60_000,
+      affectedSince: unaffectedTypes(db, CORE_UNRELATED_TYPES),
+      steadyCursorReuse: true,
+    },
   ).then((x) => x.data);
 }

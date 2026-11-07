@@ -920,6 +920,9 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     // v0.17.473 库存盘点 stock_adjustments 表 → 快检版本 '15'
     // v0.17.476 AI 记忆/会话/消息 3 表 → 快检版本 '16'
     // v0.17.478 AI 工具权限/运行审计/待授权 4 表 → 快检版本 '17'
+    // 迁移链会回填/重建业务行表（UPDATE sale_items 等），这些写入绕过 sync_changes，
+    // 游标不变 ⇒ 精确失效快照不会自行发现数据已变。收尾统一让全部快照失效（下次请求重算）。
+    await db.prepare("DELETE FROM schema_meta WHERE key LIKE 'snapshot:%'").run();
     await db.prepare(
       "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '17')",
     ).run();

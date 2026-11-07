@@ -154,6 +154,35 @@ describe('版本化只读快照', () => {
     }
   });
 
+  it('steadyCursorReuse：零写入空闲期不再按 TTL 定时重算，仅保留 24h 绝对上限', async () => {
+    let calls = 0;
+    const compute = async () => ({ n: ++calls });
+    const opts = { ttlMs: 60_000, steadyCursorReuse: true };
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_000_000);
+      expect((await versionedSnapshot(db as never, 'steady', compute, '', opts)).data.n).toBe(1);
+      // 页面挂着、无人操作，时间跨过 60 个 TTL 但游标没变 → 不应全表重算
+      nowSpy.mockReturnValue(1_000_000 + 60 * 60_000);
+      expect((await versionedSnapshot(db as never, 'steady', compute, '', opts)).data.n).toBe(1);
+      expect(calls).toBe(1);
+      // 24h 绝对上限：兜住漏配 expireSnapshots 的绕过写入，绝不永久陈旧
+      nowSpy.mockReturnValue(1_000_000 + 25 * 60 * 60_000);
+      expect((await versionedSnapshot(db as never, 'steady', compute, '', opts)).data.n).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('steadyCursorReuse：游标前进且判定相关时立即重算（数据实时性不受影响）', async () => {
+    let calls = 0;
+    const compute = async () => ({ n: ++calls });
+    const opts = { ttlMs: 60_000, steadyCursorReuse: true, affectedSince: async () => true };
+    await versionedSnapshot(db as never, 'steady2', compute, '', opts);
+    await bumpCursor(db);
+    expect((await versionedSnapshot(db as never, 'steady2', compute, '', opts)).data.n).toBe(2);
+  });
+
   it('unaffectedTypes：白名单内的写不重算，未知 entity_type 保守重算', async () => {
     let calls = 0;
     const compute = async () => ({ n: ++calls });
@@ -193,6 +222,32 @@ describe('快照消费端：写后必须精确、不得返回陈旧值', () => {
     // 三个端点只产生一份全局快照（不是各存一份）
     const rows = await env.DB.prepare("SELECT key FROM schema_meta WHERE key = 'snapshot:sync_counts'").all<{ key: string }>();
     expect(rows.results.length).toBe(1);
+  });
+
+  it('sync/stats 空闲期重复请求 + 无关写都不再全表扫（D1 rows_read 护栏）', async () => {
+    expect((await call(env, 'GET', '/api/v1/sync/stats', token)).status).toBe(200); // 预热
+    const record = async () => {
+      const sqls: string[] = [];
+      const orig = env.DB.prepare.bind(env.DB);
+      const spy = vi.spyOn(env.DB, 'prepare').mockImplementation(((sql: string) => {
+        sqls.push(sql);
+        return orig(sql);
+      }) as typeof env.DB.prepare);
+      try {
+        expect((await call(env, 'GET', '/api/v1/sync/stats', token)).status).toBe(200);
+      } finally {
+        spy.mockRestore();
+      }
+      return sqls;
+    };
+    // 零写入：命中快照，连 derived_core 的全表明细都不该再取
+    expect((await record()).some((s) => /FROM sale_items\b/i.test(s))).toBe(false);
+
+    // 设备/主题这类无关写推进游标，也不该打掉全局计数快照
+    await env.DB.prepare(
+      "INSERT INTO sync_changes (entity_type, entity_sync_id, updated_at) VALUES ('device', 'd1', '2026-01-01')",
+    ).run();
+    expect((await record()).some((s) => /FROM sale_items\b/i.test(s))).toBe(false);
   });
 
   it('overview 欠款：写单（游标变）与改舍入配置（游标不变）都必须实时', async () => {

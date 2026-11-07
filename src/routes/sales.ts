@@ -8,7 +8,7 @@ import { buildPayload, recordChange } from '../lib/sync';
 import { deleteEntityAttachments } from '../lib/image-key';
 import { getRoundingConfig, roundMoney } from '../lib/money';
 import { chunkQuery } from '../lib/query';
-import { versionedSnapshot } from '../lib/snapshot';
+import { versionedSnapshot, expireSnapshots } from '../lib/snapshot';
 import { loadDerivedCore, type CoreSaleItem } from '../lib/derived-core';
 import { consumeFifoStatements, releaseSaleUsesStatements } from '../lib/fifo';
 import { recordAudit } from './audit';
@@ -549,6 +549,9 @@ salesRouter.post('/fix-sort', adminOnly(), async (c) => {
     for (let i = 0; i < batch.length; i += 100) {
       await c.env.DB.batch(batch.slice(i, i + 100));
     }
+    // 裸写 sale_items.sort 不追加 sync_changes（见端点注释），游标不变 → 显式让快照失效，
+    // 否则 derived_core 里的 sort 会一直停留在旧值。
+    await expireSnapshots(c.env.DB);
   }
   await recordAudit(c.env.DB, {
     username: c.get('user').username, action: 'fix', entity_type: 'sale_item',

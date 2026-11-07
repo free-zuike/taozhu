@@ -7,8 +7,8 @@ import { createStorage } from '../services/storage';
 import { notifyClients } from '../services/sync-hub';
 import { attachmentContentKey, LEGACY_IMAGE_PREFIXES, parseAttachmentKey } from '../lib/image-key';
 import { recordChange } from '../lib/sync';
-import { versionedSnapshot, unaffectedTypes } from '../lib/snapshot';
-import { computeGlobalCounts } from '../lib/global-counts';
+import { versionedSnapshot, unaffectedTypes, expireSnapshots } from '../lib/snapshot';
+import { loadGlobalCounts } from '../lib/global-counts';
 import { orderRefCountsFromLines, refCountByEntity } from '../lib/attachment-counts';
 import type { AuthUser, Env } from '../types';
 
@@ -281,7 +281,7 @@ attachmentsRouter.post('/counts', async (c) => {
 // 不计 R2 孤儿/历史残留对象（孤儿由清理页单独扫描删除，避免"本地7/服务器11"类虚高差异）。
 attachmentsRouter.get('/total', async (c) => {
   // 与同步面板共用版本化快照：DISTINCT 全表扫描只在数据版本变化后跑一次
-  const { data: g } = await versionedSnapshot(c.env.DB, 'sync_counts', () => computeGlobalCounts(c.env.DB));
+  const { data: g } = await loadGlobalCounts(c.env.DB);
   return c.json({ total: g.attach_file_total });
 });
 
@@ -348,6 +348,8 @@ async function computeInUse(env: Env): Promise<Array<{ key: string; entity: stri
         out.push({ key: lk.key, entity: lk.entity, id: lk.id, file: lk.file, size: lk.size });
       }
     }
+    // 历史引用补写绕过变更流（游标不变）→ 让计数/派生快照失效，下次请求重算。
+    await expireSnapshots(db);
   }
   if (!legacyDone && !backfillFailed) {
     try {
@@ -386,6 +388,7 @@ async function computeInUse(env: Env): Promise<Array<{ key: string; entity: stri
     if (!consolidated) {
       await consolidateLineRefs('sale');
       await consolidateLineRefs('purchase');
+      await expireSnapshots(db);
       await db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('attachment_line_consolidated', '1')").run();
     }
   }
@@ -470,7 +473,12 @@ attachmentsRouter.delete('/orphans', adminOnly(), async (c) => {
       deleted++;
     } catch (_) {}
   }
-  if (deleted > 0) await notifyClients();
+  // 防御性清理的引用行绕过变更流（游标不变）→ 计数快照必须显式失效；
+  // WS 广播只通知前端，不会 bump sync_changes。
+  if (deleted > 0) {
+    await expireSnapshots(db);
+    await notifyClients();
+  }
   return c.json({ deleted });
 });
 

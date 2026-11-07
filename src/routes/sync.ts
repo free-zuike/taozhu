@@ -7,8 +7,7 @@ import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { chunkQuery } from '../lib/query';
 import { applyChange, buildPayload, latestChange, maskPayload, maxCursor, recordChange } from '../lib/sync';
-import { versionedSnapshot } from '../lib/snapshot';
-import { computeGlobalCounts } from '../lib/global-counts';
+import { loadGlobalCounts } from '../lib/global-counts';
 import { orderRefCountsFromLines, refCountByEntity } from '../lib/attachment-counts';
 import type { AuthUser, Env } from '../types';
 
@@ -356,7 +355,7 @@ syncRouter.get('/full', async (c) => {
 syncRouter.get('/stats', async (c) => {
   const db = c.env.DB;
   const clientId = c.req.query('client_id')?.trim() ?? '';
-  const { data: g, cursor } = await versionedSnapshot(db, 'sync_counts', () => computeGlobalCounts(db));
+  const { data: g, cursor } = await loadGlobalCounts(db);
   let saleItems = g.sale_items;
   let paymentCount = g.payments;
   if (clientId) {
@@ -423,7 +422,7 @@ syncRouter.get('/panel', async (c) => {
     return { counts, total: Object.values(counts).reduce((a, b) => a + b, 0), ids };
   };
   // 全局部分与 /sync/stats、/attachments/total 共用同一份版本化快照（10 条全表 COUNT 只在版本变化时重算）
-  const { data: g, cursor } = await versionedSnapshot(db, 'sync_counts', () => computeGlobalCounts(db));
+  const { data: g, cursor } = await loadGlobalCounts(db);
   const out: Record<string, unknown> = {
     clients: g.clients,
     items: g.items,
