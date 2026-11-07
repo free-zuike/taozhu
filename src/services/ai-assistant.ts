@@ -398,15 +398,22 @@ export async function runBusinessQuery(
          GROUP BY s.client_id ORDER BY s DESC LIMIT 10`,
       ).bind(start, endEx, ...(clientId ? [clientId] : [])).all<{ client_id: string; name: string; s: number }>();
       if (saleRows.results.length === 0) return '该区间没有出货记录';
-      // 欠款=截止 end 全部出货−全部收款
+      // 欠款=截止 end 累计出货−累计收款（与 stats 口径一致）；区间出货（上面 s）单独展示。
+      // 注意：不能用本区间出货 r.s 去减累计收款，否则时间段一变就算错。
       const cids = saleRows.results.map((r) => r.client_id);
-      const payRows = await db.prepare(
-        `SELECT client_id, COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE happened_at < ? AND client_id IN (${cids.map(() => '?').join(',')}) GROUP BY client_id`,
-      ).bind(endEx, ...cids).all<{ client_id: string; s: number }>();
+      const [payRows, cumSaleRows] = await Promise.all([
+        db.prepare(
+          `SELECT client_id, COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE happened_at < ? AND client_id IN (${cids.map(() => '?').join(',')}) GROUP BY client_id`,
+        ).bind(endEx, ...cids).all<{ client_id: string; s: number }>(),
+        db.prepare(
+          `SELECT s.client_id, COALESCE(SUM(s.amount),0) AS s FROM sale_items s JOIN clients c ON c.id = s.client_id WHERE s.happened_at < ? AND c.deleted_at IS NULL AND s.client_id IN (${cids.map(() => '?').join(',')}) GROUP BY s.client_id`,
+        ).bind(endEx, ...cids).all<{ client_id: string; s: number }>(),
+      ]);
       const payMap = new Map(payRows.results.map((r) => [r.client_id, r.s]));
+      const cumMap = new Map(cumSaleRows.results.map((r) => [r.client_id, r.s]));
       lines.push(`区间 ${start} ~ ${end} 各店出货额：`);
       for (const r of saleRows.results) {
-        const debt = Math.round((r.s - (payMap.get(r.client_id) ?? 0)) * 100) / 100;
+        const debt = Math.round(((cumMap.get(r.client_id) ?? 0) - (payMap.get(r.client_id) ?? 0)) * 100) / 100;
         lines.push(`${r.name}：出货 ${money(r.s)}${isStaff ? '' : `，欠款 ${money(debt)}`}`);
       }
       return lines.join('\n');

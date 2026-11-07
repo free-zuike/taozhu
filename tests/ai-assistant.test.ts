@@ -288,6 +288,22 @@ describe('动态查询与知识库（0.17.475）', () => {
     expect(items).not.toContain('¥20'); // 乙店的出货不应混入
   });
 
+  it('runBusinessQuery clients 视角欠款按累计算（修：误用区间出货减累计收款）', async () => {
+    const it = await mkItem('债测品', 1, 1);
+    await call(env, 'POST', '/api/v1/clients', token, { name: '债测店甲' });
+    const a = ((await call(env, 'GET', '/api/v1/clients', token).then((r) => r.json())) as { clients: Array<{ name: string; id: string }> }).clients.find((c) => c.name === '债测店甲')!;
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: a.id, happened_at: '2026-08-05', items: [{ price_id: it.prices[0].id, quantity: 20 }] }); // ¥20（8月）
+    await call(env, 'POST', '/api/v1/sales', token, { client_id: a.id, happened_at: '2026-09-05', items: [{ price_id: it.prices[0].id, quantity: 10 }] }); // ¥10（9月）
+
+    // 只查 9 月区间：区间出货应为 ¥10，但欠款（累计出货−累计收款）应为 ¥30，不能误用区间 ¥10。
+    const r = await runBusinessQuery(db as never, 'admin', {
+      intent: 'query', view: 'clients', start: '2026-09-01', end: '2026-09-30', client: null, kind: 'sale', year: null, topics: [],
+    });
+    expect(r).toContain('债测店甲');
+    expect(r).toContain('¥10'); // 9 月区间出货
+    expect(r).toContain('¥30'); // 累计欠款（8月20 + 9月10，无收款）
+  });
+
   it('runBusinessQuery monthly/daily/years 基本形状', async () => {
     const it = await mkItem('茄子', 4, 2);
     await call(env, 'POST', '/api/v1/clients', token, { name: 'C店' });

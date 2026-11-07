@@ -54,7 +54,8 @@ export function parseMonthRange(
   const thisYear = Number(today.slice(0, 4));
   const thisMonth = Number(today.slice(5, 7));
   const isLastYear = /去年/.test(t);
-  const relPrev = /上个月|上月|前一个月/.test(t);
+  const twoMonthAgo = /上上个月|上上月|前两个月|前俩个月/.test(t);
+  const relPrev = !twoMonthAgo && /上个月|上月|前一个月|上一个月/.test(t);
   const relThis = /这个月|本月|当月/.test(t);
   const num = /(\d{4})年(\d{1,2})月|(\d{1,2})月/.exec(t);
   const fullYear = /全年|整年|这一年/.test(t);
@@ -64,7 +65,9 @@ export function parseMonthRange(
 
   let year = thisYear;
   let month = thisMonth;
-  if (relPrev) {
+  if (twoMonthAgo) {
+    month -= 2;
+  } else if (relPrev) {
     month -= 1;
   } else if (num) {
     year = num[1] ? Number(num[1]) : (isLastYear ? thisYear - 1 : thisYear);
