@@ -63,7 +63,7 @@ export async function deleteEntityAttachments(env: Env, entity: string, id: stri
           entity_sync_id: r.file_key,
           action: 'delete',
           payload: { file_key: r.file_key, file: r.file_key.split('/').pop() ?? '', entity, id },
-          updated_at: new Date().toISO8601String(),
+          updated_at: new Date().toISOString(),
         });
       } catch (_) {}
       const others = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM attachment_refs WHERE file_key = ?')
