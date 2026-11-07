@@ -1323,7 +1323,18 @@ class SyncService {
     var pushed = 0;
     try {
       // ① 上传待传附件（失败不阻塞主流程，单张静默保留队列下次再传）——记录本次上传张数
-      final uploadedAttach = await uploadPendingAttachments();
+      //    与 enqueue 即时上传共用 _attUploadLock，避免两路并发重复上传同一文件
+      //    （否则一路成功、另一路在途遇网络抖动超时 → 日志先「成功」后「超时」，同文件重复传）
+      final uploadedAttach = _attUploadLock
+          ? 0
+          : await (() async {
+              _attUploadLock = true;
+              try {
+                return await uploadPendingAttachments();
+              } finally {
+                _attUploadLock = false;
+              }
+            })();
       // ② push 本地变更（内部成功后顺带拉取一次其他设备变更）
       pushed = await pushPending();
       // ③ 全量/增量拉取：未全量过、或本地库全空（数据被清但游标残留）→ 强制全量拉齐，
