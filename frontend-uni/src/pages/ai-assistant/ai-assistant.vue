@@ -90,7 +90,7 @@ const messages = ref<Msg[]>([]);
 const input = ref('');
 const thinking = ref(false);
 const bottomAnchor = ref('');
-const quickQs = ['今天卖了多少？', '本月毛利多少？', '哪个店欠款最多？', '哪些货快卖完了？', '有什么快过期？', '怎么记一笔账？', '店铺对不上账，帮我找可疑单据？'];
+const quickQs = ['今天卖了多少？', '本月毛利多少？', '哪个店欠款最多？', '哪些货快卖完了？', '有什么快过期？', '怎么记一笔账？', '店铺对不上账，帮我找可疑单据？', '最近 AI 帮我做了什么？'];
 const showMemories = ref(false);
 const memories = ref<Array<{ id: string; content: string; created_at: string }>>([]);
 // 打字机：最新一条助手回复逐字显示

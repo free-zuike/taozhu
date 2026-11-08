@@ -212,7 +212,8 @@ CREATE TABLE IF NOT EXISTS share_links (
   token TEXT PRIMARY KEY,
   payload TEXT NOT NULL,
   expires_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  created_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_share_links_expires ON share_links (expires_at);
 
@@ -392,3 +393,32 @@ CREATE INDEX IF NOT EXISTS idx_stock_adjustments_adjust ON stock_adjustments (ad
 -- 唯一例外：idx_payments_sync_key 是 payments 上的 UNIQUE 索引。
 -- 存量库若存在历史重复 sync_key，CI 的 wrangler d1 execute --file 会整批失败并阻断部署，
 -- 故不写进本快照，由运行时 ensureIndexes 带 try/catch 单独补齐（失败只跳过该索引，不影响 API）。
+
+-- v0.17.517 新增表：单据级幂等键、收款↔出货单核销、作废单据归档。
+-- 与 src/schema.ts 的 EXTRA_DDL 一一对应；已初始化的老库由运行时前置补建（快检之前）。
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  key TEXT PRIMARY KEY,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS payment_allocations (
+  id TEXT PRIMARY KEY,
+  payment_id TEXT NOT NULL,
+  sale_id TEXT NOT NULL,
+  amount REAL NOT NULL CHECK (amount > 0),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_alloc_payment ON payment_allocations (payment_id);
+CREATE INDEX IF NOT EXISTS idx_alloc_sale ON payment_allocations (sale_id);
+CREATE TABLE IF NOT EXISTS voided_orders (
+  id TEXT PRIMARY KEY,
+  entity_type TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  client_id TEXT NOT NULL DEFAULT '',
+  total REAL NOT NULL DEFAULT 0,
+  voided_at TEXT NOT NULL,
+  voided_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_voided_type_time ON voided_orders (entity_type, voided_at DESC);

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +14,8 @@ import '../local_db.dart';
 import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
+import '../utils/biz_date.dart';
+import '../utils/download.dart';
 import '../utils/update_sources.dart';
 import '../utils/github_release.dart';
 import '../utils/update_channel.dart';
@@ -43,6 +46,7 @@ import 'ai_activity_page.dart';
 import 'ai_memory_page.dart';
 import 'payment_accounts_page.dart';
 import 'update_sources_page.dart';
+import 'trash_page.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/center_sheet.dart';
 
@@ -270,6 +274,18 @@ class _MyPageState extends State<MyPage> {
     } catch (_) {
       _lowStocks = 0;
       _expiringStocks = 0;
+    }
+  }
+
+  /// 导出全部流水 CSV（出货 / 进货 / 收款；店员由服务端打码进价与成本）。
+  Future<void> _exportTransactionsCsv() async {
+    try {
+      final bytes = await Api.instance.getRaw('/export/transactions.csv');
+      await saveBytes(Uint8List.fromList(bytes),
+          'taozhu-transactions-${bizTodayISO()}.csv', 'text/csv', '陶朱流水导出');
+      if (mounted) toast(context, '流水 CSV 已导出');
+    } catch (e) {
+      if (mounted) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -1542,6 +1558,13 @@ class _MyPageState extends State<MyPage> {
               _item(Icons.manage_search_outlined, c.primary, '操作审计',
                   '登录 / 删除 / 修改 / 导入导出等关键操作留痕（仅老板）',
                   () => goPage(context, const AuditPage())),
+            _item(Icons.table_chart_outlined, c.primary, '导出流水 CSV',
+                '出货 / 进货 / 收款明细导出 Excel 可打开的表（店员自动打码成本）',
+                _exportTransactionsCsv),
+            if (_role != 'staff')
+              _item(Icons.restore_from_trash_outlined, c.primary, '回收站',
+                  '作废/红冲的单据快照：查看原因、恢复入账或彻底删除',
+                  () => goPage(context, const TrashPage())),
           ]),
           const SizedBox(height: 24),
           Row(

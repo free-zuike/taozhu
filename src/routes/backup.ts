@@ -89,15 +89,17 @@ backupRouter.put('/auto', async (c) => {
 // ?attachments=none 只要表数据（剪贴板/轻量导出：同环境导入附件本体已在存储端，引用行恢复后即可正常读取）
 backupRouter.get('/', async (c) => {
   const wantEmbed = c.req.query('attachments') !== 'none';
-  const { data, attachments } = await exportAllData(c.env.DB, wantEmbed ? c.env : undefined);
+  const { data, attachments, attachment_error } = await exportAllData(c.env.DB, wantEmbed ? c.env : undefined);
   await recordAudit(c.env.DB, {
     username: c.get('user').username, action: 'export', entity_type: 'backup',
-    detail: `导出全库备份（${Object.keys(data).length} 张表${attachments.count > 0 ? ` · 附件 ${attachments.count} 个${attachments.embedded ? '（内嵌）' : '（仅引用）'}` : ''}）`,
+    detail: `导出全库备份（${Object.keys(data).length} 张表${attachments.count > 0 ? ` · 附件 ${attachments.count} 个${attachments.embedded ? '（内嵌）' : '（仅引用）'}` : ''}${attachment_error ? ' · 附件导出失败' : ''}）`,
   });
   return c.json({
     exported_at: new Date().toISOString(),
     data,
     ...(attachments.count > 0 ? { attachments } : {}),
+    // 附件导出失败时明确告知，避免把这份 JSON 当成完整备份
+    ...(attachment_error ? { attachment_error, warning: '附件导出失败，本次备份不含附件，请勿据此恢复附件' } : {}),
   });
 });
 

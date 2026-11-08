@@ -26,10 +26,13 @@ import { meRouter } from './routes/me';
 import { auditRouter } from './routes/audit';
 import { devicesRouter } from './routes/devices';
 import { maintenanceRouter } from './routes/maintenance';
+import { exportRouter } from './routes/export';
+import { trashRouter } from './routes/trash';
 import { ensureSchema } from './schema';
 import { verifyToken } from './lib/jwt';
 import { isDbUnavailable, DB_UNAVAILABLE_MESSAGE } from './lib/db-availability';
 import { setHubEnv, SyncHub } from './services/sync-hub';
+import { runDailyMaintenance } from './services/maintenance';
 
 // Durable Object 需从入口导出（wrangler 按 class_name 绑定）
 export { SyncHub };
@@ -118,6 +121,8 @@ app.route('/api/v1/me', meRouter);
 app.route('/api/v1/audit', auditRouter);
 app.route('/api/v1/devices', devicesRouter);
 app.route('/api/v1/maintenance', maintenanceRouter);
+app.route('/api/v1/export', exportRouter);
+app.route('/api/v1/trash', trashRouter);
 app.route('/api/v1/print', printRouter);
 app.route('/api/v1/stmt-templates', stmtTemplatesRouter);
 
@@ -165,6 +170,13 @@ app.all('*', async (c) => {
 // 自动备份（wrangler.toml cron 每分钟触发，命中用户配置的北京时间 HH:MM 才执行——时间可配不写死）：
 // 全库 JSON 走备份存储工厂（createStorage），保留最近可配份数；失败静默下次重试。
 async function scheduledBackup(env: Env): Promise<void> {
+  // 每日维护放在备份时间判断之前：即使没配置自动备份，也要清理过期变更流/审计/分享链接。
+  // 内部按 schema_meta 日期去重，每分钟 cron 只有当天第一次真正执行 DML。
+  try {
+    await runDailyMaintenance(env.DB);
+  } catch (e) {
+    console.error('[taozhu] 每日维护失败:', e);
+  }
   try {
     const configured = await getBackupTime(env.DB);
     if (!isBackupTime(new Date(), configured)) return;

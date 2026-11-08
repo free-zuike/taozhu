@@ -59,10 +59,14 @@ export async function createPurchaseOrder(
   const syncKey = input.sync_key?.trim() || '';
   if (!Array.isArray(items) || items.length === 0) throw new ApiError('请至少添加一种商品', 400);
 
-  // 幂等：同一 sync_key 已存在（离线重放重复投递）→ 返回已有记录，不重复建单/不重复加库存
+  // 幂等：同一 sync_key 已存在（离线重放重复投递）→ 返回已有记录，不重复建单/不重复加库存。
+  // 查单据级幂等表（新写入）+ 兼容历史行表；并发竞态由 commit 时的主键冲突回滚兜底。
   if (syncKey) {
-    const existed = await db.prepare('SELECT purchase_id FROM purchase_items WHERE sync_key = ?').bind(syncKey).first<{ purchase_id: string }>();
-    if (existed) return { id: existed.purchase_id, happened_at: '', note: '', total: 0, items: 0, dup: true };
+    const existed = await db.prepare('SELECT entity_id FROM idempotency_keys WHERE key = ?')
+      .bind(syncKey).first<{ entity_id: string }>()
+      ?? await db.prepare('SELECT purchase_id AS entity_id FROM purchase_items WHERE sync_key = ?')
+        .bind(syncKey).first<{ entity_id: string }>();
+    if (existed) return { id: existed.entity_id, happened_at: '', note: '', total: 0, items: 0, dup: true };
   }
 
   const priceIds = items.map((i) => i.price_id);
@@ -111,7 +115,22 @@ export async function createPurchaseOrder(
     batch.push(stockDeltaFor(db, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, 1));
   }
 
-  await db.batch(batch);
+  // 幂等键与业务行放进同一个 batch：并发重放同一 sync_key 时后到者触发主键冲突、
+  // 整批回滚（含库存/FIFO 语句），不会留下半截单据或重复扣库存。
+  if (syncKey) {
+    batch.unshift(db.prepare('INSERT INTO idempotency_keys (key, entity_type, entity_id) VALUES (?, ?, ?)')
+      .bind(syncKey, 'purchase', purchaseId));
+  }
+  try {
+    await db.batch(batch);
+  } catch (err) {
+    if (syncKey) {
+      const dup = await db.prepare('SELECT entity_id FROM idempotency_keys WHERE key = ?')
+        .bind(syncKey).first<{ entity_id: string }>();
+      if (dup) return { id: dup.entity_id, happened_at: '', note: '', total: 0, items: 0, dup: true };
+    }
+    throw err;
+  }
   await recordChange(db, { entity_type: 'purchase', entity_sync_id: purchaseId, payload: await buildPayload(db, 'purchase', purchaseId), updated_by_username: user.username });
   await recordAudit(db, { username: user.username, action: 'create', entity_type: 'purchase', entity_id: purchaseId, detail: `添加进货：${items.length} 件商品，合计 ¥${roundMoney(total, money).toFixed(money.digits)}` });
   return { id: purchaseId, happened_at: happenedAt, note, total: roundMoney(total, money), items: items.length };
@@ -130,8 +149,11 @@ export async function createSaleOrder(
   if (!Array.isArray(items) || items.length === 0) throw new ApiError('请至少添加一种商品', 400);
 
   if (syncKey) {
-    const existed = await db.prepare('SELECT sale_id FROM sale_items WHERE sync_key = ?').bind(syncKey).first<{ sale_id: string }>();
-    if (existed) return { id: existed.sale_id, client_id: clientId, happened_at: '', note: '', total: 0, items: 0, dup: true };
+    const existed = await db.prepare('SELECT entity_id FROM idempotency_keys WHERE key = ?')
+      .bind(syncKey).first<{ entity_id: string }>()
+      ?? await db.prepare('SELECT sale_id AS entity_id FROM sale_items WHERE sync_key = ?')
+        .bind(syncKey).first<{ entity_id: string }>();
+    if (existed) return { id: existed.entity_id, client_id: clientId, happened_at: '', note: '', total: 0, items: 0, dup: true };
   }
 
   const client = await db.prepare('SELECT id FROM clients WHERE id = ? AND deleted_at IS NULL').bind(clientId).first();
@@ -184,7 +206,21 @@ export async function createSaleOrder(
     batch.push(stockDeltaFor(db, { item_id: price.item_id, unit: price.unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: price.count_unit, per }, -1));
   }
 
-  await db.batch(batch);
+  // 幂等键与业务行同一个 batch：并发重放整批回滚，杜绝重复单据 / 重复扣库存
+  if (syncKey) {
+    batch.unshift(db.prepare('INSERT INTO idempotency_keys (key, entity_type, entity_id) VALUES (?, ?, ?)')
+      .bind(syncKey, 'sale', saleId));
+  }
+  try {
+    await db.batch(batch);
+  } catch (err) {
+    if (syncKey) {
+      const dup = await db.prepare('SELECT entity_id FROM idempotency_keys WHERE key = ?')
+        .bind(syncKey).first<{ entity_id: string }>();
+      if (dup) return { id: dup.entity_id, client_id: clientId, happened_at: '', note: '', total: 0, items: 0, dup: true };
+    }
+    throw err;
+  }
   await recordChange(db, { entity_type: 'sale', entity_sync_id: saleId, payload: await buildPayload(db, 'sale', saleId), updated_by_username: user.username });
   const clientName = (await db.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>())?.name ?? clientId;
   await recordAudit(db, { username: user.username, action: 'create', entity_type: 'sale', entity_id: saleId, detail: `添加出货：店铺 ${clientName}，${items.length} 件商品，合计 ¥${roundMoney(total, money).toFixed(money.digits)}` });

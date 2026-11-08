@@ -7,6 +7,7 @@
 import { Hono } from 'hono';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ensureIndexes, inspectIndexes } from '../schema';
+import { runDailyMaintenance } from '../services/maintenance';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -29,4 +30,9 @@ maintenanceRouter.post('/indexes/ensure', async (c) => {
     plans: after.plans,
     total_indexes: after.totalIndexes,
   });
+});
+
+// POST /api/v1/maintenance/prune — 手动执行每日清理（force=true，不受当天已跑过去重限制）
+maintenanceRouter.post('/prune', async (c) => {
+  return c.json(await runDailyMaintenance(c.env.DB, true));
 });

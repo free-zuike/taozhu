@@ -42,6 +42,7 @@ class _AiAssistantPageState extends State<AiAssistantPage> {
     '有什么快过期？',
     '怎么记一笔账？',
     '店铺对不上账，帮我找可疑单据？',
+    '最近 AI 帮我做了什么？',
   ];
 
   @override

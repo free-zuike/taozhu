@@ -54,6 +54,13 @@ export const AI_TOOLS: AiToolDef[] = [
     defaultPolicy: 'ask',
   },
   {
+    name: 'activity_timeline',
+    label: '看工具时间线',
+    description: '汇总最近 AI 运行与工具调用（按工具/按天、成功失败、最近操作）',
+    permission: 'read',
+    defaultPolicy: 'allow',
+  },
+  {
     name: 'save_memory',
     label: '记住事项',
     description: '把用户让记住的事项写入助手记忆（会修改记忆）',
@@ -237,6 +244,78 @@ export async function listAiRuns(
     run: r,
     tool_calls: byRun.get(r.id) ?? [],
   }));
+}
+
+// ---------------------------------------------------------------------------
+// 工具时间线摘要：服务端确定性聚合 ai_runs / ai_tool_calls（不交给 LLM 自己数数）
+// ---------------------------------------------------------------------------
+
+export interface AiActivitySummary {
+  days: number;
+  from: string;
+  runs: number;
+  calls: number;
+  errors: number;
+  by_tool: Array<{ tool_name: string; count: number; errors: number }>;
+  by_day: Array<{ day: string; runs: number; calls: number }>;
+  recent: Array<{ at: string; tool_name: string; result: string; status: string }>;
+  text: string;
+}
+
+export async function summarizeAiActivity(
+  db: D1Database, userId: string, days = 30,
+): Promise<AiActivitySummary> {
+  const span = Math.min(Math.max(Number(days) || 30, 1), 365);
+  const from = new Date(Date.now() - span * 86400_000).toISOString();
+  const [runs, calls] = await Promise.all([
+    db.prepare(
+      'SELECT id, intent, status, started_at FROM ai_runs WHERE user_id = ? AND started_at >= ? ORDER BY started_at DESC LIMIT 500',
+    ).bind(userId, from).all<{ id: string; intent: string; status: string; started_at: string }>(),
+    db.prepare(
+      `SELECT tool_name, result, status, created_at FROM ai_tool_calls
+       WHERE user_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 500`,
+    ).bind(userId, from).all<{ tool_name: string; result: string; status: string; created_at: string }>(),
+  ]);
+  const toolMap = new Map<string, { tool_name: string; count: number; errors: number }>();
+  const dayMap = new Map<string, { day: string; runs: number; calls: number }>();
+  const day = (iso: string) => iso.slice(0, 10);
+  for (const c of calls.results) {
+    const t = toolMap.get(c.tool_name) ?? { tool_name: c.tool_name, count: 0, errors: 0 };
+    t.count += 1;
+    if (c.status === 'error') t.errors += 1;
+    toolMap.set(c.tool_name, t);
+    const d = dayMap.get(day(c.created_at)) ?? { day: day(c.created_at), runs: 0, calls: 0 };
+    d.calls += 1;
+    dayMap.set(d.day, d);
+  }
+  for (const r of runs.results) {
+    const d = dayMap.get(day(r.started_at)) ?? { day: day(r.started_at), runs: 0, calls: 0 };
+    d.runs += 1;
+    dayMap.set(d.day, d);
+  }
+  const byTool = [...toolMap.values()].sort((a, b) => b.count - a.count);
+  const byDay = [...dayMap.values()].sort((a, b) => a.day.localeCompare(b.day));
+  const errors = calls.results.filter((c) => c.status === 'error').length
+    + runs.results.filter((r) => r.status === 'error').length;
+  const recent = calls.results.slice(0, 5).map((c) => ({
+    at: c.created_at, tool_name: c.tool_name, result: String(c.result ?? '').slice(0, 80), status: c.status,
+  }));
+  const lines = [
+    `近 ${span} 天（自 ${day(from)}）共 ${runs.results.length} 次运行、${calls.results.length} 次工具调用，失败 ${errors} 次。`,
+    byTool.length
+      ? `按工具：${byTool.map((t) => `${toolDef(t.tool_name)?.label ?? t.tool_name} ${t.count} 次${t.errors ? `（失败 ${t.errors}）` : ''}`).join('；')}。`
+      : '按工具：暂无调用记录。',
+    byDay.length
+      ? `有活动的日期 ${byDay.length} 天，最近一天 ${byDay[byDay.length - 1].day}：${byDay[byDay.length - 1].runs} 次运行 / ${byDay[byDay.length - 1].calls} 次调用。`
+      : '',
+    recent.length
+      ? `最近操作：${recent.map((r) => `${r.at.slice(5, 16).replace('T', ' ')} ${r.tool_name}${r.status === 'error' ? '（失败）' : ''}`).join('；')}。`
+      : '最近没有工具操作记录。',
+  ].filter(Boolean);
+  return {
+    days: span, from, runs: runs.results.length, calls: calls.results.length, errors,
+    by_tool: byTool, by_day: byDay, recent, text: lines.join('\n'),
+  };
 }
 
 // ---------------------------------------------------------------------------

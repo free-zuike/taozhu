@@ -108,6 +108,12 @@
       <view v-if="isAdmin" class="row" @click="go('/pages/audit/audit')">
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE889;</text></view><view class="r-body"><text class="r-tx">操作审计</text><text class="r-sub">登录/删除/修改等关键操作留痕</text></view><text class="r-arrow">›</text>
       </view>
+      <view class="row" @click="exportCsv">
+        <view class="r-ic ic-green"><text class="mi ic-tx">&#xE2C4;</text></view><view class="r-body"><text class="r-tx">导出流水 CSV</text><text class="r-sub">出货/进货/收款明细（店员自动打码成本）</text></view><text class="r-arrow">›</text>
+      </view>
+      <view v-if="isAdmin" class="row" @click="go('/pages/trash/trash')">
+        <view class="r-ic ic-orange"><text class="mi ic-tx">&#xE92B;</text></view><view class="r-body"><text class="r-tx">回收站</text><text class="r-sub">作废单据快照：查看原因 / 恢复入账</text></view><text class="r-arrow">›</text>
+      </view>
     </view>
 
     <view class="bottom">
@@ -134,7 +140,7 @@ import { useThemeVars } from '../../theme';
 const { tv, patternSrc } = useThemeVars();
 import { ref, computed } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { request, getRole, getToken, getApiBase, setApiBase, clearToken, clearAccountData } from '../../api';
+import { request, requestText, getRole, getToken, getApiBase, setApiBase, clearToken, clearAccountData } from '../../api';
 import { fmtAmount } from '../../utils/money';
 import { APP_VERSION } from '../../version';
 
@@ -277,6 +283,30 @@ async function loadStats() {
     };
   } catch (e) {
     // 统计失败静默
+  }
+}
+
+/// 导出全量流水 CSV：H5 直接下载文件，小程序/App 复制到剪贴板兜底
+async function exportCsv() {
+  try {
+    const text = await requestText('/export/transactions.csv');
+    // #ifdef H5
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `taozhu-transactions-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    uni.showToast({ title: '流水 CSV 已导出', icon: 'success' });
+    // #endif
+    // #ifndef H5
+    uni.setClipboardData({
+      data: text,
+      success: () => uni.showToast({ title: '流水已复制，可粘贴到表格', icon: 'none' }),
+    });
+    // #endif
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message || '导出失败', icon: 'none' });
   }
 }
 

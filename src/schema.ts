@@ -229,7 +229,8 @@ const DDL: string[] = [
     token TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
     expires_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    created_by TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_share_links_expires ON share_links (expires_at)`,
   `CREATE TABLE IF NOT EXISTS sync_changes (
@@ -553,6 +554,58 @@ export async function inspectIndexes(db: D1Database): Promise<IndexDiagnostic> {
   };
 }
 
+/**
+ * v0.17.517 新增表：独立于全量 DDL batch（老库 CREATE TABLE IF NOT EXISTS 若失败
+ * 不会连累整批回滚）。三张表分别支撑单据幂等、收款核销、作废回收站。
+ * 必须在「版本快检」之前执行：已初始化老库 schema_version 已最新会被短路，
+ * 放在快检之后的表永远建不出来（0.17.471 backup_runs 事故同源）。
+ */
+const EXTRA_DDL = [
+  `CREATE TABLE IF NOT EXISTS idempotency_keys (
+    key TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS payment_allocations (
+    id TEXT PRIMARY KEY,
+    payment_id TEXT NOT NULL,
+    sale_id TEXT NOT NULL,
+    amount REAL NOT NULL CHECK (amount > 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_alloc_payment ON payment_allocations (payment_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_alloc_sale ON payment_allocations (sale_id)`,
+  `CREATE TABLE IF NOT EXISTS voided_orders (
+    id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    client_id TEXT NOT NULL DEFAULT '',
+    total REAL NOT NULL DEFAULT 0,
+    voided_at TEXT NOT NULL,
+    voided_by TEXT NOT NULL DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_voided_type_time ON voided_orders (entity_type, voided_at DESC)`,
+];
+
+async function ensureExtraSchema(db: D1Database): Promise<void> {
+  for (const sql of EXTRA_DDL) {
+    try { await db.prepare(sql).run(); } catch (_) { /* 单条失败不影响其它补建 */ }
+  }
+  // share_links 归属列：老库补列，历史无归属行统一归到最早用户，
+  // 之后 DELETE/PATCH 才能严格按 created_by 校验（避免 admin 互删他人分享）。
+  try {
+    const shareCols = await db.prepare('PRAGMA table_info(share_links)').all<{ name: string }>();
+    if (!shareCols.results.some((x) => x.name === 'created_by')) {
+      try { await db.prepare('ALTER TABLE share_links ADD COLUMN created_by TEXT').run(); } catch (_) {}
+    }
+    await db.prepare(
+      "UPDATE share_links SET created_by = (SELECT id FROM users ORDER BY created_at LIMIT 1) WHERE created_by IS NULL",
+    ).run();
+  } catch (_) { /* share_links 尚未建立时由后续全量迁移补建 */ }
+}
+
 /** 首次调用时建表；失败不置标志，下次重试 */
 export async function ensureSchema(db: D1Database): Promise<void> {
   if (schemaReady && indexesReady) return;
@@ -579,6 +632,8 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       const i = DDL.findIndex((s) => s.includes(marker));
       if (i >= 0) await db.prepare(DDL[i]).run();
     }
+    // 新增表/列的前置补建（必须早于下方版本快检，否则已初始化老库永远缺表）
+    await ensureExtraSchema(db);
     // 索引补齐必须先于版本快检：上面的前置建表只建表不建索引，且快检会短路整条迁移链。
     // 存量库（schema_version 已是最新）靠这里把缺失索引一次性补上，不再需要 bump 版本号。
     indexesReady = await ensureIndexes(db);

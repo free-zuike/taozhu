@@ -5,6 +5,7 @@ import { randomId } from '../lib/password';
 import { capabilityEndpoint, parseText } from './ai-parse';
 import { createPurchaseOrder, createSaleOrder, type PurchaseLineInput, type SaleLineInput } from './records';
 import { ApiError } from '../lib/api-error';
+import { normalizeAllocations, allocationStatements } from '../lib/allocations';
 import { localTodayISO } from '../lib/biz-date';
 import type { D1Database } from '@cloudflare/workers-types';
 
@@ -148,7 +149,7 @@ export async function recordTransactionFromText(
 export async function createAiPayment(
   db: D1Database,
   user: { id: string; username: string; role: string },
-  input: { client: string; amount: number; date: string | null; note: string | null },
+  input: { client: string; amount: number; date: string | null; note: string | null; allocations?: unknown },
 ): Promise<{ id: string; client: string; amount: number; date: string; note: string }> {
   const name = (input.client ?? '').trim();
   const amount = Number(input.amount);
@@ -161,9 +162,20 @@ export async function createAiPayment(
   const date = input.date && /^\d{4}-\d{2}-\d{2}$/.test(input.date) ? input.date : localTodayISO();
   const note = `AI 对账补录（待核对）${input.note ? `：${input.note}` : ''}`.slice(0, 200);
   const id = randomId();
-  await db.prepare(
-    'INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note, created_by) VALUES (?, ?, ?, ?, 0, ?, ?, ?)',
-  ).bind(id, client.id, date, amount, '', note, user.id).run();
+  // 与 /payments 同口径：默认把这笔收款按最早未结清单据 FIFO 核销，
+  // 让对账能指出「哪张单还没结清」，而不是只有累计欠款一个数字。
+  let allocations;
+  try {
+    allocations = await normalizeAllocations(db, client.id, amount, input.allocations);
+  } catch (e) {
+    throw new ApiError((e as Error).message, 400);
+  }
+  await db.batch([
+    db.prepare(
+      'INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note, created_by) VALUES (?, ?, ?, ?, 0, ?, ?, ?)',
+    ).bind(id, client.id, date, amount, '', note, user.id),
+    ...allocationStatements(db, id, allocations),
+  ]);
   // 动态 import 避免与 records → sync → routes 的静态依赖成环
   const [{ buildPayload, recordChange }, { expireSnapshots }, { recordAudit }] = await Promise.all([
     import('../lib/sync'), import('../lib/snapshot'), import('../routes/audit'),

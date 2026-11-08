@@ -241,6 +241,8 @@ async function exportAttachments(env: Env): Promise<{
 export async function exportAllData(db: D1Database, env?: Env): Promise<{
   data: Record<string, unknown[]>;
   attachments: { count: number; bytes: number; embedded: boolean };
+  /** 附件导出失败的原因；存在即表示这份 JSON 备份不含附件，不可当作完整备份 */
+  attachment_error?: string;
 }> {
   const data: Record<string, unknown[]> = {};
   const tables = await listBusinessTables(db);
@@ -248,14 +250,19 @@ export async function exportAllData(db: D1Database, env?: Env): Promise<{
     data[t] = await exportTablePages(db, t);
   }
   let attachments = { count: 0, bytes: 0, embedded: false };
+  let attachmentError: string | undefined;
   if (env) {
     try {
       const att = await exportAttachments(env);
       if (att.files.length > 0) data['__attachments'] = att.files;
       attachments = { count: att.count, bytes: att.bytes, embedded: att.embedded };
-    } catch (_) {}
+    } catch (e) {
+      // 原先静默吞掉，用户会以为备份完整、实际丢了全部附件。显式标记并返回错误字段。
+      attachmentError = e instanceof Error ? e.message : '附件导出失败';
+      data['__attachment_export_failed'] = [attachmentError];
+    }
   }
-  return { data, attachments };
+  return { data, attachments, attachment_error: attachmentError };
 }
 
 /** 云备份归档结果（POST /backup/now 与定时共用返回形态） */
@@ -414,12 +421,20 @@ export async function restoreBackupArchive(
   }
   // 附件写回存储端（key 即 attachment_refs.file_key，引用行在 db.json 里恢复后直接可用）
   let restored = 0;
+  let attachmentFailures = 0;
   for (const f of attachmentFiles) {
     try {
       await store.put(f.path, f.bytes, 'application/octet-stream');
       restored++;
-    } catch (_) {}
+    } catch (_) { attachmentFailures++; }
   }
   const { report, total_inserted } = await importBackupData(db, data);
-  return { ok: true, report, total_inserted, attachments: restored };
+  // 数据已写入但附件缺失是静默的不一致（引用行在、文件不在）；必须显式返回失败数与警告
+  return {
+    ok: true, report, total_inserted, attachments: restored,
+    ...(attachmentFailures ? {
+      attachment_failures: attachmentFailures,
+      warning: `${attachmentFailures} 个附件写回失败：数据已恢复，但这些凭证文件缺失，请重新上传`,
+    } : {}),
+  };
 }

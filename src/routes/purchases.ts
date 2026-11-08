@@ -11,6 +11,7 @@ import { chunkQuery } from '../lib/query';
 import { expireSnapshots } from '../lib/snapshot';
 import { recordAudit } from './audit';
 import { createPurchaseOrder } from '../services/records';
+import { archiveVoidedOrder } from '../services/voided';
 import { ApiError } from '../lib/api-error';
 import type { AuthUser, Env } from '../types';
 
@@ -477,22 +478,29 @@ purchasesRouter.delete('/:id', adminOnly(), async (c) => {
     `SELECT pi.item_id, pi.unit, pi.quantity, pi.count_qty, i.count_unit
      FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`).bind(id)
     .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
-  // 行级凭证附件：删行前拿行 id 清理（行级附件按 purchase_item/{lineId}/ 存储）
+  // 行级凭证附件 + FIFO 批次 id 都必须在删行前取：原来用子查询
+  // `batch_id IN (SELECT id FROM purchase_items ...)` 排在 DELETE purchase_items 之后执行，
+  // 子查询结果已空 → 批次永远删不掉，恢复/重算时凭空多出库存批次。
+  const lineIds = (await c.env.DB.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?')
+    .bind(id).all<{ id: string }>()).results.map((r) => r.id);
   try {
-    const lineRows = await c.env.DB.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
-      .all<{ id: string }>();
-    for (const lr of lineRows.results) {
-      await deleteEntityAttachments(c.env, 'purchase_item', lr.id);
+    for (const lineId of lineIds) {
+      await deleteEntityAttachments(c.env, 'purchase_item', lineId);
     }
   } catch (_) {}
+  await archiveVoidedOrder(c.env.DB, {
+    entity_type: 'purchase', id,
+    reason: c.req.query('reason')?.trim() || '删除/作废', username: c.get('user').username,
+  });
   const batch: D1PreparedStatement[] = oldItems.results
     .map((it) => stockDeltaFor(c.env.DB, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1)); // 进货加的减回
   batch.push(c.env.DB.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
-  // FIFO 批次：整单删除清批次（已消耗部分成本快照保留）
-  batch.push(c.env.DB.prepare('DELETE FROM stock_batches WHERE batch_id IN (SELECT id FROM purchase_items WHERE purchase_id = ?)').bind(id));
+  for (const lineId of lineIds) {
+    batch.push(c.env.DB.prepare('DELETE FROM stock_batches WHERE batch_id = ?').bind(lineId));
+  }
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
-  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'purchase', entity_id: id, detail: `删除进货记录（${oldItems.results.length} 件商品）` });
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'purchase', entity_id: id, detail: `作废进货记录（${oldItems.results.length} 件商品${c.req.query('reason') ? `，原因：${c.req.query('reason')}` : ''}）` });
   // 删除进货单附带的凭证图片（单据级 + 全部明细行级，best-effort 不阻塞删除）
   try {
     await deleteEntityAttachments(c.env, 'purchase', id);

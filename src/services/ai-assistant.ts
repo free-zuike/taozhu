@@ -10,9 +10,11 @@ import {
 import { randomId } from '../lib/password';
 import {
   toolDef, gateFor, startAiRun, finishAiRun, recordToolCall, createPendingAction,
+  summarizeAiActivity,
 } from './ai-tools';
 import { ApiError } from '../lib/api-error';
 import { recordTransactionFromText, createAiPayment } from './ai-record';
+import { listUnsettled } from '../lib/allocations';
 import { localTodayISO, dayRangeEnd, parseMonthRange } from '../lib/biz-date';
 import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesAggByConfig } from '../lib/money';
 import type { D1Database } from '@cloudflare/workers-types';
@@ -534,6 +536,9 @@ export async function runBusinessQuery(
         db.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>(),
       ]);
       const name = clientRow?.name ?? q.client ?? '该店铺';
+      // 核销台账：把累计欠款拆到「哪张出货单还没结清」。表未迁移的老库退化为无数据，
+      // 不影响原有明细与差异线索（catch 返回空数组）。
+      const unsettled = await listUnsettled(db, clientId).catch(() => []);
       const debt = Math.round((Number(cumSale?.s ?? 0) - Number(cumPay?.s ?? 0)) * 100) / 100;
       const sales = saleRows.results.map((r) => ({ d: r.d, a: Number(r.a), what: `出货单 ${r.sale_id}`, n: r.n }));
       const pays = payRows.results.map((r) => ({
@@ -546,10 +551,25 @@ export async function runBusinessQuery(
       for (const r of sales) lines.push(`- ${r.d} ${r.what} ${r.n} 行 ${money(r.a)}`);
       lines.push(`收款 ${pays.length} 笔：`);
       for (const r of pays) lines.push(`- ${r.d} ${r.what} ${money(r.a)}${r.extra ? ` ${r.extra}` : ''}`);
+      const open = unsettled.filter((o) => o.unsettled > 0.005);
+      if (unsettled.length) {
+        lines.push(`核销台账（收款按最早未结清单据 FIFO 分摊）：共 ${unsettled.length} 张出货单，其中 ${open.length} 张仍有待收额。`);
+        for (const o of open.slice(0, 10)) lines.push(`- ${o.date} 出货单 ${o.sale_id} 金额 ${money(o.total)}，已核销 ${money(o.allocated)}，待收 ${money(o.unsettled)}`);
+        if (open.length > 10) lines.push(`（其余 ${open.length - 10} 张未结清单据略）`);
+      }
       // 差异线索全部由上面「真实存在的单据」确定性算出，不生成任何新数字或单据
       const clues: string[] = [];
-      const all = [...sales, ...pays].map((x) => ({ d: x.d, a: x.a, what: x.what }));
       const diff = q.diff ?? 0;
+      if (unsettled.length) {
+        const openTotal = Math.round(open.reduce((s, o) => s + o.unsettled, 0) * 100) / 100;
+        clues.push(open.length
+          ? `按 FIFO 核销后仍有 ${open.length} 张单未结清、合计待收 ${money(openTotal)}，最早未结清：${open.slice(0, 3).map((o) => `${o.date} ${o.sale_id} 待收 ${money(o.unsettled)}`).join('；')} —— 优先与对方核对这几张单是否漏收/漏记。`
+          : '所有出货单都已按收款核销完（FIFO 口径），若对方仍报差额，优先核对单据金额是否录错或收款是否多记。');
+        if (diff > 0 && Math.abs(openTotal - diff) <= Math.max(0.5, diff * 0.02)) {
+          clues.push(`未结清合计 ${money(openTotal)} 与用户所说差额 ${money(diff)} 接近，可能差额就来自这些未结清单据。`);
+        }
+      }
+      const all = [...sales, ...pays].map((x) => ({ d: x.d, a: x.a, what: x.what }));
       if (diff > 0) {
         const near = all.filter((x) => Math.abs(x.a - diff) <= Math.max(0.5, diff * 0.02));
         clues.push(near.length
@@ -671,6 +691,16 @@ export async function assistantAnswer(
     tools.push({ name, label: def?.label ?? name, result });
     void recordToolCall(db, { runId, userId, toolName: name, args: userText.slice(0, 200), result });
   };
+
+  // 「最近 AI 都做了什么」：模型只看得到当前对话，必须把服务端运行审计的确定性汇总注入。
+  // 不交给模型自己数数，也不让它编造工具调用记录。
+  const activityHit = /(最近|近期|这段时间).*(AI|助手|工具|活动|做了|干了|执行|操作)|工具时间线|活动摘要|活动记录|运行记录/.test(userText);
+  if (activityHit && !intent?.payment && !intent?.record) {
+    const summary = await summarizeAiActivity(db, userId, 30);
+    noteTool('activity_timeline', `近 30 天 ${summary.runs} 次运行 / ${summary.calls} 次工具调用`);
+    extras.push('--- AI 工具时间线摘要（服务端运行审计统计，只能依据以下内容回答）---', summary.text);
+    sources.push('活动记录');
+  }
 
   // 补录收款（对账后「推送交易」）：金额必须用户明确给出，走与落单相同的授权门，确认后才入账
   if (intent?.payment) {
@@ -795,7 +825,8 @@ export async function assistantAnswer(
   }
 
   // ② 读工具：动态问数 / 内置知识库（只读，无需授权）
-  if (intent?.intent === 'query' && intent.view) {
+  // 时间线问题已由活动摘要回答，不再叠加业务问数结果（避免两份数据互相干扰）
+  if (intent?.intent === 'query' && intent.view && !activityHit) {
     const data = await runBusinessQuery(db, role, intent);
     if (data != null) {
       extras.push('--- 查询结果（本次问数按你口吻查出的数据，以此为准） ---', data);

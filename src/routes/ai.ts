@@ -16,7 +16,7 @@ import {
 import { assistantAnswer, execApprovedAction, listAiMemories, deleteAiMemory, clearAiMemories } from '../services/ai-assistant';
 import {
   toolDef, setToolPolicy, resetToolPolicies, listToolPolicies, listAiRuns,
-  takePendingAction, finishAiRun,
+  takePendingAction, finishAiRun, summarizeAiActivity,
   type ToolPolicy,
 } from '../services/ai-tools';
 import { randomId } from '../lib/password';
@@ -335,6 +335,13 @@ aiRouter.put('/tools/:name', async (c) => {
 aiRouter.post('/tools/reset', async (c) => {
   await resetToolPolicies(c.env.DB, c.get('user').id);
   return c.json({ ok: true });
+});
+
+// GET /api/v1/ai/activity/summary?days=30 — 工具时间线摘要（双端活动页顶部 + AI 问答共用）
+aiRouter.get('/activity/summary', async (c) => {
+  const days = Math.min(Math.max(Number(c.req.query('days')) || 30, 1), 365);
+  const summary = await summarizeAiActivity(c.env.DB, c.get('user').id, days);
+  return c.json(summary);
 });
 
 // GET /api/v1/ai/activity — 最近运行与工具调用（活动页；对齐参考 App agentRuns/agentToolCalls）

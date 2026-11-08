@@ -10,15 +10,25 @@ export const shareRouter = new Hono<{ Bindings: Env; Variables: V }>();
 // POST /api/v1/share — 生成分享链接（body: { payload, ttl_hours }，payload 为对账单结构化 JSON）
 shareRouter.post('/', authMiddleware(), adminOnly(), async (c) => {
   const body = await c.req.json().catch(() => null) as
-    | { payload?: string; ttl_hours?: number }
+    | { payload?: string; ttl_hours?: number; permanent?: boolean }
     | null;
   const payload = typeof body?.payload === 'string' ? body.payload.slice(0, 200000) : '';
   if (!payload) return c.json({ error: '缺少分享内容' }, 400);
-  const ttl = Number(body?.ttl_hours) || 72;
+  // clamp：负数原本会落成 expires_at=NULL（永久公开链接，含客户名与金额），
+  // 极大值/Infinity 会让 new Date(...).toISOString() 抛 RangeError → 500。
+  const rawTtl = Number(body?.ttl_hours);
+  const ttl = Number.isFinite(rawTtl) && rawTtl > 0 ? Math.min(rawTtl, 8760) : 72;
   const token = randomId();
-  const expiresAt = ttl > 0 ? new Date(Date.now() + ttl * 3600 * 1000).toISOString() : null;
-  await c.env.DB.prepare('INSERT INTO share_links (token, payload, expires_at) VALUES (?, ?, ?)')
-    .bind(token, payload, expiresAt).run();
+  // 永久链接必须显式 permanent=true，不再靠「传 0/负数」隐式触发
+  const expiresAt = body?.permanent === true
+    ? null
+    : new Date(Date.now() + ttl * 3600 * 1000).toISOString();
+  await c.env.DB.prepare(
+    'INSERT INTO share_links (token, payload, expires_at, created_by) VALUES (?, ?, ?, ?)',
+  ).bind(token, payload, expiresAt, c.get('user').id).run();
+  // 顺带清理过期链接：payload 是对账单快照，不该无限期留在库里
+  await c.env.DB.prepare('DELETE FROM share_links WHERE expires_at IS NOT NULL AND expires_at < ?')
+    .bind(new Date().toISOString()).run();
   const url = `${new URL(c.req.url).origin}/share/${token}`;
   return c.json({ token, url, expires_at: expiresAt }, 201);
 });
@@ -46,7 +56,9 @@ shareRouter.get('/', authMiddleware(), adminOnly(), async (c) => {
 // DELETE /api/v1/share/:token — 取消分享（删除链接，页面随即 404）
 shareRouter.delete('/:token', authMiddleware(), adminOnly(), async (c) => {
   const token = c.req.param('token');
-  const r = await c.env.DB.prepare('DELETE FROM share_links WHERE token = ?').bind(token).run();
+  // 只删自己创建的链接：share_links.created_by 在迁移里已为历史行补齐归属
+  const r = await c.env.DB.prepare('DELETE FROM share_links WHERE token = ? AND created_by = ?')
+    .bind(token, c.get('user').id).run();
   if ((r.meta.changes ?? 0) === 0) return c.json({ error: '分享不存在' }, 404);
   return c.json({ ok: true });
 });
@@ -55,8 +67,8 @@ shareRouter.delete('/:token', authMiddleware(), adminOnly(), async (c) => {
 shareRouter.patch('/:token', authMiddleware(), adminOnly(), async (c) => {
   const token = c.req.param('token');
   const body = await c.req.json().catch(() => null) as { extend_days?: number; permanent?: boolean } | null;
-  const row = await c.env.DB.prepare('SELECT expires_at FROM share_links WHERE token = ?').bind(token)
-    .first<{ expires_at: string | null }>();
+  const row = await c.env.DB.prepare('SELECT expires_at FROM share_links WHERE token = ? AND created_by = ?')
+    .bind(token, c.get('user').id).first<{ expires_at: string | null }>();
   if (!row) return c.json({ error: '分享不存在' }, 404);
   let expiresAt: string | null;
   if (body?.permanent) {
@@ -69,7 +81,8 @@ shareRouter.patch('/:token', authMiddleware(), adminOnly(), async (c) => {
       : Date.now();
     expiresAt = new Date(base + days * 86400000).toISOString();
   }
-  await c.env.DB.prepare('UPDATE share_links SET expires_at = ? WHERE token = ?').bind(expiresAt, token).run();
+  await c.env.DB.prepare('UPDATE share_links SET expires_at = ? WHERE token = ? AND created_by = ?')
+    .bind(expiresAt, token, c.get('user').id).run();
   return c.json({ ok: true, expires_at: expiresAt });
 });
 
@@ -87,7 +100,9 @@ export function renderShareHtml(payloadJson: string): string {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
-  const fmt = (v: unknown): string => (Number(v || 0)).toFixed(2);
+  // 坏数据（非数字字符串/NaN）不再渲染成 ¥NaN，统一按 0 处理
+  const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const fmt = (v: unknown): string => num(v).toFixed(2);
   const sales = Array.isArray(data.sales) ? (data.sales as Record<string, unknown>[]) : [];
   const payments = Array.isArray(data.payments) ? (data.payments as Record<string, unknown>[]) : [];
   const saleRows = sales
@@ -95,12 +110,12 @@ export function renderShareHtml(payloadJson: string): string {
     .join('');
   const payRows = payments
     .map((p) => {
-      const w = Number(p.waived || 0);
+      const w = num(p.waived);
       return `<tr><td>${esc(p.date)}</td><td>${esc(p.method || '—')}</td><td class="num">¥${fmt(p.amount)}</td>${w > 0 ? `<td class="num">¥${fmt(w)}</td>` : '<td class="num">—</td>'}</tr>`;
     })
     .join('');
-  const totalSales = sales.reduce((s, x) => s + Number(x.amount || 0), 0);
-  const totalPaid = payments.reduce((s, x) => s + Number(x.amount || 0), 0);
+  const totalSales = sales.reduce((s, x) => s + num(x.amount), 0);
+  const totalPaid = payments.reduce((s, x) => s + num(x.amount), 0);
   return `<!DOCTYPE html>
 <html lang="zh">
 <head>

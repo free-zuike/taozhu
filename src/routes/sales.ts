@@ -13,6 +13,7 @@ import { loadDerivedCore, type CoreSaleItem } from '../lib/derived-core';
 import { consumeFifoStatements, releaseSaleUsesStatements } from '../lib/fifo';
 import { recordAudit } from './audit';
 import { createSaleOrder } from '../services/records';
+import { archiveVoidedOrder } from '../services/voided';
 import { ApiError } from '../lib/api-error';
 import type { AuthUser, Env } from '../types';
 
@@ -613,13 +614,24 @@ salesRouter.post('/fix-id', adminOnly(), async (c) => {
   return c.json({ ok: true, orders });
 });
 
-// DELETE /sales/:id — 删除出货记录（回滚库存 + 删全部商品行，仅老板）
+// DELETE /sales/:id — 作废/红冲出货记录（?reason= 写原因）：先归档到回收站，再回滚库存并删全部商品行（仅老板）
 salesRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   const oldItems = await c.env.DB.prepare(
-    `SELECT si.item_id, si.unit, si.quantity, si.count_qty, i.count_unit
+    `SELECT si.item_id, si.unit, si.quantity, si.count_qty, si.client_id, i.count_unit
      FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`).bind(id)
-    .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
+    .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; client_id: string; count_unit?: string | null }>();
+  // 删前归档（软删）：payload 必须在业务行还在时构建，否则回收站只能存空壳。
+  // 单据不存在时 buildPayload 返回 null → 不写回收站，删除仍保持幂等（204）。
+  await archiveVoidedOrder(c.env.DB, {
+    entity_type: 'sale', id,
+    reason: c.req.query('reason')?.trim() || '删除/作废', username: c.get('user').username,
+  });
+  // 审计留痕带店铺名：以前在删行后才查 client_id，永远是「未知店铺」
+  const delClientId = oldItems.results[0]?.client_id ?? '';
+  const delClientName = delClientId
+    ? (await c.env.DB.prepare('SELECT name FROM clients WHERE id = ?').bind(delClientId).first<{ name: string }>())?.name ?? ''
+    : '';
   // 行级凭证附件：删行前拿行 id 清理（行级附件按 sale_item/{lineId}/ 存储）
   const lineRows = await c.env.DB.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
     .all<{ id: string }>();
@@ -638,12 +650,7 @@ salesRouter.delete('/:id', adminOnly(), async (c) => {
   batch.push(c.env.DB.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'sale', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
-  // 审计留痕带店铺名（删前快照：行删除后查不到）
-  const delClientId = (await c.env.DB.prepare('SELECT client_id FROM sale_items WHERE sale_id = ? LIMIT 1').bind(id).first<{ client_id: string }>())?.client_id ?? '';
-  const delClientName = delClientId
-    ? (await c.env.DB.prepare('SELECT name FROM clients WHERE id = ?').bind(delClientId).first<{ name: string }>())?.name ?? ''
-    : '';
-  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'sale', entity_id: id, detail: `删除出货：${delClientName || '未知店铺'}（${oldItems.results.length} 件商品）` });
+  await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'sale', entity_id: id, detail: `作废出货：${delClientName || '未知店铺'}（${oldItems.results.length} 件商品${c.req.query('reason') ? `，原因：${c.req.query('reason')}` : ''}）` });
   // 删除交易附带的凭证图片（单据级 + 全部明细行级，best-effort 不阻塞删除）
   try {
     await deleteEntityAttachments(c.env, 'sale', id);

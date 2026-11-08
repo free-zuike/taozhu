@@ -193,6 +193,30 @@ export function request<T = any>(path: string, method: UniMethod = 'GET', data?:
   });
 }
 
+/** 原始文本响应（CSV/文本导出）：dataType 非 json，避免 uni 对 CSV 做 JSON.parse 后报错。 */
+export function requestText(path: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    uni.request({
+      url: `${getApiBase()}/api/v1${path}`,
+      method: 'GET',
+      dataType: 'text' as never,
+      header: {
+        'x-app-version': APP_VERSION,
+        'x-device-id': getDeviceId(),
+        ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+      },
+      success: (res) => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(typeof res.data === 'string' ? res.data : String(res.data ?? ''));
+        } else {
+          reject(new Error(`请求失败(${res.statusCode})`));
+        }
+      },
+      fail: (err) => reject(new Error((err && err.errMsg) || '网络错误')),
+    });
+  });
+}
+
 // 便捷方法
 export const get = <T = any>(path: string) => request<T>(path, 'GET');
 export const post = <T = any>(path: string, data?: Record<string, unknown> | string | ArrayBuffer) => request<T>(path, 'POST', data);

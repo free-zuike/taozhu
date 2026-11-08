@@ -14,6 +14,7 @@ class AiActivityPage extends StatefulWidget {
 class _AiActivityPageState extends State<AiActivityPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>>? _activity;
+  Map<String, dynamic>? _summary;
 
   @override
   void initState() {
@@ -23,8 +24,14 @@ class _AiActivityPageState extends State<AiActivityPage> {
 
   Future<void> _load() async {
     try {
-      final d = await Api.instance.get('/ai/activity');
-      if (mounted) setState(() => _activity = ((d['activity'] as List?) ?? []).cast<Map<String, dynamic>>());
+      final results = await Future.wait([
+        Api.instance.get('/ai/activity'),
+        Api.instance.get('/ai/activity/summary?days=30'),
+      ]);
+      if (mounted) setState(() {
+        _activity = ((results[0]['activity'] as List?) ?? []).cast<Map<String, dynamic>>();
+        _summary = results[1];
+      });
     } catch (e) {
       if (mounted) toast(context, e.toString().replaceFirst('Exception: ', ''));
     }
@@ -55,6 +62,7 @@ class _AiActivityPageState extends State<AiActivityPage> {
                 child: ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
+                    if (_summary != null) _summaryCard(_summary!),
                     if (activity.isEmpty)
                       const Padding(
                         padding: EdgeInsets.only(top: 48),
@@ -65,6 +73,50 @@ class _AiActivityPageState extends State<AiActivityPage> {
                   ],
                 ),
               ),
+        ],
+      ),
+    );
+  }
+
+  /// 工具时间线摘要：服务端确定性统计，不依赖模型自己数数
+  Widget _summaryCard(Map<String, dynamic> s) {
+    final byTool = ((s['by_tool'] as List?) ?? []).cast<Map<String, dynamic>>();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _c.card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _c.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('近 ${s['days'] ?? 30} 天工具时间线', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _c.textMain)),
+          const SizedBox(height: 8),
+          Text('${s['runs'] ?? 0} 次运行 · ${s['calls'] ?? 0} 次工具调用 · 失败 ${s['errors'] ?? 0} 次',
+              style: const TextStyle(fontSize: 12.5, color: Colors.grey)),
+          if (byTool.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final t in byTool)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                        color: _c.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
+                    child: Text('${t['tool_name']} × ${t['count']}', style: TextStyle(fontSize: 11, color: _c.primary)),
+                  ),
+              ],
+            ),
+          ],
+          if ('${s['text'] ?? ''}'.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text('${s['text']}'.split('\n').first, style: const TextStyle(fontSize: 11.5, color: Colors.grey)),
+            ),
         ],
       ),
     );

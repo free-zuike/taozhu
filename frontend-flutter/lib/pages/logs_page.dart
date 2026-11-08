@@ -26,8 +26,9 @@ class _LogsPageState extends State<LogsPage> {
   void initState() {
     super.initState();
     _load();
-    // 实时刷新：轮询读取日志（SharedPreferences 读写开销小，300 条上限内安全）
-    _timer = Timer.periodic(const Duration(seconds: 2), (_) => _load());
+    // 轮询降到 10s：原先 2s 全量读+解析 300 条日志，页面常驻时纯耗 CPU/电池；
+    // 无新日志时 _load 会提前 return，不重绘、不丢筛选态与滚动位置。
+    _timer = Timer.periodic(const Duration(seconds: 10), (_) => _load());
   }
 
   @override

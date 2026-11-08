@@ -10,8 +10,8 @@ type V = { user: AuthUser };
 export const auditRouter = new Hono<{ Bindings: Env; Variables: V }>();
 auditRouter.use('*', authMiddleware(), adminOnly());
 
-/// 审计保留时长（天）：半年以上记录按月清理（不按条数——审计短期留痕，半年内不可删）
-const KEEP_DAYS = 180;
+/// 审计保留时长（天）由 services/maintenance.ts 的 AUDIT_KEEP_DAYS 统一定义；
+/// 清理在每日 cron 里执行（半年内不可删，不按条数）。
 
 /// 动作中文标签（前端显示用；action 值保持英文稳定——后续多语言按 Accept-Language 返回对应语言，不改存储）
 const ACTION_LABEL: Record<string, string> = {
@@ -23,6 +23,7 @@ const ENTITY_LABEL: Record<string, string> = {
   sale: '出货', purchase: '进货', sale_item: '出货商品', purchase_item: '进货商品',
   payment: '收款', backup: '备份', stocks: '库存', category: '分类',
   client: '店铺', item: '商品', payment_account: '收款方式', profile: '资料',
+  transactions: '流水导出',
 };
 
 export interface AuditEntry {
@@ -49,9 +50,8 @@ export async function recordAudit(db: D1Database, e: AuditEntry): Promise<void> 
     await db.prepare(
       'INSERT INTO audit_logs (username, action, entity_type, entity_id, detail, client_type) VALUES (?, ?, ?, ?, ?, ?)',
     ).bind(e.username, e.action, e.entity_type ?? null, e.entity_id ?? null, e.detail ?? null, e.clientType ?? null).run();
-    // 按月清理半年以上记录（审计短期留痕：半年内不可删；不按条数，created_at 同为 UTC ISO 字符串可比较）
-    await db.prepare('DELETE FROM audit_logs WHERE created_at < ?')
-      .bind(new Date(Date.now() - KEEP_DAYS * 86400 * 1000).toISOString()).run();
+    // 半年以上记录的清理已挪到每日 cron（runDailyMaintenance）：原先每次业务写都多跑一条
+    // DELETE，属于无谓的写放大；保留期语义不变（半年内不可删）。
   } catch (_) {
     // 审计失败不阻断业务
   }

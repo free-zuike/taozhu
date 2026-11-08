@@ -107,8 +107,18 @@ syncRouter.post('/push', async (c) => {
 syncRouter.get('/pull', async (c) => {
   const user = c.get('user');
   const since = parseInt(c.req.query('since') ?? '0', 10) || 0;
-  const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 2000);
+  // clamp：parseInt('abc')=NaN 会让 `LIMIT NaN` 报错；limit=-1 会让 `LIMIT 0` 且 hasMore
+  // = (0 > -1) 恒真，客户端陷入无限空拉。按 audit.ts 的写法统一钳制到 [1, 2000]。
+  const limit = Math.min(Math.max(Number(c.req.query('limit')) || 500, 1), 2000);
   const deviceId = c.req.query('device_id')?.trim() ?? '';
+  // 变更流按保留期清理后，旧游标可能落在已删除区间。不拦截的话客户端会「同步成功」
+  // 却静默漏掉中间变更；此时明确要求改走 /sync/full 重建本地库。
+  const wmRow = await c.env.DB.prepare("SELECT value FROM schema_meta WHERE key = 'sync_changes_watermark'")
+    .first<{ value: string }>();
+  const watermark = Number(wmRow?.value ?? 0);
+  if (since > 0 && watermark > 0 && since < watermark - 1) {
+    return c.json({ changes: [], server_cursor: since, has_more: false, need_full_sync: true });
+  }
 
   let sql = 'SELECT id, entity_type, entity_sync_id, action, payload_json, updated_at, updated_by_device_id, updated_by_username FROM sync_changes WHERE id > ?';
   const params: (string | number)[] = [since];
@@ -140,11 +150,45 @@ syncRouter.get('/pull', async (c) => {
   return c.json({ changes, server_cursor: serverCursor, has_more: hasMore });
 });
 
+// GET /sync/full/chunk — 大账本分批全量：按实体名分页取行（白名单防 SQL 注入）
+syncRouter.get('/full/chunk', async (c) => {
+  const ALLOWED = [
+    'sale_items', 'purchase_items', 'payments', 'clients', 'items', 'categories',
+    'payment_accounts', 'price_groups', 'stock_batches', 'loss_records', 'stock_adjustments',
+  ];
+  const entity = c.req.query('entity') ?? '';
+  if (!ALLOWED.includes(entity)) return c.json({ error: 'entity 不合法' }, 400);
+  const offset = Math.max(Number(c.req.query('offset')) || 0, 0);
+  const limit = Math.min(Math.max(Number(c.req.query('limit')) || 1000, 1), 5000);
+  const rows = await c.env.DB.prepare(`SELECT * FROM ${entity} ORDER BY rowid LIMIT ? OFFSET ?`)
+    .bind(limit, offset).all<Record<string, unknown>>();
+  const isStaff = c.get('user').role !== 'admin';
+  const out = isStaff
+    ? rows.results.map((r) => {
+      const o = { ...r };
+      for (const k of ['purchase_price', 'cost_price', 'price', 'amount']) if (k in o) o[k] = 0;
+      return o;
+    })
+    : rows.results;
+  return c.json({ entity, offset, limit, rows: out, has_more: rows.results.length === limit });
+});
+
 // GET /sync/full — 首同步全量快照（新设备/重装：一次拉齐全部实体，比逐条 pull 快）
 syncRouter.get('/full', async (c) => {
   const user = c.get('user');
   const db = c.env.DB;
   const isStaff = user.role === 'admin' ? false : true;
+  // 大账本保护：下面是十几条全表 SELECT，超大会撞 Worker 内存/CPU 预算。
+  // 预检走共享计数快照（命中只读 2 行），超限时明确引导改走分批端点，而不是 500 或半截数据。
+  const maxRows = Math.min(Math.max(Number(c.req.query('max_rows')) || 50000, 1000), 200000);
+  const { data: g } = await loadGlobalCounts(db);
+  const rowCount = g.sale_items + g.purchase_items + g.payments;
+  if (rowCount > maxRows) {
+    return c.json({
+      error: `全量快照 ${rowCount} 行超过上限 ${maxRows}，请改用 /sync/full/chunk 分批同步`,
+      need_chunk: true, row_count: rowCount,
+    }, 413);
+  }
 
   const clientRows = await db.prepare('SELECT * FROM clients WHERE deleted_at IS NULL ORDER BY name').all();
   const clients = clientRows.results.map((x) => {
