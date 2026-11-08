@@ -15,6 +15,10 @@ import {
 import { ApiError } from '../lib/api-error';
 import { recordTransactionFromText, createAiPayment } from './ai-record';
 import { listUnsettled } from '../lib/allocations';
+import {
+  loadClientUnitPrices, findDiffHints, formatDiffHints, formatPriceTable,
+  extractDiffAmount, extractDiffSide, type DiffSide, type UnitPrice,
+} from '../lib/diff-hints';
 import { localTodayISO, dayRangeEnd, parseMonthRange } from '../lib/biz-date';
 import { getRoundingConfig, roundMoney, normalizeRoundConfig, salesAggByConfig } from '../lib/money';
 import type { D1Database } from '@cloudflare/workers-types';
@@ -200,12 +204,12 @@ export async function chatWithAssistant(
     '--- 数据快照 / 查询结果 ---',
     context,
     '--- 回答规则 ---',
-    '1. 只依据上面的数据作答；没有的，老实说"暂无这项数据"，绝不编造数字。金额、笔数、日期区间必须原样引用，禁止自行求和、跨月推算、四舍五入或改用别的区间。例外：上下文含「对账线索」时，可基于其中列出的真实单据给出候选解释，但必须逐条引用其中的日期/单号/金额，明确标注「待核对」，绝不新增任何单据或数字。',
+    '1. 只依据上面的数据作答；没有的，老实说"暂无这项数据"，绝不编造数字。金额、笔数、日期区间与统计口径必须原样引用，不要自行改动区间或跨月推算。例外：上下文含「原始商品行明细 / 可用单价表 / 数据摘要」时，可以基于这些真实明细自主推理（哪几行按单价乘几份正好是差额、哪几张单叠加、是否重复登记、是否记到相邻周期、是否抹零），说明推理依据并标注「待核对」；但所有商品名、单价、数量、单号、日期都必须来自明细，凡「数量 × 单价 = 金额」都要能用可用单价表里的真实单价算出来，不得编造商品、单价、单据或数字。',
     '2. 被问到"卖了多少/赚了多少/谁欠款/该补什么货/有什么临期"等经营问题时，直接给数字和清单，简洁、口语化。',
     '3. 如果用户想记一笔带商品行的进货/出货单，引导到「记单」页用 AI 识别（拍照/语音/文字）；若只是补录一笔收款，用户可直接说「给某店补录一笔 X 元收款（某日）」，助手会生成待确认单据，用户确认后才入账。绝不替用户臆造金额或按差额自动平账。',
     '4. 被问"怎么用/功能在哪"等使用问题时，用一两句话说明（记单在底部「记单」页、统计在「统计」页、库存盘点在「库存」页右上角、对账单在「对账单」、备份在「我的→备份」）。',
     '5. 回复用中文，尽量简短（一般 2-5 行；对账类可略长，要列清候选单据）。',
-    '6. 被问「对不上账/可能漏了哪笔/差在哪」时，基于「对账明细 + 对账线索」列出最值得核对的几笔（金额接近差额、同金额重复、边界日、抹零零头），说清这是候选而非结论；用户给了差额时优先比对。数据不足就直说需要哪个店铺和哪段区间。',
+    '6. 被问「对不上账/可能漏了哪笔/差在哪/对方比我多 X 元/哪些商品可能漏记」时：用「原始商品行明细 + 可用单价表 + 单据列表」自己找最值得核对的几种可能，逐条写清依据和涉及的单号/商品/金额，并说明这是候选不是结论；「算术校验表」只用来核对自己的算术，不必逐条复述，也不要局限于它列出的组合。按上下文里的「方向」判断该查漏记还是重复登记。数据不足就直说需要哪个店铺和哪段区间。绝不把差额当成该补录的金额。',
   ].join('\n');
   const resp = await _postChatAdaptive(chatUrl, {
     'Content-Type': 'application/json',
@@ -277,18 +281,17 @@ interface Intent {
   forget: string | null;
   /** 用户要记一笔账（一句话落单；文本=用户原话，purpose 默认进货，出货须含店名/卖/送等） */
   record: { purpose: 'purchase' | 'sale'; text: string } | null;
-  /** 用户口述的对账差额（如"差 380 元"），用于在真实单据里筛金额接近的候选 */
+  /** 用户口述的对账差额（如"差 380 元"），用于在真实单据里筛金额接近的候选、按真实单价反推商品行 */
   diff: number | null;
+  /** 差额方向：对方账更多 / 我方账更多；判断不出为 null */
+  diff_side?: DiffSide | null;
   /** 用户明确要求补录/推送一笔收款；金额必须用户自己给出，绝不从差额推测 */
   payment: { client: string; amount: number; date: string | null; note: string | null } | null;
 }
 
-/** 从用户原话兜底抽取对账差额（"差了380""差 380 元""对不上 1,200"）；抽不到返回 null */
+/** 从用户原话兜底抽取对账差额（"差了380""对方比我多 10 元""对不上 1,200"）；抽不到返回 null */
 function extractDiff(text: string): number | null {
-  const m = text.match(/(?:差|少了|多了|对不上|差额)[^\d]{0,8}([\d,]+(?:\.\d+)?)/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, ''));
-  return Number.isFinite(n) && n > 0 ? n : null;
+  return extractDiffAmount(text);
 }
 
 /** 意图提取（JSON 模式；宽松解析，失败返回 null 走兜底） */
@@ -302,7 +305,7 @@ export async function extractIntent(cfg: AiConfig, userText: string, ctxText: st
     '(a) 经营数据（金额/销售/欠款/进货/库存相关）→ intent="query"，并填 view 与参数；',
     '(b) 功能用法（怎么用/功能在哪/说明）→ intent="kb"，topics 填相关主题词；',
     '(c) 要记一笔账（如"记一笔：白菜2斤3元一斤""给老王送2箱苹果"）→ intent="record"，record 填 {purpose:"sale"|"purchase", text:用户原话}——出货（卖/送/给XX）填 sale，进货填 purchase（默认 purchase）；',
-    '(d) 对账差异（"某店对不上账""差了380""推断可能漏了哪笔""帮我找找差异"）→ intent="query"、view="client_ledger"、client=店铺名；用户说出差额填 diff（正数），没说填 null；',
+    '(d) 对账差异（"某店对不上账""差了380""对方比我多 10 元""推断可能漏了哪笔/哪行商品""帮我找找差异"）→ intent="query"、view="client_ledger"、client=店铺名；用户说出差额填 diff（正数，如"多 10 元"填 10），没说填 null；',
     '(e) 明确要补录/推送一笔收款（如"给老王补录一笔 380 元收款"）→ intent="chat"，payment 填 {client,amount,date,note}；金额必须是用户自己说出的数字，绝不推测；',
     '(f) 其他（问候/闲聊）→ intent="chat"。',
     `今天日期 ${localTodayISO()}（业务时区 UTC+8；按此日历日换算"上个月/本月/今年"等相对时间）。${ctxText.split('\n')[0] ?? ''}`,
@@ -515,12 +518,28 @@ export async function runBusinessQuery(
         const names = await db.prepare(
           'SELECT name FROM clients WHERE deleted_at IS NULL ORDER BY name LIMIT 20',
         ).all<{ name: string }>();
-        return `请说明要对哪个店铺的账。当前店铺：${names.results.map((r) => r.name).join('、') || '（暂无）'}。`;
+        const head = `请说明要对哪个店铺的账。当前店铺：${names.results.map((r) => r.name).join('、') || '（暂无）'}。`;
+        const askedDiff = q.diff ?? 0;
+        if (askedDiff <= 0) return head;
+        // 没说店名也能帮上忙：按全库真实单价反推可能漏记的商品行，
+        // 明确标注口径更宽，避免把「别店卖过」误当成这店一定卖过。
+        try {
+          const prices = await loadClientUnitPrices(db, null);
+          return [
+            head,
+            '未指定店铺，以下按全库原始数据给出（可能含该店从未卖过的商品，仅供参考）：',
+            '请基于这些真实单价自主推理差额可能来自哪些商品行，并说明依据。',
+            ...formatPriceTable(prices),
+            ...formatDiffHints(askedDiff, findDiffHints(askedDiff, prices), q.diff_side ?? null),
+          ].join('\n');
+        } catch (_) {
+          return head;
+        }
       }
       const start = q.start || '2000-01-01';
       const end = q.end || today;
       const endEx = dayRangeEnd(end);
-      const [saleRows, payRows, cumSale, cumPay, clientRow] = await Promise.all([
+      const [saleRows, payRows, cumSale, cumPay, clientRow, lineRows] = await Promise.all([
         db.prepare(
           `SELECT sale_id, substr(MAX(happened_at),1,10) AS d, ROUND(SUM(amount),2) AS a, COUNT(*) AS n
            FROM sale_items WHERE client_id = ? AND happened_at >= ? AND happened_at < ?
@@ -534,6 +553,19 @@ export async function runBusinessQuery(
         db.prepare('SELECT COALESCE(SUM(amount),0) AS s FROM sale_items WHERE client_id = ?').bind(clientId).first<{ s: number }>(),
         db.prepare('SELECT COALESCE(SUM(amount + waived),0) AS s FROM payments WHERE client_id = ?').bind(clientId).first<{ s: number }>(),
         db.prepare('SELECT name FROM clients WHERE id = ?').bind(clientId).first<{ name: string }>(),
+        // 原始商品行：把「数据」交给模型，而不是只给算好的汇总/结论。
+        // 模型可据此自行推理哪几行叠加、哪个单价乘几份等于差额、是否重复登记等。
+        db.prepare(
+          `SELECT substr(si.happened_at,1,10) AS d, si.sale_id AS sale_id,
+                  COALESCE(i.name, '商品#' || si.item_id) AS name, si.unit AS unit,
+                  si.quantity AS quantity, si.sale_price AS price, si.amount AS amount
+           FROM sale_items si LEFT JOIN items i ON i.id = si.item_id
+           WHERE si.client_id = ? AND si.happened_at >= ? AND si.happened_at < ?
+           ORDER BY si.happened_at DESC, si.sale_id DESC, si.sort ASC LIMIT 100`,
+        ).bind(clientId, start, endEx).all<{
+          d: string; sale_id: string; name: string; unit: string;
+          quantity: number; price: number; amount: number;
+        }>(),
       ]);
       const name = clientRow?.name ?? q.client ?? '该店铺';
       // 核销台账：把累计欠款拆到「哪张出货单还没结清」。表未迁移的老库退化为无数据，
@@ -557,24 +589,38 @@ export async function runBusinessQuery(
         for (const o of open.slice(0, 10)) lines.push(`- ${o.date} 出货单 ${o.sale_id} 金额 ${money(o.total)}，已核销 ${money(o.allocated)}，待收 ${money(o.unsettled)}`);
         if (open.length > 10) lines.push(`（其余 ${open.length - 10} 张未结清单据略）`);
       }
-      // 差异线索全部由上面「真实存在的单据」确定性算出，不生成任何新数字或单据
+      // ① 原始数据：逐行明细 + 库里真实存在的单价。推理交给模型，这里不预设任何结论。
+      lines.push('--- 原始商品行明细（逐行，最多 100 行；日期/单号/商品/数量/单价/金额均来自账本，可自由组合推理）---');
+      if (!lineRows.results.length) lines.push('（该区间没有商品行明细）');
+      for (const r of lineRows.results) {
+        lines.push(`- ${r.d} 单 ${r.sale_id} ${r.name} ${qty(r.quantity)}${r.unit ? ` ${r.unit}` : ''} × ${money(r.price)} = ${money(r.amount)}`);
+      }
+      if (lineRows.results.length === 100) lines.push('（已达 100 行上限；需要更早的请指定日期区间）');
+      let prices: UnitPrice[] = [];
+      try {
+        prices = await loadClientUnitPrices(db, clientId);
+      } catch (_) {
+        // 老库缺价目表/分组表时退化为「只有逐行明细」，不影响原有对账能力
+      }
+      lines.push(...formatPriceTable(prices));
+      // ② 数据摘要：只陈述由真实单据确定性算出的「事实」，不下判断、不给核对建议——推理交给模型
       const clues: string[] = [];
       const diff = q.diff ?? 0;
       if (unsettled.length) {
         const openTotal = Math.round(open.reduce((s, o) => s + o.unsettled, 0) * 100) / 100;
         clues.push(open.length
-          ? `按 FIFO 核销后仍有 ${open.length} 张单未结清、合计待收 ${money(openTotal)}，最早未结清：${open.slice(0, 3).map((o) => `${o.date} ${o.sale_id} 待收 ${money(o.unsettled)}`).join('；')} —— 优先与对方核对这几张单是否漏收/漏记。`
-          : '所有出货单都已按收款核销完（FIFO 口径），若对方仍报差额，优先核对单据金额是否录错或收款是否多记。');
+          ? `按 FIFO 核销后仍有 ${open.length} 张单未结清、合计待收 ${money(openTotal)}；最早未结清：${open.slice(0, 3).map((o) => `${o.date} ${o.sale_id} 待收 ${money(o.unsettled)}`).join('；')}。`
+          : '所有出货单都已按收款核销完（FIFO 口径）。');
         if (diff > 0 && Math.abs(openTotal - diff) <= Math.max(0.5, diff * 0.02)) {
-          clues.push(`未结清合计 ${money(openTotal)} 与用户所说差额 ${money(diff)} 接近，可能差额就来自这些未结清单据。`);
+          clues.push(`未结清合计 ${money(openTotal)} 与用户所说差额 ${money(diff)} 接近。`);
         }
       }
       const all = [...sales, ...pays].map((x) => ({ d: x.d, a: x.a, what: x.what }));
       if (diff > 0) {
         const near = all.filter((x) => Math.abs(x.a - diff) <= Math.max(0.5, diff * 0.02));
         clues.push(near.length
-          ? `金额接近差额 ${money(diff)} 的单据：${near.map((x) => `${x.d} ${x.what} ${money(x.a)}`).join('；')} —— 核对是否重复登记或被对方漏算。`
-          : `没有找到金额接近差额 ${money(diff)} 的单笔；可能是多笔组合、数字录错或跨区间。`);
+          ? `金额接近差额 ${money(diff)} 的单据：${near.map((x) => `${x.d} ${x.what} ${money(x.a)}`).join('；')}。`
+          : `没有找到金额接近差额 ${money(diff)} 的单笔。`);
       }
       const byAmount = new Map<string, typeof all>();
       for (const x of all) {
@@ -583,15 +629,22 @@ export async function runBusinessQuery(
       }
       const dups = [...byAmount.values()].filter((g) => g.length > 1).slice(0, 5);
       if (dups.length) {
-        clues.push(`同金额重复出现的单据：${dups.map((g) => `${money(g[0].a)} × ${g.length} 笔（${g.map((x) => x.d).join('、')}）`).join('；')} —— 核对是否重复入账。`);
+        clues.push(`同金额重复出现的单据：${dups.map((g) => `${money(g[0].a)} × ${g.length} 笔（${g.map((x) => x.d).join('、')}）`).join('；')}。`);
       }
       if (q.start) {
         const edge = all.filter((x) => x.d === start || x.d === end).slice(0, 5);
-        if (edge.length) clues.push(`区间边界日单据：${edge.map((x) => `${x.d} ${x.what} ${money(x.a)}`).join('；')} —— 核对是否记到相邻周期。`);
+        if (edge.length) clues.push(`区间边界日单据：${edge.map((x) => `${x.d} ${x.what} ${money(x.a)}`).join('；')}。`);
       }
-      if (Math.abs(debt % 1) > 0.005) clues.push(`账面欠款有零头 ${money(debt)}，核对抹零/进位规则与对方口径是否一致。`);
-      lines.push('--- 对账线索（基于上面真实单据算出，仅供人工核对，不代表实际漏记）---');
-      lines.push(clues.length ? clues.join('\n') : '没有发现明显可疑单据；建议核对区间、抹零规则与对方口径。');
+      if (Math.abs(debt % 1) > 0.005) clues.push(`账面欠款有零头 ${money(debt)}。`);
+      // ③ 算术校验表：确定性枚举只用来核对模型的算术，不是标准答案，也不限制推理范围。
+      if (diff > 0) {
+        lines.push(...formatDiffHints(diff, findDiffHints(diff, prices), q.diff_side ?? null));
+      } else {
+        lines.push('--- 差额未给出 ---');
+        lines.push('用户尚未说出具体差额；可请他说「差 X 元」或「对方比我多 X 元」，再基于上面的原始明细与单价表推理可能漏记的商品行。');
+      }
+      lines.push('--- 数据摘要（基于真实单据自动算出的事实，不是结论，仅供人工核对；请结合原始明细自行推理）---');
+      lines.push(clues.length ? clues.join('\n') : '（本区间没有额外事实摘要；请直接依据上面的原始明细推理。）');
       lines.push('若要补录收款，用户必须明确说出「店铺 + 金额 + 日期」，确认后才入账；绝不按差额臆造金额。');
       return lines.join('\n');
     }
@@ -671,14 +724,22 @@ export async function assistantAnswer(
   }
   // 对账/推断类请求：模型常把「猜一下可能漏了哪笔」归成 chat，导致只注入今日快照、
   // 助手只能答"猜不出来"。这里做确定性兜底，强制改走单店对账明细查询。
-  const reconcileHit = /对不上账|对不上|对账|差额|差了|漏记|漏了|推断|猜一下|可能.*(?:交易|单|笔)/.test(userText);
+  // 「多了/少了 + 金额」才当对账，避免「今天多卖了 3 件」被误判成差异核对
+  const reconcileHit = /对不上账|对不上|对账|差额|差了|比我多|比我少|多了?\s*[\d,]+(?:\.\d+)?\s*(?:元|块|钱)|少了?\s*[\d,]+(?:\.\d+)?\s*(?:元|块|钱)|漏记|漏了|漏哪|推断|猜一下|可能.*(?:交易|单|笔|商品|行)/.test(userText);
   if (reconcileHit && !intent?.payment && !intent?.record && !intent?.remember && !intent?.forget
     && (!intent || (intent.intent !== 'query' && intent.intent !== 'kb'))) {
     intent = {
       intent: 'query', view: 'client_ledger', start: intent?.start ?? null, end: intent?.end ?? null,
       client: intent?.client ?? null, kind: 'sale', year: null, topics: [], remember: null,
-      forget: null, record: null, diff: intent?.diff ?? extractDiff(userText), payment: null,
+      forget: null, record: null, diff: extractDiff(userText) ?? intent?.diff ?? null, payment: null,
     };
+  }
+  // 无论模型把请求归成 query 还是走上面的兜底：只要落在单店对账，就用正则把
+  // 差额与「谁比谁多」补齐/纠正，避免模型漏填 diff 导致差额相关原始数据与校验表不注入。
+  if (intent && intent.intent === 'query' && intent.view === 'client_ledger') {
+    if (intent.diff == null) intent.diff = extractDiff(userText);
+    const side = extractDiffSide(userText);
+    if (side) intent.diff_side = side;
   }
   const sources: string[] = [];
   const extras: string[] = [];

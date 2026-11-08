@@ -1558,8 +1558,8 @@ class _MyPageState extends State<MyPage> {
               _item(Icons.manage_search_outlined, c.primary, '操作审计',
                   '登录 / 删除 / 修改 / 导入导出等关键操作留痕（仅老板）',
                   () => goPage(context, const AuditPage())),
-            _item(Icons.table_chart_outlined, c.primary, '导出流水 CSV',
-                '出货 / 进货 / 收款明细导出 Excel 可打开的表（店员自动打码成本）',
+            _item(Icons.table_chart_outlined, c.primary, '导出全账本流水 CSV',
+                '全部店铺出货 / 进货 / 收款；单店导出在「店铺」页，店员自动打码成本',
                 _exportTransactionsCsv),
             if (_role != 'staff')
               _item(Icons.restore_from_trash_outlined, c.primary, '回收站',

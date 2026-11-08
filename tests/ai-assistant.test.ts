@@ -354,6 +354,84 @@ describe('动态查询与知识库（0.17.475）', () => {
     await expect(createAiPayment(db as never, user, { client: '补录店', amount: 0, date: null, note: null })).rejects.toThrow(/大于 0/);
   });
 
+  it('client_ledger：注入原始商品行/单价表供模型推理，校验表只核对算术', async () => {
+    const item = await mkItem('豆腐', 2, 1);
+    await call(env, 'POST', '/api/v1/clients', token, { name: '豆腐店' });
+    const cl = ((await call(env, 'GET', '/api/v1/clients', token).then((r) => r.json())) as { clients: Array<{ id: string }> }).clients[0];
+    await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: cl.id, happened_at: '2026-11-08', items: [{ price_id: item.prices[0].id, quantity: 5 }],
+    });
+    const q = {
+      intent: 'query' as const, view: 'client_ledger', start: '2026-11-01', end: '2026-11-30',
+      client: '豆腐店', kind: 'sale' as const, year: null, topics: [], diff: 10,
+      diff_side: 'theirs_more' as const,
+      remember: null, forget: null, record: null, payment: null,
+    };
+    const r = await runBusinessQuery(db as never, 'admin', q);
+    // 原始数据必须给全，模型才有东西可推理
+    expect(r).toContain('原始商品行明细');
+    expect(r).toContain('可用单价表');
+    expect(r).toContain('豆腐 5 斤 × ¥2 = ¥10');
+    // 确定性枚举降级为校验表，不再是标准答案
+    expect(r).toContain('算术校验表');
+    expect(r).toContain('不是标准答案');
+    expect(r).toContain('豆腐 5 斤 × 2.00 元 = 10.00 元');
+    expect(r).toContain('本店按此单价出过 1 次');
+    expect(r).toContain('不是账本里已发生的单据');
+    expect(r).toContain('用户说「对方账比我们多 10.00 元」');
+    expect(r).toContain('绝不按差额臆造金额');
+    // 没给差额时不能硬凑，只引导用户说出差额
+    const noDiff = await runBusinessQuery(db as never, 'admin', { ...q, diff: null, diff_side: null });
+    expect(noDiff).toContain('「差 X 元」');
+  });
+
+  it('client_ledger：没说店名但给了差额，仍给全库真实单价数据并提醒补店铺名', async () => {
+    await mkItem('豆腐', 2, 1);
+    const q = {
+      intent: 'query' as const, view: 'client_ledger', start: null, end: null,
+      client: null, kind: 'sale' as const, year: null, topics: [], diff: 10,
+      diff_side: 'theirs_more' as const,
+      remember: null, forget: null, record: null, payment: null,
+    };
+    const r = await runBusinessQuery(db as never, 'admin', q);
+    expect(r).toContain('请说明要对哪个店铺的账');
+    expect(r).toContain('未指定店铺，以下按全库原始数据给出');
+    expect(r).toContain('可用单价表');
+    expect(r).toContain('豆腐 5 斤 × 2.00 元 = 10.00 元');
+    expect(r).toContain('不是账本里已发生的单据');
+  });
+
+  it('assistantAnswer：模型把「对方比我多 10 元」当闲聊时，仍强制注入原始数据供推理', async () => {
+    await mkItem('豆腐', 2, 1);
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_u: string, init: { body: string }) => {
+      bodies.push(init.body);
+      const content = bodies.length === 1
+        ? '{"intent":"chat","view":null,"client":null,"diff":null}'
+        : '好的。';
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+    }));
+    try {
+      const outcome = await assistantAnswer(cfg, db as never, [
+        { role: 'user', content: '对方比我多了10元，是不是漏了 5 块单价 2 元的豆腐？' },
+      ], 'admin', 'u-test');
+      expect(outcome.reply).toBeTruthy();
+      const finalBody = JSON.parse(bodies[bodies.length - 1]) as {
+        messages: Array<{ role: string; content: string }>;
+      };
+      const sys = finalBody.messages.find((m) => m.role === 'system')?.content ?? '';
+      expect(sys).toContain('可用单价表');
+      expect(sys).toContain('原始商品行明细 / 可用单价表');
+      expect(sys).toContain('自主推理');
+      expect(sys).toContain('算术校验表');
+      expect(sys).toContain('豆腐 5 斤 × 2.00 元 = 10.00 元');
+      expect(sys).toContain('用户说「对方账比我们多 10.00 元」');
+      expect(sys).toContain('不要据此自动补单');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('runBusinessQuery monthly/daily/years 基本形状', async () => {
     const it = await mkItem('茄子', 4, 2);
     await call(env, 'POST', '/api/v1/clients', token, { name: 'C店' });

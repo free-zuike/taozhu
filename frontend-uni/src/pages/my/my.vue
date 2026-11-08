@@ -109,7 +109,7 @@
         <view class="r-ic ic-blue"><text class="mi ic-tx">&#xE889;</text></view><view class="r-body"><text class="r-tx">操作审计</text><text class="r-sub">登录/删除/修改等关键操作留痕</text></view><text class="r-arrow">›</text>
       </view>
       <view class="row" @click="exportCsv">
-        <view class="r-ic ic-green"><text class="mi ic-tx">&#xE2C4;</text></view><view class="r-body"><text class="r-tx">导出流水 CSV</text><text class="r-sub">出货/进货/收款明细（店员自动打码成本）</text></view><text class="r-arrow">›</text>
+        <view class="r-ic ic-green"><text class="mi ic-tx">&#xE2C4;</text></view><view class="r-body"><text class="r-tx">导出全账本流水</text><text class="r-sub">全部店铺出货/进货/收款（单店导出在店铺页）、店员自动打码成本</text></view><text class="r-arrow">›</text>
       </view>
       <view v-if="isAdmin" class="row" @click="go('/pages/trash/trash')">
         <view class="r-ic ic-orange"><text class="mi ic-tx">&#xE92B;</text></view><view class="r-body"><text class="r-tx">回收站</text><text class="r-sub">作废单据快照：查看原因 / 恢复入账</text></view><text class="r-arrow">›</text>
