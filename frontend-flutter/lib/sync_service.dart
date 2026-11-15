@@ -149,7 +149,10 @@ class SyncService {
   /// 拉取「在用附件」列表（服务端 /attachments/in-use），带客户端缓存：
   /// 5 分钟内复用，避免每次同步都触发服务端对 attachment_refs 全表扫（D1 读额度主要消耗源）。
   /// 删除传播主路径走变更流（attachment delete 变更），本缓存只影响收敛兜底时效，安全。
-  static Future<List<Map<String, dynamic>>> _fetchInUse({bool force = false}) async {
+  /// 返回 fresh=false 表示本次来自缓存：调用方不得把「列表里没有」当成「服务器没有」——
+  /// 刚上传成功的引用在旧缓存里必然缺席，误判会导致每次同步重传同一附件（日志反复"上传成功"）。
+  static Future<({List<Map<String, dynamic>> list, bool fresh})> _fetchInUse(
+      {bool force = false}) async {
     final p = await SharedPreferences.getInstance();
     if (!force) {
       final ts = p.getInt(_kInUseCacheTsKey) ?? 0;
@@ -159,7 +162,7 @@ class SyncService {
           try {
             final list =
                 (jsonDecode(raw) as List?)?.cast<Map<String, dynamic>>() ?? [];
-            if (list.isNotEmpty) return list;
+            if (list.isNotEmpty) return (list: list, fresh: false);
           } catch (_) {}
         }
       }
@@ -182,16 +185,37 @@ class SyncService {
       await p.setString(_kInUseCacheKey, jsonEncode(list));
       await p.setInt(_kInUseCacheTsKey, DateTime.now().millisecondsSinceEpoch);
     } catch (_) {}
-    return list;
+    return (list: list, fresh: true);
+  }
+
+  /// 上传成功后作废客户端 in-use 缓存（下一次必须向服务器取新鲜列表）。
+  /// 否则刚上传的引用会在 5 分钟旧缓存里缺席，被 downloadInUseAttachments 的
+  /// 「本地独有引用收敛」误判成未上传 → 重新入队 → 每次同步重传同一附件。
+  static Future<void> _invalidateInUseCache() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove(_kInUseCacheKey);
+      await p.remove(_kInUseCacheTsKey);
+    } catch (_) {}
   }
 
   static Future<void> downloadInUseAttachments() async {
     if (kIsWeb) return;
     List<Map<String, dynamic>> inUse;
+    var inUseFresh = false;
     try {
       // 在用列表拉取（带 5 分钟客户端缓存，避免每次同步触发服务端 attachment_refs 全表扫——D1 读额度主耗）。
       // 删除传播主路径走变更流（attachment delete 变更），缓存仅影响收敛兜底时效，安全。
-      inUse = await _fetchInUse();
+      final fetched = await _fetchInUse();
+      inUse = fetched.list;
+      inUseFresh = fetched.fresh;
+      // 服务器在用的规范化三元组（entity/id/basename）：墓碑清理与待传队列清理共用。
+      // 队列清理必须只认服务器在册的条目——不能用下方合并了本地登记的 refs 判定，
+      // 否则上传失败的队列条目会被本地引用行提前清掉，不再重试。
+      final serverIds = <String>{
+        for (final a in inUse)
+          '${a['entity'] ?? ''}/${a['id'] ?? ''}/${'${a['file'] ?? ''}'.split('/').last}',
+      };
       // 本地删除墓碑（deleted_attachments）：所有删除附件/删行/删单路径写入，
       // pull 全量刷新先把命中墓碑的三元组剔除——删除永胜，绝不被旧快照复活
       // （对齐参考实现 CouchDB 墓碑语义；比内存 pendingDel 覆盖更全：删行删单元
@@ -252,12 +276,22 @@ class SyncService {
         // 482 已移除自动删除、492 上传改原子，孤儿不再被误删，故不再"一刀切宁留勿丢"，
         // 改为——有本地副本的重新入队补传（计数自然向服务器收敛）；无副本且无服务器引用=真孤儿，
         // 已无法上传，丢弃以避免本地计数虚高。
+        // **仅"本次从服务器拉取"的新鲜列表才做该判定**（inUseFresh）：缓存列表可能只是还没
+        // 包含刚上传成功的引用（上传成功已清队列），据此重入队 = 每次同步重传同一附件、
+        // 日志反复"附件上传成功"（用户反馈 2026-11-15）。缓存命中时只保留本地行，等新鲜列表再收敛。
         final root = await getApplicationDocumentsDirectory();
         final p = await SharedPreferences.getInstance();
         for (final r in await LocalDb.getAll('attachment_refs')) {
           final id3 = '${r['entity'] ?? ''}/${r['entity_id'] ?? ''}/${'${r['file'] ?? ''}'.split('/').last}';
           if (ids.contains(id3)) continue; // 云端已回，跳过
           if (tombstones.contains(id3)) continue; // 已删除标记，不再复活
+          if (!inUseFresh) {
+            // 缓存不可作为"服务器没有此引用"的依据：保留本地行（本地优先，图标不灭），
+            // 不重入队也不丢弃；下一次新鲜拉取再决定补传/收敛。
+            merged.add(r);
+            ids.add(id3);
+            continue;
+          }
           final file = '${r['file'] ?? ''}'.split('/').last;
           final hasCopy = file.isNotEmpty && File('${root.path}/attachments/$file').existsSync();
           if (!hasCopy) continue; // 真孤儿（无副本无法上传）：丢弃，本地计数不再虚高
@@ -281,10 +315,6 @@ class SyncService {
       // 墓碑使命完成可清除（对齐参考实现 CouchDB 墓碑在复制确认后压缩）；仅清"服务器已无"
       // 的墓碑——服务器仍下发说明删除还没传播完，墓碑继续挡复活
       try {
-        final serverIds = <String>{
-          for (final a in inUse)
-            '${a['entity'] ?? ''}/${a['id'] ?? ''}/${'${a['file'] ?? ''}'.split('/').last}',
-        };
         final rows = await LocalDb.getAll(kDeletedAttachmentsStore);
         for (final t in rows) {
           final e = '${t['entity'] ?? ''}';
@@ -297,17 +327,17 @@ class SyncService {
         }
       } catch (_) {}
       // in-use 已确认包含的待上传条目 → 从队列移除（上传成功且服务器已落引用行；
-      // 未含的保留在队列，下次合并保护继续生效——图标"添加后灭一次"根因修复）
+      // 未含的保留在队列，下次合并保护继续生效——图标"添加后灭一次"根因修复）。
+      // 判定只用 serverIds（服务器在册），不用合并后的 refs——本地登记行不代表已上传。
       try {
         final p = await SharedPreferences.getInstance();
         final list = p.getStringList(kPendingUploadsKey) ?? [];
         if (list.isNotEmpty) {
-          final inUseIds = refs.map((r) => '${r['entity']}/${r['entity_id']}/${'${r['file'] ?? ''}'.split('/').last}').toSet();
           final next = list.where((e) {
             try {
               final m = jsonDecode(e) as Map<String, dynamic>;
               final id3 = '${m['entity'] ?? ''}/${m['id'] ?? ''}/${'${m['fileName'] ?? ''}'.split('/').last}';
-              return !inUseIds.contains(id3);
+              return !serverIds.contains(id3);
             } catch (_) {
               return false; // 脏条目丢弃
             }
@@ -618,6 +648,9 @@ class SyncService {
                 .timeout(const Duration(seconds: 20));
             uploaded++;
             appLog('sync', '附件上传成功：$entity/$id/$fileName', level: 'info');
+            // 客户端 in-use 缓存同步作废：刚上传的引用若被旧缓存"漏列"，同步第④步的
+            // downloadInUseAttachments 会把它误判为本地独有 → 重新入队 → 每次同步重传。
+            await _invalidateInUseCache();
             // 上传成功立即清队列（对齐参考架构：上传即成功，无 in-use 二次确认）：
             // 服务器引用已落（POST 已写引用表+变更流），本端引用行已在入队时写本地，
             // 不再等待 downloadInUseAttachments 确认——否则成功条目恒留队列，
@@ -642,10 +675,10 @@ class SyncService {
       await Future.wait(batch.map(one));
       idx += 4;
     }
-    // 上传结果不立即清空待上传队列：成功条目保留，由 downloadInUseAttachments 确认
-    // in-use 已含该引用后逐条移除（否则合并保护失效，putAll([]) 冲掉已登记行 → 图标闪烁）；
-    // 失败条目同样保留重试（宁留勿丢，幂等）。队列清理见 downloadInUseAttachments。
-    if (uploaded > 0) appLog('sync', '已上传附件 $uploaded 张（待 in-use 确认后清队列）', level: 'info');
+    // 成功条目已在单张成功回调里立即清队列；失败条目保留重试（宁留勿丢，幂等）。
+    // downloadInUseAttachments 另有服务器 in-use 兜底清理（覆盖"服务器已收到但客户端没
+    // 收到响应/清队列前被杀"的残留条目）。
+    if (uploaded > 0) appLog('sync', '已上传附件 $uploaded 张', level: 'info');
     return uploaded;
   }
 
@@ -1084,7 +1117,7 @@ class SyncService {
             .where((x) => '${x['entity_type'] ?? ''}' == 'attachment' && '${x['action'] ?? ''}' == 'delete')
             .toList();
         if (attachDeletes.isNotEmpty) {
-          final inUseList = await _fetchInUse(force: true);
+          final inUseList = (await _fetchInUse(force: true)).list;
           for (final x in attachDeletes) {
             final sid = '${x['entity_sync_id'] ?? ''}';
             // 优先用 payload 携带的 entity/id（新客户端删除带三元组），否则用服务器 in-use 匹配
