@@ -156,7 +156,7 @@ paymentsRouter.delete('/:id', adminOnly(), async (c) => {
   const id = c.req.param('id');
   // 审计留痕带金额/方式（删前快照）
   const pay = await c.env.DB.prepare('SELECT amount, method FROM payments WHERE id = ?').bind(id).first<{ amount: number; method: string }>();
-  await archiveVoidedOrder(c.env.DB, {
+  const trashId = await archiveVoidedOrder(c.env.DB, {
     entity_type: 'payment', id,
     reason: c.req.query('reason')?.trim() || '删除/作废', username: c.get('user').username,
   });
@@ -173,9 +173,12 @@ paymentsRouter.delete('/:id', adminOnly(), async (c) => {
   }
   await recordChange(c.env.DB, { entity_type: 'payment', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
   await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'payment', entity_id: id, detail: `撤销收款（¥${pay ? Math.round(pay.amount * 100) / 100 : 0}${pay?.method ? ` ${pay.method}` : ''}）` });
-  // 撤销收款时一并清理其附件文件（孤儿文件清理，best-effort 不阻塞）
-  try {
-    await deleteEntityAttachments(c.env, 'payment', id);
-  } catch (_) {}
+  // 撤销收款时清理其附件文件（孤儿文件清理，best-effort 不阻塞）。
+  // 已归档到回收站 → 保留（恢复后凭证完整）；未归档的硬删除才清理。
+  if (!trashId) {
+    try {
+      await deleteEntityAttachments(c.env, 'payment', id);
+    } catch (_) {}
+  }
   return c.body(null, 204);
 });

@@ -155,16 +155,18 @@ class SyncService {
       {bool force = false}) async {
     final p = await SharedPreferences.getInstance();
     if (!force) {
-      final ts = p.getInt(_kInUseCacheTsKey) ?? 0;
-      if (DateTime.now().millisecondsSinceEpoch - ts < _kInUseCacheTtlMs) {
-        final raw = p.getString(_kInUseCacheKey);
-        if (raw != null && raw.isNotEmpty) {
-          try {
-            final list =
-                (jsonDecode(raw) as List?)?.cast<Map<String, dynamic>>() ?? [];
-            if (list.isNotEmpty) return (list: list, fresh: false);
-          } catch (_) {}
-        }
+      final age = DateTime.now().millisecondsSinceEpoch - (p.getInt(_kInUseCacheTsKey) ?? 0);
+      final raw = p.getString(_kInUseCacheKey);
+      if (raw != null && raw.isNotEmpty) {
+        try {
+          final list =
+              (jsonDecode(raw) as List?)?.cast<Map<String, dynamic>>() ?? [];
+          // 非空列表缓存 5 分钟；空列表只缓存 60 秒——零附件账号不必每次同步都打服务器
+          // （省 D1），又不让"他端刚上传的附件"因空缓存迟迟不下载。
+          if (age < (list.isEmpty ? 60 * 1000 : _kInUseCacheTtlMs)) {
+            return (list: list, fresh: false);
+          }
+        } catch (_) {}
       }
     }
     Map<String, dynamic> d = {};
@@ -295,8 +297,11 @@ class SyncService {
           final file = '${r['file'] ?? ''}'.split('/').last;
           final hasCopy = file.isNotEmpty && File('${root.path}/attachments/$file').existsSync();
           if (!hasCopy) continue; // 真孤儿（无副本无法上传）：丢弃，本地计数不再虚高
-          // 有副本但不在待上传队列（队列条目丢失/被清理误删）→ 重新入队，下一轮同步补传收敛
-          if (!pendingUploads.contains(id3)) {
+          // 只补传"曾经入过队"的引用（enqueueAttachmentUpload 在本地行写 queued=true）：
+          // 队列条目丢失/被误清 → 重新入队，下一轮同步补传收敛。
+          // 识别即挂载/未保存单据的本地登记没有该标记 → 绝不在这里补传：否则用户还没点保存，
+          // 图片就已上传到服务器（取消后残留指向不存在单据 id 的孤儿引用，各端反复下载）。
+          if (r['queued'] == true && !pendingUploads.contains(id3)) {
             try {
               final list = p.getStringList(kPendingUploadsKey) ?? [];
               final entry = jsonEncode({'entity': r['entity'] ?? '', 'id': r['entity_id'] ?? '', 'fileName': file});
@@ -367,6 +372,9 @@ class SyncService {
         if (entity.isEmpty || id.isEmpty || file.isEmpty) return false;
         // 本地副本按内容存公共目录 attachments/{file}（file=md5.jpg；同图多实体共享一份，
         // 对齐参考实现"同图一份物理文件"）；附件引用表仍按实体各一行（每个商品/单据算一个附件）
+        // 删除墓碑命中的三元组不下载：in-use 响应可能来自旧缓存/删除传播窗口，
+        // 刚删的附件不能因为一次全量刷新又被拉回本地（否则"删了又出现"）。
+        if (tombstones.contains('$entity/$id/$file')) return false;
         final target = File('${root.path}/attachments/$file');
         if (target.existsSync()) return false; // 已有副本（同图共享）
         final key = a['key'] ?? '$entity/$id/$file';
@@ -443,6 +451,9 @@ class SyncService {
         'entity_id': id.trim(),
         'file': fileName.trim(),
         'key': 'taozhu/images/attachments/$fileName',
+        // 标记"曾入过队"：downloadInUseAttachments 的本地独有收敛只补传这类引用；
+        // 识别即挂载/未保存单据的本地登记没有该标记 → 提交前不会被提前上传（防孤儿引用）。
+        'queued': true,
       });
     } catch (_) {}
     version.notifyListeners(); // 账本附件图标计数/列表即时联动（无需等下一次同步）
@@ -502,6 +513,57 @@ class SyncService {
       if (!list.contains(entry)) return;
       final next = list.where((e) => e != entry).toList();
       await p.setStringList(kPendingUploadsKey, next);
+    } catch (_) {}
+  }
+
+  /// 未保存单据取消（记单页 dispose）：清理本单全部附件引用/本地副本/待传队列，
+  /// 并对**已上传到云端**的引用入队 delete 变更（离线可重试）——否则服务器残留指向
+  /// "从未保存的单据 id"的孤儿引用：in-use 永远算在用、各端反复下载、孤儿扫描也不清理。
+  /// 识别即挂载但从未入队的图（queued 标记缺失）不会上传，这里同样按其本地引用清理。
+  static Future<void> discardUnsavedOrderAttachments(String entity, String id) async {
+    if (kIsWeb) return;
+    try {
+      final refs = await LocalDb.getAll('attachment_refs');
+      final mine = refs.where((r) =>
+          '${r['entity'] ?? ''}' == entity && '${r['entity_id'] ?? ''}' == id).toList();
+      if (mine.isEmpty) return;
+      final removedFiles = <String>{};
+      for (final r in mine) {
+        final file = '${r['file'] ?? ''}'.split('/').last;
+        if (file.isEmpty) continue;
+        removedFiles.add(file);
+        final key = '${r['key'] ?? ''}'.isNotEmpty
+            ? '${r['key']}'
+            : 'taozhu/images/attachments/$file';
+        await LocalDb.deleteOne('attachment_refs', '$entity/$id/$file');
+        await removePendingUpload(entity: entity, id: id, fileName: file);
+        // 墓碑：封锁 in-use 全量刷新 / pull upsert 把该三元组写回本地
+        await tombstoneDeletedAttachment(entity: entity, id: id, file: file);
+        // 云端已上传的引用 → 入队删除（attachment delete 变更，离线可重试）；
+        // 入队失败（本地只读等）→ 直连兜底删除
+        try {
+          await enqueueChange(
+            entityType: 'attachment',
+            entitySyncId: key,
+            action: 'delete',
+            payload: {'file_key': key, 'entity': entity, 'id': id},
+          );
+        } catch (_) {
+          try {
+            await Api.instance.delete('/attachments?key=$key&entity=$entity&id=$id');
+          } catch (_) {}
+        }
+      }
+      // 本地副本：无其他引用（同图可能被其他单据共享）才删
+      final remain = await LocalDb.getAll('attachment_refs');
+      final root = await getApplicationDocumentsDirectory();
+      for (final f in removedFiles) {
+        if (remain.any((r) => '${r['file'] ?? ''}'.split('/').last == f)) continue;
+        final ff = File('${root.path}/attachments/$f');
+        if (ff.existsSync()) await ff.delete();
+      }
+      appLog('sync',
+          '未保存单据附件清理：$entity/$id 移除 ${mine.length} 条引用（已上传的入队删除云端）', level: 'info');
     } catch (_) {}
   }
 
@@ -584,8 +646,13 @@ class SyncService {
       }
       if (stale.isNotEmpty) {
         try {
+          // 只从"当前队列"里移除判定为失效的条目，不用过滤时的旧快照整表覆盖：
+          // 过滤期间用户新加入的附件条目不能被这次重写吞掉。
           final p = await SharedPreferences.getInstance();
-          await p.setStringList(kPendingUploadsKey, kept);
+          final staleSet = stale.toSet();
+          final cur = p.getStringList(kPendingUploadsKey) ?? [];
+          final next = cur.where((e) => !staleSet.contains(e)).toList();
+          if (next.length != cur.length) await p.setStringList(kPendingUploadsKey, next);
         } catch (_) {}
       }
       return kept;
@@ -651,6 +718,21 @@ class SyncService {
             // 客户端 in-use 缓存同步作废：刚上传的引用若被旧缓存"漏列"，同步第④步的
             // downloadInUseAttachments 会把它误判为本地独有 → 重新入队 → 每次同步重传。
             await _invalidateInUseCache();
+            // 在途上传期间用户删了附件/取消了未保存单据（本地引用行已删）→ 补发删除变更。
+            // 否则这次在途上传会在"删除"之后把引用重新写回服务器（删了又出现）。
+            try {
+              final still = await LocalDb.getOne(
+                  'attachment_refs', '${entity.trim()}/${id.trim()}/${fileName.trim()}');
+              if (still == null) {
+                final key = 'taozhu/images/attachments/$fileName';
+                await enqueueChange(
+                  entityType: 'attachment',
+                  entitySyncId: key,
+                  action: 'delete',
+                  payload: {'file_key': key, 'entity': entity, 'id': id},
+                );
+              }
+            } catch (_) {}
             // 上传成功立即清队列（对齐参考架构：上传即成功，无 in-use 二次确认）：
             // 服务器引用已落（POST 已写引用表+变更流），本端引用行已在入队时写本地，
             // 不再等待 downloadInUseAttachments 确认——否则成功条目恒留队列，
@@ -905,23 +987,48 @@ class SyncService {
                       ? {'entity': entity, 'id': eid}
                       : _parseAttachmentKey(key);
                   if (parsed != null) {
+                    final pEntity = '${parsed['entity'] ?? ''}';
+                    final pId = '${parsed['id'] ?? ''}';
+                    final baseFile = key.split('/').last;
                     // 本地待上传队列同步移除（同实体同文件）：其他端已删，本端残留待传条目
                     // 不应再传回去（否则删除被上传复活）
                     try {
-                      await removePendingUpload(
-                          entity: '${parsed['entity'] ?? ''}',
-                          id: '${parsed['id'] ?? ''}',
-                          fileName: key.split('/').last);
+                      await removePendingUpload(entity: pEntity, id: pId, fileName: baseFile);
                     } catch (_) {}
-                    final f = File('${root.path}/attachments/${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
+                    // 同步删除本地引用行 + **写删除墓碑**（不能删墓碑）：同一次同步第④步
+                    // downloadInUseAttachments 可能命中 5 分钟旧 in-use 缓存，快照里仍有该三元组，
+                    // 没有墓碑会被 putAll 写回 → 已删附件短暂"复活"（用户看到删了又出现）。
+                    try {
+                      await LocalDb.deleteOne('attachment_refs', '$pEntity/$pId/$baseFile');
+                    } catch (_) {}
+                    await tombstoneDeletedAttachment(entity: pEntity, id: pId, file: baseFile);
+                    // 本地副本清理：平铺目录 attachments/{file}（同图一份）在该文件无其他引用
+                    // 且不在待上传队列时才删；历史嵌套目录（attachments/{entity}/{id}/{file}）一并清
+                    try {
+                      final remain = await LocalDb.getAll('attachment_refs');
+                      final stillUsed = remain.any((r) =>
+                          '${r['file'] ?? ''}'.split('/').last == baseFile);
+                      var pendingUse = false;
+                      try {
+                        final prefs = await SharedPreferences.getInstance();
+                        pendingUse = (prefs.getStringList(kPendingUploadsKey) ?? []).any((e) {
+                          try {
+                            final m = jsonDecode(e) as Map<String, dynamic>;
+                            return '${m['fileName'] ?? ''}'.split('/').last == baseFile;
+                          } catch (_) {
+                            return false;
+                          }
+                        });
+                      } catch (_) {}
+                      if (!stillUsed && !pendingUse) {
+                        final flat = File('${root.path}/attachments/$baseFile');
+                        if (flat.existsSync()) flat.deleteSync();
+                      }
+                    } catch (_) {}
+                    final f = File('${root.path}/attachments/$pEntity/$pId/$baseFile');
                     if (f.existsSync()) f.deleteSync();
-                    // 同步删除本地引用行 + 删除墓碑（删除已由他端发起并进入变更流，本地无需墓碑）
-                    try {
-                      await LocalDb.deleteOne('attachment_refs', '${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
-                    } catch (_) {}
-                    try {
-                      await LocalDb.deleteOne(kDeletedAttachmentsStore, '${parsed['entity']}/${parsed['id']}/${key.split('/').last}');
-                    } catch (_) {}
+                    // 缓存作废：下一次 in-use 必须取服务器新鲜列表（旧缓存还会带回已删引用）
+                    await _invalidateInUseCache();
                   }
                 } else {
                   // upsert：他端上传附件 → 本地写引用行（下载由 downloadInUseAttachments 补齐）
@@ -936,6 +1043,11 @@ class SyncService {
                       'file': file,
                       'key': key,
                     });
+                    // 同三元组曾被本端删除（墓碑）：他端重新上传 = 删除作废，清墓碑防被过滤
+                    try {
+                      await clearTombstone(entity: entity, id: eid, file: file);
+                    } catch (_) {}
+                    await _invalidateInUseCache();
                   }
                 }
               }

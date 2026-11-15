@@ -173,7 +173,7 @@ async function scheduledBackup(env: Env): Promise<void> {
   // 每日维护放在备份时间判断之前：即使没配置自动备份，也要清理过期变更流/审计/分享链接。
   // 内部按 schema_meta 日期去重，每分钟 cron 只有当天第一次真正执行 DML。
   try {
-    await runDailyMaintenance(env.DB);
+    await runDailyMaintenance(env.DB, false, env);
   } catch (e) {
     console.error('[taozhu] 每日维护失败:', e);
   }

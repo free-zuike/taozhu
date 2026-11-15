@@ -40,6 +40,9 @@ const entity = ref('');
 const id = ref('');
 const fbEntity = ref('');
 const fbId = ref('');
+/** 当前列表实际来自哪个实体：行级为空回退单据级时，删除必须按回退实体定位引用行 */
+const listEntity = ref('');
+const listId = ref('');
 
 onLoad(async (options) => {
   entity.value = String(options?.entity || '');
@@ -56,6 +59,8 @@ const confirm = (title: string, content: string) =>
 
 async function load() {
   let rows: Array<{ key: string }> = [];
+  let usedEntity = entity.value;
+  let usedId = id.value;
   try {
     const d = await getAttachments(entity.value, id.value);
     rows = d.attachments || [];
@@ -64,8 +69,13 @@ async function load() {
     try {
       const d = await getAttachments(fbEntity.value, fbId.value);
       rows = d.attachments || [];
+      // 回退单据级展示的列表：删除必须按回退实体定位引用行（新格式 key 自带信息为零）
+      usedEntity = fbEntity.value;
+      usedId = fbId.value;
     } catch (_) {}
   }
+  listEntity.value = usedEntity;
+  listId.value = usedId;
   list.value = rows;
 }
 
@@ -130,7 +140,7 @@ function downloadAttach() {
 async function removeAttach(key: string) {
   if (!(await confirm('删除凭证', '确定删除这张凭证图片吗？'))) return;
   try {
-    await deleteAttachment(key);
+    await deleteAttachment(listEntity.value || entity.value, listId.value || id.value, key);
     const idx = list.value.findIndex((a) => a.key === key);
     list.value = list.value.filter((a) => a.key !== key);
     if (idx >= 0 && index.value >= idx && index.value > 0) index.value -= 1;

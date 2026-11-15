@@ -575,7 +575,7 @@ async function uploadAttach() {
 async function removeAttach(key: string) {
   if (!(await confirm('删除凭证', '确定删除这张凭证吗？'))) return;
   try {
-    await deleteAttachment(key);
+    await deleteAttachment(attach.value.entity, attach.value.id, key);
     const idx = attach.value.list.findIndex((a) => a.key === key);
     attach.value.list = attach.value.list.filter((a) => a.key !== key);
     if (idx >= 0 && attach.value.index >= idx && attach.value.index > 0) attach.value.index -= 1;

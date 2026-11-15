@@ -7,6 +7,7 @@ import { applyChange, buildPayload, recordChange } from '../lib/sync';
 import { expireSnapshots } from '../lib/snapshot';
 import { recordAudit } from './audit';
 import { entityExists, type VoidableEntity, type VoidedEntry } from '../services/voided';
+import { deleteEntityAttachments } from '../lib/image-key';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -82,6 +83,40 @@ trashRouter.post('/:id/restore', async (c) => {
     payload: await buildPayload(db, row.entity_type, orderId),
     updated_by_username: c.get('user').username,
   });
+  // 恢复后补发附件 upsert 变更：作废时附件引用/R2 文件被保留（未删），但执行删除的客户端
+  // 写过本地删除墓碑——没有 upsert 变更墓碑不会自动清除，恢复后的凭证仍被墓碑挡住不显示。
+  try {
+    const lineEntity = row.entity_type === 'sale' ? 'sale_item'
+      : row.entity_type === 'purchase' ? 'purchase_item' : '';
+    const lineTable = row.entity_type === 'sale' ? 'sale_items'
+      : row.entity_type === 'purchase' ? 'purchase_items' : '';
+    const refs: Array<{ entity: string; entity_id: string; file_key: string }> = [];
+    const orderRefs = await db.prepare(
+      'SELECT entity, entity_id, file_key FROM attachment_refs WHERE entity = ? AND entity_id = ?',
+    ).bind(row.entity_type, orderId).all<{ entity: string; entity_id: string; file_key: string }>();
+    refs.push(...orderRefs.results);
+    if (lineEntity && lineTable) {
+      const orderCol = row.entity_type === 'sale' ? 'sale_id' : 'purchase_id';
+      const lineRefs = await db.prepare(
+        `SELECT r.entity, r.entity_id, r.file_key FROM attachment_refs r
+         JOIN ${lineTable} l ON l.id = r.entity_id
+         WHERE r.entity = ? AND l.${orderCol} = ?`,
+      ).bind(lineEntity, orderId).all<{ entity: string; entity_id: string; file_key: string }>();
+      refs.push(...lineRefs.results);
+    }
+    for (const r of refs) {
+      await recordChange(db, {
+        entity_type: 'attachment',
+        entity_sync_id: `${r.entity}:${r.entity_id}:${r.file_key}`,
+        action: 'upsert',
+        payload: {
+          file_key: r.file_key, file: r.file_key.split('/').pop() ?? '',
+          entity: r.entity, id: r.entity_id,
+        },
+        updated_by_username: c.get('user').username,
+      });
+    }
+  } catch (_) { /* 补发失败不影响恢复主流程（附件在 in-use 中仍可被下载收敛） */ }
   await expireSnapshots(db);
   await recordAudit(db, {
     username: c.get('user').username, action: 'update', entity_type: row.entity_type, entity_id: orderId,
@@ -92,8 +127,32 @@ trashRouter.post('/:id/restore', async (c) => {
 });
 
 // DELETE /trash/:id — 彻底清除（不可再恢复）
+// 作废时附件引用/R2 文件被保留（供恢复），这里才是真正清理点：删引用 + 补发 attachment 删除变更，
+// 零引用文件物理删除。同 ID 单据若已被新单占用（entityExists）→ 绝不能清附件（属于新单）。
 trashRouter.delete('/:id', async (c) => {
-  const res = await c.env.DB.prepare('DELETE FROM voided_orders WHERE id = ?').bind(c.req.param('id')).run();
+  const trashId = c.req.param('id');
+  const row = await c.env.DB.prepare('SELECT * FROM voided_orders WHERE id = ?')
+    .bind(trashId).first<VoidedEntry>();
+  if (!row || !isVoidable(row.entity_type)) return c.json({ error: '回收站记录不存在' }, 404);
+  let payload: Record<string, unknown> = {};
+  try { payload = JSON.parse(row.payload) as Record<string, unknown>; } catch (_) {}
+  const orderId = String(payload.id ?? '');
+  try {
+    if (orderId && !(await entityExists(c.env.DB, row.entity_type, orderId))) {
+      const lineEntity = row.entity_type === 'sale' ? 'sale_item'
+        : row.entity_type === 'purchase' ? 'purchase_item' : '';
+      if (lineEntity && Array.isArray(payload.items)) {
+        for (const it of payload.items as Array<Record<string, unknown>>) {
+          const lineId = String(it?.id ?? '');
+          if (lineId) await deleteEntityAttachments(c.env, lineEntity, lineId);
+        }
+      }
+      await deleteEntityAttachments(c.env, row.entity_type, orderId);
+    }
+  } catch (e) {
+    console.error('[taozhu] 彻底删除回收站记录时清理附件失败:', e);
+  }
+  const res = await c.env.DB.prepare('DELETE FROM voided_orders WHERE id = ?').bind(trashId).run();
   if (!res.meta.changes) return c.json({ error: '回收站记录不存在' }, 404);
   return c.body(null, 204);
 });

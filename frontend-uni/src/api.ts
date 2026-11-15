@@ -259,9 +259,14 @@ export function uploadAttachment(entity: string, id: string, filePath: string): 
   });
 }
 
-/** 删除附件：DELETE /attachments?key= */
-export function deleteAttachment(key: string): Promise<unknown> {
-  return request(`/attachments?key=${encodeURIComponent(key)}`, 'DELETE');
+/** 删除附件：DELETE /attachments?key=&entity=&id=
+ *  新格式内容 key（taozhu/images/attachments/{md5}.jpg）解析不出实体，后端强制要求
+ *  entity+id 才能定位引用行（共用图保护）；只传 key 会 400「附件删除需 entity/id」。 */
+export function deleteAttachment(entity: string, id: string, key: string): Promise<unknown> {
+  return request(
+    `/attachments?key=${encodeURIComponent(key)}&entity=${encodeURIComponent(entity)}&id=${encodeURIComponent(id)}`,
+    'DELETE',
+  );
 }
 
 /** AI 识别上传（uni.uploadFile multipart）：field=photo|audio，返回后端解析结果 {ok,items,...} */

@@ -15,8 +15,10 @@ class LocalDb {
   LocalDb._();
   static Database? _db;
 
-  /// 连续写失败计数（只读/损坏库自愈：≥3 次 → 删除重建 + 全量同步恢复）
+  /// 连续写失败计数（只读/损坏库自愈：≥3 次 → 删除重建 + 全量同步恢复）。
+  /// 只统计"连续"失败：距上次失败超过 10 分钟视为新的一轮，避免偶发写错误跨天累计后误触发重建。
   static int _writeFailures = 0;
+  static DateTime? _lastWriteFailureAt;
 
   /// 数据库操作串行队列：所有读写按入队顺序逐个执行。
   /// 页面 _load（同步通知触发）与删除/同步写入并发访问同一 sembast 连接，
@@ -124,9 +126,15 @@ class LocalDb {
   }
 
   /// 写失败后的自愈决策：'read only'（数据库被以只读打开）是持续状态，立即重建库文件；
-  /// 其他偶发错误累计 3 次才重建（避免网络抖动等瞬时失败误删库）。诊断日志带错误类型。
+  /// 其他偶发错误 10 分钟内累计 3 次才重建（避免瞬时失败误删库；跨天的偶发失败不累计）。
   static Future<void> _onWriteFailure(Object e) async {
     final msg = e.toString();
+    final now = DateTime.now();
+    if (_lastWriteFailureAt == null ||
+        now.difference(_lastWriteFailureAt!) > const Duration(minutes: 10)) {
+      _writeFailures = 0;
+    }
+    _lastWriteFailureAt = now;
     _writeFailures++;
     if (msg.contains('read only') || msg.contains('read-only') || _writeFailures >= 3) {
       appLog('db', '本地库持续写失败（${msg.split('\n').first}，累计 ${_writeFailures} 次），重建库文件+全量同步恢复', level: 'error');
@@ -134,10 +142,48 @@ class LocalDb {
     }
   }
 
+  /// 重建库前备份"未推送变更"（直接读写，不走 _serial：当前正处于串行 op 内，排队会死锁）。
+  /// 只备份 local_changes 队列；待传附件队列在 SharedPreferences（不随库重建丢失）。
+  static Future<List<Map<String, dynamic>>> _readPendingRaw() async {
+    final db = await _open();
+    if (db == null) return <Map<String, dynamic>>[];
+    try {
+      final snap = await intMapStoreFactory.store(pendingStore).find(db);
+      return snap.map((e) => Map<String, dynamic>.from(e.value)).toList();
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  /// 重建库后重放备份的未推送变更（新库已创建；随后 sync() 会正常 push）。
+  static Future<int> _restorePendingRaw(List<Map<String, dynamic>> rows) async {
+    if (rows.isEmpty) return 0;
+    final db = await _open();
+    if (db == null) return 0;
+    var restored = 0;
+    try {
+      final store = intMapStoreFactory.store(pendingStore);
+      for (final row in rows) {
+        final rawId = row['id'];
+        final id = rawId is int ? rawId : DateTime.now().microsecondsSinceEpoch + restored;
+        await store.record(id).put(db, row);
+        restored++;
+      }
+    } catch (_) {}
+    return restored;
+  }
+
   /// 本地库持续写失败（只读/损坏）→ 删除（删不掉则改名绕开）重建数据库文件并触发全量同步恢复。
+  /// 重建前备份未推送变更、重建后立即重放——否则离线记的单/待推送变更会随库文件一起丢失。
   /// 若应用数据目录本身不可写（存储权限/分区异常），记录明确根因日志。
   static Future<void> _rebuildDatabase() async {
     _writeFailures = 0;
+    _lastWriteFailureAt = null;
+    // 先备份（此时旧库仍可读；只读库读不受影响）
+    final pendingBackup = await _readPendingRaw();
+    if (pendingBackup.isNotEmpty) {
+      appLog('db', '本地库重建前已备份 ${pendingBackup.length} 条未推送变更（重建后重放，不丢离线记录）', level: 'error');
+    }
     try {
       await _db?.close();
     } catch (_) {}
@@ -171,6 +217,10 @@ class LocalDb {
         appLog('db', '本地库已重建${dirWritable ? '，目录可写' : '，目录仍不可写（存储权限/分区异常，建议清理应用数据重装）'}，触发全量同步恢复', level: 'error');
       }
     } catch (_) {}
+    final restored = await _restorePendingRaw(pendingBackup);
+    if (restored > 0) {
+      appLog('db', '已重放 $restored 条未推送变更（等待同步推送）', level: 'error');
+    }
     try {
       await SyncService.resetSyncState();
       unawaited(SyncService.sync());

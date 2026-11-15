@@ -4,6 +4,7 @@ import app from '../src/index';
 import { ensureSchema, resetSchemaState } from '../src/schema';
 import { createStorage } from '../src/services/storage';
 import { createFakeD1, fakeAssets } from './helpers/fake-d1';
+import { runDailyMaintenance } from '../src/services/maintenance';
 
 const JWT_SECRET = 'test-secret';
 const BASE = 'http://localhost';
@@ -115,7 +116,8 @@ describe('交易附件（R2）', () => {
     };
     expect(list.attachments).toHaveLength(1);
     expect(list.attachments[0].key).toBe(key);
-    expect(list.attachments[0].size).toBe(4);
+    // size 不再逐条 list R2 反查（附件查看器/小程序不展示），统一 0（与 /bulk 口径一致）
+    expect(list.attachments[0].size).toBe(0);
 
     const read = await call(env, 'GET', `/api/v1/attachments/${key}`, token);
     expect(read.status).toBe(200);
@@ -379,15 +381,24 @@ describe('交易附件（R2）', () => {
     ).bind(saleId).first<{ n: number }>();
     expect(afterDel?.n ?? 0).toBe(0);
 
-    // 重新上传，删单据 → 级联清引用
+    // 重新上传，删单据 → 归档到回收站：附件引用保留（恢复后凭证完整）
     const up2 = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
     const delSale = await call(env, 'DELETE', `/api/v1/sales/${saleId}`, token);
     expect(delSale.status).toBe(204);
     const afterSale = await (env.DB as FakeD1).prepare("SELECT COUNT(*) AS n FROM attachment_refs").first<{ n: number }>();
-    expect(afterSale?.n ?? 0).toBe(0);
+    expect(afterSale?.n ?? 0).toBe(1);
+    // 彻底清除回收站记录 → 才是真正清理点（删引用 + 零引用文件物理删）
+    const trashList = (await (await call(env, 'GET', '/api/v1/trash', token)).json()) as { items: Array<{ id: string }> };
+    expect(trashList.items.length).toBe(1);
+    const purge = await call(env, 'DELETE', `/api/v1/trash/${trashList.items[0].id}`, token);
+    expect(purge.status).toBe(204);
+    const afterPurge = await (env.DB as FakeD1).prepare("SELECT COUNT(*) AS n FROM attachment_refs").first<{ n: number }>();
+    expect(afterPurge?.n ?? 0).toBe(0);
+    const gone = await call(env, 'GET', `/api/v1/attachments/${up2.key}`, token);
+    expect(gone.status).toBe(404);
   });
 
-  it('删除交易 → 行级 sale_item 附件引用+R2 文件全清（整单与单行两条路径）', async () => {
+  it('删除交易 → 附件随回收站保留，彻底清除后才全清（整单与单行两条路径）', async () => {
     // 建真实单据（2 明细行）
     await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
     const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
@@ -433,13 +444,23 @@ describe('交易附件（R2）', () => {
     ).bind(line1).first<{ n: number }>();
     expect(lineRefs?.n ?? 0).toBe(0);
 
-    // 删除整单（剩 line2 为末行）→ 行级附件引用+R2 全清
+    // 删除整单（剩 line2 为末行）→ 归档到回收站：附件引用保留（恢复后凭证完整），彻底清除才全清
     const delSale = await call(env, 'DELETE', `/api/v1/sales/${saleId}`, token);
     expect(delSale.status).toBe(204);
+    const totalAfterVoid = (await (await call(env, 'GET', '/api/v1/attachments/total', token)).json()) as { total: number };
+    expect(totalAfterVoid.total).toBe(1);
+    const refsAfterVoid = await (env.DB as FakeD1).prepare('SELECT COUNT(*) AS n FROM attachment_refs').first<{ n: number }>();
+    expect(refsAfterVoid?.n ?? 0).toBe(1);
+    const trashList = (await (await call(env, 'GET', '/api/v1/trash', token)).json()) as { items: Array<{ id: string }> };
+    expect(trashList.items.length).toBe(1);
+    const purge = await call(env, 'DELETE', `/api/v1/trash/${trashList.items[0].id}`, token);
+    expect(purge.status).toBe(204);
     const totalEnd = (await (await call(env, 'GET', '/api/v1/attachments/total', token)).json()) as { total: number };
     expect(totalEnd.total).toBe(0);
     const refsEnd = await (env.DB as FakeD1).prepare('SELECT COUNT(*) AS n FROM attachment_refs').first<{ n: number }>();
     expect(refsEnd?.n ?? 0).toBe(0);
+    const gone = await call(env, 'GET', `/api/v1/attachments/${up2.key}`, token);
+    expect(gone.status).toBe(404);
   });
 
   it('counts 单据级统计计入明细行前缀（整单凭证=批量存入各行的行级图）', async () => {
@@ -914,6 +935,121 @@ describe('附件删除走同步变更流（引用变更流驱动：本地删 →
       "SELECT COUNT(*) AS n FROM attachment_refs WHERE entity = 'sale_item' AND entity_id = ? AND file_key = ?",
     ).bind(lines[0], singleKey).first<{ n: number }>();
     expect(singleLeft?.n ?? 0).toBe(1);
+  });
+
+  it('作废 → 回收站恢复：附件引用与 R2 文件保留，凭证随单据一起恢复', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-02-01',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+
+    // 作废（归档到回收站；附件引用与文件保留）
+    expect((await call(env, 'DELETE', `/api/v1/sales/${saleId}`, token)).status).toBe(204);
+    const trashList = (await (await call(env, 'GET', '/api/v1/trash', token)).json()) as { items: Array<{ id: string }> };
+    expect(trashList.items.length).toBe(1);
+    // 恢复 → 单据与凭证都回来（此前附件在作废时被物理删除，恢复后永久丢失）
+    expect((await call(env, 'POST', `/api/v1/trash/${trashList.items[0].id}/restore`, token)).status).toBe(200);
+    const list = (await (await call(env, 'GET', `/api/v1/attachments?entity=sale&id=${saleId}`, token)).json()) as {
+      attachments: Array<{ key: string }>;
+    };
+    expect(list.attachments).toHaveLength(1);
+    expect(list.attachments[0].key).toBe(up.key);
+    expect((await call(env, 'GET', `/api/v1/attachments/${up.key}`, token)).status).toBe(200);
+
+    // 再作废 + 彻底清除回收站 → 附件才真正清掉（零引用文件物理删除）
+    expect((await call(env, 'DELETE', `/api/v1/sales/${saleId}`, token)).status).toBe(204);
+    const trash2 = (await (await call(env, 'GET', '/api/v1/trash', token)).json()) as { items: Array<{ id: string }> };
+    expect(trash2.items.length).toBe(1);
+    expect((await call(env, 'DELETE', `/api/v1/trash/${trash2.items[0].id}`, token)).status).toBe(204);
+    expect((await call(env, 'GET', `/api/v1/attachments/${up.key}`, token)).status).toBe(404);
+  });
+
+  it('sync push 删单据（原生离线删除）→ 归档保留附件；恢复后凭证仍在', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-02-02',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+
+    // 原生客户端离线删除走 sync push（不经过 REST DELETE）：服务端必须先归档再删，
+    // 且保留附件引用/文件（此前这类删除不进回收站、附件也被物理删除）
+    const push = await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'phone-a',
+      changes: [{
+        entity_type: 'sale', entity_sync_id: saleId, action: 'delete', payload: {},
+        updated_at: new Date(Date.now() + 60_000).toISOString(),
+      }],
+    });
+    expect(push.status).toBe(200);
+    expect(((await push.json()) as { accepted: number }).accepted).toBe(1);
+
+    const trashList = (await (await call(env, 'GET', '/api/v1/trash', token)).json()) as { items: Array<{ id: string }> };
+    expect(trashList.items.length).toBe(1);
+    expect((await call(env, 'POST', `/api/v1/trash/${trashList.items[0].id}/restore`, token)).status).toBe(200);
+    const list = (await (await call(env, 'GET', `/api/v1/attachments?entity=sale&id=${saleId}`, token)).json()) as {
+      attachments: Array<{ key: string }>;
+    };
+    expect(list.attachments).toHaveLength(1);
+    expect(list.attachments[0].key).toBe(up.key);
+    expect((await call(env, 'GET', `/api/v1/attachments/${up.key}`, token)).status).toBe(200);
+  });
+
+  it('R2 写入失败 → 回滚引用行（不留"有引用无文件"的坏引用），重试可成功', async () => {
+    const bucket = env.BUCKET as FakeBucket;
+    const origPut = bucket.put.bind(bucket);
+    (bucket as unknown as { put: FakeBucket['put'] }).put = async () => { throw new Error('r2 down'); };
+    const failed = await call(env, 'POST', '/api/v1/attachments?entity=sale&id=s1', token, photoForm(), true);
+    (bucket as unknown as { put: FakeBucket['put'] }).put = origPut;
+    expect(failed.status).toBe(500);
+    const refs = await (env.DB as FakeD1).prepare('SELECT COUNT(*) AS n FROM attachment_refs').first<{ n: number }>();
+    expect(refs?.n ?? 0).toBe(0);
+    // 恢复后重试 → 成功（客户端上传重试路径）
+    const ok = await call(env, 'POST', '/api/v1/attachments?entity=sale&id=s1', token, photoForm(), true);
+    expect(ok.status).toBe(201);
+  });
+
+  it('回收站快照过期（每日维护）→ 附件引用与 R2 文件一并清理', async () => {
+    await call(env, 'POST', '/api/v1/clients', token, { name: '店A' });
+    const clients = (await (await call(env, 'GET', '/api/v1/clients', token)).json()) as { clients: Array<{ id: string }> };
+    await call(env, 'POST', '/api/v1/items', token, {
+      name: '白菜', prices: [{ unit: '斤', purchase_price: 2, sale_price: 2.5 }],
+    });
+    const items = (await (await call(env, 'GET', '/api/v1/items', token)).json()) as {
+      items: Array<{ prices: Array<{ id: string }> }>;
+    };
+    const sale = await call(env, 'POST', '/api/v1/sales', token, {
+      client_id: clients.clients[0].id, happened_at: '2026-02-01',
+      items: [{ price_id: items.items[0].prices[0].id, quantity: 1 }],
+    });
+    const saleId = ((await sale.json()) as { id: string }).id;
+    const up = (await (await call(env, 'POST', `/api/v1/attachments?entity=sale&id=${saleId}`, token, photoForm(), true)).json()) as { key: string };
+    expect((await call(env, 'DELETE', `/api/v1/sales/${saleId}`, token)).status).toBe(204);
+    // 把归档时间改到保留期之外 → 每日维护应清理快照 + 附件
+    await (env.DB as FakeD1).prepare("UPDATE voided_orders SET voided_at = '2000-01-01T00:00:00.000Z'").run();
+    const out = await runDailyMaintenance(env.DB as never, true, env as never);
+    expect(out.voided_orders).toBe(1);
+    const refs = await (env.DB as FakeD1).prepare('SELECT COUNT(*) AS n FROM attachment_refs').first<{ n: number }>();
+    expect(refs?.n ?? 0).toBe(0);
+    expect((await call(env, 'GET', `/api/v1/attachments/${up.key}`, token)).status).toBe(404);
   });
 });
 

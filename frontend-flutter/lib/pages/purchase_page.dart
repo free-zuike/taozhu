@@ -122,34 +122,15 @@ class _PurchasePageState extends State<PurchasePage> {
       r.priceCtrl.dispose();
       r.noteCtrl.dispose();
     }
-    // 未提交退出（取消）：清理识别即挂载的原图（引用+本地副本，零网络）
-    if (!_submitted && _pendingGroups.isNotEmpty) {
-      unawaited(_cleanupRecognizedOnCancel());
+    // 未提交退出（取消）：清理本单全部附件（识别即挂载的原图 + 手动添加的整单凭证）。
+    // 新增单据的 id 永远不会存在 → 已上传到云端的引用一并入队删除，否则服务器残留
+    // 指向不存在单据的孤儿引用（in-use 永远算在用、各端反复下载）。
+    // 编辑已有单据 / 批量直编（真实单据 id）取消不清理——附件属于已保存单据。
+    if (!_submitted && !_editing && !isDateRows) {
+      unawaited(SyncService.discardUnsavedOrderAttachments('purchase', _purchaseId));
+      _pendingGroups.clear();
     }
     super.dispose();
-  }
-
-  /// 取消退出时清理识别挂载：删单据级引用行 + 本地副本文件（识别挂载未入上传队列，零网络）
-  Future<void> _cleanupRecognizedOnCancel() async {
-    final groups = List<Map<String, dynamic>>.from(_pendingGroups);
-    if (groups.isEmpty) return;
-    try {
-      for (final g in groups) {
-        final file = '${g['file'] ?? ''}';
-        if (file.isEmpty) continue;
-        await LocalDb.deleteOne('attachment_refs', 'purchase/$_purchaseId/$file');
-      }
-      final root = await getApplicationDocumentsDirectory();
-      final files = groups.map((g) => '${g['file']}').toSet();
-      final refs = await LocalDb.getAll('attachment_refs');
-      for (final f in files) {
-        if (f.isEmpty) continue;
-        final ff = File('${root.path}/attachments/$f');
-        if (ff.existsSync() && !refs.any((r) => '${r['file'] ?? ''}' == f)) await ff.delete();
-      }
-      _pendingGroups.clear();
-    } catch (_) {}
-    appLog('sync', '识别取消清理：移除识别挂载 ${groups.length} 组（零网络）', level: 'info');
   }
 
   @override

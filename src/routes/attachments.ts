@@ -146,18 +146,16 @@ attachmentsRouter.get('/', async (c) => {
   if (!id) return c.json({ error: '缺少 id' }, 400);
   const store = createStorage(c.env);
   const byKey = new Map<string, { key: string; size: number; uploaded?: Date }>();
-  // ① 引用表（权威）：该实体引用的全部 file_key（新旧格式都记录在引用表；size 用 list(key) 补）
+  // ① 引用表（权威）：该实体引用的全部 file_key。
+  // size 不再逐条调 R2 list 反查（N 张凭证=N 次 R2 操作，打开整单凭证明显变慢）；
+  // 附件查看器/小程序都不展示该字段，统一返回 0（与 /bulk 口径一致），
+  // 真实大小由清理页的孤儿扫描（一次前缀 list）提供。
   try {
     const refs = await c.env.DB.prepare(
       'SELECT file_key FROM attachment_refs WHERE entity = ? AND entity_id = ?',
     ).bind(entity, id).all<{ file_key: string }>();
     for (const r of refs.results) {
-      let size = 0;
-      try {
-        const o = await store.list(r.file_key);
-        if (o.objects.length > 0) size = o.objects[0].size;
-      } catch (_) {}
-      byKey.set(r.file_key, { key: r.file_key, size });
+      byKey.set(r.file_key, { key: r.file_key, size: 0 });
     }
   } catch (_) {}
   // ② 历史前缀 R2 列（旧格式 key 引用行缺失的极老数据兜底）
@@ -194,16 +192,28 @@ attachmentsRouter.post('/', async (c) => {
     // 实体引用 id = `${entity}:${id}:${key}`（引用表主键语义）：同图多实体各自一条变更，
     // LWW/幂等按引用 id 判定不串；幂等重传（引用已存在）不重复写变更（同内容同实体无变化）
     const refId = `${entity}:${id}:${key}`;
-    // 关键：先落 D1 引用行、再传 R2 文件（原子性）。D1 额度耗尽时引用写不进→整体失败（无文件无引用，
-    // 干净回退）；绝不会产生"有 R2 文件、无引用行"的孤儿——那种孤儿正是被后续清理误删、导致附件丢失的根因。
-    // 引用已落但 R2 偶发失败→文件缺失由客户端重试补齐，同样不会残留孤儿。
+    // 关键：先落 D1 引用行、再传 R2 文件。D1 额度耗尽时引用写不进→整体失败（无文件无引用，
+    // 干净回退）；R2 写入偶发失败 → 回滚本次新插入的引用行（见下方 catch），客户端重试时
+    // 重新落引用+补文件。绝不留下「有引用行、无文件」的坏引用：那种引用在 in-use 里永远算在用，
+    // 各端每次同步下载 404、孤儿判定又认为它在用，永远清不掉。
     const upserted = await c.env.DB.prepare(
       'INSERT OR IGNORE INTO attachment_refs (id, entity, entity_id, file_key, md5) VALUES (?, ?, ?, ?, ?)',
     ).bind(refId, entity, id, key, key.split('/').pop()?.replace('.jpg', '') ?? '').run();
-    const needChange = (upserted.meta.changes ?? 0) > 0 || !(await c.env.DB.prepare(
+    const inserted = (upserted.meta.changes ?? 0) > 0;
+    const needChange = inserted || !(await c.env.DB.prepare(
       'SELECT 1 FROM sync_changes WHERE entity_type = ? AND entity_sync_id = ? LIMIT 1',
     ).bind('attachment', refId).first());
-    await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
+    try {
+      await createStorage(c.env).put(key, bytes, file.type || 'image/jpeg');
+    } catch (e) {
+      // 只回滚本次新插入的引用行；已有引用行（inserted=false）可能属于此前成功上传，不能删
+      if (inserted) {
+        try {
+          await c.env.DB.prepare('DELETE FROM attachment_refs WHERE id = ?').bind(refId).run();
+        } catch (_) {}
+      }
+      throw e;
+    }
     if (needChange) {
       const user = c.get('user');
       await recordChange(c.env.DB, {

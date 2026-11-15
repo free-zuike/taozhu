@@ -356,6 +356,9 @@ export async function applyChange(
   env: Env,
   ch: { entity_type: string; entity_sync_id: string; action: string; payload: unknown },
   username?: string, // 同步发起者（push 认证用户）——审计"谁干的"用实际登录人，而非 payload.deep 空值
+  /** keepAttachments=true：单据级删除已先落回收站快照（作废/软删），附件引用与 R2 文件必须保留，
+   *  恢复时凭证才能一起回来；未归档的硬删除（行级删除、归档失败）仍按原行为清附件。 */
+  opts?: { keepAttachments?: boolean },
 ): Promise<{ ok: boolean; error?: string }> {
   const { entity_type, entity_sync_id: id, action } = ch;
   const p = (ch.payload ?? {}) as Record<string, any>;
@@ -490,6 +493,9 @@ export async function applyChange(
           ).bind(id).first<{ sale_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
           if (row) {
             await db.batch([
+              // FIFO：先释放该行的批次占用（remaining 恢复），再删行——否则 sale_uses 残留，
+              // 后续成本/库存批次永远少一块（REST 删除路径同口径）
+              ...(await releaseSaleUsesStatements(db, id)),
               stockDeltaFor(db, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, 1),
               db.prepare('DELETE FROM sale_items WHERE id = ?').bind(id),
             ]);
@@ -559,6 +565,9 @@ export async function applyChange(
             await db.batch([
               stockDeltaFor(db, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1),
               db.prepare('DELETE FROM purchase_items WHERE id = ?').bind(id),
+              // FIFO 批次随行删除（与 REST 删除路径同口径）：否则幽灵批次留在 stock_batches，
+              // 后续出货 FIFO 会把已删进货的批次继续消耗 → 成本错乱
+              db.prepare('DELETE FROM stock_batches WHERE batch_id = ?').bind(id),
             ]);
             const remain = await db.prepare('SELECT COUNT(*) AS n FROM purchase_items WHERE purchase_id = ?').bind(row.purchase_id).first<{ n: number }>();
             if ((remain?.n ?? 0) === 0) {
@@ -621,20 +630,31 @@ export async function applyChange(
             `SELECT si.item_id, si.unit, si.quantity, si.count_qty, i.count_unit
              FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.sale_id = ?`).bind(id)
             .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
-          // R2 行级文件清理：删行前拿行 id（行级附件按 sale_item/{lineId}/ 存储）
-          try {
-            const lineRows = await db.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
-              .all<{ id: string }>();
-            for (const lr of lineRows.results) {
-              await deleteEntityAttachments(env, 'sale_item', lr.id);
-            }
-          } catch (_) {}
-          const bt: D1PreparedStatement[] = old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1));
+          // 行 id 先取：行级附件清理与 FIFO 批次占用释放都要用（删行后查不到）
+          const lineRows = await db.prepare('SELECT id FROM sale_items WHERE sale_id = ?').bind(id)
+            .all<{ id: string }>();
+          // R2 行级文件清理：删行前拿行 id（行级附件按 sale_item/{lineId}/ 存储）。
+          // keepAttachments（已归档到回收站）→ 保留引用与文件，恢复单据时凭证一起回来。
+          if (!opts?.keepAttachments) {
+            try {
+              for (const lr of lineRows.results) {
+                await deleteEntityAttachments(env, 'sale_item', lr.id);
+              }
+            } catch (_) {}
+          }
+          const bt: D1PreparedStatement[] = [];
+          // FIFO：释放全部行批次占用（remaining 恢复）——不释放则恢复单据时会二次消耗批次
+          for (const lr of lineRows.results) {
+            bt.push(...(await releaseSaleUsesStatements(db, lr.id)));
+          }
+          bt.push(...old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, 1)));
           bt.push(db.prepare('DELETE FROM sale_items WHERE sale_id = ?').bind(id));
           await db.batch(bt);
           // 单据级附件：由 deleteEntityAttachments 级联删引用并补发 attachment 删除变更
           // （不再直接 DELETE——直接删不进变更流，/in-use 版本化快照会失效不了、留孤儿）
-          try { await deleteEntityAttachments(env, 'sale', id); } catch (_) {}
+          if (!opts?.keepAttachments) {
+            try { await deleteEntityAttachments(env, 'sale', id); } catch (_) {}
+          }
         } else {
           await applySaleUpsert(db, id, p);
           // 附件引用差集：仅当 payload 显式提供 attachments 数组才收敛（payload 为期望全集）。
@@ -650,19 +670,29 @@ export async function applyChange(
             `SELECT pi.item_id, pi.unit, pi.quantity, pi.count_qty, i.count_unit
              FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.purchase_id = ?`).bind(id)
             .all<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
-          // R2 行级文件清理：删行前拿行 id（行级附件按 purchase_item/{lineId}/ 存储）
-          try {
-            const lineRows = await db.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
-              .all<{ id: string }>();
-            for (const lr of lineRows.results) {
-              await deleteEntityAttachments(env, 'purchase_item', lr.id);
-            }
-          } catch (_) {}
+          // 行 id 先取：行级附件清理与 FIFO 批次删除都要用（删行后查不到）
+          const lineRows = await db.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?').bind(id)
+            .all<{ id: string }>();
+          // R2 行级文件清理：删行前拿行 id（行级附件按 purchase_item/{lineId}/ 存储）。
+          // keepAttachments（已归档到回收站）→ 保留引用与文件。
+          if (!opts?.keepAttachments) {
+            try {
+              for (const lr of lineRows.results) {
+                await deleteEntityAttachments(env, 'purchase_item', lr.id);
+              }
+            } catch (_) {}
+          }
           const bt: D1PreparedStatement[] = old.results.map((it) => stockDeltaFor(db, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1));
+          // FIFO 批次随单删除（与 REST 删除路径同口径）：幽灵批次会被后续出货继续消耗 → 成本错乱
+          for (const lr of lineRows.results) {
+            bt.push(db.prepare('DELETE FROM stock_batches WHERE batch_id = ?').bind(lr.id));
+          }
           bt.push(db.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
           await db.batch(bt);
           // 单据级附件：由 deleteEntityAttachments 级联删引用并补发 attachment 删除变更
-          try { await deleteEntityAttachments(env, 'purchase', id); } catch (_) {}
+          if (!opts?.keepAttachments) {
+            try { await deleteEntityAttachments(env, 'purchase', id); } catch (_) {}
+          }
         } else {
           await applyPurchaseUpsert(db, id, p);
           if (Array.isArray(p.attachments)) {
@@ -672,9 +702,17 @@ export async function applyChange(
         break;
       case 'payment':
         if (action === 'delete') {
+          // 核销行与收款同删（与 REST 撤销收款同口径）：否则留下指向已删收款的孤儿核销行，
+          // 待收/欠款口径按核销行汇总时会失真。老库无该表时跳过，不让删除失败。
+          try {
+            await db.prepare('DELETE FROM payment_allocations WHERE payment_id = ?').bind(id).run();
+          } catch (_) {}
           await db.prepare('DELETE FROM payments WHERE id = ?').bind(id).run();
-          // 附件：由 deleteEntityAttachments 级联删引用并补发 attachment 删除变更
-          try { await deleteEntityAttachments(env, 'payment', id); } catch (_) {}
+          // 附件：由 deleteEntityAttachments 级联删引用并补发 attachment 删除变更。
+          // keepAttachments（已归档到回收站）→ 保留引用与文件。
+          if (!opts?.keepAttachments) {
+            try { await deleteEntityAttachments(env, 'payment', id); } catch (_) {}
+          }
         } else {
           await db.prepare(
             `INSERT INTO payments (id, client_id, happened_at, amount, waived, method, note) VALUES (?, ?, ?, ?, ?, ?, ?)

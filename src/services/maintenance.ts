@@ -6,13 +6,16 @@
  * 会持续推高备份包体积、/sync/full 成本与 D1 存储占用。
  * sync_changes 是 append-only 变更流，每行带实体完整快照，增长最快。
  */
+import { deleteEntityAttachments } from '../lib/image-key';
+import { entityExists, type VoidableEntity } from './voided';
+import type { Env } from '../types';
+
 export const AUDIT_KEEP_DAYS = 180;
 export const SYNC_CHANGES_KEEP_DAYS = 180;
 /** 回收站快照保留一年：留足人工核对/恢复窗口，又不让归档无限增长 */
 export const VOIDED_KEEP_DAYS = 365;
 const MAINT_KEY = 'daily_maintenance_date';
 export const SYNC_WATERMARK_KEY = 'sync_changes_watermark';
-
 export interface MaintenanceResult {
   ran: boolean;
   audit_logs: number;
@@ -26,8 +29,9 @@ export interface MaintenanceResult {
 /**
  * 幂等：用 schema_meta 记日期，cron 每分钟触发但每天只真正执行一次。
  * force=true 供 admin 手动端点调用（可重复跑）。
+ * env 传入时才会清理过期回收站快照对应的附件（R2 引用/文件）；不传则跳过附件清理（测试用）。
  */
-export async function runDailyMaintenance(db: D1Database, force = false): Promise<MaintenanceResult> {
+export async function runDailyMaintenance(db: D1Database, force = false, env?: Env): Promise<MaintenanceResult> {
   const zero = (): MaintenanceResult => ({
     ran: false, audit_logs: 0, sync_changes: 0, share_links: 0, idempotency_keys: 0, voided_orders: 0, cutoff: '',
   });
@@ -45,10 +49,36 @@ export async function runDailyMaintenance(db: D1Database, force = false): Promis
   const sh = await db.prepare('DELETE FROM share_links WHERE expires_at IS NOT NULL AND expires_at < ?')
     .bind(now).run();
   const ik = await db.prepare('DELETE FROM idempotency_keys WHERE created_at < ?').bind(cutoff).run();
-  // 回收站超期快照（老库可能还没补建 voided_orders 表，单条失败不影响其它清理）
+  // 回收站超期快照（老库可能还没补建 voided_orders 表，单条失败不影响其它清理）。
+  // 作废时附件引用/R2 文件被保留（供恢复），快照过期删除时才是真正清理点：
+  // 先按快照清理附件（删引用 + 补发删除变更，零引用文件物理删），再删快照行。
   const voidCut = new Date(Date.now() - VOIDED_KEEP_DAYS * 86400_000).toISOString();
   let voided = 0;
   try {
+    if (env) {
+      const expired = await db.prepare('SELECT entity_type, payload FROM voided_orders WHERE voided_at < ?')
+        .bind(voidCut).all<{ entity_type: string; payload: string }>();
+      for (const row of expired.results) {
+        try {
+          const entityType = row.entity_type as VoidableEntity;
+          if (!['sale', 'purchase', 'payment'].includes(entityType)) continue;
+          const payload = JSON.parse(row.payload) as Record<string, unknown>;
+          const orderId = String(payload.id ?? '');
+          if (!orderId) continue;
+          // 同 ID 单据已被新单占用 → 附件属于新单，绝不能清
+          if (await entityExists(db, entityType, orderId)) continue;
+          const lineEntity = entityType === 'sale' ? 'sale_item'
+            : entityType === 'purchase' ? 'purchase_item' : '';
+          if (lineEntity && Array.isArray(payload.items)) {
+            for (const it of payload.items as Array<Record<string, unknown>>) {
+              const lineId = String(it?.id ?? '');
+              if (lineId) await deleteEntityAttachments(env, lineEntity, lineId);
+            }
+          }
+          await deleteEntityAttachments(env, entityType, orderId);
+        } catch (_) { /* 单条清理失败不阻断维护 */ }
+      }
+    }
     const v = await db.prepare('DELETE FROM voided_orders WHERE voided_at < ?').bind(voidCut).run();
     voided = v.meta.changes ?? 0;
   } catch (_) { /* no such table */ }

@@ -358,6 +358,17 @@ purchasesRouter.delete('/items/:id', async (c) => {
   ).bind(id).first<{ id: string; purchase_id: string; item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
   if (!row) return c.json({ error: '明细行不存在' }, 404);
   const purchaseId = row.purchase_id;
+  // 删的是该单最后一行商品 → 整条记录随之消失：先归档到回收站（可恢复）。
+  // 归档成功 → 保留附件引用与文件（恢复后凭证完整）；归档失败/非最后一行 → 按原行为硬删附件。
+  const remainBefore = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM purchase_items WHERE purchase_id = ?')
+    .bind(purchaseId).first<{ n: number }>();
+  const lastLine = (remainBefore?.n ?? 0) <= 1;
+  const trashId = lastLine
+    ? await archiveVoidedOrder(c.env.DB, {
+        entity_type: 'purchase', id: purchaseId,
+        reason: '删除/作废', username: c.get('user').username,
+      })
+    : null;
   const batch: D1PreparedStatement[] = [
     stockDeltaFor(c.env.DB, { item_id: row.item_id, unit: row.unit, quantity: row.quantity, count_qty: row.count_qty, count_unit: row.count_unit }, -1), // 进货增加恢复
     c.env.DB.prepare('DELETE FROM purchase_items WHERE id = ?').bind(id),
@@ -365,17 +376,21 @@ purchasesRouter.delete('/items/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM stock_batches WHERE batch_id = ?').bind(id),
   ];
   await c.env.DB.batch(batch);
-  // 该行若有凭证附件（行级 purchase_item 引用），级联删除引用+R2（best-effort 不阻塞删除）
-  try {
-    await deleteEntityAttachments(c.env, 'purchase_item', id);
-  } catch (_) {}
+  // 该行若有凭证附件（行级 purchase_item 引用），未归档时级联删除引用+R2（best-effort 不阻塞删除）
+  if (!trashId) {
+    try {
+      await deleteEntityAttachments(c.env, 'purchase_item', id);
+    } catch (_) {}
+  }
   // 删的是该单最后一行商品 → 该批记录无商品，按用户语义（无单据概念）整体删除该条记录；
   // 无 head 表（已物理删除），只清行级附件引用，避免服务端残留"无明细"空壳
   const remain = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM purchase_items WHERE purchase_id = ?').bind(purchaseId).first<{ n: number }>();
   if ((remain?.n ?? 0) === 0) {
-    try {
-      await deleteEntityAttachments(c.env, 'purchase', purchaseId);
-    } catch (_) {}
+    if (!trashId) {
+      try {
+        await deleteEntityAttachments(c.env, 'purchase', purchaseId);
+      } catch (_) {}
+    }
     await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: purchaseId, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
     return c.json({ ok: true, order_deleted: true });
   }
@@ -483,15 +498,19 @@ purchasesRouter.delete('/:id', adminOnly(), async (c) => {
   // 子查询结果已空 → 批次永远删不掉，恢复/重算时凭空多出库存批次。
   const lineIds = (await c.env.DB.prepare('SELECT id FROM purchase_items WHERE purchase_id = ?')
     .bind(id).all<{ id: string }>()).results.map((r) => r.id);
-  try {
-    for (const lineId of lineIds) {
-      await deleteEntityAttachments(c.env, 'purchase_item', lineId);
-    }
-  } catch (_) {}
-  await archiveVoidedOrder(c.env.DB, {
+  // 归档必须在删附件/删行之前：快照要含完整明细与附件引用，恢复时凭证才能一起回来。
+  // 归档成功 → 保留附件引用与 R2 文件；归档失败 → 按原行为硬删附件。
+  const trashId = await archiveVoidedOrder(c.env.DB, {
     entity_type: 'purchase', id,
     reason: c.req.query('reason')?.trim() || '删除/作废', username: c.get('user').username,
   });
+  if (!trashId) {
+    try {
+      for (const lineId of lineIds) {
+        await deleteEntityAttachments(c.env, 'purchase_item', lineId);
+      }
+    } catch (_) {}
+  }
   const batch: D1PreparedStatement[] = oldItems.results
     .map((it) => stockDeltaFor(c.env.DB, { item_id: it.item_id, unit: it.unit, quantity: it.quantity, count_qty: it.count_qty, count_unit: it.count_unit }, -1)); // 进货加的减回
   batch.push(c.env.DB.prepare('DELETE FROM purchase_items WHERE purchase_id = ?').bind(id));
@@ -501,9 +520,12 @@ purchasesRouter.delete('/:id', adminOnly(), async (c) => {
   await c.env.DB.batch(batch);
   await recordChange(c.env.DB, { entity_type: 'purchase', entity_sync_id: id, action: 'delete', payload: {}, updated_by_username: c.get('user').username });
   await recordAudit(c.env.DB, { username: c.get('user').username, action: 'delete', entity_type: 'purchase', entity_id: id, detail: `作废进货记录（${oldItems.results.length} 件商品${c.req.query('reason') ? `，原因：${c.req.query('reason')}` : ''}）` });
-  // 删除进货单附带的凭证图片（单据级 + 全部明细行级，best-effort 不阻塞删除）
-  try {
-    await deleteEntityAttachments(c.env, 'purchase', id);
-  } catch (_) {}
+  // 删除进货单附带的凭证图片（单据级 + 全部明细行级，best-effort 不阻塞删除）。
+  // 已归档到回收站 → 保留（恢复后凭证完整）；未归档的硬删除才清理。
+  if (!trashId) {
+    try {
+      await deleteEntityAttachments(c.env, 'purchase', id);
+    } catch (_) {}
+  }
   return c.body(null, 204);
 });

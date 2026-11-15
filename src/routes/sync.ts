@@ -7,6 +7,7 @@ import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { chunkQuery } from '../lib/query';
 import { applyChange, buildPayload, latestChange, maskPayload, maxCursor, recordChange } from '../lib/sync';
+import { archiveVoidedOrder } from '../services/voided';
 import { loadGlobalCounts } from '../lib/global-counts';
 import { orderRefCountsFromLines, refCountByEntity } from '../lib/attachment-counts';
 import type { AuthUser, Env } from '../types';
@@ -81,7 +82,26 @@ syncRouter.post('/push', async (c) => {
 
     // 应用到业务表（投影；含库存联动与附件引用差集 GC），成功后追加变更流
     // username=push 认证用户 → 行级审计"谁干的"记实际登录人（同设备批量变更同人）
-    const applied = await applyChange(c.env.DB, c.env, { entity_type: entityType, entity_sync_id: id, action, payload: ch.payload ?? {} }, user.username);
+    // 单据级删除先落回收站快照：原生客户端离线删除走 sync push（不经过 REST DELETE），
+    // 此前这类删除不进回收站=无法恢复、附件也被一并物理删除。归档成功 → 附件保留（恢复后凭证完整）；
+    // 归档失败（表缺失/单据已空/重复删除）→ keepAttachments=false，按原行为清附件，不阻断删除。
+    let keepAttachments = false;
+    if (action === 'delete' && (entityType === 'sale' || entityType === 'purchase' || entityType === 'payment')) {
+      try {
+        keepAttachments = Boolean(await archiveVoidedOrder(c.env.DB, {
+          entity_type: entityType as 'sale' | 'purchase' | 'payment',
+          id,
+          reason: '删除/作废（同步）',
+          username: user.username,
+        }));
+      } catch (_) { /* 归档失败不阻断删除（与 REST 删除口径一致） */ }
+    }
+    const applied = await applyChange(
+      c.env.DB, c.env,
+      { entity_type: entityType, entity_sync_id: id, action, payload: ch.payload ?? {} },
+      user.username,
+      { keepAttachments },
+    );
     if (!applied.ok) {
       result.rejected += 1;
       itemResult(entityType, id, false, applied.error || 'apply_failed');

@@ -34,5 +34,5 @@ maintenanceRouter.post('/indexes/ensure', async (c) => {
 
 // POST /api/v1/maintenance/prune — 手动执行每日清理（force=true，不受当天已跑过去重限制）
 maintenanceRouter.post('/prune', async (c) => {
-  return c.json(await runDailyMaintenance(c.env.DB, true));
+  return c.json(await runDailyMaintenance(c.env.DB, true, c.env));
 });
