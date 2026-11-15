@@ -205,6 +205,8 @@ class SyncService {
     if (kIsWeb) return;
     List<Map<String, dynamic>> inUse;
     var inUseFresh = false;
+    // 删除墓碑集合：引用刷新（过滤）与下载循环（跳过已删）共用，必须提升到函数作用域
+    final tombstones = <String>{};
     try {
       // 在用列表拉取（带 5 分钟客户端缓存，避免每次同步触发服务端 attachment_refs 全表扫——D1 读额度主耗）。
       // 删除传播主路径走变更流（attachment delete 变更），缓存仅影响收敛兜底时效，安全。
@@ -222,7 +224,6 @@ class SyncService {
       // pull 全量刷新先把命中墓碑的三元组剔除——删除永胜，绝不被旧快照复活
       // （对齐参考实现 CouchDB 墓碑语义；比内存 pendingDel 覆盖更全：删行删单元
       //  无 attachment 删除变更，只有墓碑能挡住"删行后行级引用被 pull 写回"）
-      final tombstones = <String>{};
       try {
         for (final t in await LocalDb.getAll(kDeletedAttachmentsStore)) {
           final e = '${t['entity'] ?? ''}';
