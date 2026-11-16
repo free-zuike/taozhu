@@ -10,11 +10,12 @@ import { createStorage } from '../services/storage';
 import { parseAttachmentKey, deleteEntityAttachments } from './image-key';
 import { recordChange, type SyncChangeInput } from './changes';
 import { getRoundingConfig, roundMoney } from './money';
-import { consumeFifoStatements, releaseSaleUsesStatements } from './fifo';
+import { consumeFifoStatements, consumeLossStatements, releaseSaleUsesStatements } from './fifo';
+import { localTodayISO } from './biz-date';
 import { recordAudit } from '../routes/audit';
 import type { Env } from '../types';
 
-export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'price_group', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item', 'loss_record', 'stock_adjustment'] as const;
+export const SYNC_ENTITIES = ['client', 'item', 'category', 'payment_account', 'price_group', 'sale', 'purchase', 'payment', 'attachment', 'sale_item', 'purchase_item', 'loss_record', 'stock_adjustment', 'stock_threshold'] as const;
 export type SyncEntityType = (typeof SYNC_ENTITIES)[number];
 
 // recordChange / SyncChangeInput 现定义于 ./changes 并由此重新导出（保持外部 import 路径不变）
@@ -159,6 +160,15 @@ export async function buildPayload(db: D1Database, entityType: string, id: strin
         id: r.id, client_id: r.client_id, happened_at: r.happened_at,
         amount: r.amount, waived: r.waived ?? 0, method: r.method ?? '', note: r.note ?? '',
         attachments: refs.results.map((x) => x.file_key),
+      };
+    }
+    case 'loss_record': {
+      const r = await db.prepare('SELECT * FROM loss_records WHERE id = ?').bind(id).first<Record<string, unknown>>();
+      if (!r) return null;
+      return {
+        id: r.id, item_id: r.item_id, unit: r.unit,
+        qty: r.qty, price: r.price, amount: r.amount, happened_at: r.happened_at,
+        note: r.note ?? '', created_by: r.created_by ?? null, created_at: r.created_at ?? '',
       };
     }
     case 'stock_adjustment': {
@@ -484,6 +494,105 @@ export async function applyChange(
           ).bind(id, p.name ?? '', p.bank_name ?? '', p.card_last_four ?? '', Number(p.sort) || 0).run();
         }
         break;
+      case 'loss_record': {
+        // 报损（库存损耗）：本地优先推送路径。与 POST /stocks/loss 同口径——
+        // 从 FIFO 最早批次扣减 remaining，金额=损量×批次进价（加权），单独记流水。
+        if (action === 'delete') return { ok: false, error: '报损记录不支持删除（请用盘点调整反向修正）' };
+        const itemId = String(p.item_id ?? '').trim();
+        const unit = String(p.unit ?? '').trim();
+        const qty = Number(p.qty);
+        if (!itemId || !unit || !Number.isFinite(qty) || qty <= 0) {
+          return { ok: false, error: '报损需商品/单位/数量（>0）' };
+        }
+        // 幂等：同 id 已应用（推送重试）→ 直接成功，不再二次扣批次
+        if (await db.prepare('SELECT 1 FROM loss_records WHERE id = ?').bind(id).first()) return { ok: true };
+        const happenedAt = String(p.happened_at ?? '').trim() || localTodayISO();
+        const note = String(p.note ?? '');
+        const loss = await consumeLossStatements(db, itemId, unit, qty);
+        if (loss.leftover > 0) {
+          return { ok: false, error: `损耗数量超过当前库存（还差 ${Math.round(loss.leftover * 100) / 100}${unit}）` };
+        }
+        await db.batch([
+          ...loss.stmts,
+          db.prepare(
+            'INSERT INTO loss_records (id, item_id, unit, qty, price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          ).bind(id, itemId, unit, qty, loss.amount / qty, loss.amount, happenedAt, note, p.created_by ?? null),
+        ]);
+        try {
+          await recordAudit(db, {
+            username: username ?? String(p.created_by ?? 'sync'), action: 'loss', entity_type: 'stocks',
+            detail: `报损（同步）：${itemId} ${unit} ${qty}，金额 ¥${Math.round(loss.amount * 100) / 100}${note ? `（${note}）` : ''}`,
+          });
+        } catch (_) {}
+        return { ok: true };
+      }
+      case 'stock_adjustment': {
+        // 盘点调整（本地优先推送路径）：客户端按本地账面算出**有符号差异** qty（盘盈+/盘亏-）
+        // 并给出 price/amount 估值；服务端按批次账重算权威金额（盘亏从最早批次扣、盘盈按档案进价建批）。
+        if (action === 'delete') return { ok: false, error: '盘点调整不支持删除' };
+        if (await db.prepare('SELECT 1 FROM stock_adjustments WHERE id = ?').bind(id).first()) return { ok: true }; // 幂等
+        const itemId = String(p.item_id ?? '').trim();
+        const unit = String(p.unit ?? '').trim();
+        const qty = Number(p.qty); // 有符号差异
+        const adjustId = String(p.adjust_id ?? '').trim();
+        if (!itemId || !unit || !adjustId || !Number.isFinite(qty) || qty === 0) {
+          return { ok: false, error: '盘点行需商品/单位/调整量（非 0）/盘点单号' };
+        }
+        const happenedAt = String(p.happened_at ?? '').trim() || localTodayISO();
+        const note = String(p.note ?? '');
+        let price = Number(p.price) || 0;
+        let amount = 0;
+        const stmts: D1PreparedStatement[] = [];
+        if (qty > 0) {
+          // 盘盈：建新批次（客户端带价优先，缺失按档案进价；与 POST /stocks/adjust 同口径）
+          if (!(price > 0)) {
+            price = (await db.prepare(
+              'SELECT purchase_price FROM item_prices WHERE item_id = ? AND unit = ? AND active = 1 ORDER BY created_at DESC LIMIT 1',
+            ).bind(itemId, unit).first<{ purchase_price: number }>())?.purchase_price ?? 0;
+          }
+          amount = Math.round(qty * price * 100) / 100;
+          stmts.push(db.prepare(
+            'INSERT INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at) VALUES (?, ?, ?, ?, ?, ?)',
+          ).bind(id, itemId, unit, price, qty, happenedAt));
+        } else {
+          // 盘亏：从最早批次扣减（与报损同口径）；不足则整条拒绝，不回退半截库存
+          const loss = await consumeLossStatements(db, itemId, unit, -qty);
+          if (loss.leftover > 0) {
+            return { ok: false, error: `「${itemId}（${unit}）」盘亏超过账面库存（还差 ${Math.round(loss.leftover * 100) / 100}${unit}）` };
+          }
+          amount = Math.round(loss.amount * 100) / 100;
+          price = Math.round((loss.amount / (-qty)) * 100) / 100;
+          stmts.push(...loss.stmts);
+        }
+        await db.batch([
+          ...stmts,
+          db.prepare(
+            'INSERT INTO stock_adjustments (id, adjust_id, item_id, unit, qty, price, amount, happened_at, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          ).bind(id, adjustId, itemId, unit, qty, price, amount, happenedAt, note, p.created_by ?? null),
+        ]);
+        return { ok: true };
+      }
+      case 'stock_threshold': {
+        // 安全库存阈值（stocks.min_stock）：按 商品+单位 定位 stocks 行，不存在则建行。
+        // 实体 id 用 item_id::unit 的稳定键（客户端可离线生成，不依赖服务端 stock 行 id）。
+        if (action === 'delete') return { ok: false, error: '库存阈值不支持删除' };
+        const itemId = String(p.item_id ?? '').trim();
+        const unit = String(p.unit ?? '').trim();
+        const minStock = Number(p.min_stock);
+        if (!itemId || !unit || !Number.isFinite(minStock) || minStock < 0) {
+          return { ok: false, error: '阈值需商品/单位/非负数值' };
+        }
+        const val = Math.round(minStock * 100) / 100;
+        const cur = await db.prepare('SELECT id FROM stocks WHERE item_id = ? AND unit = ?')
+          .bind(itemId, unit).first<{ id: string }>();
+        if (cur) {
+          await db.prepare('UPDATE stocks SET min_stock = ? WHERE id = ?').bind(val, cur.id).run();
+        } else {
+          await db.prepare('INSERT INTO stocks (id, item_id, unit, quantity, min_stock) VALUES (?, ?, ?, 0, ?)')
+            .bind(randomId(), itemId, unit, val).run();
+        }
+        return { ok: true };
+      }
       case 'sale_item': {
         // 行级出货记录（去单据化）：upsert 单行商品；delete 删行并级联清单据（防空壳）
         if (action === 'delete') {

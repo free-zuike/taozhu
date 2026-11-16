@@ -7,6 +7,7 @@ import '../sync_service.dart';
 import '../theme.dart';
 import '../utils/money.dart';
 import '../utils/biz_date.dart';
+import '../utils/local_fifo.dart';
 import '../widgets/center_sheet.dart';
 import '../widgets/number_pad_field.dart';
 import 'router.dart';
@@ -148,7 +149,7 @@ class _StocksPageState extends State<StocksPage> {
         if (itemId.isEmpty || rawUnit.isEmpty) continue;
         final cu = cuOf[itemId] ?? '';
         final unit = cu.isNotEmpty ? cu : rawUnit;
-        final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
+        final qty = (r['quantity'] as num?)?.toDouble() ?? (r['qty'] as num?)?.toDouble() ?? 0;
         final cq = (r['count_qty'] as num?)?.toDouble() ?? 0;
         final eff = cq > 0 ? cq : qty;
         final key = '$itemId|$unit';
@@ -255,7 +256,8 @@ class _StocksPageState extends State<StocksPage> {
     }
   }
 
-  /// 报损（损耗）：老板操作、需在线——从 FIFO 最早进货批次扣减，单独记损耗流水（不计入出货毛利）。
+  /// 报损（损耗）：老板操作，本地优先——写本地损耗流水 + 待推送队列（离线可用）；
+  /// 金额按本地 FIFO 批次派生估值，推送后服务端按批次账重算权威金额。
   /// 单位下拉取该商品全部单位（主卡 + 折叠行），默认主单位（出货单位）。
   Future<void> _reportLoss(Map<String, dynamic> s) async {
     final units = <String>{'${s['unit'] ?? ''}'};
@@ -266,10 +268,6 @@ class _StocksPageState extends State<StocksPage> {
     final unitList = units.where((u) => u.isNotEmpty).toList();
     if (unitList.isEmpty) {
       toast(context, '缺少单位信息，无法报损');
-      return;
-    }
-    if (!kIsWeb && Api.isOffline) {
-      toast(context, '报损需联网（当前离线，联网后再报损）');
       return;
     }
     final qtyCtrl = TextEditingController();
@@ -324,13 +322,47 @@ class _StocksPageState extends State<StocksPage> {
       return;
     }
     try {
-      await Api.instance.post('/stocks/loss', {
-        'item_id': s['item_id'],
-        'unit': selUnit,
-        'qty': qty,
-        'note': note,
-      });
-      toast(context, '已报损 ${fmtQty(qty)}$selUnit');
+      if (kIsWeb) {
+        await Api.instance.post('/stocks/loss', {
+          'item_id': s['item_id'],
+          'unit': selUnit,
+          'qty': qty,
+          'note': note,
+        });
+      } else {
+        // 本地优先：写本地损耗流水 + 待推送队列（离线可用）。
+        // 金额按本地 FIFO 批次派生估值（与服务器 consumeLossStatements 同口径）；
+        // 推送后服务端按批次账重算权威金额并下发其他端。
+        final itemId = '${s['item_id'] ?? ''}';
+        final fifo = localFifoConsume(
+          itemId: itemId,
+          unit: selUnit,
+          qty: qty,
+          buyRows: await LocalDb.getAll('purchase_items'),
+          saleRows: await LocalDb.getAll('sale_items'),
+          lossRows: await LocalDb.getAll('loss_records'),
+        );
+        final archive = localArchivePrice(await LocalDb.getAllByName('items'), itemId, selUnit);
+        final short = qty - fifo.covered;
+        final amount = fifo.cost + (short > 0 ? short * archive : 0);
+        final lossId = 'l${DateTime.now().microsecondsSinceEpoch}';
+        final row = <String, dynamic>{
+          'id': lossId,
+          'item_id': itemId,
+          'unit': selUnit,
+          'qty': qty,
+          'price': qty > 0 ? amount / qty : 0,
+          'amount': amount,
+          'happened_at': bizTodayISO(),
+          'note': note,
+          'created_at': DateTime.now().toIso8601String(),
+        };
+        await LocalDb.upsertOne('loss_records', row);
+        await SyncService.enqueueChange(
+            entityType: 'loss_record', entitySyncId: lossId, payload: row);
+        unawaited(SyncService.pushPending()); // 联网即推；离线保留队列
+      }
+      toast(context, '已报损 ${fmtQty(qty)}$selUnit${kIsWeb ? '' : '（本地，联网后同步）'}');
       SyncService.notifyStockChanged(); // 我的页低库存红字实时刷新
       _refresh();
     } catch (e) {
@@ -341,7 +373,32 @@ class _StocksPageState extends State<StocksPage> {
   /// 损耗记录：GET /stocks/loss 列表 + 区间汇总（金额/单价仅老板可见，店员打码对齐成本）
   Future<void> _lossList() async {
     try {
-      final d = await Api.instance.get('/stocks/loss');
+      Map<String, dynamic> d = {};
+      try {
+        d = await Api.instance.get('/stocks/loss');
+      } catch (_) {
+        // 离线：用本地镜像生成同形响应（损耗流水随同步下发；成本列按老板可见）
+        final canSee = (await Api.instance.getRole()) == 'admin';
+        final names = <String, String>{
+          for (final it in await LocalDb.getAllByName('items')) '${it['id'] ?? ''}': '${it['name'] ?? ''}',
+        };
+        final local = (await LocalDb.getAll('loss_records'))
+          ..sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+        d = {
+          'rows': [
+            for (final r in local)
+              {
+                ...r,
+                'item_name': names['${r['item_id'] ?? ''}'] ?? '',
+                'cost_visible': canSee,
+              },
+          ],
+          'total_qty': local.fold<double>(0, (s, r) => s + ((r['qty'] as num?)?.toDouble() ?? 0)),
+          'total_amount': canSee
+              ? local.fold<double>(0, (s, r) => s + ((r['amount'] as num?)?.toDouble() ?? 0))
+              : 0,
+        };
+      }
       final rows = ((d['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
       final costVisible = rows.isEmpty || rows.first['cost_visible'] != false;
       final totalQty = (d['total_qty'] as num?)?.toDouble() ?? 0;
@@ -423,7 +480,7 @@ class _StocksPageState extends State<StocksPage> {
 
   /// 盘点弹层：列出所有商品价格单位，填「实际数量」——与账面差异=盘盈(+)/盘亏(−)，
   /// 提交后服务端按 FIFO 批次调整库存并记调整流水（可追溯）；可顺手同步设预警阈值。
-  /// 需在线（调整走服务端批次账）；防连点。
+  /// 本地优先：盘点差异/阈值写本地镜像 + 待推送队列（离线可用；Web 直连服务端）；防连点。
   Future<void> _count() async {
     if (_counting) return;
     if (!kIsWeb && Api.isOffline) {
@@ -583,7 +640,8 @@ class _StocksPageState extends State<StocksPage> {
         final v = double.tryParse(qtyCtrls[i].text.trim());
         final book = rows[i]['quantity'] as double;
         if (v != null && v >= 0 && (v - book).abs() > 0.001) {
-          adjustRows.add({'item_id': rows[i]['item_id'], 'unit': rows[i]['unit'], 'actual_qty': v});
+          // 离线本地优先需要差异值（服务端推送按有符号差异落批次账）
+          adjustRows.add({'item_id': rows[i]['item_id'], 'unit': rows[i]['unit'], 'actual_qty': v, 'qty': v - book});
         }
         final min = double.tryParse(minCtrls[i].text.trim());
         if (min != null && min >= 0 && (min - (rows[i]['min_stock'] as double)).abs() > 0.001) {
@@ -598,23 +656,103 @@ class _StocksPageState extends State<StocksPage> {
       }
       setState(() => _counting = true);
       try {
+        final adjustId = 'c${DateTime.now().millisecondsSinceEpoch}${_countingNonce()}';
+        final happenedAt = bizTodayISO();
         String? adjMsg;
         if (adjustRows.isNotEmpty) {
-          final r = await Api.instance.post('/stocks/adjust', {
-            'id': 'c${DateTime.now().millisecondsSinceEpoch}${_countingNonce()}',
-            'rows': adjustRows,
-            'happened_at': bizTodayISO(),
-          });
-          final surplus = (r['surplus'] as num?)?.toDouble() ?? 0;
-          final shortage = (r['shortage'] as num?)?.toDouble() ?? 0;
-          adjMsg = '调整 ${r['adjusted'] ?? adjustRows.length} 项'
-              '${surplus > 0 ? '，盘盈 ${fmtQty(surplus)}' : ''}'
-              '${shortage > 0 ? '，盘亏 ${fmtQty(shortage)}' : ''}';
+          if (kIsWeb) {
+            final r = await Api.instance.post('/stocks/adjust', {
+              'id': adjustId,
+              'rows': adjustRows,
+              'happened_at': happenedAt,
+            });
+            final surplus = (r['surplus'] as num?)?.toDouble() ?? 0;
+            final shortage = (r['shortage'] as num?)?.toDouble() ?? 0;
+            adjMsg = '调整 ${r['adjusted'] ?? adjustRows.length} 项'
+                '${surplus > 0 ? '，盘盈 ${fmtQty(surplus)}' : ''}'
+                '${shortage > 0 ? '，盘亏 ${fmtQty(shortage)}' : ''}';
+          } else {
+            // 本地优先：按本地账面差异逐行生成盘点流水 + 待推送队列（离线可用）。
+            // 盘盈金额按档案进价、盘亏按本地 FIFO 批次成本估值；推送后服务端按批次账重算权威金额。
+            final items = await LocalDb.getAllByName('items');
+            final buyRows = await LocalDb.getAll('purchase_items');
+            final saleRows = await LocalDb.getAll('sale_items');
+            final lossRows = await LocalDb.getAll('loss_records');
+            var adjusted = 0;
+            var surplus = 0.0, shortage = 0.0;
+            for (final a in adjustRows) {
+              final itemId = '${a['item_id'] ?? ''}';
+              final unit = '${a['unit'] ?? ''}';
+              final diff = (a['qty'] as num?)?.toDouble() ?? 0;
+              if (diff.abs() <= 0.001) continue;
+              double price = 0;
+              double amount = 0;
+              if (diff > 0) {
+                price = localArchivePrice(items, itemId, unit);
+                amount = diff * price;
+                surplus += diff;
+              } else {
+                final fifo = localFifoConsume(
+                  itemId: itemId, unit: unit, qty: -diff,
+                  buyRows: buyRows, saleRows: saleRows, lossRows: lossRows,
+                );
+                final short = -diff - fifo.covered;
+                amount = fifo.cost + (short > 0 ? short * localArchivePrice(items, itemId, unit) : 0);
+                price = -diff > 0 ? amount / (-diff) : 0;
+                shortage += -diff;
+              }
+              final rowId = 'a${DateTime.now().microsecondsSinceEpoch}${_countingNonce()}$adjusted';
+              final row = <String, dynamic>{
+                'id': rowId,
+                'adjust_id': adjustId,
+                'item_id': itemId,
+                'unit': unit,
+                'qty': diff,
+                'price': price,
+                'amount': amount,
+                'happened_at': happenedAt,
+                'note': '',
+                'created_at': DateTime.now().toIso8601String(),
+              };
+              await LocalDb.upsertOne('stock_adjustments', row);
+              await SyncService.enqueueChange(
+                  entityType: 'stock_adjustment', entitySyncId: rowId, payload: row);
+              adjusted++;
+            }
+            adjMsg = '调整 $adjusted 项'
+                '${surplus > 0 ? '，盘盈 ${fmtQty(surplus)}' : ''}'
+                '${shortage > 0 ? '，盘亏 ${fmtQty(shortage)}' : ''}';
+          }
         }
         if (thresholdRows.isNotEmpty) {
-          await Api.instance.put('/stocks', {'rows': thresholdRows});
+          if (kIsWeb) {
+            await Api.instance.put('/stocks', {'rows': thresholdRows});
+          } else {
+            // 本地优先：阈值写本地 stocks 镜像 + 待推送队列（stock_threshold 按 商品+单位 定位）
+            final stocks = await LocalDb.getAll('stocks');
+            for (final t in thresholdRows) {
+              final itemId = '${t['item_id'] ?? ''}';
+              final unit = '${t['unit'] ?? ''}';
+              final min = (t['min_stock'] as num?)?.toDouble() ?? 0;
+              final cur = stocks.where((x) => '${x['item_id']}' == itemId && '${x['unit']}' == unit).firstOrNull;
+              final id = '$itemId::$unit';
+              await LocalDb.upsertOne('stocks', {
+                ...?cur,
+                'id': cur?['id'] ?? 'thr:$id',
+                'item_id': itemId,
+                'unit': unit,
+                'min_stock': min,
+              });
+              await SyncService.enqueueChange(
+                entityType: 'stock_threshold',
+                entitySyncId: id,
+                payload: {'id': id, 'item_id': itemId, 'unit': unit, 'min_stock': min},
+              );
+            }
+          }
         }
-        toast(context, '已保存${adjMsg != null ? '：$adjMsg' : ''}（阈值 ${thresholdRows.length} 项）');
+        if (!kIsWeb) unawaited(SyncService.pushPending()); // 联网即推；离线保留队列
+        toast(context, '已保存${adjMsg != null ? '：$adjMsg' : ''}（阈值 ${thresholdRows.length} 项${kIsWeb ? '' : '，本地'}）');
         SyncService.notifyStockChanged(); // 我的页低库存红字实时刷新
         _refresh();
       } catch (e) {
@@ -632,7 +770,43 @@ class _StocksPageState extends State<StocksPage> {
   /// 盘点调整记录：GET /stocks/adjustments 列表 + 盘盈/盘亏汇总（金额/单价仅老板可见）
   Future<void> _adjustmentsList() async {
     try {
-      final d = await Api.instance.get('/stocks/adjustments');
+      Map<String, dynamic> d = {};
+      try {
+        d = await Api.instance.get('/stocks/adjustments');
+      } catch (_) {
+        // 离线：用本地镜像生成同形响应（盘点流水随同步下发；成本列按老板可见）
+        final canSee = (await Api.instance.getRole()) == 'admin';
+        final names = <String, String>{
+          for (final it in await LocalDb.getAllByName('items')) '${it['id'] ?? ''}': '${it['name'] ?? ''}',
+        };
+        final local = (await LocalDb.getAll('stock_adjustments'))
+          ..sort((a, b) => '${b['happened_at'] ?? ''}'.compareTo('${a['happened_at'] ?? ''}'));
+        double sumQty(bool positive) => local.fold<double>(
+            0, (s, r) {
+              final q = (r['qty'] as num?)?.toDouble() ?? 0;
+              return s + ((positive ? q > 0 : q < 0) ? q.abs() : 0);
+            });
+        double sumAmount(bool positive) => canSee
+            ? local.fold<double>(0, (s, r) {
+                final q = (r['qty'] as num?)?.toDouble() ?? 0;
+                return s + ((positive ? q > 0 : q < 0) ? ((r['amount'] as num?)?.toDouble() ?? 0) : 0);
+              })
+            : 0;
+        d = {
+          'rows': [
+            for (final r in local)
+              {
+                ...r,
+                'item_name': names['${r['item_id'] ?? ''}'] ?? '',
+                'cost_visible': canSee,
+              },
+          ],
+          'surplus_qty': sumQty(true),
+          'shortage_qty': sumQty(false),
+          'surplus_amount': sumAmount(true),
+          'shortage_amount': sumAmount(false),
+        };
+      }
       final rows = ((d['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
       final costVisible = rows.isEmpty || rows.first['cost_visible'] != false;
       final surplusQty = (d['surplus_qty'] as num?)?.toDouble() ?? 0;

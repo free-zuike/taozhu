@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../api.dart';
@@ -6,8 +7,8 @@ import '../log.dart';
 import '../sync_service.dart';
 
 /// 收款方式账户（收款账户，服务器同步实体）：现金/微信/支付宝/银行卡/转账 等。
-/// - App：本地库镜像优先（离线秒开可下拉选择），账户管理走服务端 PUT（全量覆盖），成功后写本地镜像 + 触发同步
-/// - Web：直连服务器
+/// - App：本地优先——本地库镜像立即生效 + 待推送队列（upsert/delete），离线也能增删改
+/// - Web：直连服务器 PUT 全量覆盖
 /// 数据以服务端为准（与其他同步实体一致），同步面板显示 本地 vs 服务器 账户数量。
 class LocalAccounts {
   LocalAccounts._();
@@ -60,15 +61,80 @@ class LocalAccounts {
               'card_last_four': '${a['card_last_four'] ?? ''}'.trim(),
             })
         .toList();
+    if (!kIsWeb) {
+      // 本地优先：镜像立即生效 + 队列推送（离线可用）
+      try {
+        await _saveLocal(items);
+        return;
+      } catch (e) {
+        appLog('accounts', '保存收款账户（本地）失败: ${e.toString().split('\n').first}', level: 'error');
+        rethrow;
+      }
+    }
     try {
       final d = await Api.instance.put('/payment-accounts', {'accounts': items});
       await _mirror(d);
-      // App：服务端已记录变更流，触发增量拉取合并本机镜像（Web 无本地库，跳过）
-      if (!kIsWeb) SyncService.schedulePullNow();
+      // Web：服务端已记录变更流，各页监听 version 刷新（无本地库）
     } catch (e) {
       appLog('accounts', '保存收款账户失败: ${e.toString().split('\n').first}', level: 'error');
       rethrow;
     }
+  }
+
+  /// 本地优先保存：按名称对齐已有 id → 写本地镜像（立即生效）+ 待推送队列（upsert/删）。
+  /// 本地镜像为空时先尝试拉一次服务器账户拿权威 id（防离线生成 id 导致服务器重复账户）；
+  /// 拉不到（真离线首装）才本地生成 id，联网后以服务端为准。
+  static Future<void> _saveLocal(List<Map<String, dynamic>> items) async {
+    var current = await LocalDb.getAll('payment_accounts');
+    if (current.isEmpty) {
+      try {
+        final d = await Api.instance.get('/payment-accounts');
+        current = ((d['accounts'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } catch (_) {}
+    }
+    final byName = <String, Map<String, dynamic>>{};
+    for (final a in current) {
+      final n = '${a['name'] ?? ''}'.trim();
+      if (n.isNotEmpty) byName[n] = a;
+    }
+    final rows = <Map<String, dynamic>>[];
+    final keptNames = <String>{};
+    var sort = 0;
+    for (final it in items) {
+      final name = '${it['name'] ?? ''}'.trim();
+      if (name.isEmpty) continue;
+      keptNames.add(name);
+      final old = byName[name];
+      final oldId = '${old?['id'] ?? ''}';
+      rows.add({
+        'id': oldId.isNotEmpty ? oldId : 'pa${DateTime.now().microsecondsSinceEpoch}${sort}',
+        'name': name,
+        'bank_name': '${it['bank_name'] ?? ''}',
+        'card_last_four': '${it['card_last_four'] ?? ''}',
+        'sort': sort++,
+      });
+    }
+    await LocalDb.putAll('payment_accounts', rows);
+    // 删除被移除的账户（按服务器 id；本地镜像里没 id 的默认账户跳过）
+    for (final a in current) {
+      final name = '${a['name'] ?? ''}'.trim();
+      final id = '${a['id'] ?? ''}';
+      if (id.isEmpty || keptNames.contains(name)) continue;
+      await SyncService.enqueueChange(
+        entityType: 'payment_account',
+        entitySyncId: id,
+        action: 'delete',
+        payload: {'id': id},
+      );
+    }
+    for (final r in rows) {
+      await SyncService.enqueueChange(
+        entityType: 'payment_account',
+        entitySyncId: '${r['id']}',
+        payload: r,
+      );
+    }
+    unawaited(SyncService.pushPending()); // 联网即推；离线保留队列
   }
 
   /// 服务端响应写入本地镜像（Web 端 LocalDb 空操作）

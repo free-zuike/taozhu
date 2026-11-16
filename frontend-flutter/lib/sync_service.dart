@@ -1053,6 +1053,26 @@ class SyncService {
                 }
               }
               applied = true;
+            } else if (entityType == 'stock_threshold') {
+              // 安全库存阈值（stocks.min_stock）：按 商品+单位 更新本地 stocks 行，
+              // 无行则插临时行（id 用 thr: 前缀；下次全量同步以服务端 stocks 行为准）
+              final itemId = '${payload['item_id'] ?? ''}';
+              final unit = '${payload['unit'] ?? ''}';
+              final minStock = (payload['min_stock'] as num?)?.toDouble();
+              if (action != 'delete' && itemId.isNotEmpty && unit.isNotEmpty && minStock != null) {
+                final stocks = await LocalDb.getAll('stocks');
+                final cur = stocks
+                    .where((x) => '${x['item_id'] ?? ''}' == itemId && '${x['unit'] ?? ''}' == unit)
+                    .firstOrNull;
+                await LocalDb.upsertOne('stocks', {
+                  ...?cur,
+                  'id': cur?['id'] ?? 'thr:$itemId::$unit',
+                  'item_id': itemId,
+                  'unit': unit,
+                  'min_stock': minStock,
+                });
+              }
+              applied = true;
             } else {
               final store = _storeOf(entityType);
               if (store.isEmpty) continue;

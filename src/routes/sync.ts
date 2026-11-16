@@ -110,9 +110,15 @@ syncRouter.post('/push', async (c) => {
       }
       continue;
     }
+    // 服务端重算金额的实体（报损 FIFO 加权、盘点盘亏批次成本）：变更流下发服务端权威快照，
+    // 否则其他端会收到客户端离线估值（甚至 0），本地历史金额与服务器不一致。
+    let changePayload: unknown = ch.payload ?? {};
+    if (action === 'upsert' && (entityType === 'loss_record' || entityType === 'stock_adjustment')) {
+      changePayload = (await buildPayload(c.env.DB, entityType, id)) ?? changePayload;
+    }
     await recordChange(c.env.DB, {
       entity_type: entityType, entity_sync_id: id, action,
-      payload: action === 'upsert' ? (ch.payload ?? {}) : {},
+      payload: action === 'upsert' ? changePayload : {},
       updated_at: new Date(incomingTs).toISOString(),
       updated_by_device_id: deviceId, updated_by_username: user.username,
     });
