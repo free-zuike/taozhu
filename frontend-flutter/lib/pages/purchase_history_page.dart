@@ -414,12 +414,14 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
       if (kIsWeb) {
         await Api.instance.delete('/purchases/${p['id']}');
       } else {
-        // 原生本地优先：先清附件副本（需镜像 items 定位行级目录）再本地删行 + 队列推送
+        // 原生本地优先：先落本地回收站快照（离线可恢复）→ 清附件副本 → 本地删行 + 队列推送
+        final trashId = await SyncService.archiveLocalVoid('purchase', '${p['id']}');
         await SyncService.cleanupLocalAttachmentsOf('purchase', '${p['id']}');
         await _deletePurchaseRowsOf('${p['id']}', ((p['items'] as List?) ?? []).cast<Map<String, dynamic>>());
         await LocalDb.deleteOne('purchases', '${p['id']}');
         await SyncService.enqueueChange(
-            entityType: 'purchase', entitySyncId: '${p['id']}', action: 'delete', payload: {});
+            entityType: 'purchase', entitySyncId: '${p['id']}', action: 'delete',
+            payload: {'trash_id': trashId});
         unawaited(SyncService.pushPending());
       }
       toast(context, '已删除，库存已回滚');
@@ -481,12 +483,15 @@ class _PurchaseHistoryPageState extends State<PurchaseHistoryPage> {
         final updatedItems = items.where((it) => '${it['id']}' != rowId).toList();
         if (updatedItems.isEmpty) {
           // 删的是该条记录最后一商品 → 整条记录删除（不留空壳，与 Web 级联语义一致）
+          // 本地回收站快照先落（离线可恢复）；删除变更带 trash_id 供联网对账
+          final trashId = await SyncService.archiveLocalVoid('purchase', '${order['id']}');
           await SyncService.cleanupLocalAttachmentsOf('purchase_item', rowId);
           await SyncService.cleanupLocalAttachmentsOf('purchase', '${order['id']}');
           await _deletePurchaseRowsOf('${order['id']}', items);
           await LocalDb.deleteOne('purchases', '${order['id']}');
           await SyncService.enqueueChange(
-              entityType: 'purchase', entitySyncId: '${order['id']}', action: 'delete', payload: {});
+              entityType: 'purchase', entitySyncId: '${order['id']}', action: 'delete',
+              payload: {'trash_id': trashId});
           unawaited(SyncService.pushPending()); // 立即推送：删除即时生效，服务端笔数/库存收敛
           toast(context, '已删除该商品（本条记录已无商品）');
           _load();

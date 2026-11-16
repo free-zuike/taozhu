@@ -324,10 +324,12 @@ class _PaymentsPageState extends State<PaymentsPage> {
       if (kIsWeb) {
         await Api.instance.delete('/payments/${p['id']}');
       } else {
-        // 原生本地优先：本地删行 + 队列推送 delete + 立即推送（删除即时生效，防复活）
+        // 原生本地优先：先落本地回收站快照（离线可恢复）→ 删本地行 + 队列推送 delete + 立即推送
+        final trashId = await SyncService.archiveLocalVoid('payment', '${p['id']}');
         await LocalDb.deleteOne('payments', '${p['id']}');
         await SyncService.enqueueChange(
-            entityType: 'payment', entitySyncId: '${p['id']}', action: 'delete', payload: {});
+            entityType: 'payment', entitySyncId: '${p['id']}', action: 'delete',
+            payload: {'trash_id': trashId});
         unawaited(SyncService.pushPending());
       }
       toast(context, '已撤销，正在同步');

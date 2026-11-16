@@ -56,7 +56,7 @@ async function seed(env: Env, token: string) {
   return { clientId, priceId, purchaseId, saleId, paymentId };
 }
 
-interface TrashItem { id: string; entity_type: string; reason: string; total: number }
+interface TrashItem { id: string; entity_type: string; reason: string; total: number; entity_id?: string }
 async function trash(env: Env, token: string, type?: string) {
   const res = await call(env, 'GET', `/api/v1/trash${type ? `?entity_type=${type}` : ''}`, token);
   expect(res.status).toBe(200);
@@ -144,5 +144,45 @@ describe('作废单据回收站', () => {
     const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });
     const staffToken = ((await login.json()) as { token: string }).token;
     expect((await call(env, 'GET', '/api/v1/trash', staffToken)).status).toBe(403);
+  });
+
+  it('离线删除：sync push 带 trash_id → 服务端用同一 id 归档，列表带 entity_id，可按单据查/恢复', async () => {
+    const ts = new Date(Date.now() + 60_000).toISOString();
+    const push = await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'phone-a',
+      changes: [{
+        entity_type: 'sale', entity_sync_id: ids.saleId, action: 'delete',
+        payload: { trash_id: 'tv-offline-1' }, updated_at: ts,
+      }],
+    });
+    expect(((await push.json()) as { accepted: number }).accepted).toBe(1);
+
+    const list = await trash(env, token, 'sale');
+    expect(list.items[0].id).toBe('tv-offline-1');
+    expect(list.items[0].entity_id).toBe(ids.saleId);
+
+    // 离线对账：按业务单据 id 查归档（列表分页截断也不影响）
+    const found = (await (await call(env, 'GET',
+      `/api/v1/trash/find?entity_type=sale&entity_id=${ids.saleId}`, token)).json()) as { id: string | null };
+    expect(found.id).toBe('tv-offline-1');
+
+    expect((await call(env, 'POST', '/api/v1/trash/tv-offline-1/restore', token)).status).toBe(200);
+    expect((await trash(env, token)).total).toBe(0);
+  });
+
+  it('离线彻底删除：sync push 带 no_archive → 不产生回收站记录', async () => {
+    const ts = new Date(Date.now() + 60_000).toISOString();
+    const push = await call(env, 'POST', '/api/v1/sync/push', token, {
+      device_id: 'phone-b',
+      changes: [{
+        entity_type: 'sale', entity_sync_id: ids.saleId, action: 'delete',
+        payload: { no_archive: true }, updated_at: ts,
+      }],
+    });
+    expect(((await push.json()) as { accepted: number }).accepted).toBe(1);
+    expect((await trash(env, token)).total).toBe(0);
+    const left = await env.DB.prepare('SELECT COUNT(*) AS n FROM sale_items WHERE sale_id = ?')
+      .bind(ids.saleId).first<{ n: number }>();
+    expect(left?.n ?? 0).toBe(0);
   });
 });

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../api.dart';
+import '../local_db.dart';
+import '../sync_service.dart';
 import '../theme.dart';
 import 'router.dart';
 
@@ -15,6 +18,7 @@ class _TrashPageState extends State<TrashPage> {
   TaozhuColors get _c => Theme.of(context).extension<TaozhuColors>()!;
   List<Map<String, dynamic>>? _items;
   bool _busy = false;
+  bool _offline = false;
 
   @override
   void initState() {
@@ -23,12 +27,54 @@ class _TrashPageState extends State<TrashPage> {
   }
 
   Future<void> _load() async {
-    try {
-      final d = await Api.instance.get('/trash?limit=100');
-      if (mounted) setState(() => _items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>());
-    } catch (e) {
-      if (mounted) toast(context, e.toString().replaceFirst('Exception: ', ''));
+    // 先对账本机"已恢复/已彻底删除"的待同步快照（有 pending 才发请求，失败不阻塞展示）
+    if (!kIsWeb) {
+      try { await SyncService.reconcileTrash(); } catch (_) {}
     }
+    // 本机快照（离线删除时生成的归档；本地优先，离线也能看/恢复）
+    var local = <Map<String, dynamic>>[];
+    if (!kIsWeb) {
+      try {
+        local = (await LocalDb.getAll('voided_orders'))
+            .where((x) => '${x['state'] ?? ''}' == 'archived')
+            .map((x) => {...x, '_local': true})
+            .toList();
+      } catch (_) {}
+    }
+    // 服务端归档（联网时合并；离线时只显示本机快照）
+    List<Map<String, dynamic>> server = [];
+    var offline = false;
+    try {
+      final d = await Api.instance.get('/trash?limit=200');
+      server = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+    } catch (_) {
+      offline = true;
+    }
+    // 去重：同 id 的本机快照优先；本机已恢复/已清除的单据不显示服务端旧归档
+    final localIds = {for (final r in local) '${r['id']}'};
+    final hidden = <String>{};
+    if (!kIsWeb) {
+      try {
+        for (final r in await LocalDb.getAll('voided_orders')) {
+          if ('${r['state'] ?? ''}' == 'archived') continue;
+          final p = (r['payload'] as Map?) ?? const {};
+          hidden.add('${r['id']}');
+          hidden.add('${r['entity_type']}:${p['id']}');
+        }
+      } catch (_) {}
+    }
+    final merged = <Map<String, dynamic>>[
+      ...local,
+      ...server.where((s) =>
+          !localIds.contains('${s['id']}') &&
+          !hidden.contains('${s['id']}') &&
+          !hidden.contains('${s['entity_type']}:${s['entity_id'] ?? ''}')),
+    ]..sort((a, b) => '${b['voided_at'] ?? ''}'.compareTo('${a['voided_at'] ?? ''}'));
+    if (!mounted) return;
+    setState(() {
+      _items = merged;
+      _offline = offline;
+    });
   }
 
   static const _typeLabel = {'sale': '出货', 'purchase': '进货', 'payment': '收款'};
@@ -55,9 +101,22 @@ class _TrashPageState extends State<TrashPage> {
     );
     if (ok != true || _busy) return;
     setState(() => _busy = true);
+    final isLocal = row['_local'] == true;
     try {
-      await Api.instance.post('/trash/${row['id']}/restore');
-      if (mounted) toast(context, '已恢复到账本');
+      if (isLocal) {
+        // 本地优先：立即按快照恢复（离线可用），在线时顺手让服务端回放（进货批次账以服务端为准）
+        await SyncService.restoreLocalVoid('${row['id']}');
+        var serverOk = false;
+        try {
+          await Api.instance.post('/trash/${row['id']}/restore');
+          serverOk = true;
+        } catch (_) { /* 离线/服务端尚无归档 → 保留 pending，联网后对账 */ }
+        if (serverOk) await SyncService.removeLocalVoid('${row['id']}');
+        if (mounted) toast(context, serverOk ? '已恢复到账本' : '已恢复（本机，联网后自动确认）');
+      } else {
+        await Api.instance.post('/trash/${row['id']}/restore');
+        if (mounted) toast(context, '已恢复到账本');
+      }
       await _load();
     } catch (e) {
       if (mounted) toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -80,9 +139,22 @@ class _TrashPageState extends State<TrashPage> {
     );
     if (ok != true || _busy) return;
     setState(() => _busy = true);
+    final isLocal = row['_local'] == true;
     try {
-      await Api.instance.delete('/trash/${row['id']}');
-      if (mounted) toast(context, '已从回收站清除');
+      if (isLocal) {
+        // 本地优先：立即从本机列表移除（标记待清理），在线时顺手清服务端归档
+        await SyncService.purgeLocalVoid('${row['id']}');
+        var serverOk = false;
+        try {
+          await Api.instance.delete('/trash/${row['id']}');
+          serverOk = true;
+        } catch (_) { /* 离线/服务端尚无归档 → 联网后对账（含 no_archive 硬删） */ }
+        if (serverOk) await SyncService.removeLocalVoid('${row['id']}');
+        if (mounted) toast(context, serverOk ? '已从回收站清除' : '已清除（本机，联网后自动清理云端）');
+      } else {
+        await Api.instance.delete('/trash/${row['id']}');
+        if (mounted) toast(context, '已从回收站清除');
+      }
       await _load();
     } catch (e) {
       if (mounted) toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -114,6 +186,12 @@ class _TrashPageState extends State<TrashPage> {
                         child: Text('删除出货 / 进货 / 收款时会先归档到这里，作废行不会进入统计、欠款与流水导出。',
                             style: TextStyle(fontSize: 12.5, color: Colors.grey)),
                       ),
+                      if (_offline)
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 12),
+                          child: Text('当前离线：显示本机归档。联网后自动对账其他设备的回收站记录。',
+                              style: TextStyle(fontSize: 12.5, color: Colors.orange)),
+                        ),
                       if (items.isEmpty)
                         const Padding(
                           padding: EdgeInsets.only(top: 48),
@@ -151,6 +229,16 @@ class _TrashPageState extends State<TrashPage> {
                 child: Text(_typeLabel[type] ?? type,
                     style: TextStyle(fontSize: 11, color: _c.primary, fontWeight: FontWeight.w600)),
               ),
+              if (row['_local'] == true) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(6)),
+                  child: const Text('本机',
+                      style: TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w600)),
+                ),
+              ],
               const SizedBox(width: 8),
               Expanded(
                 child: Text('${_shortTime(row['voided_at'])} · ${row['voided_by'] ?? ''} · 金额 ¥${row['total'] ?? 0}',

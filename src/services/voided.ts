@@ -21,18 +21,21 @@ export interface VoidedEntry {
   voided_by: string;
 }
 
-/** 删除前归档。表未迁移的极端情况下只记日志、不阻断删除（宁可少一条回收站记录）。 */
+/** 删除前归档。表未迁移的极端情况下只记日志、不阻断删除（宁可少一条回收站记录）。
+ *  opts.trashId：客户端本地优先删除时预生成的回收站 id（离线恢复/彻底删除需要同一 id 对账）；
+ *  冲突用 INSERT OR REPLACE（同一删除变更重试不会产生两条归档）。 */
 export async function archiveVoidedOrder(
   db: D1Database,
   input: { entity_type: VoidableEntity; id: string; reason?: string; username: string },
+  opts?: { trashId?: string },
 ): Promise<string | null> {
   try {
     const payload = await buildPayload(db, input.entity_type, input.id);
     if (!payload) return null;
     const p = payload as Record<string, unknown>;
-    const trashId = randomId();
+    const trashId = String(opts?.trashId ?? '').trim() || randomId();
     await db.prepare(
-      `INSERT INTO voided_orders (id, entity_type, payload, reason, client_id, total, voided_at, voided_by)
+      `INSERT OR REPLACE INTO voided_orders (id, entity_type, payload, reason, client_id, total, voided_at, voided_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       trashId, input.entity_type, JSON.stringify(payload),

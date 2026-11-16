@@ -1026,12 +1026,15 @@ class _LedgerPageState extends State<LedgerPage> {
         final updatedItems = items.where((it) => '${it['id']}' != itemId).toList();
         if (updatedItems.isEmpty) {
           // 删的是该条记录最后一商品 → 整条记录删除（不留空壳单，与 Web 级联语义一致）
+          // 本地回收站快照先落（离线可恢复）；删除变更带 trash_id 供联网对账
+          final trashId = await SyncService.archiveLocalVoid('sale', '${order['id']}');
           await SyncService.cleanupLocalAttachmentsOf('sale_item', itemId);
           await SyncService.cleanupLocalAttachmentsOf('sale', '${order['id']}');
           await _deleteSaleRowsOf('${order['id']}', items);
           await LocalDb.deleteOne('sales', '${order['id']}');
           await SyncService.enqueueChange(
-              entityType: 'sale', entitySyncId: '${order['id']}', action: 'delete', payload: {});
+              entityType: 'sale', entitySyncId: '${order['id']}', action: 'delete',
+              payload: {'trash_id': trashId});
           unawaited(SyncService.pushPending()); // 立即推送：删除即时生效，服务端笔数/库存收敛
           toast(context, '已删除该商品（本条记录已无商品）');
           appLog('op', '出货 删除商品行：该条出货记录最后一行，整单一并删除');
@@ -1094,12 +1097,14 @@ class _LedgerPageState extends State<LedgerPage> {
       if (kIsWeb) {
         await Api.instance.delete('/sales/$orderId');
       } else {
-        // 原生：先清附件副本（需镜像 items 定位行级目录）再删本地行（立即生效），再入同步队列
+        // 原生：先落本地回收站快照（离线可恢复）→ 清附件副本 → 删本地行 → 入同步队列
+        final trashId = await SyncService.archiveLocalVoid('sale', orderId);
         await SyncService.cleanupLocalAttachmentsOf('sale', orderId);
         await _deleteSaleRowsOf(orderId, ((order['items'] as List?) ?? []).cast<Map<String, dynamic>>());
         await LocalDb.deleteOne('sales', orderId);
         await SyncService.enqueueChange(
-            entityType: 'sale', entitySyncId: orderId, action: 'delete', payload: {});
+            entityType: 'sale', entitySyncId: orderId, action: 'delete',
+            payload: {'trash_id': trashId});
         unawaited(SyncService.pushPending()); // 立即推送：删除即时生效，服务端笔数/库存收敛
       }
       toast(context, '已删除该记录');

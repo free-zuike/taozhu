@@ -26,10 +26,43 @@ trashRouter.get('/', async (c) => {
   const total = await c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM voided_orders ${where}`)
     .bind(...params).first<{ cnt: number }>();
   const rows = await c.env.DB.prepare(
-    `SELECT id, entity_type, reason, client_id, total, voided_at, voided_by FROM voided_orders
+    `SELECT id, entity_type, payload, reason, client_id, total, voided_at, voided_by FROM voided_orders
      ${where} ORDER BY voided_at DESC, id DESC LIMIT ? OFFSET ?`,
-  ).bind(...params, limit, offset).all();
-  return c.json({ total: total?.cnt ?? 0, items: rows.results });
+  ).bind(...params, limit, offset).all<{
+    id: string; entity_type: string; payload: string; reason: string; client_id: string;
+    total: number; voided_at: string; voided_by: string;
+  }>();
+  // entity_id：快照里的业务单据 id。离线恢复/彻底删除需要按 单据 id 与本地快照对账
+  //（本地优先删除时 id 由客户端预生成、两边一致；历史/Web 删除也能靠它匹配）。
+  const items = rows.results.map((r) => {
+    let entityId = '';
+    try { entityId = String((JSON.parse(r.payload) as Record<string, unknown>)?.id ?? ''); } catch (_) {}
+    return {
+      id: r.id, entity_id: entityId, entity_type: r.entity_type, reason: r.reason,
+      client_id: r.client_id, total: r.total, voided_at: r.voided_at, voided_by: r.voided_by,
+    };
+  });
+  return c.json({ total: total?.cnt ?? 0, items });
+});
+
+// GET /trash/find?entity_type=&entity_id= — 按业务单据 id 查归档（离线恢复/彻底删除对账用）
+// 页面列表分页可能截断，不能用列表匹配；这里按 entity_type 粗筛后 JS 精确比对 payload.id。
+trashRouter.get('/find', async (c) => {
+  const type = c.req.query('entity_type')?.trim() ?? '';
+  const eid = c.req.query('entity_id')?.trim() ?? '';
+  if (!isVoidable(type)) return c.json({ error: 'entity_type 不合法' }, 400);
+  if (!eid) return c.json({ error: '缺少 entity_id' }, 400);
+  const rows = await c.env.DB.prepare(
+    'SELECT id, payload FROM voided_orders WHERE entity_type = ? ORDER BY voided_at DESC LIMIT 500',
+  ).bind(type).all<{ id: string; payload: string }>();
+  for (const r of rows.results) {
+    try {
+      if (String((JSON.parse(r.payload) as Record<string, unknown>)?.id ?? '') === eid) {
+        return c.json({ id: r.id });
+      }
+    } catch (_) {}
+  }
+  return c.json({ id: null });
 });
 
 // GET /trash/:id — 单条完整快照（前端预览用）

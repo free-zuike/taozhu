@@ -568,6 +568,214 @@ class SyncService {
     } catch (_) {}
   }
 
+  // ---------- 回收站：本地快照 / 离线恢复 / 联网对账 ----------
+
+  static const _voidedStore = 'voided_orders';
+
+  /// 删除单据前在本地归档快照（离线可恢复）。返回本地回收站 id——删除变更 payload 带上
+  /// trash_id，服务端归档用同一 id，联网后就能按 id 精确对账（恢复/彻底删除）。
+  /// **必须在删除本地行/附件引用之前调用**（快照要含明细与附件引用）。
+  static Future<String> archiveLocalVoid(String entityType, String id, {String reason = ''}) async {
+    if (kIsWeb) return '';
+    try {
+      final orderStore = _storeOf(entityType);
+      if (orderStore.isEmpty) return '';
+      final order = await LocalDb.getOne(orderStore, id);
+      if (order == null) return '';
+      final items = ((order['items'] as List?) ?? const []).cast<Map<String, dynamic>>();
+      final lineEntity = entityType == 'sale' ? 'sale_item'
+          : entityType == 'purchase' ? 'purchase_item' : '';
+      final lineIds = {for (final it in items) '${it['id'] ?? ''}'}.where((x) => x.isNotEmpty).toSet();
+      final refs = <Map<String, dynamic>>[];
+      for (final r in await LocalDb.getAll('attachment_refs')) {
+        final e = '${r['entity'] ?? ''}';
+        final eid = '${r['entity_id'] ?? ''}';
+        final mine = (e == entityType && eid == id) ||
+            (lineEntity.isNotEmpty && e == lineEntity && lineIds.contains(eid));
+        if (!mine) continue;
+        refs.add({'entity': e, 'entity_id': eid, 'file': '${r['file'] ?? ''}', 'key': '${r['key'] ?? ''}'});
+      }
+      final trashId = 'tv${DateTime.now().microsecondsSinceEpoch}';
+      await LocalDb.upsertOne(_voidedStore, {
+        'id': trashId,
+        'entity_type': entityType,
+        'payload': order,
+        'attachments': refs,
+        'reason': reason,
+        'client_id': '${order['client_id'] ?? ''}',
+        'total': (order['total'] as num?)?.toDouble() ?? (order['amount'] as num?)?.toDouble() ?? 0,
+        'voided_at': DateTime.now().toIso8601String(),
+        'voided_by': await Api.instance.getUsername(),
+        'state': 'archived',
+      });
+      return trashId;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// 离线恢复：按本地快照重建单据/明细/附件引用（清墓碑），标记 restored_pending。
+  /// 联网后 reconcileTrash() 调服务端 restore（进货批次账等由服务端重放，成本口径正确）。
+  static Future<void> restoreLocalVoid(String trashId) async {
+    if (kIsWeb) return;
+    try {
+      final snap = await LocalDb.getOne(_voidedStore, trashId);
+      if (snap == null) return;
+      if ('${snap['state'] ?? ''}' == 'restored_pending') return;
+      final entityType = '${snap['entity_type'] ?? ''}';
+      final payload = ((snap['payload'] as Map?) ?? const {}).cast<String, dynamic>();
+      final id = '${payload['id'] ?? ''}';
+      final orderStore = _storeOf(entityType);
+      if (id.isEmpty || orderStore.isEmpty) return;
+      await LocalDb.upsertOne(orderStore, payload);
+      final lineStore = entityType == 'sale' ? 'sale_items'
+          : entityType == 'purchase' ? 'purchase_items' : '';
+      final orderKey = entityType == 'sale' ? 'sale_id'
+          : entityType == 'purchase' ? 'purchase_id' : '';
+      if (lineStore.isNotEmpty) {
+        for (final it in ((payload['items'] as List?) ?? const []).cast<Map<String, dynamic>>()) {
+          final rid = '${it['id'] ?? ''}';
+          if (rid.isEmpty) continue;
+          final row = Map<String, dynamic>.from(it);
+          row[orderKey] = id;
+          if ('${row['client_id'] ?? ''}'.isEmpty) row['client_id'] = '${payload['client_id'] ?? ''}';
+          await LocalDb.upsertOne(lineStore, row);
+        }
+      }
+      for (final a in ((snap['attachments'] as List?) ?? const []).cast<Map<String, dynamic>>()) {
+        final e = '${a['entity'] ?? ''}';
+        final eid = '${a['entity_id'] ?? ''}';
+        final file = '${a['file'] ?? ''}'.split('/').last;
+        if (e.isEmpty || eid.isEmpty || file.isEmpty) continue;
+        await LocalDb.upsertOne('attachment_refs', {
+          'id': '$e/$eid/$file',
+          'entity': e,
+          'entity_id': eid,
+          'file': file,
+          'key': '${a['key'] ?? 'taozhu/images/attachments/$file'}',
+        });
+        await clearTombstone(entity: e, id: eid, file: file);
+      }
+      await LocalDb.upsertOne(_voidedStore, {...snap, 'state': 'restored_pending'});
+      version.notifyListeners();
+      appLog('sync', '回收站本地恢复：$entityType/$id（待联网确认）', level: 'info');
+    } catch (_) {}
+  }
+
+  /// 本地彻底删除：标记 purged_pending（联网后删服务端归档；未推送的删除改为不归档硬删）。
+  static Future<void> purgeLocalVoid(String trashId) async {
+    if (kIsWeb) return;
+    try {
+      final snap = await LocalDb.getOne(_voidedStore, trashId);
+      if (snap == null) return;
+      await LocalDb.upsertOne(_voidedStore, {...snap, 'state': 'purged_pending'});
+    } catch (_) {}
+  }
+
+  static Future<void> removeLocalVoid(String trashId) async {
+    if (kIsWeb) return;
+    try {
+      await LocalDb.deleteOne(_voidedStore, trashId);
+    } catch (_) {}
+  }
+
+  /// 联网对账：把本地"已恢复/已彻底删除"的回收站快照落到服务端。
+  /// - restored_pending：按 单据 id 查服务端归档 → 有则 POST restore（409=服务端已存在→删归档行）；
+  ///   无归档 = 删除变更尚未推送 → 取消待推送删除即可（服务端从未删过这张单）。
+  /// - purged_pending：有归档 → DELETE /trash/:id（附件清理有 entityExists 防误删）；
+  ///   无归档 → 把待推送删除改成 no_archive（服务端不再归档、直接硬删）。
+  static Future<void> reconcileTrash() async {
+    if (kIsWeb) return;
+    try {
+      final all = await LocalDb.getAll(_voidedStore);
+      final pending = all.where((x) {
+        final s = '${x['state'] ?? ''}';
+        return s == 'restored_pending' || s == 'purged_pending';
+      }).toList();
+      if (pending.isEmpty) return;
+      final changes = await LocalDb.getPendingChanges();
+      for (final snap in pending) {
+        final trashId = '${snap['id'] ?? ''}';
+        final state = '${snap['state'] ?? ''}';
+        final entityType = '${snap['entity_type'] ?? ''}';
+        final payload = ((snap['payload'] as Map?) ?? const {}).cast<String, dynamic>();
+        final orderId = '${payload['id'] ?? ''}';
+        if (trashId.isEmpty || orderId.isEmpty) continue;
+        String? serverId;
+        try {
+          final d = await Api.instance.get(
+              '/trash/find?entity_type=$entityType&entity_id=${Uri.encodeQueryComponent(orderId)}');
+          final sid = '${d['id'] ?? ''}';
+          serverId = sid.isEmpty ? null : sid;
+        } catch (_) {
+          return; // 网络失败：保留 pending，下次同步再对账
+        }
+        if (state == 'restored_pending') {
+          if (serverId != null) {
+            try {
+              await Api.instance.post('/trash/$serverId/restore');
+            } catch (e) {
+              final msg = '$e';
+              if (msg.contains('409') || msg.contains('已存在')) {
+                // 单据已存在（他端已恢复/同 id 新单）→ 删归档行（附件有 entityExists 保护）
+                try { await Api.instance.delete('/trash/$serverId'); } catch (_) {}
+              } else {
+                return; // 其他失败：保留 pending
+              }
+            }
+          } else {
+            var hadPendingDelete = false;
+            for (final ch in changes) {
+              if ('${ch['entity_type'] ?? ''}' == entityType &&
+                  '${ch['entity_sync_id'] ?? ''}' == orderId &&
+                  '${ch['action'] ?? ''}' == 'delete') {
+                final cid = ch['id'];
+                if (cid is int) {
+                  await LocalDb.removePendingChange(cid);
+                  hadPendingDelete = true;
+                }
+              }
+            }
+            if (!hadPendingDelete) {
+              // 归档已过期/被清理：服务端没有这张单了 → 推一次快照让它回来
+              await enqueueChange(entityType: entityType, entitySyncId: orderId, payload: payload);
+              if (entityType == 'purchase') {
+                appLog('sync', '回收站恢复：进货归档已不在服务端，已按快照重推（批次成本需人工核对）',
+                    level: 'error');
+              }
+            }
+          }
+          await LocalDb.deleteOne(_voidedStore, trashId);
+        } else {
+          if (serverId != null) {
+            try {
+              await Api.instance.delete('/trash/$serverId');
+            } catch (_) {
+              return; // 保留 pending
+            }
+          } else {
+            // 未推送的删除：改成"不归档、直接硬删"，避免服务端又建一条回收站记录
+            for (final ch in changes) {
+              if ('${ch['entity_type'] ?? ''}' == entityType &&
+                  '${ch['entity_sync_id'] ?? ''}' == orderId &&
+                  '${ch['action'] ?? ''}' == 'delete') {
+                final cid = ch['id'];
+                if (cid is int) {
+                  await LocalDb.removePendingChange(cid);
+                  await enqueueChange(
+                      entityType: entityType, entitySyncId: orderId, action: 'delete',
+                      payload: {'no_archive': true});
+                }
+              }
+            }
+          }
+          await LocalDb.deleteOne(_voidedStore, trashId);
+        }
+      }
+      version.notifyListeners();
+    } catch (_) {}
+  }
+
   /// 上传前过滤"实体已从本地库删除"的残留待传条目：行/单被删（删行重录/删单/他端删除已同步）后，
   /// 其附件引用若无本地实体支撑，重传只会让服务器引用"删了又复活"（in-use 自愈再删=无限循环）。
   /// 本地库是权威：本地没有该实体 = 不该再上传。仅返回仍有效的条目（并同步把失效条目清出队列）。
@@ -1532,6 +1740,9 @@ class SyncService {
             })();
       // ② push 本地变更（内部成功后顺带拉取一次其他设备变更）
       pushed = await pushPending();
+      // ②b 回收站离线操作对账（恢复/彻底删除）：只在有 pending 本地快照时才发起请求；
+      //     放在 pull 前，服务端 restore 产生的变更可在本次拉取中合并。
+      await reconcileTrash();
       // ③ 全量/增量拉取：未全量过、或本地库全空（数据被清但游标残留）→ 强制全量拉齐，
       // 无需用户手动干预
       final done = await isFullDone();

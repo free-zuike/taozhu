@@ -85,15 +85,22 @@ syncRouter.post('/push', async (c) => {
     // 单据级删除先落回收站快照：原生客户端离线删除走 sync push（不经过 REST DELETE），
     // 此前这类删除不进回收站=无法恢复、附件也被一并物理删除。归档成功 → 附件保留（恢复后凭证完整）；
     // 归档失败（表缺失/单据已空/重复删除）→ keepAttachments=false，按原行为清附件，不阻断删除。
+    // payload.trash_id：客户端本地优先删除预生成的回收站 id（离线恢复/彻底删除按同一 id 对账）。
+    // payload.no_archive：用户已在本地"彻底删除"，服务端不再归档、直接硬删并清附件。
+    const delPayload = (ch.payload ?? {}) as Record<string, unknown>;
+    const noArchive = action === 'delete' && delPayload['no_archive'] === true;
     let keepAttachments = false;
-    if (action === 'delete' && (entityType === 'sale' || entityType === 'purchase' || entityType === 'payment')) {
+    if (
+      action === 'delete' && !noArchive &&
+      (entityType === 'sale' || entityType === 'purchase' || entityType === 'payment')
+    ) {
       try {
         keepAttachments = Boolean(await archiveVoidedOrder(c.env.DB, {
           entity_type: entityType as 'sale' | 'purchase' | 'payment',
           id,
           reason: '删除/作废（同步）',
           username: user.username,
-        }));
+        }, { trashId: String(delPayload['trash_id'] ?? '') }));
       } catch (_) { /* 归档失败不阻断删除（与 REST 删除口径一致） */ }
     }
     const applied = await applyChange(
