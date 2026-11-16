@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
@@ -16,6 +17,7 @@ import '../theme.dart';
 import '../utils/money.dart';
 import '../utils/biz_date.dart';
 import '../utils/download.dart';
+import '../utils/local_csv.dart';
 import '../utils/update_sources.dart';
 import '../utils/github_release.dart';
 import '../utils/update_channel.dart';
@@ -277,12 +279,24 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
-  /// 导出全部流水 CSV（出货 / 进货 / 收款；店员由服务端打码进价与成本）。
+  /// 导出全部流水 CSV（出货 / 进货 / 收款）：
+  /// 原生端本地生成（离线可用，读本地镜像；店员成本/进价打码）；
+  /// Web 无本地库 → 服务端生成（带审计）。
   Future<void> _exportTransactionsCsv() async {
     try {
-      final bytes = await Api.instance.getRaw('/export/transactions.csv');
-      await saveBytes(Uint8List.fromList(bytes),
-          'taozhu-transactions-${bizTodayISO()}.csv', 'text/csv', '陶朱流水导出');
+      if (kIsWeb) {
+        final bytes = await Api.instance.getRaw('/export/transactions.csv');
+        await saveBytes(Uint8List.fromList(bytes),
+            'taozhu-transactions-${bizTodayISO()}.csv', 'text/csv', '陶朱流水导出');
+      } else {
+        final r = await buildLocalTransactionsCsv(isStaff: await localIsStaff());
+        await saveBytes(Uint8List.fromList(utf8.encode(r.csv)),
+            'taozhu-transactions-${bizTodayISO()}.csv', 'text/csv', '陶朱流水导出');
+        if (mounted && r.truncated) {
+          toast(context, '流水 CSV 已导出（${r.rows} 行，已达上限）');
+          return;
+        }
+      }
       if (mounted) toast(context, '流水 CSV 已导出');
     } catch (e) {
       if (mounted) toast(context, e.toString().replaceFirst('Exception: ', ''));

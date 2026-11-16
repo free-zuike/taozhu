@@ -223,17 +223,32 @@ class _ItemsPageState extends State<ItemsPage> {
 
   bool _bulking = false; // 批量调价提交防连点
 
-  /// 批量调价（老板，需在线）：选商品 → 规则（字段/百分比或固定值/价格组联动）→
-  /// 预览（原价→新价）→ 确认执行（POST /items/bulk-price，逐商品变更流同步到各端）
+  /// 批量调价（老板）：选商品 → 规则（字段/百分比或固定值/价格组联动）→
+  /// 预览（原价→新价）→ 确认执行。
+  /// 本地优先：原生读/写本地商品目录 + 同步队列（离线可用，联网自动推送）；Web 直连服务端。
   Future<void> _bulkPrice() async {
     if (_bulking) return;
-    if (!kIsWeb && Api.isOffline) {
-      toast(context, '批量调价需联网（当前离线，联网后再调）');
-      return;
-    }
     try {
-      final d = await Api.instance.get('/items');
-      final items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      final List<Map<String, dynamic>> items;
+      if (kIsWeb) {
+        final d = await Api.instance.get('/items');
+        items = ((d['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+      } else {
+        items = (await LocalDb.getAllByName('items'))
+            .where((x) => '${x['deleted_at'] ?? ''}'.isEmpty)
+            .toList();
+      }
+      final groupNames = <String, String>{};
+      if (!kIsWeb) {
+        for (final g in await LocalDb.getAll('price_groups')) {
+          groupNames['${g['id'] ?? ''}'] = '${g['name'] ?? ''}';
+        }
+      }
+      /// 与服务器 calcNewPrice 同规则：百分比/固定值，两位小数
+      double calcNew(double old, String mode, double value) {
+        final v = mode == 'percent' ? old * (1 + value / 100) : old + value;
+        return (v * 100).round() / 100;
+      }
       if (items.isEmpty) {
         toast(context, '暂无商品');
         return;
@@ -271,19 +286,61 @@ class _ItemsPageState extends State<ItemsPage> {
             final list = filtered();
             Future<void> doPreview() async {
               setDlg(() { previewBusy = true; previewRows = []; previewGroup = []; });
+              final val = double.tryParse(valueCtrl.text.trim()) ?? 0;
               try {
-                final ids = selIds.toList();
-                final pv = await Api.instance.post('/items/bulk-price/preview', {
-                  'item_ids': ids, 'field': field, 'mode': mode,
-                  'value': double.tryParse(valueCtrl.text.trim()) ?? 0,
-                  'apply_group_prices': applyGroup,
-                });
-                setDlg(() {
-                  previewRows = ((pv['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
-                  previewGroup = ((pv['group_rows'] as List?) ?? []).cast<Map<String, dynamic>>();
-                  previewBusy = false;
-                  step = 2;
-                });
+                if (kIsWeb) {
+                  final ids = selIds.toList();
+                  final pv = await Api.instance.post('/items/bulk-price/preview', {
+                    'item_ids': ids, 'field': field, 'mode': mode,
+                    'value': val,
+                    'apply_group_prices': applyGroup,
+                  });
+                  setDlg(() {
+                    previewRows = ((pv['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
+                    previewGroup = ((pv['group_rows'] as List?) ?? []).cast<Map<String, dynamic>>();
+                    previewBusy = false;
+                    step = 2;
+                  });
+                } else {
+                  // 本地优先：按本地商品目录（含 prices/group_prices）即时预览，零网络
+                  final rows = <Map<String, dynamic>>[];
+                  final groupRows = <Map<String, dynamic>>[];
+                  for (final it in items) {
+                    if (!selIds.contains('${it['id']}')) continue;
+                    final iid = '${it['id']}';
+                    final iname = '${it['name'] ?? ''}';
+                    for (final pr in ((it['prices'] as List?) ?? const []).cast<Map<String, dynamic>>()) {
+                      if (pr['active'] == 0) continue;
+                      final oldSale = (pr['sale_price'] as num?)?.toDouble() ?? 0;
+                      final oldBuy = (pr['purchase_price'] as num?)?.toDouble() ?? 0;
+                      rows.add({
+                        'price_id': '${pr['id'] ?? ''}', 'item_id': iid, 'item_name': iname,
+                        'unit': '${pr['unit'] ?? ''}',
+                        'old_sale': oldSale,
+                        'new_sale': field == 'purchase_price' ? oldSale : calcNew(oldSale, mode, val),
+                        'old_purchase': oldBuy,
+                        'new_purchase': field == 'sale_price' ? oldBuy : calcNew(oldBuy, mode, val),
+                      });
+                    }
+                    if (applyGroup) {
+                      for (final g in ((it['group_prices'] as List?) ?? const []).cast<Map<String, dynamic>>()) {
+                        final old = (g['sale_price'] as num?)?.toDouble() ?? 0;
+                        groupRows.add({
+                          'price_id': '${g['id'] ?? ''}', 'item_id': iid, 'item_name': iname,
+                          'unit': '${g['unit'] ?? ''}', 'group_id': '${g['group_id'] ?? ''}',
+                          'group_name': groupNames['${g['group_id'] ?? ''}'] ?? '',
+                          'old': old, 'new': calcNew(old, mode, val),
+                        });
+                      }
+                    }
+                  }
+                  setDlg(() {
+                    previewRows = rows;
+                    previewGroup = groupRows;
+                    previewBusy = false;
+                    step = 2;
+                  });
+                }
               } catch (e) {
                 setDlg(() => previewBusy = false);
                 toast(context, e.toString().replaceFirst('Exception: ', ''));
@@ -292,12 +349,50 @@ class _ItemsPageState extends State<ItemsPage> {
             Future<void> doExec() async {
               setDlg(() => executing = true);
               try {
-                await Api.instance.post('/items/bulk-price', {
-                  'item_ids': selIds.toList(), 'field': field, 'mode': mode,
-                  'value': double.tryParse(valueCtrl.text.trim()) ?? 0,
-                  'apply_group_prices': applyGroup,
-                });
-                toast(context, '批量调价完成（${selIds.length} 个商品）');
+                final val = double.tryParse(valueCtrl.text.trim()) ?? 0;
+                if (kIsWeb) {
+                  await Api.instance.post('/items/bulk-price', {
+                    'item_ids': selIds.toList(), 'field': field, 'mode': mode,
+                    'value': val,
+                    'apply_group_prices': applyGroup,
+                  });
+                } else {
+                  // 本地优先：逐商品改本地价格目录 + 入同步队列（离线可用，联网自动推送）
+                  for (final it in items) {
+                    if (!selIds.contains('${it['id']}')) continue;
+                    final updated = Map<String, dynamic>.from(it);
+                    updated['prices'] = [
+                      for (final pr in ((it['prices'] as List?) ?? const []).cast<Map<String, dynamic>>())
+                        if (pr['active'] == 0)
+                          pr
+                        else
+                          {
+                            ...pr,
+                            'sale_price': field == 'purchase_price'
+                                ? pr['sale_price']
+                                : calcNew((pr['sale_price'] as num?)?.toDouble() ?? 0, mode, val),
+                            'purchase_price': field == 'sale_price'
+                                ? pr['purchase_price']
+                                : calcNew((pr['purchase_price'] as num?)?.toDouble() ?? 0, mode, val),
+                          },
+                    ];
+                    if (applyGroup) {
+                      updated['group_prices'] = [
+                        for (final g in ((it['group_prices'] as List?) ?? const []).cast<Map<String, dynamic>>())
+                          {
+                            ...g,
+                            'sale_price':
+                                calcNew((g['sale_price'] as num?)?.toDouble() ?? 0, mode, val),
+                          },
+                      ];
+                    }
+                    await LocalDb.upsertOne('items', updated);
+                    await SyncService.enqueueChange(
+                        entityType: 'item', entitySyncId: '${it['id']}', payload: updated);
+                  }
+                  unawaited(SyncService.pushPending());
+                }
+                toast(context, '批量调价完成（${selIds.length} 个商品${kIsWeb ? '' : '，本地'}）');
                 Navigator.pop(ctx, true);
               } catch (e) {
                 setDlg(() => executing = false);

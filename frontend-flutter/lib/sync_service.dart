@@ -718,7 +718,11 @@ class SyncService {
               final msg = '$e';
               if (msg.contains('409') || msg.contains('已存在')) {
                 // 单据已存在（他端已恢复/同 id 新单）→ 删归档行（附件有 entityExists 保护）
-                try { await Api.instance.delete('/trash/$serverId'); } catch (_) {}
+                try {
+                  await Api.instance.delete('/trash/$serverId');
+                } catch (_) {
+                  return; // 删归档失败：保留 pending，下次再对账
+                }
               } else {
                 return; // 其他失败：保留 pending
               }
