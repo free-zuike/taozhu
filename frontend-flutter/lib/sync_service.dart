@@ -524,6 +524,11 @@ class SyncService {
   static Future<void> discardUnsavedOrderAttachments(String entity, String id) async {
     if (kIsWeb) return;
     try {
+      // 安全阀：单据本身还在本地库（已保存/待推送）→ 这不是"未保存取消"，绝不能清附件。
+      // （此前调用方只看 _submitted 标记，而原生保存路径从未置位 → 保存后退出页面把
+      //   已保存单据的附件删光，0.17.520~522 微信分享图片记账附件丢失的根因）
+      final orderStore = _storeOf(entity);
+      if (orderStore.isNotEmpty && await LocalDb.getOne(orderStore, id) != null) return;
       final refs = await LocalDb.getAll('attachment_refs');
       final mine = refs.where((r) =>
           '${r['entity'] ?? ''}' == entity && '${r['entity_id'] ?? ''}' == id).toList();

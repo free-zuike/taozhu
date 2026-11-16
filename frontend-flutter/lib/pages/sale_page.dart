@@ -1737,6 +1737,10 @@ double _fifoCost(
         );
       }
     }
+    // 原生保存成功（本地已落库 + 入队）→ 立即置位"已提交"：退出页面不再走"未保存取消"的
+    // 附件清理。此前 _submitted 只在 Web 分支置位，原生保存后退出会把本单凭证图当
+    // "未保存附件"删光（0.17.520~522 微信分享图片记账附件丢失的根因）。
+    _submitted = true;
     // 编辑/批量直编：原单行被删除的行 → 行级 delete（防"删的行服务端复活"）
     if (_editing || isDateRows) {
       final removedIds = _origItemIds.difference(keptIds);
