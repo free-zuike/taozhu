@@ -302,6 +302,18 @@ class Api {
   /// 只发一次）。写操作（POST/PUT/PATCH/DELETE）不缓存。
   static final Map<String, _GetEntry> _getCache = {};
 
+  /// 让相关 GET 短缓存失效（写操作后立即刷新列表用）。
+  /// 典型：回收站恢复/彻底删除后不失效 → 20 秒内重新拉到旧列表，条目"还在"、
+  /// 再点删除服务器已无该记录 → 报"回收站记录不存在"。
+  /// 按 path 前缀匹配（含 query 变体）；空串=清空全部。
+  void invalidateGetCache(String pathPrefix) {
+    if (pathPrefix.isEmpty) {
+      _getCache.clear();
+      return;
+    }
+    _getCache.removeWhere((k, _) => k == pathPrefix || k.startsWith(pathPrefix));
+  }
+
   Future<Map<String, dynamic>> request(
     String path, {
     String method = 'GET',
@@ -332,7 +344,13 @@ class Api {
       });
       return created;
     }
-    return _requestInner(path, method: method, body: body);
+    return _requestInner(path, method: method, body: body).then((r) {
+      // 写操作成功后让所有 GET 短缓存失效：否则删除/恢复/新增后 20 秒内重新拉到旧列表
+      //（回收站"删了还在、再点报已不存在"、Web 端删商品/客户"删了还在"的根因）。
+      // 缓存只用于几秒内同页去重，清空代价极小。
+      _getCache.clear();
+      return r;
+    });
   }
 
   Future<Map<String, dynamic>> _requestInner(

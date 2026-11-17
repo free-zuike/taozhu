@@ -27,6 +27,9 @@ class _TrashPageState extends State<TrashPage> {
   }
 
   Future<void> _load() async {
+    // 回收站列表/对账必须拿最新数据：GET 短缓存会把刚恢复/彻底删除的条目再显示出来
+    //（用户"删除后不刷新、还能重复点，再点报已不存在"根因）。
+    Api.instance.invalidateGetCache('/trash');
     // 先对账本机"已恢复/已彻底删除"的待同步快照（有 pending 才发请求，失败不阻塞展示）
     if (!kIsWeb) {
       try { await SyncService.reconcileTrash(); } catch (_) {}
