@@ -1790,6 +1790,9 @@ class SyncService {
       // 本地镜像只在 fullSync 写一次 → 增量同步后不更新=库存页"每次点进去没数据/旧数据"（用户反馈）。
       // 每次同步完成拉一次 /stocks 写本地镜像（行数=商品×单位，量级小；失败静默保留旧镜像）
       await _syncStocksLocal();
+      // ⑨ 历史 FIFO 批次账回填（0.17.525 前 App 行级写入没有维护服务端批次）：
+      // 管理员设备后台分批调用，服务端游标断点续跑；每次进程只检查一次，不阻塞同步。
+      unawaited(maybeBackfillFifoLedger());
     } catch (e) {
       _lastSyncFailed = true;
       final msg = _friendlyError(e);
@@ -1800,6 +1803,32 @@ class SyncService {
     } finally {
       _syncRunning = false;
       _setStatus(_lastSyncFailed ? 'error' : 'idle');
+    }
+  }
+
+  /// 历史 FIFO 批次账回填（一次性运维，可断点续跑）：
+  /// 0.17.525 之前 App 行级进货/出货没有在服务端维护 stock_batches/sale_batch_uses，
+  /// 导致库存金额、Web 出货成本、盘点扣批对 App 单据失真。服务端按「商品+单位」分批重放历史，
+  /// 游标存服务端 schema_meta；这里由管理员设备后台循环调用直到 done。
+  /// 只在 App 进程内检查一次（服务端已完成时只是一次轻量状态读取）。
+  static bool _fifoBackfillChecked = false;
+  static Future<void> maybeBackfillFifoLedger() async {
+    if (kIsWeb || _fifoBackfillChecked) return;
+    _fifoBackfillChecked = true;
+    try {
+      if ((await Api.instance.getRole()) != 'admin') return;
+      for (var round = 0; round < 50; round++) {
+        final d = await Api.instance.post('/maintenance/fifo-backfill', {'max_groups': 10});
+        final processed = (d['processed'] as num?)?.toInt() ?? 0;
+        final done = d['done'] == true;
+        if (processed > 0) {
+          appLog('sync',
+              '历史成本批次回填：本轮 $processed 组${done ? '（完成）' : '，后台继续'}', level: 'info');
+        }
+        if (done || processed <= 0) break; // 完成/服务端异常无进展：下次启动再续跑
+      }
+    } catch (e) {
+      appLog('sync', '历史成本批次回填未完成（下次启动续跑）: ${_friendlyError(e)}', level: 'error');
     }
   }
 

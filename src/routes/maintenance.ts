@@ -8,6 +8,7 @@ import { Hono } from 'hono';
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import { ensureIndexes, inspectIndexes } from '../schema';
 import { runDailyMaintenance } from '../services/maintenance';
+import { runFifoBackfillStep } from '../services/fifo-backfill';
 import type { AuthUser, Env } from '../types';
 
 type V = { user: AuthUser };
@@ -35,4 +36,18 @@ maintenanceRouter.post('/indexes/ensure', async (c) => {
 // POST /api/v1/maintenance/prune — 手动执行每日清理（force=true，不受当天已跑过去重限制）
 maintenanceRouter.post('/prune', async (c) => {
   return c.json(await runDailyMaintenance(c.env.DB, true, c.env));
+});
+
+// POST /api/v1/maintenance/fifo-backfill — 历史 FIFO 批次账回填（分批续跑/幂等）
+// body: { max_groups?: number(0 只查状态), reset?: boolean }
+// 用途：0.17.525 之前 App 行级进货/出货没有维护批次账；升级后由 App 管理员设备
+// 在后台分批调用，直到 done。不动历史 cost_price（不改历史毛利），只修批次/占用。
+maintenanceRouter.post('/fifo-backfill', async (c) => {
+  const body = await c.req.json().catch(() => null) as {
+    max_groups?: number; reset?: boolean;
+  } | null;
+  return c.json(await runFifoBackfillStep(c.env.DB, {
+    maxGroups: Number(body?.max_groups) || 0,
+    reset: body?.reset === true,
+  }));
 });
