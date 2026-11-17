@@ -44,10 +44,11 @@ maintenanceRouter.post('/prune', async (c) => {
 // 在后台分批调用，直到 done。不动历史 cost_price（不改历史毛利），只修批次/占用。
 maintenanceRouter.post('/fifo-backfill', async (c) => {
   const body = await c.req.json().catch(() => null) as {
-    max_groups?: number; reset?: boolean;
+    max_groups?: number; reset?: boolean; daily_work?: number;
   } | null;
   return c.json(await runFifoBackfillStep(c.env.DB, {
     maxGroups: Number(body?.max_groups) || 0,
     reset: body?.reset === true,
+    dailyWork: Number(body?.daily_work) || undefined,
   }));
 });

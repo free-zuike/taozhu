@@ -1821,11 +1821,20 @@ class SyncService {
         final d = await Api.instance.post('/maintenance/fifo-backfill', {'max_groups': 10});
         final processed = (d['processed'] as num?)?.toInt() ?? 0;
         final done = d['done'] == true;
+        final paused = d['paused'] == true;
         if (processed > 0) {
           appLog('sync',
-              '历史成本批次回填：本轮 $processed 组${done ? '（完成）' : '，后台继续'}', level: 'info');
+              '历史成本批次回填：本轮 $processed 组${done ? '（完成）' : (paused ? '，今日额度已用完' : '，后台继续')}', level: 'info');
         }
-        if (done || processed <= 0) break; // 完成/服务端异常无进展：下次启动再续跑
+        if (done) break;
+        if (paused) {
+          // D1 免费额度保护：每日写入预算用完即停，次日启动自动续跑
+          appLog('sync',
+              '历史成本批次回填：今日额度已用完，剩余 ${d['remaining_groups'] ?? '?'} 组，明天启动继续',
+              level: 'info');
+          break;
+        }
+        if (processed <= 0) break; // 服务端异常无进展：下次启动再续跑
       }
     } catch (e) {
       appLog('sync', '历史成本批次回填未完成（下次启动续跑）: ${_friendlyError(e)}', level: 'error');

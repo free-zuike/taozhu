@@ -147,6 +147,25 @@ describe('历史 FIFO 批次账回填', () => {
     expect(useCount?.n).toBe(totalUses?.n);
   });
 
+  it('每日预算：超出即暂停，预算放大后从断点续跑', async () => {
+    // 两组数据；预算 1 行：第一组仍处理（防死锁），第二组因预算不足暂停
+    const r1 = (await (await call(env, 'POST', '/api/v1/maintenance/fifo-backfill', token, {
+      max_groups: 5, daily_work: 1,
+    })).json()) as { done: boolean; paused: boolean; processed: number; remaining_groups: number };
+    expect(r1.processed).toBe(1);
+    expect(r1.paused).toBe(true);
+    expect(r1.done).toBe(false);
+    expect(r1.remaining_groups).toBe(1);
+
+    // 预算放大 → 从断点继续，处理剩余组
+    const r2 = (await (await call(env, 'POST', '/api/v1/maintenance/fifo-backfill', token, {
+      max_groups: 5, daily_work: 100000,
+    })).json()) as { done: boolean; paused: boolean; processed: number };
+    expect(r2.processed).toBe(1);
+    expect(r2.done).toBe(true);
+    expect(r2.paused).toBe(false);
+  });
+
   it('员工无权调用', async () => {
     await call(env, 'POST', '/api/v1/users', token, { username: 'staff1', password: 'staff123', role: 'staff' });
     const login = await call(env, 'POST', '/api/v1/auth/login', undefined, { username: 'staff1', password: 'staff123' });

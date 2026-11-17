@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS purchase_items (
 );
 CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items (purchase_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_items_date ON purchase_items (happened_at);
+CREATE INDEX IF NOT EXISTS idx_purchase_items_item ON purchase_items (item_id, unit);
 
 CREATE TABLE IF NOT EXISTS sale_items (
   id TEXT PRIMARY KEY,
