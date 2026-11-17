@@ -631,19 +631,32 @@ export async function applyChange(
            FROM sale_items si LEFT JOIN items i ON i.id = si.item_id WHERE si.id = ?`,
         ).bind(id).first<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
         const isNew = oldRow == null;
+        // FIFO（行级=主写入路径）：先释放旧行的批次占用并落库（consume 的 SELECT 才能看到恢复后的
+        // remaining），再按新数量/单位重新消耗。此前该分支只改库存汇总、不动批次账 →
+        // App 出货不消耗批次，服务端 FIFO/库存金额对 App 单据失真。
+        const unit = String(p.unit ?? '');
+        try {
+          const rel = await releaseSaleUsesStatements(db, id);
+          if (rel.length > 0) await db.batch(rel);
+        } catch (_) {}
+        let fifoStmts: D1PreparedStatement[] = [];
+        try {
+          fifoStmts = (await consumeFifoStatements(db, itemId, unit, qty, id)).stmts;
+        } catch (_) {}
         const stock = oldRow
           ? [
               stockDeltaFor(db, { item_id: oldRow.item_id, unit: oldRow.unit, quantity: oldRow.quantity, count_qty: oldRow.count_qty, count_unit: oldRow.count_unit }, 1),
-              stockDeltaFor(db, { item_id: itemId, unit: p.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: oldRow.count_unit ?? null }, -1),
+              stockDeltaFor(db, { item_id: itemId, unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: oldRow.count_unit ?? null }, -1),
             ]
-          : [stockDeltaFor(db, { item_id: itemId, unit: p.unit ?? '', quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: p.count_unit ?? null }, -1)];
+          : [stockDeltaFor(db, { item_id: itemId, unit, quantity: qty, count_qty: effCount === qty ? null : effCount, count_unit: p.count_unit ?? null }, -1)];
         await db.batch([
+          ...fifoStmts,
           db.prepare(
             `INSERT INTO sale_items (id, sale_id, item_id, unit, quantity, count_qty, sale_price, cost_price, amount, happened_at, note, client_id, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET sale_id = excluded.sale_id, item_id = excluded.item_id, unit = excluded.unit,
                quantity = excluded.quantity, count_qty = excluded.count_qty, sale_price = excluded.sale_price, cost_price = excluded.cost_price,
                amount = excluded.amount, happened_at = excluded.happened_at, note = excluded.note, client_id = excluded.client_id, sort = excluded.sort`,
-          ).bind(id, saleId, itemId, p.unit ?? '', qty, effCount === qty ? null : effCount,
+          ).bind(id, saleId, itemId, unit, qty, effCount === qty ? null : effCount,
             Number(p.sale_price) || 0, Number(p.cost_price) || 0, amount,
             p.happened_at || null, p.note ?? '', p.client_id ?? '', Number(p.sort) || 0),
           ...stock,
@@ -700,6 +713,31 @@ export async function applyChange(
            FROM purchase_items pi LEFT JOIN items i ON i.id = pi.item_id WHERE pi.id = ?`,
         ).bind(id).first<{ item_id: string; unit: string; quantity: number; count_qty: number | null; count_unit?: string | null }>();
         const isNew2 = oldRow2 == null;
+        // FIFO 批次（行级=主写入路径）：新行建批；已存在行按"已消耗量保持"调整剩余
+        //（与 REST PATCH /purchases/items 同口径）。此前 App 进货不建批次 → 服务端批次账
+        // 缺这批库存，Web 出货/回收站恢复/库存金额估值会回退档案进价，盘点盘亏也会多扣。
+        const batchStmts: D1PreparedStatement[] = [];
+        if (isNew2) {
+          batchStmts.push(db.prepare(
+            'INSERT OR IGNORE INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at) VALUES (?, ?, ?, ?, ?, ?)',
+          ).bind(id, itemId2, p.unit ?? '', Number(p.purchase_price) || 0, qty2, p.happened_at || ''));
+        } else {
+          const curB = await db.prepare('SELECT remaining FROM stock_batches WHERE batch_id = ?').bind(id)
+            .first<{ remaining: number }>();
+          const oldQty = Number(oldRow2.quantity) || 0;
+          const usedQty = Math.max(0, oldQty - (curB?.remaining ?? 0));
+          const newRemaining = Math.max(0, qty2 - usedQty);
+          if (curB) {
+            batchStmts.push(db.prepare(
+              'UPDATE stock_batches SET price = ?, remaining = ?, unit = ?, happened_at = ? WHERE batch_id = ?',
+            ).bind(Number(p.purchase_price) || 0, newRemaining, p.unit ?? '', p.happened_at || '', id));
+          } else {
+            // 历史 App 进货没建过批次：补一条（按本次数量全额；历史消耗无法回溯）
+            batchStmts.push(db.prepare(
+              'INSERT OR IGNORE INTO stock_batches (batch_id, item_id, unit, price, remaining, happened_at) VALUES (?, ?, ?, ?, ?, ?)',
+            ).bind(id, itemId2, p.unit ?? '', Number(p.purchase_price) || 0, qty2, p.happened_at || ''));
+          }
+        }
         const stock2 = oldRow2
           ? [
               stockDeltaFor(db, { item_id: oldRow2.item_id, unit: oldRow2.unit, quantity: oldRow2.quantity, count_qty: oldRow2.count_qty, count_unit: oldRow2.count_unit }, -1),
@@ -716,6 +754,7 @@ export async function applyChange(
             Number(p.purchase_price) || 0, amount2,
             p.happened_at || null, p.note ?? '', Number(p.sort) || 0),
           ...stock2,
+          ...batchStmts,
         ]);
         if (isNew2) {
           try {

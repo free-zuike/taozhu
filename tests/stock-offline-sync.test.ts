@@ -163,4 +163,61 @@ describe('库存操作离线推送（sync push）', () => {
     const thr = pull.changes.filter((c) => c.entity_type === 'stock_threshold').at(-1);
     expect(thr?.payload.min_stock).toBe(8);
   });
+
+  it('行级进货/出货 upsert 维护 FIFO 批次账（App 主写入路径：建批/消耗/编辑/幂等）', async () => {
+    const item = await call(env, 'POST', '/api/v1/items', token, {
+      name: '土豆', prices: [{ unit: '斤', purchase_price: 2, sale_price: 3 }],
+    });
+    const itemId = ((await item.json()) as { id: string }).id;
+    const ts = (s: number) => new Date(Date.now() + s * 1000).toISOString();
+
+    // 1) App 进货行级 upsert（此前不建批次）→ 建批 remaining=10
+    let res = await push(env, token, [{
+      entity_type: 'purchase_item', entity_sync_id: 'pi-off-1', action: 'upsert',
+      payload: {
+        id: 'pi-off-1', purchase_id: 'p-off-1', item_id: itemId, unit: '斤',
+        quantity: 10, purchase_price: 2, amount: 20, happened_at: '2026-09-01',
+      },
+    }], 'phone-a', ts(1));
+    expect(((await res.json()) as { accepted: number }).accepted).toBe(1);
+    expect(await remaining(env, itemId)).toBe(10);
+
+    // 2) App 出货行级 upsert → 消耗 4 斤（此前不消耗批次）
+    const salePayload = {
+      id: 'si-off-1', sale_id: 's-off-1', client_id: '', item_id: itemId, unit: '斤',
+      quantity: 4, sale_price: 3, cost_price: 2, amount: 12, happened_at: '2026-09-02',
+    };
+    res = await push(env, token, [{
+      entity_type: 'sale_item', entity_sync_id: 'si-off-1', action: 'upsert', payload: salePayload,
+    }], 'phone-a', ts(2));
+    expect(((await res.json()) as { accepted: number }).accepted).toBe(1);
+    expect(await remaining(env, itemId)).toBe(6);
+    const uses = await env.DB.prepare('SELECT qty FROM sale_batch_uses WHERE sale_item_id = ?')
+      .bind('si-off-1').first<{ qty: number }>();
+    expect(uses?.qty).toBe(4);
+
+    // 3) 同一出货变更换设备重放（幂等）→ 先释放再重新消耗，剩余仍 6
+    res = await push(env, token, [{
+      entity_type: 'sale_item', entity_sync_id: 'si-off-1', action: 'upsert', payload: salePayload,
+    }], 'phone-b', ts(3));
+    expect(((await res.json()) as { accepted: number }).accepted).toBe(1);
+    expect(await remaining(env, itemId)).toBe(6);
+
+    // 4) 编辑进货 10→12（已消耗 4 保持）→ 剩余 8
+    await push(env, token, [{
+      entity_type: 'purchase_item', entity_sync_id: 'pi-off-1', action: 'upsert',
+      payload: {
+        id: 'pi-off-1', purchase_id: 'p-off-1', item_id: itemId, unit: '斤',
+        quantity: 12, purchase_price: 2, amount: 24, happened_at: '2026-09-01',
+      },
+    }], 'phone-a', ts(4));
+    expect(await remaining(env, itemId)).toBe(8);
+
+    // 5) 编辑出货 4→5 → 释放旧占用后重新消耗 → 剩余 7
+    await push(env, token, [{
+      entity_type: 'sale_item', entity_sync_id: 'si-off-1', action: 'upsert',
+      payload: { ...salePayload, quantity: 5, amount: 15 },
+    }], 'phone-a', ts(5));
+    expect(await remaining(env, itemId)).toBe(7);
+  });
 });
